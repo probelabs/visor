@@ -1,0 +1,37 @@
+name: 'Gates Action'
+description: 'A GitHub Action with AI-powered PR review capabilities using Octokit'
+author: 'Your Name'
+
+inputs:
+  github-token:
+    description: 'GitHub token for authentication'
+    required: true
+    default: ${{ github.token }}
+  owner:
+    description: 'Repository owner'
+    required: false
+  repo:
+    description: 'Repository name'
+    required: false
+  auto-review:
+    description: 'Enable automatic PR review on PR open events'
+    required: false
+    default: 'false'
+
+outputs:
+  repo-name:
+    description: 'Name of the repository'
+  repo-description:
+    description: 'Description of the repository'
+  repo-stars:
+    description: 'Number of stars on the repository'
+  review-score:
+    description: 'Overall review score (0-100) for PR reviews'
+  issues-found:
+    description: 'Number of issues found during PR review'
+  auto-review-completed:
+    description: 'Whether automatic PR review was completed'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

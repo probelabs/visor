@@ -1,0 +1,43 @@
+{
+  "action": "created",
+  "issue": {
+    "id": 1,
+    "number": 1,
+    "title": "Test PR",
+    "state": "open",
+    "pull_request": {
+      "url": "https://api.github.com/repos/test-owner/gates-test/pulls/1",
+      "html_url": "https://github.com/test-owner/gates-test/pull/1",
+      "diff_url": "https://github.com/test-owner/gates-test/pull/1.diff",
+      "patch_url": "https://github.com/test-owner/gates-test/pull/1.patch"
+    },
+    "user": {
+      "id": 123,
+      "login": "test-user",
+      "type": "User"
+    }
+  },
+  "comment": {
+    "id": 456,
+    "body": "/review --focus=security",
+    "user": {
+      "id": 123,
+      "login": "test-user",
+      "type": "User"
+    },
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  "repository": {
+    "id": 789,
+    "name": "gates-test",
+    "full_name": "test-owner/gates-test",
+    "owner": {
+      "id": 101,
+      "login": "test-owner",
+      "type": "User"
+    },
+    "private": false,
+    "default_branch": "main"
+  }
+}

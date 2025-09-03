@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx -y @probelabs/vow@latest:*)",
+      "Bash(npx -y @probelabs/vow@latest consent:*)",
+      "Bash(npx -y @probelabs/vow@latest rules:*)",
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "WebSearch",
+      "Bash(npm run build:*)",
+      "Bash(npm test)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm test:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @probelabs/vow check --hook --hook-type=PreToolUseGit"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @probelabs/vow check --hook --hook-type=Stop"
+          }
+        ]
+      }
+    ]
+  }
+}

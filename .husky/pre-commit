@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged for linting and formatting
+npx lint-staged
+
+# Run tests to ensure everything still works
+npm test
+
+echo "✅ Pre-commit checks passed!"
