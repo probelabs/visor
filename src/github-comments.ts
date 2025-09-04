@@ -24,6 +24,16 @@ export interface CommentMetadata {
   triggeredBy: string;
 }
 
+interface GitHubApiError {
+  status?: number;
+  response?: {
+    status?: number;
+    data?: {
+      message?: string;
+    };
+  };
+}
+
 /**
  * Manages GitHub PR comments with dynamic updating capabilities
  */
@@ -67,8 +77,12 @@ export class CommentManager {
 
       return null;
     } catch (error) {
-      if (this.isRateLimitError(error)) {
-        await this.handleRateLimit(error);
+      if (
+        this.isRateLimitError(
+          error as { status?: number; response?: { data?: { message?: string } } }
+        )
+      ) {
+        await this.handleRateLimit(error as { response?: { headers?: Record<string, string> } });
         return this.findVisorComment(owner, repo, prNumber, commentId);
       }
       throw error;
@@ -89,7 +103,11 @@ export class CommentManager {
       allowConcurrentUpdates?: boolean;
     } = {}
   ): Promise<Comment> {
-    const { commentId = this.generateCommentId(), triggeredBy = 'unknown', allowConcurrentUpdates = false } = options;
+    const {
+      commentId = this.generateCommentId(),
+      triggeredBy = 'unknown',
+      allowConcurrentUpdates = false,
+    } = options;
 
     return this.withRetry(async () => {
       const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
@@ -109,7 +127,9 @@ export class CommentManager {
           });
 
           if (currentComment.data.updated_at !== existingComment.updated_at) {
-            throw new Error(`Comment collision detected for comment ${commentId}. Another process may have updated it.`);
+            throw new Error(
+              `Comment collision detected for comment ${commentId}. Another process may have updated it.`
+            );
           }
         }
 
@@ -139,7 +159,7 @@ export class CommentManager {
    */
   public formatCommentWithMetadata(content: string, metadata: CommentMetadata): string {
     const { commentId, lastUpdated, triggeredBy } = metadata;
-    
+
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
@@ -151,7 +171,11 @@ ${content}
   /**
    * Create collapsible sections for comment content
    */
-  public createCollapsibleSection(title: string, content: string, isExpanded: boolean = false): string {
+  public createCollapsibleSection(
+    title: string,
+    content: string,
+    isExpanded: boolean = false
+  ): string {
     const openAttribute = isExpanded ? ' open' : '';
     return `<details${openAttribute}>
 <summary>${title}</summary>
@@ -174,10 +198,10 @@ ${content}
     for (const [groupKey, items] of Object.entries(grouped)) {
       const totalScore = items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length;
       const totalIssues = items.reduce((sum, item) => sum + (item.issuesFound || 0), 0);
-      
+
       const emoji = this.getCheckTypeEmoji(groupKey);
       const title = `${emoji} ${this.formatGroupTitle(groupKey, totalScore, totalIssues)}`;
-      
+
       const sectionContent = items.map(item => item.content).join('\n\n');
       sections.push(this.createCollapsibleSection(title, sectionContent, totalIssues > 0));
     }
@@ -213,7 +237,9 @@ ${content}
   /**
    * Handle rate limiting with exponential backoff
    */
-  private async handleRateLimit(error: any): Promise<void> {
+  private async handleRateLimit(error: {
+    response?: { headers?: Record<string, string> };
+  }): Promise<void> {
     const resetTime = error.response?.headers?.['x-ratelimit-reset'];
     if (resetTime) {
       const resetDate = new Date(parseInt(resetTime) * 1000);
@@ -228,28 +254,51 @@ ${content}
   /**
    * Check if error is a rate limit error
    */
-  private isRateLimitError(error: any): boolean {
-    return error.status === 403 && error.response?.data?.message?.includes('rate limit');
+  private isRateLimitError(error: GitHubApiError): boolean {
+    return error.status === 403 && (error.response?.data?.message?.includes('rate limit') ?? false);
+  }
+
+  /**
+   * Check if error should not be retried (auth errors, not found, etc.)
+   */
+  private isNonRetryableError(error: GitHubApiError): boolean {
+    // Don't retry auth errors, not found, etc., but allow rate limit errors to be handled separately
+    const nonRetryableStatuses = [401, 404, 422]; // Unauthorized, Not Found, Unprocessable Entity
+    const status = error.status || error.response?.status;
+
+    // 403 is non-retryable unless it's a rate limit error
+    if (status === 403) {
+      return !this.isRateLimitError(error);
+    }
+
+    return status !== undefined && nonRetryableStatuses.includes(status);
   }
 
   /**
    * Retry wrapper with exponential backoff
    */
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {
-    let lastError: any;
-    
+    let lastError: Error = new Error('Unknown error');
+
     for (let attempt = 0; attempt <= this.retryConfig.maxRetries; attempt++) {
       try {
         return await operation();
       } catch (error) {
-        lastError = error;
-        
+        lastError = error instanceof Error ? error : new Error(String(error));
+
         if (attempt === this.retryConfig.maxRetries) {
           break;
         }
 
-        if (this.isRateLimitError(error)) {
-          await this.handleRateLimit(error);
+        if (
+          this.isRateLimitError(
+            error as { status?: number; response?: { data?: { message?: string } } }
+          )
+        ) {
+          await this.handleRateLimit(error as { response?: { headers?: Record<string, string> } });
+        } else if (this.isNonRetryableError(error as GitHubApiError)) {
+          // Don't retry auth errors, not found errors, etc.
+          throw error;
         } else {
           const delay = Math.min(
             this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt),
@@ -276,8 +325,14 @@ ${content}
   private groupResults(
     results: Array<{ checkType: string; content: string; score?: number; issuesFound?: number }>,
     groupBy: 'check' | 'severity'
-  ): Record<string, Array<{ checkType: string; content: string; score?: number; issuesFound?: number }>> {
-    const grouped: Record<string, Array<{ checkType: string; content: string; score?: number; issuesFound?: number }>> = {};
+  ): Record<
+    string,
+    Array<{ checkType: string; content: string; score?: number; issuesFound?: number }>
+  > {
+    const grouped: Record<
+      string,
+      Array<{ checkType: string; content: string; score?: number; issuesFound?: number }>
+    > = {};
 
     for (const result of results) {
       const key = groupBy === 'check' ? result.checkType : this.getSeverityGroup(result.score);
@@ -306,16 +361,16 @@ ${content}
    */
   private getCheckTypeEmoji(checkType: string): string {
     const emojiMap: Record<string, string> = {
-      'performance': '📈',
-      'security': '🔒',
-      'architecture': '🏗️',
-      'style': '🎨',
-      'all': '🔍',
-      'Excellent': '✅',
-      'Good': '👍',
+      performance: '📈',
+      security: '🔒',
+      architecture: '🏗️',
+      style: '🎨',
+      all: '🔍',
+      Excellent: '✅',
+      Good: '👍',
       'Needs Improvement': '⚠️',
       'Critical Issues': '🚨',
-      'Unknown': '❓'
+      Unknown: '❓',
     };
     return emojiMap[checkType] || '📝';
   }

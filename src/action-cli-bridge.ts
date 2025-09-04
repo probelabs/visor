@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { CliOptions, CheckType, OutputFormat } from './types/cli';
+import { CheckType } from './types/cli';
 import { VisorConfig } from './types/config';
 
 export interface GitHubActionInputs {
@@ -20,12 +20,12 @@ export interface GitHubContext {
     name: string;
   };
   event?: {
-    comment?: any;
-    issue?: any;
-    pull_request?: any;
+    comment?: Record<string, unknown>;
+    issue?: Record<string, unknown>;
+    pull_request?: Record<string, unknown>;
     action?: string;
   };
-  payload?: any;
+  payload?: Record<string, unknown>;
 }
 
 export interface ActionCliOutput {
@@ -76,7 +76,7 @@ export class ActionCliBridge {
         .split(',')
         .map(check => check.trim())
         .filter(check => this.isValidCheck(check));
-      
+
       for (const check of checks) {
         args.push('--check', check);
       }
@@ -102,7 +102,7 @@ export class ActionCliBridge {
 
     try {
       const cliArgs = this.parseGitHubInputsToCliArgs(inputs);
-      
+
       // Set up environment variables for CLI
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
@@ -110,13 +110,13 @@ export class ActionCliBridge {
         GITHUB_EVENT_NAME: this.context.event_name,
         GITHUB_CONTEXT: JSON.stringify(this.context),
         GITHUB_REPOSITORY_OWNER: this.context.repository?.owner.login || inputs.owner || '',
-        GITHUB_REPOSITORY: this.context.repository 
+        GITHUB_REPOSITORY: this.context.repository
           ? `${this.context.repository.owner.login}/${this.context.repository.name}`
           : `${inputs.owner || ''}/${inputs.repo || ''}`,
       };
 
       console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);
-      
+
       const result = await this.executeCommand('node', ['dist/cli-main.js', ...cliArgs], {
         cwd: workingDir,
         env,
@@ -126,7 +126,7 @@ export class ActionCliBridge {
       if (result.exitCode === 0) {
         // Try to parse CLI output for additional data
         const cliOutput = this.parseCliOutput(result.output);
-        
+
         return {
           success: true,
           output: result.output,
@@ -165,15 +165,15 @@ export class ActionCliBridge {
 
     if (cliResult.success && cliResult.cliOutput) {
       const cli = cliResult.cliOutput;
-      
+
       if (cli.reviewScore !== undefined) {
         outputs['review-score'] = cli.reviewScore.toString();
       }
-      
+
       if (cli.issuesFound !== undefined) {
         outputs['issues-found'] = cli.issuesFound.toString();
       }
-      
+
       if (cli.autoReviewCompleted !== undefined) {
         outputs['auto-review-completed'] = cli.autoReviewCompleted.toString();
       }
@@ -196,7 +196,7 @@ export class ActionCliBridge {
   ): Promise<{ output: string; error: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
       const { cwd, env, timeout = 30000 } = options;
-      
+
       const child: ChildProcess = spawn(command, args, {
         cwd,
         env,
@@ -208,18 +208,18 @@ export class ActionCliBridge {
       let timeoutHandle: NodeJS.Timeout | null = null;
 
       if (child.stdout) {
-        child.stdout.on('data', (data) => {
+        child.stdout.on('data', data => {
           output += data.toString();
         });
       }
 
       if (child.stderr) {
-        child.stderr.on('data', (data) => {
+        child.stderr.on('data', data => {
           error += data.toString();
         });
       }
 
-      child.on('close', (code) => {
+      child.on('close', code => {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
         }
@@ -230,7 +230,7 @@ export class ActionCliBridge {
         });
       });
 
-      child.on('error', (err) => {
+      child.on('error', err => {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
         }
@@ -258,7 +258,7 @@ export class ActionCliBridge {
         const trimmed = line.trim();
         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
           const parsed = JSON.parse(trimmed);
-          
+
           // Extract relevant data that can be used for Action outputs
           return {
             reviewScore: parsed.reviewScore || parsed.overallScore,
@@ -267,9 +267,9 @@ export class ActionCliBridge {
           };
         }
       }
-      
+
       return {};
-    } catch (error) {
+    } catch {
       console.log('Could not parse CLI output as JSON, using default values');
       return {};
     }
@@ -330,12 +330,12 @@ export class ActionCliBridge {
 
     // Write temporary config file
     const tempConfigPath = path.join(workingDir, '.visor-temp.yaml');
-    
+
     try {
       const yaml = require('js-yaml');
       const yamlContent = yaml.dump(config);
       await fs.writeFile(tempConfigPath, yamlContent, 'utf8');
-      
+
       return tempConfigPath;
     } catch (error) {
       console.error('Failed to create temporary config file:', error);
@@ -354,28 +354,28 @@ export class ActionCliBridge {
 - Sensitive data exposure
 - Input validation issues
 - Cryptographic weaknesses`,
-      
+
       performance: `Analyze this code for performance issues, focusing on:
 - Database query efficiency (N+1 problems, missing indexes)
 - Memory usage and potential leaks
 - Algorithmic complexity issues
 - Caching opportunities
 - Resource utilization`,
-      
+
       architecture: `Review the architectural aspects of this code, focusing on:
 - Design patterns and code organization
 - Separation of concerns
 - SOLID principles adherence
 - Code maintainability and extensibility
 - Technical debt`,
-      
+
       style: `Review code style and maintainability, focusing on:
 - Consistent naming conventions
 - Code formatting and readability
 - Documentation quality
 - Error handling patterns
 - Code complexity`,
-      
+
       all: `Perform a comprehensive code review covering:
 - Security vulnerabilities and best practices
 - Performance optimization opportunities
@@ -393,10 +393,10 @@ export class ActionCliBridge {
   public async cleanup(options: { workingDir?: string } = {}): Promise<void> {
     const { workingDir = process.cwd() } = options;
     const tempConfigPath = path.join(workingDir, '.visor-temp.yaml');
-    
+
     try {
       await fs.unlink(tempConfigPath);
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   }

@@ -16,7 +16,7 @@ describe('EventMapper', () => {
           triggers: ['**/*.{js,ts,py}', 'src/auth/**/*'],
         },
         'performance-check': {
-          type: 'ai', 
+          type: 'ai',
           prompt: 'Analyze performance implications',
           on: ['pr_opened', 'pr_updated'],
           triggers: ['**/*.sql', 'src/database/**/*'],
@@ -245,7 +245,12 @@ describe('EventMapper', () => {
         },
       };
 
-      const requestedChecks = ['security-check', 'performance-check', 'style-check', 'non-existent-check'];
+      const requestedChecks = [
+        'security-check',
+        'performance-check',
+        'style-check',
+        'non-existent-check',
+      ];
 
       const result = eventMapper.getSelectiveExecution(eventContext, requestedChecks);
 

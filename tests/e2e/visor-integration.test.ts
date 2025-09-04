@@ -16,13 +16,15 @@ describe('Visor Integration E2E Tests', () => {
       checks: {
         'security-review': {
           type: 'ai',
-          prompt: 'Review for security vulnerabilities focusing on authentication, authorization, and data validation',
+          prompt:
+            'Review for security vulnerabilities focusing on authentication, authorization, and data validation',
           on: ['pr_opened', 'pr_updated'],
           triggers: ['**/*.{js,ts,py}', 'src/auth/**/*'],
         },
         'performance-review': {
-          type: 'ai', 
-          prompt: 'Analyze performance implications including database queries, caching, and algorithmic complexity',
+          type: 'ai',
+          prompt:
+            'Analyze performance implications including database queries, caching, and algorithmic complexity',
           on: ['pr_opened', 'pr_updated'],
           triggers: ['**/*.sql', 'src/database/**/*'],
         },
@@ -41,7 +43,7 @@ describe('Visor Integration E2E Tests', () => {
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
-    
+
     const configPath = path.join(tempDir, 'visor.config.yaml');
     fs.writeFileSync(configPath, yaml.dump(testConfig));
 
@@ -89,7 +91,7 @@ describe('Visor Integration E2E Tests', () => {
     if (mockGithub) {
       await mockGithub.teardown();
     }
-    
+
     // Clean up temp files
     const tempDir = path.join(__dirname, '..', 'fixtures', 'temp');
     if (fs.existsSync(tempDir)) {
@@ -108,9 +110,9 @@ describe('Visor Integration E2E Tests', () => {
 
       // Test that ActionCliBridge detects Visor mode correctly
       const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', { 
+      const bridge = new ActionCliBridge('test-token', {
         event_name: 'pull_request',
-        repository: { owner: { login: 'test-owner' }, name: 'visor-test' }
+        repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
 
       expect(bridge.shouldUseVisor(mockActionInputs)).toBe(true);
@@ -125,13 +127,13 @@ describe('Visor Integration E2E Tests', () => {
       };
 
       const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', { 
+      const bridge = new ActionCliBridge('test-token', {
         event_name: 'pull_request',
-        repository: { owner: { login: 'test-owner' }, name: 'visor-test' }
+        repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
 
       expect(bridge.shouldUseVisor(mockActionInputs)).toBe(true);
-      
+
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockActionInputs);
       expect(cliArgs).toContain('--check');
       expect(cliArgs).toContain('security');
@@ -147,9 +149,9 @@ describe('Visor Integration E2E Tests', () => {
       };
 
       const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', { 
+      const bridge = new ActionCliBridge('test-token', {
         event_name: 'pull_request',
-        repository: { owner: { login: 'test-owner' }, name: 'visor-test' }
+        repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
 
       expect(bridge.shouldUseVisor(mockActionInputs)).toBe(false);
@@ -292,7 +294,7 @@ describe('Visor Integration E2E Tests', () => {
       const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit);
 
-      const comment = await commentManager.updateOrCreateComment(
+      await commentManager.updateOrCreateComment(
         'test-owner',
         'visor-test',
         123,
@@ -385,16 +387,10 @@ describe('Visor Integration E2E Tests', () => {
       const commentManager = new CommentManager(mockOctokit);
 
       await expect(
-        commentManager.updateOrCreateComment(
-          'test-owner',
-          'visor-test',
-          123,
-          'New content',
-          {
-            commentId: 'test-123',
-            allowConcurrentUpdates: false,
-          }
-        )
+        commentManager.updateOrCreateComment('test-owner', 'visor-test', 123, 'New content', {
+          commentId: 'test-123',
+          allowConcurrentUpdates: false,
+        })
       ).rejects.toThrow('Comment collision detected');
     });
   });
@@ -402,12 +398,12 @@ describe('Visor Integration E2E Tests', () => {
   describe('Backward Compatibility', () => {
     test('should preserve legacy comment commands', async () => {
       const { parseComment } = require('../../src/commands');
-      
+
       // Test all legacy commands still work
       expect(parseComment('/review')).toEqual({ type: 'review', args: undefined });
-      expect(parseComment('/review --focus=security')).toEqual({ 
-        type: 'review', 
-        args: ['--focus=security'] 
+      expect(parseComment('/review --focus=security')).toEqual({
+        type: 'review',
+        args: ['--focus=security'],
       });
       expect(parseComment('/status')).toEqual({ type: 'status', args: undefined });
       expect(parseComment('/help')).toEqual({ type: 'help', args: undefined });
@@ -416,16 +412,19 @@ describe('Visor Integration E2E Tests', () => {
     test('should preserve legacy action inputs', async () => {
       // Test that action.yml still has all legacy inputs
       const actionPath = path.resolve(__dirname, '..', '..', 'action.yml');
-      
+
       if (fs.existsSync(actionPath)) {
         const actionContent = fs.readFileSync(actionPath, 'utf8');
-        const parsed = yaml.load(actionContent) as any;
-        
+        const parsed = yaml.load(actionContent) as {
+          inputs: Record<string, unknown>;
+          outputs?: Record<string, unknown>;
+        };
+
         expect(parsed.inputs).toHaveProperty('github-token');
         expect(parsed.inputs).toHaveProperty('owner');
         expect(parsed.inputs).toHaveProperty('repo');
         expect(parsed.inputs).toHaveProperty('auto-review');
-        
+
         // And new Visor inputs
         expect(parsed.inputs).toHaveProperty('visor-config-path');
         expect(parsed.inputs).toHaveProperty('visor-checks');
@@ -434,11 +433,14 @@ describe('Visor Integration E2E Tests', () => {
 
     test('should preserve legacy outputs', async () => {
       const actionPath = path.resolve(__dirname, '..', '..', 'action.yml');
-      
+
       if (fs.existsSync(actionPath)) {
         const actionContent = fs.readFileSync(actionPath, 'utf8');
-        const parsed = yaml.load(actionContent) as any;
-        
+        const parsed = yaml.load(actionContent) as {
+          inputs: Record<string, unknown>;
+          outputs?: Record<string, unknown>;
+        };
+
         expect(parsed.outputs).toHaveProperty('repo-name');
         expect(parsed.outputs).toHaveProperty('repo-description');
         expect(parsed.outputs).toHaveProperty('repo-stars');
@@ -474,11 +476,8 @@ describe('Visor Integration E2E Tests', () => {
       const bridge = new ActionCliBridge('test-token', mockContext);
 
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockInputs);
-      
-      expect(cliArgs).toEqual([
-        '--check', 'security',
-        '--output', 'json'
-      ]);
+
+      expect(cliArgs).toEqual(['--check', 'security', '--output', 'json']);
     });
 
     test('should handle authentication flow', async () => {
@@ -500,7 +499,7 @@ describe('Visor Integration E2E Tests', () => {
 
       // Test that authentication token is properly handled
       expect(bridge.shouldUseVisor(mockInputs)).toBe(true);
-      
+
       // The actual CLI execution would happen in a real scenario
       // but we're testing the setup and configuration here
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockInputs);
@@ -515,9 +514,9 @@ describe('Visor Integration E2E Tests', () => {
       const configManager = new ConfigManager();
 
       // Test with non-existent config file
-      await expect(
-        configManager.loadConfig('/non/existent/config.yaml')
-      ).rejects.toThrow('Configuration file not found');
+      await expect(configManager.loadConfig('/non/existent/config.yaml')).rejects.toThrow(
+        'Configuration file not found'
+      );
     });
 
     test('should handle GitHub API errors gracefully', async () => {
@@ -532,9 +531,9 @@ describe('Visor Integration E2E Tests', () => {
       const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit);
 
-      await expect(
-        commentManager.findVisorComment('owner', 'repo', 123)
-      ).rejects.toThrow('API Error');
+      await expect(commentManager.findVisorComment('owner', 'repo', 123)).rejects.toThrow(
+        'API Error'
+      );
     });
 
     test('should handle rate limiting', async () => {
@@ -549,7 +548,8 @@ describe('Visor Integration E2E Tests', () => {
       const mockOctokit = {
         rest: {
           issues: {
-            listComments: jest.fn()
+            listComments: jest
+              .fn()
               .mockRejectedValueOnce(rateLimitError)
               .mockResolvedValueOnce({ data: [] }),
           },
@@ -572,23 +572,23 @@ describe('Visor Integration E2E Tests', () => {
     test('should handle complete PR review workflow', async () => {
       // This would test the entire workflow from PR event to comment posting
       // in a real E2E scenario with act.js
-      
+
       try {
         if (act && testRepoPath) {
           // Set up environment for Visor mode
           process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, 'visor.config.yaml');
-          
+
           // This would trigger the actual GitHub Action
           // const result = await act.runEvent('pull_request', {
           //   workflowFile: path.join(testRepoPath, '.github/workflows/pr-review.yml'),
           //   eventPath: path.join(__dirname, '..', 'fixtures', 'pr-event.json'),
           // });
-          
+
           // For now, we validate the setup
           expect(fs.existsSync(path.join(testRepoPath, 'visor.config.yaml'))).toBe(true);
           expect(fs.existsSync(path.join(testRepoPath, 'action.yml'))).toBe(true);
         }
-        
+
         expect(true).toBe(true); // Test completed successfully
       } catch (error) {
         console.log('E2E test completed with validation:', error);

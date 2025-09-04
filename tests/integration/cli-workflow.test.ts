@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -18,7 +18,7 @@ describe('CLI Workflow Integration Tests', () => {
     // Clean up temporary directory
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   });
@@ -26,7 +26,10 @@ describe('CLI Workflow Integration Tests', () => {
   /**
    * Helper function to run CLI commands
    */
-  const runCLI = (args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<{
+  const runCLI = (
+    args: string[],
+    options: { cwd?: string; timeout?: number } = {}
+  ): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
@@ -34,29 +37,29 @@ describe('CLI Workflow Integration Tests', () => {
     return new Promise((resolve, reject) => {
       const child = spawn('npx', ['ts-node', CLI_PATH, ...args], {
         cwd: options.cwd || tempDir,
-        stdio: 'pipe'
+        stdio: 'pipe',
       });
 
       let stdout = '';
       let stderr = '';
 
-      child.stdout?.on('data', (data) => {
+      child.stdout?.on('data', data => {
         stdout += data.toString();
       });
 
-      child.stderr?.on('data', (data) => {
+      child.stderr?.on('data', data => {
         stderr += data.toString();
       });
 
-      child.on('close', (code) => {
+      child.on('close', code => {
         resolve({
           stdout,
           stderr,
-          exitCode: code || 0
+          exitCode: code || 0,
         });
       });
 
-      child.on('error', (error) => {
+      child.on('error', error => {
         reject(error);
       });
 
@@ -74,20 +77,22 @@ describe('CLI Workflow Integration Tests', () => {
    */
   const initGitRepo = async (dir: string) => {
     const { execSync } = require('child_process');
-    
+
     try {
       // Initialize git repo
       execSync('git init', { cwd: dir });
       execSync('git config user.email "test@example.com"', { cwd: dir });
       execSync('git config user.name "Test User"', { cwd: dir });
-      
+
       // Create initial commit
       fs.writeFileSync(path.join(dir, 'README.md'), '# Test Repository\n');
       execSync('git add .', { cwd: dir });
       execSync('git commit -m "Initial commit"', { cwd: dir });
-      
+
       // Create some test files with changes
-      fs.writeFileSync(path.join(dir, 'test.js'), `
+      fs.writeFileSync(
+        path.join(dir, 'test.js'),
+        `
 function test() {
   // This is a test function
   var x = "test"; // Should use let/const
@@ -95,102 +100,147 @@ function test() {
 }
 
 module.exports = test;
-`);
-      
-      fs.writeFileSync(path.join(dir, 'security-test.sql'), `
+`
+      );
+
+      fs.writeFileSync(
+        path.join(dir, 'security-test.sql'),
+        `
 SELECT * FROM users WHERE id = '${process.argv[2]}';
 -- This has SQL injection vulnerability
-`);
-      
+`
+      );
     } catch (error) {
       console.warn('Failed to initialize git repo:', error);
     }
   };
 
   describe('Help and Version Commands', () => {
-    it('should display help when --help flag is used', async () => {
-      const result = await runCLI(['--help']);
-      
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Usage: visor [options]');
-      expect(result.stdout).toContain('Visor - AI-powered code review tool');
-      expect(result.stdout).toContain('--check');
-      expect(result.stdout).toContain('--output');
-      expect(result.stdout).toContain('Examples:');
-    }, timeout);
+    it(
+      'should display help when --help flag is used',
+      async () => {
+        const result = await runCLI(['--help']);
 
-    it('should display help when -h flag is used', async () => {
-      const result = await runCLI(['-h']);
-      
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Usage: visor [options]');
-    }, timeout);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: visor [options]');
+        expect(result.stdout).toContain('Visor - AI-powered code review tool');
+        expect(result.stdout).toContain('--check');
+        expect(result.stdout).toContain('--output');
+        expect(result.stdout).toContain('Examples:');
+      },
+      timeout
+    );
 
-    it('should display version when --version flag is used', async () => {
-      const result = await runCLI(['--version']);
-      
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toMatch(/^\d+\.\d+\.\d+/);
-    }, timeout);
+    it(
+      'should display help when -h flag is used',
+      async () => {
+        const result = await runCLI(['-h']);
 
-    it('should display version when -V flag is used', async () => {
-      const result = await runCLI(['-V']);
-      
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toMatch(/^\d+\.\d+\.\d+/);
-    }, timeout);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: visor [options]');
+      },
+      timeout
+    );
+
+    it(
+      'should display version when --version flag is used',
+      async () => {
+        const result = await runCLI(['--version']);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toMatch(/^\d+\.\d+\.\d+/);
+      },
+      timeout
+    );
+
+    it(
+      'should display version when -V flag is used',
+      async () => {
+        const result = await runCLI(['-V']);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toMatch(/^\d+\.\d+\.\d+/);
+      },
+      timeout
+    );
   });
 
   describe('Argument Validation', () => {
-    it('should show error for invalid check type', async () => {
-      await initGitRepo(tempDir);
-      
-      const result = await runCLI(['--check', 'invalid-check']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Invalid check types: invalid-check');
-      expect(result.stderr).toContain('Available check types: performance, architecture, security, style, all');
-    }, timeout);
+    it(
+      'should show error for invalid check type',
+      async () => {
+        await initGitRepo(tempDir);
 
-    it('should show error for invalid output format', async () => {
-      await initGitRepo(tempDir);
-      
-      const result = await runCLI(['--check', 'security', '--output', 'invalid-format']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Invalid output format');
-    }, timeout);
+        const result = await runCLI(['--check', 'invalid-check']);
 
-    it('should show error for unknown options', async () => {
-      const result = await runCLI(['--unknown-option']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('unknown option');
-    }, timeout);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('Invalid check type: invalid-check');
+        expect(result.stderr).toContain(
+          'Available options: performance, architecture, security, style, all'
+        );
+      },
+      timeout
+    );
 
-    it('should show error for missing required arguments', async () => {
-      const result = await runCLI(['--check']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('argument missing');
-    }, timeout);
+    it(
+      'should show error for invalid output format',
+      async () => {
+        await initGitRepo(tempDir);
+
+        const result = await runCLI(['--check', 'security', '--output', 'invalid-format']);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('Invalid output format');
+      },
+      timeout
+    );
+
+    it(
+      'should show error for unknown options',
+      async () => {
+        const result = await runCLI(['--unknown-option']);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('unknown option');
+      },
+      timeout
+    );
+
+    it(
+      'should show error for missing required arguments',
+      async () => {
+        const result = await runCLI(['--check']);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('argument missing');
+      },
+      timeout
+    );
   });
 
   describe('Non-Git Repository Handling', () => {
-    it('should show error when not in a git repository', async () => {
-      // Don't initialize git in temp directory
-      const result = await runCLI(['--check', 'security']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Not a git repository');
-    }, timeout);
+    it(
+      'should show error when not in a git repository',
+      async () => {
+        // Don't initialize git in temp directory
+        const result = await runCLI(['--check', 'security']);
 
-    it('should handle empty directory gracefully', async () => {
-      const result = await runCLI(['--check', 'performance']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Not a git repository');
-    }, timeout);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('Not a git repository');
+      },
+      timeout
+    );
+
+    it(
+      'should handle empty directory gracefully',
+      async () => {
+        const result = await runCLI(['--check', 'performance']);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('Not a git repository');
+      },
+      timeout
+    );
   });
 
   describe('Basic Check Execution', () => {
@@ -200,7 +250,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should execute security checks successfully', async () => {
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
       expect(result.stdout).toContain('📂 Repository:');
@@ -209,7 +259,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should execute performance checks successfully', async () => {
       const result = await runCLI(['--check', 'performance'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
       expect(result.stdout).toContain('ANALYSIS RESULTS');
@@ -217,7 +267,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should execute style checks successfully', async () => {
       const result = await runCLI(['--check', 'style'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
       expect(result.stdout).toContain('ANALYSIS RESULTS');
@@ -225,15 +275,17 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should execute all checks successfully', async () => {
       const result = await runCLI(['--check', 'all'], { timeout: 60000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
       expect(result.stdout).toContain('ANALYSIS RESULTS');
     }, 60000);
 
     it('should execute multiple specific checks', async () => {
-      const result = await runCLI(['--check', 'security', '--check', 'performance'], { timeout: 45000 });
-      
+      const result = await runCLI(['--check', 'security', '--check', 'performance'], {
+        timeout: 45000,
+      });
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
       expect(result.stdout).toContain('ANALYSIS RESULTS');
@@ -247,7 +299,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should output in table format (default)', async () => {
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('📊 Analysis Summary');
       expect(result.stdout).toContain('Overall Score');
@@ -257,13 +309,13 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should output in JSON format', async () => {
       const result = await runCLI(['--check', 'security', '--output', 'json'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
-      
+
       // Should contain valid JSON
       const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
       expect(jsonMatch).toBeTruthy();
-      
+
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         expect(parsed).toHaveProperty('summary');
@@ -275,8 +327,10 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
     }, 45000);
 
     it('should output in markdown format', async () => {
-      const result = await runCLI(['--check', 'security', '--output', 'markdown'], { timeout: 45000 });
-      
+      const result = await runCLI(['--check', 'security', '--output', 'markdown'], {
+        timeout: 45000,
+      });
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('# 🔍 Visor Analysis Results');
       expect(result.stdout).toContain('## 📊 Summary');
@@ -292,7 +346,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should show repository status information', async () => {
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Configuration version: 1.0');
       expect(result.stdout).toContain('📂 Repository:');
@@ -309,9 +363,9 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
       } catch {
         // Ignore if no changes to commit
       }
-      
+
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('No uncommitted changes found');
     }, 45000);
@@ -320,30 +374,42 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
   describe('Error Scenarios', () => {
     it('should handle configuration file not found gracefully', async () => {
       await initGitRepo(tempDir);
-      
-      const result = await runCLI(['--config', 'non-existent-config.yaml', '--check', 'security'], { timeout: 45000 });
-      
+
+      const result = await runCLI(['--config', 'non-existent-config.yaml', '--check', 'security'], {
+        timeout: 45000,
+      });
+
       // Should still run with default config
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
     }, 45000);
 
-    it('should show warning when no checks specified', async () => {
-      await initGitRepo(tempDir);
-      
-      const result = await runCLI([]);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('No checks specified');
-      expect(result.stderr).toContain('Available check types: performance, architecture, security, style, all');
-    }, timeout);
+    it(
+      'should show warning when no checks specified',
+      async () => {
+        await initGitRepo(tempDir);
 
-    it('should handle CLI parsing errors gracefully', async () => {
-      const result = await runCLI(['--check', 'security', 'extra-argument']);
-      
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('too many arguments');
-    }, timeout);
+        const result = await runCLI([]);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('No checks specified');
+        expect(result.stderr).toContain(
+          'Available check types: performance, architecture, security, style, all'
+        );
+      },
+      timeout
+    );
+
+    it(
+      'should handle CLI parsing errors gracefully',
+      async () => {
+        const result = await runCLI(['--check', 'security', 'extra-argument']);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('too many arguments');
+      },
+      timeout
+    );
   });
 
   describe('Performance and Reliability', () => {
@@ -355,7 +421,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
       const startTime = Date.now();
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
       const executionTime = Date.now() - startTime;
-      
+
       expect(result.exitCode).toBe(0);
       expect(executionTime).toBeLessThan(30000); // Should complete within 30 seconds
     }, 45000);
@@ -364,16 +430,16 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
       const promises = [
         runCLI(['--check', 'security'], { timeout: 45000 }),
         runCLI(['--check', 'performance'], { timeout: 45000 }),
-        runCLI(['--check', 'style'], { timeout: 45000 })
+        runCLI(['--check', 'style'], { timeout: 45000 }),
       ];
-      
+
       const results = await Promise.allSettled(promises);
-      
+
       // At least some should succeed (depending on system resources)
-      const successCount = results.filter(r => 
-        r.status === 'fulfilled' && r.value.exitCode === 0
+      const successCount = results.filter(
+        r => r.status === 'fulfilled' && r.value.exitCode === 0
       ).length;
-      
+
       expect(successCount).toBeGreaterThan(0);
     }, 60000);
   });
@@ -385,7 +451,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
 
     it('should work with default configuration', async () => {
       const result = await runCLI(['--check', 'security'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Configuration version: 1.0');
     }, 45000);
@@ -401,12 +467,14 @@ output:
     group_by: check
     collapse: true
 `;
-      
+
       const configPath = path.join(tempDir, 'custom-visor.yaml');
       fs.writeFileSync(configPath, configContent);
-      
-      const result = await runCLI(['--config', configPath, '--check', 'security'], { timeout: 45000 });
-      
+
+      const result = await runCLI(['--config', configPath, '--check', 'security'], {
+        timeout: 45000,
+      });
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('🔍 Visor - AI-powered code review tool');
     }, 45000);
@@ -415,37 +483,40 @@ output:
   describe('Edge Cases', () => {
     it('should handle very large repository gracefully', async () => {
       await initGitRepo(tempDir);
-      
+
       // Create many files to simulate large repo
       const srcDir = path.join(tempDir, 'src');
       fs.mkdirSync(srcDir);
-      
+
       for (let i = 0; i < 50; i++) {
-        fs.writeFileSync(path.join(srcDir, `file${i}.js`), `
+        fs.writeFileSync(
+          path.join(srcDir, `file${i}.js`),
+          `
 console.log("File ${i}");
 var x = "test";
 function test${i}() {
   return x;
 }
-`);
+`
+        );
       }
-      
+
       const result = await runCLI(['--check', 'style'], { timeout: 60000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('ANALYSIS RESULTS');
     }, 60000);
 
     it('should handle special characters in file names', async () => {
       await initGitRepo(tempDir);
-      
+
       // Create files with special characters
       fs.writeFileSync(path.join(tempDir, 'file with spaces.js'), 'console.log("test");');
       fs.writeFileSync(path.join(tempDir, 'file-with-dashes.js'), 'console.log("test");');
       fs.writeFileSync(path.join(tempDir, 'file.with.dots.js'), 'console.log("test");');
-      
+
       const result = await runCLI(['--check', 'style'], { timeout: 45000 });
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('ANALYSIS RESULTS');
     }, 45000);

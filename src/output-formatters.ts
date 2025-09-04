@@ -31,8 +31,8 @@ export class OutputFormatters {
       colWidths: [25, 30],
       style: {
         head: ['cyan', 'bold'],
-        border: ['grey']
-      }
+        border: ['grey'],
+      },
     });
 
     summaryTable.push(
@@ -53,34 +53,33 @@ export class OutputFormatters {
     if (result.reviewSummary.comments.length > 0) {
       if (groupByCategory) {
         const groupedComments = this.groupCommentsByCategory(result.reviewSummary.comments);
-        
+
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
-          
+
           const categoryTable = new CliTable3({
             head: ['File', 'Line', 'Severity', 'Message'],
             colWidths: [25, 8, 12, 50],
             style: {
               head: ['cyan', 'bold'],
-              border: ['grey']
-            }
+              border: ['grey'],
+            },
           });
 
           const emoji = this.getCategoryEmoji(category);
           output += `${emoji} ${category.toUpperCase()} Issues (${comments.length})\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
-            const severityColor = this.getSeverityColor(comment.severity);
             categoryTable.push([
               comment.file,
               comment.line.toString(),
               { content: comment.severity.toUpperCase(), hAlign: 'center' },
-              this.truncateText(comment.message, 45)
+              this.truncateText(comment.message, 45),
             ]);
           }
 
           output += categoryTable.toString() + '\n';
-          
+
           if (!showDetails && comments.length > 5) {
             output += `... and ${comments.length - 5} more issues\n`;
           }
@@ -93,19 +92,22 @@ export class OutputFormatters {
           colWidths: [20, 6, 12, 10, 40],
           style: {
             head: ['cyan', 'bold'],
-            border: ['grey']
-          }
+            border: ['grey'],
+          },
         });
 
         output += '🔍 All Issues\n';
-        
-        for (const comment of result.reviewSummary.comments.slice(0, showDetails ? undefined : 10)) {
+
+        for (const comment of result.reviewSummary.comments.slice(
+          0,
+          showDetails ? undefined : 10
+        )) {
           issuesTable.push([
             this.truncateText(comment.file, 18),
             comment.line.toString(),
             comment.category,
             comment.severity.toUpperCase(),
-            this.truncateText(comment.message, 35)
+            this.truncateText(comment.message, 35),
           ]);
         }
 
@@ -122,17 +124,14 @@ export class OutputFormatters {
         colWidths: [5, 70],
         style: {
           head: ['cyan', 'bold'],
-          border: ['grey']
-        }
+          border: ['grey'],
+        },
       });
 
       output += '💡 Suggestions\n';
-      
+
       result.reviewSummary.suggestions.forEach((suggestion, index) => {
-        suggestionsTable.push([
-          (index + 1).toString(),
-          this.wrapText(suggestion, 65)
-        ]);
+        suggestionsTable.push([(index + 1).toString(), this.wrapText(suggestion, 65)]);
       });
 
       output += suggestionsTable.toString() + '\n\n';
@@ -145,19 +144,19 @@ export class OutputFormatters {
         colWidths: [40, 12, 12, 12],
         style: {
           head: ['cyan', 'bold'],
-          border: ['grey']
-        }
+          border: ['grey'],
+        },
       });
 
       output += '📁 Files Changed\n';
-      
+
       for (const file of result.repositoryInfo.files) {
         const statusEmoji = this.getFileStatusEmoji(file.status);
         filesTable.push([
           this.truncateText(file.filename, 35),
           `${statusEmoji} ${file.status}`,
           `+${file.additions}`,
-          `-${file.deletions}`
+          `-${file.deletions}`,
         ]);
       }
 
@@ -182,7 +181,7 @@ export class OutputFormatters {
         criticalIssues: result.reviewSummary.criticalIssues,
         executionTime: result.executionTime,
         timestamp: result.timestamp,
-        checksExecuted: result.checksExecuted
+        checksExecuted: result.checksExecuted,
       },
       repository: {
         title: result.repositoryInfo.title,
@@ -193,13 +192,13 @@ export class OutputFormatters {
         workingDirectory: result.repositoryInfo.workingDirectory,
         filesChanged: result.repositoryInfo.files.length,
         totalAdditions: result.repositoryInfo.totalAdditions,
-        totalDeletions: result.repositoryInfo.totalDeletions
+        totalDeletions: result.repositoryInfo.totalDeletions,
       },
-      issues: options.groupByCategory 
+      issues: options.groupByCategory
         ? this.groupCommentsByCategory(result.reviewSummary.comments)
         : result.reviewSummary.comments,
       suggestions: result.reviewSummary.suggestions,
-      files: options.includeFiles ? result.repositoryInfo.files : undefined
+      files: options.includeFiles ? result.repositoryInfo.files : undefined,
     };
 
     return JSON.stringify(jsonResult, null, 2);
@@ -208,123 +207,128 @@ export class OutputFormatters {
   /**
    * Format analysis results as SARIF 2.1.0
    */
-  static formatAsSarif(result: AnalysisResult, options: OutputFormatterOptions = {}): string {
+  static formatAsSarif(result: AnalysisResult, _options: OutputFormatterOptions = {}): string {
     // Generate unique rule definitions for each issue category
-    const rules: any[] = [
+    const rules: Array<{
+      id: string;
+      shortDescription: { text: string };
+      fullDescription: { text: string };
+      helpUri: string;
+    }> = [
       {
-        id: "visor-security-input-validation",
+        id: 'visor-security-input-validation',
         shortDescription: {
-          text: "Input validation required"
+          text: 'Input validation required',
         },
         fullDescription: {
-          text: "Input validation and sanitization should be implemented to prevent security vulnerabilities."
+          text: 'Input validation and sanitization should be implemented to prevent security vulnerabilities.',
         },
-        helpUri: "https://owasp.org/www-project-top-ten/2017/A1_2017-Injection"
+        helpUri: 'https://owasp.org/www-project-top-ten/2017/A1_2017-Injection',
       },
       {
-        id: "visor-performance-optimization",
+        id: 'visor-performance-optimization',
         shortDescription: {
-          text: "Performance optimization needed"
+          text: 'Performance optimization needed',
         },
         fullDescription: {
-          text: "Code performance can be improved through caching, algorithm optimization, or resource management."
+          text: 'Code performance can be improved through caching, algorithm optimization, or resource management.',
         },
-        helpUri: "https://web.dev/performance/"
+        helpUri: 'https://web.dev/performance/',
       },
       {
-        id: "visor-style-consistency",
+        id: 'visor-style-consistency',
         shortDescription: {
-          text: "Code style inconsistency"
+          text: 'Code style inconsistency',
         },
         fullDescription: {
-          text: "Code should follow consistent naming conventions and formatting standards."
+          text: 'Code should follow consistent naming conventions and formatting standards.',
         },
-        helpUri: "https://google.github.io/styleguide/"
+        helpUri: 'https://google.github.io/styleguide/',
       },
       {
-        id: "visor-logic-complexity",
+        id: 'visor-logic-complexity',
         shortDescription: {
-          text: "Logic complexity issue"
+          text: 'Logic complexity issue',
         },
         fullDescription: {
-          text: "Code logic could be simplified or broken down into smaller, more manageable components."
+          text: 'Code logic could be simplified or broken down into smaller, more manageable components.',
         },
-        helpUri: "https://refactoring.guru/"
+        helpUri: 'https://refactoring.guru/',
       },
       {
-        id: "visor-documentation-missing",
+        id: 'visor-documentation-missing',
         shortDescription: {
-          text: "Documentation missing"
+          text: 'Documentation missing',
         },
         fullDescription: {
-          text: "Public functions and complex logic should be documented for maintainability."
+          text: 'Public functions and complex logic should be documented for maintainability.',
         },
-        helpUri: "https://jsdoc.app/"
-      }
+        helpUri: 'https://jsdoc.app/',
+      },
     ];
 
     // Map Visor categories to rule IDs
     const categoryToRuleId: Record<string, string> = {
-      security: "visor-security-input-validation",
-      performance: "visor-performance-optimization", 
-      style: "visor-style-consistency",
-      logic: "visor-logic-complexity",
-      documentation: "visor-documentation-missing"
+      security: 'visor-security-input-validation',
+      performance: 'visor-performance-optimization',
+      style: 'visor-style-consistency',
+      logic: 'visor-logic-complexity',
+      documentation: 'visor-documentation-missing',
     };
 
     // Map Visor severity to SARIF level
     const severityToLevel: Record<string, string> = {
-      error: "error",
-      warning: "warning",
-      info: "note"
+      error: 'error',
+      warning: 'warning',
+      info: 'note',
     };
 
     // Convert ReviewComments to SARIF results
-    const sarifResults = result.reviewSummary.comments.map((comment, index) => {
-      const ruleId = categoryToRuleId[comment.category] || "visor-logic-complexity";
+    const sarifResults = result.reviewSummary.comments.map((comment, _index) => {
+      const ruleId = categoryToRuleId[comment.category] || 'visor-logic-complexity';
       const ruleIndex = rules.findIndex(rule => rule.id === ruleId);
-      
+
       return {
         ruleId: ruleId,
         ruleIndex: ruleIndex,
-        level: severityToLevel[comment.severity] || "warning",
+        level: severityToLevel[comment.severity] || 'warning',
         message: {
-          text: comment.message
+          text: comment.message,
         },
         locations: [
           {
             physicalLocation: {
               artifactLocation: {
                 uri: comment.file,
-                uriBaseId: "%SRCROOT%"
+                uriBaseId: '%SRCROOT%',
               },
               region: {
                 startLine: comment.line,
-                startColumn: 1
-              }
-            }
-          }
-        ]
+                startColumn: 1,
+              },
+            },
+          },
+        ],
       };
     });
 
     // Construct the complete SARIF 2.1.0 structure
     const sarifReport = {
-      "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-      "version": "2.1.0",
-      "runs": [
+      $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+      version: '2.1.0',
+      runs: [
         {
-          "tool": {
-            "driver": {
-              "name": "Visor",
-              "version": "1.0.0",
-              "informationUri": "https://github.com/your-org/visor",
-              "rules": rules
-            }
+          tool: {
+            driver: {
+              name: 'Visor',
+              version: '1.0.0',
+              informationUri: 'https://github.com/your-org/visor',
+              rules: rules,
+            },
           },
-          "results": sarifResults
-        }
-      ]
+          results: sarifResults,
+        },
+      ],
     };
 
     return JSON.stringify(sarifReport, null, 2);
@@ -361,10 +365,10 @@ export class OutputFormatters {
     if (result.reviewSummary.comments.length > 0) {
       if (groupByCategory) {
         const groupedComments = this.groupCommentsByCategory(result.reviewSummary.comments);
-        
+
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
-          
+
           const emoji = this.getCategoryEmoji(category);
           const score = this.calculateCategoryScore(comments);
           output += `## ${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (Score: ${score}/100)\n\n`;
@@ -379,20 +383,20 @@ export class OutputFormatters {
           if (!showDetails && comments.length > 5) {
             output += `<details>\n`;
             output += `<summary>Show ${comments.length - 5} more issues...</summary>\n\n`;
-            
+
             for (const comment of comments.slice(5)) {
               const severityEmoji = this.getSeverityEmoji(comment.severity);
               output += `### ${severityEmoji} \`${comment.file}:${comment.line}\`\n`;
               output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
               output += `**Message**: ${comment.message}\n\n`;
             }
-            
+
             output += `</details>\n\n`;
           }
         }
       } else {
         output += `## 🔍 All Issues\n\n`;
-        
+
         for (const comment of result.reviewSummary.comments) {
           const severityEmoji = this.getSeverityEmoji(comment.severity);
           output += `### ${severityEmoji} \`${comment.file}:${comment.line}\` (${comment.category})\n`;
@@ -408,7 +412,7 @@ export class OutputFormatters {
     // Suggestions
     if (result.reviewSummary.suggestions.length > 0) {
       output += `## 💡 Recommendations\n\n`;
-      
+
       result.reviewSummary.suggestions.forEach((suggestion, index) => {
         output += `${index + 1}. ${suggestion}\n`;
       });
@@ -420,7 +424,7 @@ export class OutputFormatters {
       output += `## 📁 Files Changed\n\n`;
       output += `| File | Status | Changes |\n`;
       output += `|------|--------|---------|\n`;
-      
+
       for (const file of result.repositoryInfo.files) {
         const statusEmoji = this.getFileStatusEmoji(file.status);
         output += `| \`${file.filename}\` | ${statusEmoji} ${file.status} | +${file.additions}/-${file.deletions} |\n`;
@@ -437,13 +441,15 @@ export class OutputFormatters {
     return output;
   }
 
-  private static groupCommentsByCategory(comments: ReviewComment[]): Record<string, ReviewComment[]> {
+  private static groupCommentsByCategory(
+    comments: ReviewComment[]
+  ): Record<string, ReviewComment[]> {
     const grouped: Record<string, ReviewComment[]> = {
       security: [],
       performance: [],
       style: [],
       logic: [],
-      documentation: []
+      documentation: [],
     };
 
     for (const comment of comments) {
@@ -458,11 +464,11 @@ export class OutputFormatters {
 
   private static calculateCategoryScore(comments: ReviewComment[]): number {
     if (comments.length === 0) return 100;
-    
+
     const errorCount = comments.filter(c => c.severity === 'error').length;
     const warningCount = comments.filter(c => c.severity === 'warning').length;
     const infoCount = comments.filter(c => c.severity === 'info').length;
-    
+
     return Math.max(0, 100 - errorCount * 25 - warningCount * 10 - infoCount * 5);
   }
 
@@ -472,7 +478,7 @@ export class OutputFormatters {
       performance: '📈',
       style: '🎨',
       logic: '🧠',
-      documentation: '📚'
+      documentation: '📚',
     };
     return emojiMap[category] || '📝';
   }
@@ -481,7 +487,7 @@ export class OutputFormatters {
     const emojiMap: Record<string, string> = {
       error: '🚨',
       warning: '⚠️',
-      info: 'ℹ️'
+      info: 'ℹ️',
     };
     return emojiMap[severity] || '📝';
   }
@@ -491,7 +497,7 @@ export class OutputFormatters {
       added: '✅',
       removed: '❌',
       modified: '📝',
-      renamed: '🔄'
+      renamed: '🔄',
     };
     return emojiMap[status] || '📄';
   }
@@ -500,7 +506,7 @@ export class OutputFormatters {
     const colorMap: Record<string, string> = {
       error: 'red',
       warning: 'yellow',
-      info: 'cyan'
+      info: 'cyan',
     };
     return colorMap[severity] || 'white';
   }
@@ -512,7 +518,7 @@ export class OutputFormatters {
 
   private static wrapText(text: string, width: number): string {
     if (text.length <= width) return text;
-    
+
     const words = text.split(' ');
     const lines: string[] = [];
     let currentLine = '';

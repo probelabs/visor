@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { ConfigManager } from '../../src/config';
 import { VisorConfig } from '../../src/types/config';
 import * as fs from 'fs';
@@ -53,8 +54,9 @@ output:
     it('should handle missing config file gracefully', async () => {
       mockFs.existsSync.mockReturnValue(false);
 
-      await expect(configManager.loadConfig('/nonexistent/config.yaml'))
-        .rejects.toThrow('Configuration file not found: /nonexistent/config.yaml');
+      await expect(configManager.loadConfig('/nonexistent/config.yaml')).rejects.toThrow(
+        'Configuration file not found: /nonexistent/config.yaml'
+      );
     });
 
     it('should handle invalid YAML syntax', async () => {
@@ -74,8 +76,9 @@ output:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(invalidYaml);
 
-      await expect(configManager.loadConfig('/path/to/invalid.yaml'))
-        .rejects.toThrow('Invalid YAML syntax');
+      await expect(configManager.loadConfig('/path/to/invalid.yaml')).rejects.toThrow(
+        'Invalid YAML syntax'
+      );
     });
 
     it('should handle file read errors', async () => {
@@ -84,8 +87,9 @@ output:
         throw new Error('Permission denied');
       });
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Failed to read configuration file');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Failed to read configuration file'
+      );
     });
   });
 
@@ -101,8 +105,9 @@ checks:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithoutVersion);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Missing required field: version');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Missing required field: version'
+      );
     });
 
     it('should validate required checks field', async () => {
@@ -116,8 +121,9 @@ output:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithoutChecks);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Missing required field: checks');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Missing required field: checks'
+      );
     });
 
     it('should validate check configuration structure', async () => {
@@ -132,8 +138,9 @@ checks:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithInvalidCheck);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Invalid check configuration for "performance": missing type');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Invalid check configuration for "performance": missing type'
+      );
     });
 
     it('should validate check type values', async () => {
@@ -149,8 +156,9 @@ checks:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithInvalidType);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Invalid check type "invalid_type". Must be: ai');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Invalid check type "invalid_type". Must be: ai'
+      );
     });
 
     it('should validate event triggers', async () => {
@@ -166,8 +174,9 @@ checks:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithInvalidEvent);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Invalid event "invalid_event". Must be one of: pr_opened, pr_updated, pr_closed');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Invalid event "invalid_event". Must be one of: pr_opened, pr_updated, pr_closed'
+      );
     });
 
     it('should validate output format configuration', async () => {
@@ -186,8 +195,9 @@ output:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(configWithInvalidOutput);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml'))
-        .rejects.toThrow('Invalid output format "invalid_format". Must be one of: summary, detailed');
+      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
+        'Invalid output format "invalid_format". Must be one of: summary, detailed'
+      );
     });
   });
 
@@ -201,8 +211,8 @@ output:
         pr_comment: {
           format: 'summary',
           group_by: 'check',
-          collapse: true
-        }
+          collapse: true,
+        },
       });
     });
 
@@ -241,7 +251,7 @@ checks:
 
       // Mock process.cwd() to return our test directory
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
-      
+
       mockFs.existsSync.mockImplementation((filePath: any) => {
         return filePath === path.join(testConfigDir, 'visor.config.yaml');
       });
@@ -264,7 +274,7 @@ checks:
 `;
 
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
-      
+
       mockFs.existsSync.mockImplementation((filePath: any) => {
         // First check for .yaml fails, second check for .yml succeeds
         return filePath === path.join(testConfigDir, 'visor.config.yml');
@@ -296,15 +306,15 @@ checks:
           performance: {
             type: 'ai',
             prompt: 'Check performance',
-            on: ['pr_opened']
-          }
-        }
+            on: ['pr_opened'],
+          },
+        },
       };
 
       const cliOptions = {
         checks: ['security', 'architecture'] as any,
         output: 'json' as const,
-        configPath: '/custom/path.yaml'
+        configPath: '/custom/path.yaml',
       };
 
       const merged = configManager.mergeWithCliOptions(fileConfig, cliOptions);
@@ -318,12 +328,12 @@ checks:
     it('should handle empty CLI options', async () => {
       const fileConfig: Partial<VisorConfig> = {
         version: '1.0',
-        checks: {}
+        checks: {},
       };
 
       const cliOptions = {
         checks: [],
-        output: 'table' as const
+        output: 'table' as const,
       };
 
       const merged = configManager.mergeWithCliOptions(fileConfig, cliOptions);
@@ -354,7 +364,7 @@ checks:
 
       expect(config.environmentOverrides).toEqual({
         configPath: '/env/config.yaml',
-        outputFormat: 'json'
+        outputFormat: 'json',
       });
 
       // Clean up

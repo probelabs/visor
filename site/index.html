@@ -1797,7 +1797,7 @@ jobs:
             
             <div class="config-generator">
                 <h3>Interactive Config Generator</h3>
-                <p>Select AI checks to generate your visor.yaml:</p>
+                <p>Select AI assistants and security tools to generate your visor.yaml:</p>
                 
                 <div class="tool-selector">
                     <label class="tool-option">
@@ -1811,34 +1811,34 @@ jobs:
                         AI Code Assistant
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="code-review">
+                        <input type="checkbox" name="tools" value="semgrep">
                         <span class="checkmark"></span>
-                        AI Code Review
+                        Semgrep (SAST)
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="security">
+                        <input type="checkbox" name="tools" value="trivy">
                         <span class="checkmark"></span>
-                        AI Security Analysis
+                        Trivy (Vulnerabilities)
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="performance">
+                        <input type="checkbox" name="tools" value="trufflehog">
                         <span class="checkmark"></span>
-                        AI Performance Check
+                        TruffleHog (Secrets)
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="probe">
+                        <input type="checkbox" name="tools" value="eslint">
                         <span class="checkmark"></span>
-                        Probe Assistant
+                        ESLint (JavaScript)
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="docs">
+                        <input type="checkbox" name="tools" value="gitleaks">
                         <span class="checkmark"></span>
-                        AI Documentation Check
+                        Gitleaks (Git Secrets)
                     </label>
                     <label class="tool-option">
-                        <input type="checkbox" name="tools" value="migration">
+                        <input type="checkbox" name="tools" value="bandit">
                         <span class="checkmark"></span>
-                        AI Migration Guard
+                        Bandit (Python Security)
                     </label>
                 </div>
                 
@@ -2302,70 +2302,52 @@ jobs:
       - bug_troubleshooting
       - implementation_suggestions`,
                 
-                'code-review': `  code_review:
-    type: ai
-    prompt: |
-      Review this PR for:
-      - Logic errors and bugs
-      - Edge cases not handled
-      - Code maintainability
-      - Best practices
-    on: [pr_opened, pr_updated]`,
-                
-                'security-analysis': `  security_analysis:
-    type: ai
-    model: claude-3-5-sonnet
-    prompt: |
-      Analyze code for security vulnerabilities:
-      - Authentication and authorization issues
-      - Input validation problems
-      - Potential data exposure
-      - Dependency vulnerabilities
+                semgrep: `  - name: semgrep
+    runner: tool
+    image: returntocorp/semgrep:latest
+    commands:
+      - semgrep --config=auto --json .
     conditions:
-      files: ["**/*.js", "**/*.py", "**/*.go"]`,
+      files: ["**/*.py", "**/*.js", "**/*.go", "**/*.java"]`,
                 
-                'performance-check': `  performance_check:
-    type: ai
-    model: gpt-4o
-    prompt: |
-      Review code for performance issues:
-      - Database query optimization
-      - Memory usage patterns
-      - Algorithmic complexity
-      - Resource management
+                trivy: `  - name: trivy-vuln
+    runner: tool
+    image: aquasec/trivy:latest
+    commands:
+      - trivy fs --format json .
     conditions:
-      files: ["**/*.sql", "**/*.js", "**/*.py"]`,
+      files: ["package.json", "requirements.txt", "go.mod"]`,
                 
-                'documentation-check': `  documentation_check:
-    type: ai
-    model: claude-3-5-sonnet
-    prompt: |
-      Check documentation completeness:
-      - Missing function documentation
-      - Outdated README sections
-      - API endpoint documentation
-      - Code comments clarity
+                trufflehog: `  - name: secrets-scan
+    runner: tool
+    image: trufflesecurity/trufflehog:latest
+    commands:
+      - trufflehog filesystem . --json
+    conditions:
+      max_diff_size: 1000`,
+                
+                eslint: `  - name: eslint
+    runner: script
+    script: |
+      npx eslint . --ext .js,.jsx,.ts,.tsx --format json
     conditions:
       files: ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]`,
                 
-                'probe': `  probe:
-    type: ai
-    command: probe
-    prompt: |
-      Your goal is to answer questions about this project and assist developers
-    on: [comment, issue_open]`,
-                
-                'migration-guard': `  migration_guard:
-    type: ai
-    model: gpt-4o
-    prompt: |
-      Check for breaking changes in:
-      - API contracts and interfaces
-      - Database schema modifications
-      - Configuration changes
-      - Dependency updates
+                gitleaks: `  - name: gitleaks
+    runner: tool
+    image: zricethezav/gitleaks:latest
+    commands:
+      - gitleaks detect --source . --report-format json
     conditions:
-      files: ["**/migration/**", "**/schema/**", "**/api/**"]`
+      max_diff_size: 500`,
+                
+                bandit: `  - name: bandit
+    runner: tool
+    image: securitycodescans/bandit:latest
+    commands:
+      - bandit -r . -f json
+    conditions:
+      files: ["**/*.py"]`
             };
 
             const yamlConfig = `# visor.yaml

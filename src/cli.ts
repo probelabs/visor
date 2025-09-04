@@ -24,13 +24,18 @@ export class CLI {
       .name('visor')
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
-      .option('-c, --check <type>', 'Specify check type (can be used multiple times)', this.collectChecks, [])
+      .option(
+        '-c, --check <type>',
+        'Specify check type (can be used multiple times)',
+        this.collectChecks,
+        []
+      )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--config <path>', 'Path to configuration file')
       .addHelpText('after', this.getExamplesText());
 
     // Add validation for options
-    this.program.hook('preAction', (thisCommand) => {
+    this.program.hook('preAction', thisCommand => {
       const opts = thisCommand.opts();
       this.validateOptions(opts);
     });
@@ -54,7 +59,12 @@ export class CLI {
         .name('visor')
         .description('Visor - AI-powered code review tool')
         .version(this.getVersion())
-        .option('-c, --check <type>', 'Specify check type (can be used multiple times)', this.collectChecks, [])
+        .option(
+          '-c, --check <type>',
+          'Specify check type (can be used multiple times)',
+          this.collectChecks,
+          []
+        )
         .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
         .option('--config <path>', 'Path to configuration file')
         .allowUnknownOption(false)
@@ -76,7 +86,7 @@ export class CLI {
         output: options.output as OutputFormat,
         configPath: options.config,
         help: options.help,
-        version: options.version
+        version: options.version,
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -84,7 +94,10 @@ export class CLI {
         if (error.message.includes('unknown option') || error.message.includes('Unknown option')) {
           throw error;
         }
-        if (error.message.includes('Missing required argument') || error.message.includes('argument missing')) {
+        if (
+          error.message.includes('Missing required argument') ||
+          error.message.includes('argument missing')
+        ) {
           throw error;
         }
         if (error.message.includes('too many arguments')) {
@@ -99,9 +112,9 @@ export class CLI {
   /**
    * Validate parsed options
    */
-  private validateOptions(options: any): void {
+  private validateOptions(options: Record<string, unknown>): void {
     // Validate check types
-    if (options.check && options.check.length > 0) {
+    if (Array.isArray(options.check) && options.check.length > 0) {
       for (const check of options.check) {
         if (!this.validChecks.includes(check as CheckType)) {
           throw new Error(
@@ -129,7 +142,12 @@ export class CLI {
       .name('visor')
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
-      .option('-c, --check <type>', 'Specify check type (can be used multiple times)', this.collectChecks, [])
+      .option(
+        '-c, --check <type>',
+        'Specify check type (can be used multiple times)',
+        this.collectChecks,
+        []
+      )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--config <path>', 'Path to configuration file')
       .addHelpText('after', this.getExamplesText());
@@ -149,7 +167,7 @@ export class CLI {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
         return packageJson.version || '1.0.0';
       }
-    } catch (error) {
+    } catch {
       // Fallback to default version
     }
     return '1.0.0';

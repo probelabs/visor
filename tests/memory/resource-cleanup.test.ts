@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { ConfigManager } from '../../src/config';
 import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { CommentManager } from '../../src/github-comments';
@@ -33,7 +34,7 @@ describe('Resource Cleanup Verification Tests', () => {
   beforeEach(() => {
     memoryProfiler = new MemoryProfiler();
     mockOctokit = createMockOctokit();
-    
+
     if (global.gc) {
       global.gc();
     }
@@ -51,7 +52,7 @@ describe('Resource Cleanup Verification Tests', () => {
 
       const configManager = new ConfigManager();
       const createdFiles: string[] = [];
-      
+
       // Create many temporary config files
       const numConfigs = 50;
       console.log(`Creating ${numConfigs} temporary config files...`);
@@ -82,15 +83,15 @@ describe('Resource Cleanup Verification Tests', () => {
 
       // Perform many file operations
       const loadPromises: Promise<any>[] = [];
-      
+
       for (let i = 0; i < numConfigs; i++) {
         const configPath = createdFiles[i];
-        
+
         // Create promise for each config load
         const loadPromise = (async () => {
           try {
             const config = await configManager.loadConfig(configPath);
-            
+
             // Perform additional operations
             const cliOptions = {
               checks: ['performance' as any],
@@ -99,18 +100,18 @@ describe('Resource Cleanup Verification Tests', () => {
               help: false,
               version: false,
             };
-            
+
             const merged = configManager.mergeWithCliOptions(config, cliOptions);
-            
+
             // Simulate processing
             JSON.stringify(merged);
-            
+
             return { success: true, configPath };
           } catch (error) {
             return { success: false, error, configPath };
           }
         })();
-        
+
         loadPromises.push(loadPromise);
       }
 
@@ -129,9 +130,9 @@ describe('Resource Cleanup Verification Tests', () => {
       // Test that we can still perform file operations (file handles not exhausted)
       const testConfigPath = path.join(tempDir, 'cleanup-test.yaml');
       const testConfig = { version: '1.0', checks: {} };
-      
+
       fs.writeFileSync(testConfigPath, yaml.dump(testConfig));
-      
+
       try {
         const cleanupTestConfig = await configManager.loadConfig(testConfigPath);
         expect(cleanupTestConfig).toBeDefined();
@@ -174,7 +175,7 @@ describe('Resource Cleanup Verification Tests', () => {
 
       for (let i = 0; i < numBridges; i++) {
         const bridge = new ActionCliBridge('test-token', context);
-        
+
         const inputs = {
           'github-token': 'test-token',
           'visor-checks': 'security,performance',
@@ -185,10 +186,10 @@ describe('Resource Cleanup Verification Tests', () => {
         try {
           // This should create temporary config files
           const tempConfigPath = await bridge.createTempConfigFromInputs(inputs);
-          
+
           if (tempConfigPath) {
             tempFilePaths.push(tempConfigPath);
-            
+
             // Verify file was created
             if (fs.existsSync(tempConfigPath)) {
               console.log(`  Created temp file: ${path.basename(tempConfigPath)}`);
@@ -226,7 +227,7 @@ describe('Resource Cleanup Verification Tests', () => {
         if (fs.existsSync(filePath)) {
           filesRemaining++;
           console.log(`  File still exists: ${path.basename(filePath)}`);
-          
+
           // Manual cleanup for test cleanliness
           try {
             fs.unlinkSync(filePath);
@@ -239,7 +240,9 @@ describe('Resource Cleanup Verification Tests', () => {
       console.log(`Temporary File Cleanup Results:`);
       console.log(`  Files created: ${tempFilePaths.length}`);
       console.log(`  Files remaining: ${filesRemaining}`);
-      console.log(`  Cleanup success rate: ${((tempFilePaths.length - filesRemaining) / tempFilePaths.length * 100).toFixed(2)}%`);
+      console.log(
+        `  Cleanup success rate: ${(((tempFilePaths.length - filesRemaining) / tempFilePaths.length) * 100).toFixed(2)}%`
+      );
 
       // Should cleanup most temporary files
       expect(filesRemaining).toBeLessThanOrEqual(tempFilePaths.length * 0.1); // ≤10% remaining
@@ -287,24 +290,36 @@ describe('Resource Cleanup Verification Tests', () => {
             type: 'ai' as const,
             prompt: `Large prompt for check ${i}-${j}: ${Array(100).fill(`detail-${j}`).join(' ')}`,
             on: ['pr_opened' as const, 'pr_updated' as const],
-            triggers: Array(20).fill(0).map((_, k) => `**/*-${i}-${j}-${k}.*`),
+            triggers: Array(20)
+              .fill(0)
+              .map((_, k) => `**/*-${i}-${j}-${k}.*`),
           };
         }
 
         largeConfigs.push(largeConfig);
         const eventMapper = new EventMapper(largeConfig);
-        
+
         // Perform operations that create internal references
         const event = {
           event_name: 'pull_request',
           action: 'opened',
           repository: { owner: { login: `owner-${i}` }, name: `repo-${i}` },
-          pull_request: { number: i, state: 'open', head: { sha: 'abc', ref: 'feature' }, base: { sha: 'def', ref: 'main' }, draft: false },
+          pull_request: {
+            number: i,
+            state: 'open',
+            head: { sha: 'abc', ref: 'feature' },
+            base: { sha: 'def', ref: 'main' },
+            draft: false,
+          },
         };
 
         const fileContext = {
-          changedFiles: Array(50).fill(0).map((_, k) => `file-${i}-${k}.js`),
-          modifiedFiles: Array(25).fill(0).map((_, k) => `modified-${i}-${k}.js`),
+          changedFiles: Array(50)
+            .fill(0)
+            .map((_, k) => `file-${i}-${k}.js`),
+          modifiedFiles: Array(25)
+            .fill(0)
+            .map((_, k) => `modified-${i}-${k}.js`),
         };
 
         try {
@@ -319,8 +334,10 @@ describe('Resource Cleanup Verification Tests', () => {
 
       const afterCreationMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const creationGrowthMB = (afterCreationMemory - baselineMemory) / 1024 / 1024;
-      
-      console.log(`After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`
+      );
 
       // Clear all references
       eventMappers.length = 0;
@@ -392,7 +409,7 @@ describe('Resource Cleanup Verification Tests', () => {
 
         // Add reference back from root to check
         config.primary_check = config.checks[`circular-check-${i}`];
-        
+
         // Create some nested circular references
         config.nested = {
           level1: {
@@ -417,8 +434,10 @@ describe('Resource Cleanup Verification Tests', () => {
 
       const afterCreationMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const creationGrowthMB = (afterCreationMemory - baselineMemory) / 1024 / 1024;
-      
-      console.log(`After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`
+      );
 
       // Clear references (this should break the circular references)
       for (const config of circularConfigs) {
@@ -489,17 +508,20 @@ describe('Resource Cleanup Verification Tests', () => {
         // Perform multiple API operations that create connections/state
         const operations = [
           () => manager.findVisorComment('test-owner', `test-repo-${i}`, i),
-          () => manager.updateOrCreateComment(
-            'test-owner',
-            `test-repo-${i}`,
-            i,
-            `Large comment content ${i}: ${Array(100).fill(`data-${i}`).join(' ')}`,
-            { commentId: `comment-${i}`, triggeredBy: `test-${i}` }
-          ),
-          () => manager.formatCommentWithMetadata(
-            `Content ${i}`,
-            { commentId: `format-${i}`, lastUpdated: new Date().toISOString(), triggeredBy: `format-test-${i}` }
-          ),
+          () =>
+            manager.updateOrCreateComment(
+              'test-owner',
+              `test-repo-${i}`,
+              i,
+              `Large comment content ${i}: ${Array(100).fill(`data-${i}`).join(' ')}`,
+              { commentId: `comment-${i}`, triggeredBy: `test-${i}` }
+            ),
+          () =>
+            manager.formatCommentWithMetadata(`Content ${i}`, {
+              commentId: `format-${i}`,
+              lastUpdated: new Date().toISOString(),
+              triggeredBy: `format-test-${i}`,
+            }),
         ];
 
         // Execute operations
@@ -516,8 +538,10 @@ describe('Resource Cleanup Verification Tests', () => {
 
       const afterOperationsMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const operationsGrowthMB = (afterOperationsMemory - baselineMemory) / 1024 / 1024;
-      
-      console.log(`After operations: ${(afterOperationsMemory / 1024 / 1024).toFixed(2)}MB (growth: ${operationsGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After operations: ${(afterOperationsMemory / 1024 / 1024).toFixed(2)}MB (growth: ${operationsGrowthMB.toFixed(2)}MB)`
+      );
 
       // Clear all comment manager references
       commentManagers.length = 0;
@@ -573,20 +597,22 @@ describe('Resource Cleanup Verification Tests', () => {
             repository: { owner: { login: 'test' }, name: 'repo' },
           };
           const bridge = new ActionCliBridge('token', context);
-          
+
           // Create resources that might leak on error
           const resources = {
             id: i,
             configManager,
             bridge,
             largeBuffer: Buffer.alloc(1024 * 50), // 50KB buffer
-            errorData: Array(100).fill(0).map((_, j) => ({
-              id: `error-${i}-${j}`,
-              data: `error-data-${i}-${j}`.repeat(10),
-              timestamp: new Date(),
-            })),
+            errorData: Array(100)
+              .fill(0)
+              .map((_, j) => ({
+                id: `error-${i}-${j}`,
+                data: `error-data-${i}-${j}`.repeat(10),
+                timestamp: new Date(),
+              })),
           };
-          
+
           resourceHolders.push(resources);
 
           // Simulate operations that might fail
@@ -596,7 +622,8 @@ describe('Resource Cleanup Verification Tests', () => {
             // Bridge operations with invalid inputs
             () => bridge.parseGitHubInputsToCliArgs({ 'github-token': null } as any),
             // Mock API call that fails
-            () => mockOctokit.rest.pulls.get({ owner: 'invalid', repo: 'invalid', pull_number: -1 }),
+            () =>
+              mockOctokit.rest.pulls.get({ owner: 'invalid', repo: 'invalid', pull_number: -1 }),
           ];
 
           // Execute operations and expect them to fail
@@ -607,7 +634,6 @@ describe('Resource Cleanup Verification Tests', () => {
               // Expected failures - the key is that resources should still be cleaned up
             }
           }
-
         } catch (error: any) {
           // Errors are expected in this test scenario
         }
@@ -616,14 +642,18 @@ describe('Resource Cleanup Verification Tests', () => {
         if (i % 10 === 0) {
           const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
           const growthMB = (currentMemory - baselineMemory) / 1024 / 1024;
-          console.log(`  Scenario ${i}: ${(currentMemory / 1024 / 1024).toFixed(2)}MB (growth: ${growthMB.toFixed(2)}MB)`);
+          console.log(
+            `  Scenario ${i}: ${(currentMemory / 1024 / 1024).toFixed(2)}MB (growth: ${growthMB.toFixed(2)}MB)`
+          );
         }
       }
 
       const afterErrorsMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const errorsGrowthMB = (afterErrorsMemory - baselineMemory) / 1024 / 1024;
-      
-      console.log(`After error scenarios: ${(afterErrorsMemory / 1024 / 1024).toFixed(2)}MB (growth: ${errorsGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After error scenarios: ${(afterErrorsMemory / 1024 / 1024).toFixed(2)}MB (growth: ${errorsGrowthMB.toFixed(2)}MB)`
+      );
 
       // Clear all resource holders
       resourceHolders.length = 0;
@@ -637,7 +667,8 @@ describe('Resource Cleanup Verification Tests', () => {
       const afterCleanupMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const cleanupGrowthMB = (afterCleanupMemory - baselineMemory) / 1024 / 1024;
       const recoveredMemoryMB = (afterErrorsMemory - afterCleanupMemory) / 1024 / 1024;
-      const recoveryPercentage = errorsGrowthMB > 0 ? (recoveredMemoryMB / errorsGrowthMB) * 100 : 0;
+      const recoveryPercentage =
+        errorsGrowthMB > 0 ? (recoveredMemoryMB / errorsGrowthMB) * 100 : 0;
 
       console.log(`Resource Leak Detection Results:`);
       console.log(`  Error scenarios growth: ${errorsGrowthMB.toFixed(2)}MB`);

@@ -1,5 +1,5 @@
-import { CommentManager, Comment, RetryConfig } from '../../src/github-comments';
-import { Octokit } from '@octokit/rest';
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+import { CommentManager, RetryConfig } from '../../src/github-comments';
 
 // Mock the Octokit module
 jest.mock('@octokit/rest', () => ({
@@ -29,6 +29,21 @@ describe('CommentManager', () => {
           getComment: jest.fn(),
         },
       },
+      request: jest.fn().mockResolvedValue({ data: {} }),
+      graphql: jest.fn().mockResolvedValue({}),
+      log: {
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+      },
+      hook: {
+        before: jest.fn(),
+        after: jest.fn(),
+        error: jest.fn(),
+        wrap: jest.fn(),
+      },
+      auth: jest.fn().mockResolvedValue({ token: 'mock-token' }),
     };
 
     const retryConfig: Partial<RetryConfig> = {
@@ -186,7 +201,7 @@ describe('CommentManager', () => {
       mockOctokit.rest.issues.listComments.mockResolvedValue({
         data: [existingComment],
       } as any);
-      
+
       mockOctokit.rest.issues.getComment.mockResolvedValue({
         data: existingComment,
       } as any);
@@ -232,19 +247,16 @@ describe('CommentManager', () => {
       mockOctokit.rest.issues.listComments.mockResolvedValue({
         data: [originalComment],
       } as any);
-      
+
       mockOctokit.rest.issues.getComment.mockResolvedValue({
         data: modifiedComment,
       } as any);
 
       await expect(
-        commentManager.updateOrCreateComment(
-          'owner',
-          'repo',
-          123,
-          'New content',
-          { commentId: 'test123', allowConcurrentUpdates: false }
-        )
+        commentManager.updateOrCreateComment('owner', 'repo', 123, 'New content', {
+          commentId: 'test123',
+          allowConcurrentUpdates: false,
+        })
       ).rejects.toThrow('Comment collision detected');
     });
 

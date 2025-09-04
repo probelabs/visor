@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { PRAnalyzer } from '../../src/pr-analyzer';
 
 // Mock Octokit
@@ -11,6 +12,21 @@ const mockOctokit = {
       listComments: jest.fn(),
     },
   },
+  request: jest.fn().mockResolvedValue({ data: {} }),
+  graphql: jest.fn().mockResolvedValue({}),
+  log: {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+  hook: {
+    before: jest.fn(),
+    after: jest.fn(),
+    error: jest.fn(),
+    wrap: jest.fn(),
+  },
+  auth: jest.fn().mockResolvedValue({ token: 'mock-token' }),
 } as any;
 
 describe('PRAnalyzer', () => {

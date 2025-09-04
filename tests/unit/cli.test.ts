@@ -1,5 +1,4 @@
 import { CLI } from '../../src/cli';
-import { CliOptions } from '../../src/types/cli';
 
 describe('CLI Argument Parser', () => {
   let cli: CLI;
@@ -16,7 +15,14 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should parse multiple check arguments', () => {
-      const result = cli.parseArgs(['--check', 'performance', '--check', 'architecture', '--check', 'security']);
+      const result = cli.parseArgs([
+        '--check',
+        'performance',
+        '--check',
+        'architecture',
+        '--check',
+        'security',
+      ]);
       expect(result.checks).toEqual(['performance', 'architecture', 'security']);
     });
 
@@ -32,10 +38,14 @@ describe('CLI Argument Parser', () => {
 
     it('should parse all arguments together', () => {
       const result = cli.parseArgs([
-        '--check', 'performance', 
-        '--check', 'security',
-        '--output', 'json',
-        '--config', './custom.yaml'
+        '--check',
+        'performance',
+        '--check',
+        'security',
+        '--output',
+        'json',
+        '--config',
+        './custom.yaml',
       ]);
       expect(result.checks).toEqual(['performance', 'security']);
       expect(result.output).toBe('json');
@@ -59,11 +69,15 @@ describe('CLI Argument Parser', () => {
 
   describe('Argument Validation', () => {
     it('should validate check types', () => {
-      expect(() => cli.parseArgs(['--check', 'invalid-check'])).toThrow('Invalid check type: invalid-check');
+      expect(() => cli.parseArgs(['--check', 'invalid-check'])).toThrow(
+        'Invalid check type: invalid-check'
+      );
     });
 
     it('should validate output formats', () => {
-      expect(() => cli.parseArgs(['--output', 'invalid-format'])).toThrow('Invalid output format: invalid-format');
+      expect(() => cli.parseArgs(['--output', 'invalid-format'])).toThrow(
+        'Invalid output format: invalid-format'
+      );
     });
 
     it('should allow valid check types', () => {
@@ -104,7 +118,9 @@ describe('CLI Argument Parser', () => {
       } catch (error) {
         expect(error instanceof Error).toBe(true);
         expect((error as Error).message).toContain('Invalid check type');
-        expect((error as Error).message).toContain('Available options: performance, architecture, security, style, all');
+        expect((error as Error).message).toContain(
+          'Available options: performance, architecture, security, style, all'
+        );
       }
     });
   });
@@ -122,7 +138,9 @@ describe('CLI Argument Parser', () => {
     it('should include examples in help text', () => {
       const helpText = cli.getHelpText();
       expect(helpText).toContain('visor --check performance --output table');
-      expect(helpText).toContain('visor --check performance --check security --config ./visor.config.yaml');
+      expect(helpText).toContain(
+        'visor --check performance --check security --config ./visor.config.yaml'
+      );
     });
   });
 
@@ -135,7 +153,14 @@ describe('CLI Argument Parser', () => {
 
   describe('Advanced Parsing Scenarios', () => {
     it('should handle duplicate check types by keeping unique values', () => {
-      const result = cli.parseArgs(['--check', 'performance', '--check', 'performance', '--check', 'security']);
+      const result = cli.parseArgs([
+        '--check',
+        'performance',
+        '--check',
+        'performance',
+        '--check',
+        'security',
+      ]);
       expect(result.checks).toEqual(['performance', 'security']);
     });
 
@@ -154,7 +179,7 @@ describe('CLI Argument Parser', () => {
   describe('Integration with Configuration', () => {
     it('should return parsed options in expected format', () => {
       const result = cli.parseArgs(['--check', 'performance', '--output', 'json']);
-      
+
       // Ensure the result matches the CliOptions interface
       expect(result).toHaveProperty('checks');
       expect(result).toHaveProperty('output');
@@ -163,7 +188,14 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should preserve order of check arguments', () => {
-      const result = cli.parseArgs(['--check', 'security', '--check', 'performance', '--check', 'architecture']);
+      const result = cli.parseArgs([
+        '--check',
+        'security',
+        '--check',
+        'performance',
+        '--check',
+        'architecture',
+      ]);
       expect(result.checks).toEqual(['security', 'performance', 'architecture']);
     });
   });

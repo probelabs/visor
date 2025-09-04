@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { CLI } from '../../src/cli';
 import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
@@ -5,11 +6,11 @@ import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
 import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { EventMapper } from '../../src/event-mapper';
-import { 
-  PerformanceTimer, 
-  MemoryProfiler, 
-  createLargePRFixture, 
-  createMockOctokit 
+import {
+  PerformanceTimer,
+  MemoryProfiler,
+  createLargePRFixture,
+  createMockOctokit,
 } from '../performance/test-utilities';
 
 describe('Memory Leak Detection Tests', () => {
@@ -24,7 +25,7 @@ describe('Memory Leak Detection Tests', () => {
     timer = new PerformanceTimer();
     memoryProfiler = new MemoryProfiler();
     mockOctokit = createMockOctokit();
-    
+
     // Force garbage collection before each test
     if (global.gc) {
       global.gc();
@@ -52,12 +53,12 @@ describe('Memory Leak Detection Tests', () => {
 
       const cli = new CLI();
       const configManager = new ConfigManager();
-      
+
       // Establish baseline
       global.gc();
       await new Promise(resolve => setTimeout(resolve, 200));
       const baselineMemory = memoryProfiler.getCurrentUsage().heapUsed;
-      
+
       const memoryReadings: Array<{
         iteration: number;
         memoryMB: number;
@@ -74,17 +75,17 @@ describe('Memory Leak Detection Tests', () => {
         // Vary the operations to simulate real usage
         const checkType = ['performance', 'security', 'style', 'architecture'][i % 4];
         const outputFormat = ['summary', 'detailed', 'json'][i % 3];
-        
+
         try {
           // CLI parsing operations
           const options = cli.parseArgs(['--check', checkType, '--output', outputFormat]);
           expect(options).toBeDefined();
-          
+
           // Config operations
           const config = await configManager.findAndLoadConfig();
           const merged = configManager.mergeWithCliOptions(config, options);
           expect(merged).toBeDefined();
-          
+
           // Create temporary objects that should be garbage collected
           const tempData = {
             iteration: i,
@@ -93,10 +94,9 @@ describe('Memory Leak Detection Tests', () => {
             config: merged,
             timestamp: new Date(),
           };
-          
+
           // Simulate processing
           JSON.stringify(tempData);
-          
         } catch (error) {
           console.log(`Operation ${i} failed:`, error);
         }
@@ -106,21 +106,24 @@ describe('Memory Leak Detection Tests', () => {
           // Force GC before measurement
           global.gc();
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
           const memoryMB = currentMemory / 1024 / 1024;
           const growthMB = (currentMemory - baselineMemory) / 1024 / 1024;
-          
+
           memoryReadings.push({
             iteration: i,
             memoryMB,
             growthMB,
           });
 
-          console.log(`  Iteration ${i}: ${memoryMB.toFixed(2)}MB (growth: ${growthMB >= 0 ? '+' : ''}${growthMB.toFixed(2)}MB)`);
-          
+          console.log(
+            `  Iteration ${i}: ${memoryMB.toFixed(2)}MB (growth: ${growthMB >= 0 ? '+' : ''}${growthMB.toFixed(2)}MB)`
+          );
+
           // Early termination if memory growth is excessive
-          if (growthMB > 100) { // More than 100MB growth
+          if (growthMB > 100) {
+            // More than 100MB growth
             console.log(`Stopping early due to excessive memory growth: ${growthMB.toFixed(2)}MB`);
             break;
           }
@@ -134,9 +137,10 @@ describe('Memory Leak Detection Tests', () => {
       const finalGrowthMB = (finalMemory - baselineMemory) / 1024 / 1024;
 
       // Analysis
-      const avgGrowth = memoryReadings.reduce((sum, r) => sum + r.growthMB, 0) / memoryReadings.length;
+      const avgGrowth =
+        memoryReadings.reduce((sum, r) => sum + r.growthMB, 0) / memoryReadings.length;
       const maxGrowth = Math.max(...memoryReadings.map(r => r.growthMB));
-      const growthPerOperation = finalGrowthMB / totalOperations * 1024; // KB per operation
+      const growthPerOperation = (finalGrowthMB / totalOperations) * 1024; // KB per operation
 
       console.log(`Memory Leak Detection Results:`);
       console.log(`  Operations completed: ${totalOperations}`);
@@ -163,7 +167,7 @@ describe('Memory Leak Detection Tests', () => {
 
       const analyzer = new PRAnalyzer(mockOctokit);
       const reviewer = new PRReviewer(mockOctokit);
-      
+
       // Establish baseline
       global.gc();
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -171,7 +175,7 @@ describe('Memory Leak Detection Tests', () => {
 
       const cycles = 100;
       const memoryCheckpoints: number[] = [];
-      
+
       console.log(`Starting ${cycles} PR analysis cycles...`);
       console.log(`Baseline memory: ${(baselineMemory / 1024 / 1024).toFixed(2)}MB`);
 
@@ -192,31 +196,32 @@ describe('Memory Leak Detection Tests', () => {
           // Perform analysis
           const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', cycle);
           const review = await reviewer.reviewPR('test-owner', 'test-repo', cycle, prInfo);
-          
+
           // Validate results
           expect(prInfo).toBeDefined();
           expect(review).toBeDefined();
           expect(typeof review.overallScore).toBe('number');
-          
+
           // Create some temporary large objects that should be GC'd
           const tempAnalysis = {
             cycle,
             prInfo,
             review,
             largeBuffer: Buffer.alloc(1024 * 10), // 10KB buffer
-            processingData: Array(100).fill(0).map((_, i) => ({
-              id: `${cycle}-${i}`,
-              data: `processing-data-${cycle}-${i}`.repeat(10),
-            })),
+            processingData: Array(100)
+              .fill(0)
+              .map((_, i) => ({
+                id: `${cycle}-${i}`,
+                data: `processing-data-${cycle}-${i}`.repeat(10),
+              })),
           };
-          
+
           // Use the data briefly
-          JSON.stringify({ 
-            cycle, 
-            score: review.overallScore, 
-            dataSize: tempAnalysis.largeBuffer.length 
+          JSON.stringify({
+            cycle,
+            score: review.overallScore,
+            dataSize: tempAnalysis.largeBuffer.length,
           });
-          
         } catch (error) {
           console.log(`Cycle ${cycle} failed:`, error);
         }
@@ -225,12 +230,14 @@ describe('Memory Leak Detection Tests', () => {
         if (cycle % 10 === 0) {
           global.gc();
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
           memoryCheckpoints.push(currentMemory);
-          
+
           const growthMB = (currentMemory - baselineMemory) / 1024 / 1024;
-          console.log(`  Cycle ${cycle}: ${(currentMemory / 1024 / 1024).toFixed(2)}MB (growth: ${growthMB >= 0 ? '+' : ''}${growthMB.toFixed(2)}MB)`);
+          console.log(
+            `  Cycle ${cycle}: ${(currentMemory / 1024 / 1024).toFixed(2)}MB (growth: ${growthMB >= 0 ? '+' : ''}${growthMB.toFixed(2)}MB)`
+          );
         }
       }
 
@@ -238,10 +245,11 @@ describe('Memory Leak Detection Tests', () => {
       global.gc();
       await new Promise(resolve => setTimeout(resolve, 200));
       const finalMemory = memoryProfiler.getCurrentUsage().heapUsed;
-      
+
       // Analysis
       const totalGrowthMB = (finalMemory - baselineMemory) / 1024 / 1024;
-      const avgMemoryMB = memoryCheckpoints.reduce((sum, m) => sum + m, 0) / memoryCheckpoints.length / 1024 / 1024;
+      const avgMemoryMB =
+        memoryCheckpoints.reduce((sum, m) => sum + m, 0) / memoryCheckpoints.length / 1024 / 1024;
       const maxMemoryMB = Math.max(...memoryCheckpoints) / 1024 / 1024;
 
       console.log(`PR Analysis Memory Pressure Results:`);
@@ -249,7 +257,7 @@ describe('Memory Leak Detection Tests', () => {
       console.log(`  Final growth: ${totalGrowthMB.toFixed(2)}MB`);
       console.log(`  Average memory: ${avgMemoryMB.toFixed(2)}MB`);
       console.log(`  Peak memory: ${maxMemoryMB.toFixed(2)}MB`);
-      console.log(`  Growth per cycle: ${(totalGrowthMB / cycles * 1024).toFixed(2)}KB`);
+      console.log(`  Growth per cycle: ${((totalGrowthMB / cycles) * 1024).toFixed(2)}KB`);
 
       // Memory pressure thresholds
       expect(totalGrowthMB).toBeLessThan(30); // Total growth <30MB
@@ -268,7 +276,7 @@ describe('Memory Leak Detection Tests', () => {
 
       const initialMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const commentManagers: CommentManager[] = [];
-      
+
       // Create many comment managers with operations
       const numManagers = 50;
       console.log(`Creating ${numManagers} comment managers...`);
@@ -278,7 +286,7 @@ describe('Memory Leak Detection Tests', () => {
           maxRetries: 2,
           baseDelay: 50,
         });
-        
+
         // Perform operations that create internal state
         try {
           await manager.findVisorComment('test-owner', `test-repo-${i}`, i);
@@ -295,18 +303,20 @@ describe('Memory Leak Detection Tests', () => {
         } catch (error: any) {
           // Expected for mock failures
         }
-        
+
         commentManagers.push(manager);
       }
 
       const afterCreationMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const creationGrowthMB = (afterCreationMemory - initialMemory) / 1024 / 1024;
-      
-      console.log(`After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`
+      );
 
       // Clear references
       commentManagers.length = 0;
-      
+
       // Force garbage collection
       global.gc();
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -343,7 +353,7 @@ describe('Memory Leak Detection Tests', () => {
 
       const initialMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const bridges: ActionCliBridge[] = [];
-      
+
       console.log('Creating multiple ActionCliBridge instances with temp configs...');
 
       // Create many bridge instances with temporary configs
@@ -361,7 +371,7 @@ describe('Memory Leak Detection Tests', () => {
         };
 
         const bridge = new ActionCliBridge(`test-token-${i}`, context);
-        
+
         // Create temporary configurations
         const inputs = {
           'github-token': `test-token-${i}`,
@@ -369,28 +379,30 @@ describe('Memory Leak Detection Tests', () => {
           owner: `test-owner-${i}`,
           repo: `test-repo-${i}`,
         };
-        
+
         try {
           // Operations that might create temporary resources
           const shouldUse = bridge.shouldUseVisor(inputs);
           if (shouldUse) {
             const args = bridge.parseGitHubInputsToCliArgs(inputs);
             expect(args).toBeDefined();
-            
+
             // Simulate config creation (would normally create temp files)
             await bridge.createTempConfigFromInputs(inputs);
           }
         } catch (error: any) {
           // Expected for some mock scenarios
         }
-        
+
         bridges.push(bridge);
       }
 
       const afterCreationMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const creationGrowthMB = (afterCreationMemory - initialMemory) / 1024 / 1024;
-      
-      console.log(`After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`);
+
+      console.log(
+        `After creation: ${(afterCreationMemory / 1024 / 1024).toFixed(2)}MB (growth: ${creationGrowthMB.toFixed(2)}MB)`
+      );
 
       // Cleanup bridge resources
       for (const bridge of bridges) {
@@ -400,10 +412,10 @@ describe('Memory Leak Detection Tests', () => {
           // Cleanup errors are logged but not fatal
         }
       }
-      
+
       // Clear references
       bridges.length = 0;
-      
+
       // Force garbage collection
       global.gc();
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -434,7 +446,7 @@ describe('Memory Leak Detection Tests', () => {
 
       const cli = new CLI();
       const configManager = new ConfigManager();
-      
+
       // Track GC metrics
       const gcMetrics = {
         forcedCollections: 0,
@@ -448,21 +460,23 @@ describe('Memory Leak Detection Tests', () => {
 
       for (let i = 0; i < operations; i++) {
         // Create memory pressure with large temporary objects
-        const largeTempData = Array(500).fill(0).map((_, idx) => ({
-          id: `${i}-${idx}`,
-          data: `large-data-string-${i}-${idx}`.repeat(20),
-          metadata: {
-            created: new Date(),
-            operation: i,
-            random: Math.random(),
-          },
-        }));
+        const largeTempData = Array(500)
+          .fill(0)
+          .map((_, idx) => ({
+            id: `${i}-${idx}`,
+            data: `large-data-string-${i}-${idx}`.repeat(20),
+            metadata: {
+              created: new Date(),
+              operation: i,
+              random: Math.random(),
+            },
+          }));
 
         // Perform CLI operations
         const options = cli.parseArgs(['--check', 'all', '--output', 'json']);
         const config = await configManager.findAndLoadConfig();
         const merged = configManager.mergeWithCliOptions(config, options);
-        
+
         // Simulate processing with the large data
         const processed = largeTempData.map(item => ({
           ...item,
@@ -474,20 +488,22 @@ describe('Memory Leak Detection Tests', () => {
         if (i % 20 === 0) {
           const memoryBefore = memoryProfiler.getCurrentUsage().heapUsed;
           gcMetrics.memoryBeforeGC.push(memoryBefore);
-          
+
           global.gc();
           gcMetrics.forcedCollections++;
-          
+
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const memoryAfter = memoryProfiler.getCurrentUsage().heapUsed;
           gcMetrics.memoryAfterGC.push(memoryAfter);
-          
+
           const collected = memoryBefore - memoryAfter;
           const efficiency = collected > 0 ? (collected / memoryBefore) * 100 : 0;
           gcMetrics.gcEfficiency.push(efficiency);
-          
-          console.log(`  GC ${gcMetrics.forcedCollections}: ${(memoryBefore / 1024 / 1024).toFixed(2)}MB → ${(memoryAfter / 1024 / 1024).toFixed(2)}MB (${efficiency.toFixed(2)}% efficiency)`);
+
+          console.log(
+            `  GC ${gcMetrics.forcedCollections}: ${(memoryBefore / 1024 / 1024).toFixed(2)}MB → ${(memoryAfter / 1024 / 1024).toFixed(2)}MB (${efficiency.toFixed(2)}% efficiency)`
+          );
         }
 
         // Clear temp references explicitly
@@ -496,18 +512,24 @@ describe('Memory Leak Detection Tests', () => {
       }
 
       // Final analysis
-      const avgEfficiency = gcMetrics.gcEfficiency.reduce((sum, eff) => sum + eff, 0) / gcMetrics.gcEfficiency.length;
+      const avgEfficiency =
+        gcMetrics.gcEfficiency.reduce((sum, eff) => sum + eff, 0) / gcMetrics.gcEfficiency.length;
       const minEfficiency = Math.min(...gcMetrics.gcEfficiency);
       const maxEfficiency = Math.max(...gcMetrics.gcEfficiency);
-      const totalMemoryCollected = gcMetrics.memoryBeforeGC.reduce((sum, before, i) => {
-        const after = gcMetrics.memoryAfterGC[i];
-        return sum + Math.max(0, before - after);
-      }, 0) / 1024 / 1024;
+      const totalMemoryCollected =
+        gcMetrics.memoryBeforeGC.reduce((sum, before, i) => {
+          const after = gcMetrics.memoryAfterGC[i];
+          return sum + Math.max(0, before - after);
+        }, 0) /
+        1024 /
+        1024;
 
       console.log(`GC Efficiency Monitoring Results:`);
       console.log(`  Forced collections: ${gcMetrics.forcedCollections}`);
       console.log(`  Average efficiency: ${avgEfficiency.toFixed(2)}%`);
-      console.log(`  Efficiency range: ${minEfficiency.toFixed(2)}% - ${maxEfficiency.toFixed(2)}%`);
+      console.log(
+        `  Efficiency range: ${minEfficiency.toFixed(2)}% - ${maxEfficiency.toFixed(2)}%`
+      );
       console.log(`  Total memory collected: ${totalMemoryCollected.toFixed(2)}MB`);
 
       // GC efficiency validation
@@ -528,7 +550,7 @@ describe('Memory Leak Detection Tests', () => {
       }
 
       const analyzer = new PRAnalyzer(mockOctokit);
-      
+
       // Collect memory data over time
       const memoryPattern: Array<{
         timestamp: number;
@@ -540,7 +562,7 @@ describe('Memory Leak Detection Tests', () => {
       const startTime = Date.now();
       global.gc();
       const baselineMemory = memoryProfiler.getCurrentUsage().heapUsed;
-      
+
       console.log(`Analyzing memory growth patterns over varied operations...`);
       console.log(`Baseline memory: ${(baselineMemory / 1024 / 1024).toFixed(2)}MB`);
 
@@ -554,18 +576,18 @@ describe('Memory Leak Detection Tests', () => {
 
       for (let cycle = 0; cycle < 40; cycle++) {
         const opType = operationTypes[cycle % operationTypes.length];
-        
+
         // Create PR of specific size
         const prData = createLargePRFixture({
           filesCount: opType.files,
           linesPerFile: opType.lines,
         });
-        
+
         mockOctokit.rest.pulls.get.mockResolvedValue({ data: prData.prInfo });
         mockOctokit.rest.pulls.listFiles.mockResolvedValue({ data: prData.files });
 
         const operationStart = Date.now();
-        
+
         try {
           await analyzer.fetchPRDiff('test-owner', 'test-repo', cycle);
         } catch (error: any) {
@@ -574,7 +596,7 @@ describe('Memory Leak Detection Tests', () => {
 
         const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
         const growth = currentMemory - baselineMemory;
-        
+
         memoryPattern.push({
           timestamp: Date.now() - startTime,
           memory: currentMemory,
@@ -586,7 +608,7 @@ describe('Memory Leak Detection Tests', () => {
         if (cycle % 10 === 0 && cycle > 0) {
           global.gc();
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const postGCMemory = memoryProfiler.getCurrentUsage().heapUsed;
           memoryPattern.push({
             timestamp: Date.now() - startTime,
@@ -598,21 +620,26 @@ describe('Memory Leak Detection Tests', () => {
       }
 
       // Analyze growth patterns
-      const operationGroups = memoryPattern.reduce((groups, point) => {
-        if (!groups[point.operation]) groups[point.operation] = [];
-        groups[point.operation].push(point.growth / 1024 / 1024); // Convert to MB
-        return groups;
-      }, {} as Record<string, number[]>);
+      const operationGroups = memoryPattern.reduce(
+        (groups, point) => {
+          if (!groups[point.operation]) groups[point.operation] = [];
+          groups[point.operation].push(point.growth / 1024 / 1024); // Convert to MB
+          return groups;
+        },
+        {} as Record<string, number[]>
+      );
 
       console.log(`Memory Growth Pattern Analysis:`);
-      
+
       for (const [operation, growths] of Object.entries(operationGroups)) {
         const avgGrowth = growths.reduce((sum, g) => sum + g, 0) / growths.length;
         const maxGrowth = Math.max(...growths);
         const minGrowth = Math.min(...growths);
-        
-        console.log(`  ${operation}: avg=${avgGrowth.toFixed(2)}MB, range=${minGrowth.toFixed(2)}-${maxGrowth.toFixed(2)}MB (${growths.length} samples)`);
-        
+
+        console.log(
+          `  ${operation}: avg=${avgGrowth.toFixed(2)}MB, range=${minGrowth.toFixed(2)}-${maxGrowth.toFixed(2)}MB (${growths.length} samples)`
+        );
+
         // Validate reasonable growth patterns
         if (operation !== 'gc-cleanup') {
           expect(avgGrowth).toBeLessThan(100); // Average growth <100MB per operation type
@@ -620,15 +647,19 @@ describe('Memory Leak Detection Tests', () => {
       }
 
       // Check for memory growth correlation with operation complexity
-      const smallPRGrowth = operationGroups['small-pr'] ? 
-        operationGroups['small-pr'].reduce((sum, g) => sum + g, 0) / operationGroups['small-pr'].length : 0;
-      const hugePRGrowth = operationGroups['huge-pr'] ? 
-        operationGroups['huge-pr'].reduce((sum, g) => sum + g, 0) / operationGroups['huge-pr'].length : 0;
+      const smallPRGrowth = operationGroups['small-pr']
+        ? operationGroups['small-pr'].reduce((sum, g) => sum + g, 0) /
+          operationGroups['small-pr'].length
+        : 0;
+      const hugePRGrowth = operationGroups['huge-pr']
+        ? operationGroups['huge-pr'].reduce((sum, g) => sum + g, 0) /
+          operationGroups['huge-pr'].length
+        : 0;
 
       if (smallPRGrowth > 0 && hugePRGrowth > 0) {
         const growthRatio = hugePRGrowth / smallPRGrowth;
         console.log(`  Memory growth ratio (huge/small PR): ${growthRatio.toFixed(2)}x`);
-        
+
         // Memory usage should correlate somewhat with operation complexity
         expect(growthRatio).toBeGreaterThan(1); // Larger operations should use more memory
         expect(growthRatio).toBeLessThan(20); // But not excessively more

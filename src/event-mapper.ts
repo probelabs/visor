@@ -22,7 +22,7 @@ export interface GitHubEventContext {
   };
   issue?: {
     number: number;
-    pull_request?: any;
+    pull_request?: Record<string, unknown>;
   };
   comment?: {
     body: string;
@@ -63,8 +63,17 @@ export class EventMapper {
     eventContext: GitHubEventContext,
     fileContext?: FileChangeContext
   ): MappedExecution {
+    // Validate input payload first
+    if (!eventContext || typeof eventContext !== 'object') {
+      throw new Error('Invalid or corrupted event payload: missing event context');
+    }
+
+    if (!eventContext.event_name || typeof eventContext.event_name !== 'string') {
+      throw new Error('Invalid or corrupted event payload: missing or invalid event_name');
+    }
+
     const eventTrigger = this.mapGitHubEventToTrigger(eventContext);
-    
+
     if (!eventTrigger) {
       return {
         shouldExecute: false,
@@ -79,7 +88,7 @@ export class EventMapper {
 
     const checksToRun = this.getChecksForEvent(eventTrigger, fileContext);
     const repository = this.getRepositoryName(eventContext);
-    
+
     return {
       shouldExecute: checksToRun.length > 0,
       checksToRun,
@@ -104,17 +113,17 @@ export class EventMapper {
         if (action === 'synchronize' || action === 'edited') return 'pr_updated';
         if (action === 'closed') return 'pr_closed';
         break;
-      
+
       case 'issue_comment':
         // Only handle PR comments
         if (eventContext.issue?.pull_request) {
           return 'pr_updated'; // Treat comments as PR updates
         }
         break;
-        
+
       case 'pull_request_review':
         return 'pr_updated';
-        
+
       case 'push':
         // Push events are not directly supported as PR events
         // They would need additional context to determine if they're part of a PR
@@ -127,12 +136,9 @@ export class EventMapper {
   /**
    * Get checks that should run for a specific event
    */
-  private getChecksForEvent(
-    eventTrigger: EventTrigger,
-    fileContext?: FileChangeContext
-  ): string[] {
+  private getChecksForEvent(eventTrigger: EventTrigger, fileContext?: FileChangeContext): string[] {
     const checksToRun: string[] = [];
-    
+
     for (const [checkName, checkConfig] of Object.entries(this.config.checks || {})) {
       if (this.shouldRunCheck(checkConfig, eventTrigger, fileContext)) {
         checksToRun.push(checkName);
@@ -167,10 +173,7 @@ export class EventMapper {
   /**
    * Check if file changes match trigger patterns
    */
-  private matchesFilePatterns(
-    patterns: string[],
-    fileContext: FileChangeContext
-  ): boolean {
+  private matchesFilePatterns(patterns: string[], fileContext: FileChangeContext): boolean {
     const allFiles = [
       ...(fileContext.changedFiles || []),
       ...(fileContext.addedFiles || []),
@@ -187,29 +190,28 @@ export class EventMapper {
    * Convert glob pattern to RegExp
    */
   private convertGlobToRegex(glob: string): RegExp {
-    let regexPattern = glob
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&'); // Escape special regex chars
-      
+    let regexPattern = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&'); // Escape special regex chars
+
     // Handle different types of glob patterns
     regexPattern = regexPattern
-      .replace(/\*\*\/\*/g, '___GLOBSTAR_ALL___')    // Temporarily replace **/* 
-      .replace(/\*\*\//g, '___GLOBSTAR_DIR___')      // Temporarily replace **/
-      .replace(/\/\*\*/g, '___SLASH_GLOBSTAR___')    // Temporarily replace /**
-      .replace(/\*\*/g, '___GLOBSTAR___')            // Temporarily replace **
-      .replace(/\*/g, '[^/]*')                       // Convert * to [^/]* (matches within directory)
-      .replace(/\?/g, '.')                           // Convert ? to .
-      .replace(/___GLOBSTAR_ALL___/g, '.*')          // Convert **/* to .*
-      .replace(/___GLOBSTAR_DIR___/g, '(?:.*/)?')    // Convert **/ to (?:.*/)?
-      .replace(/___SLASH_GLOBSTAR___/g, '(?:/.*)?')  // Convert /** to (?:/.*)?
-      .replace(/___GLOBSTAR___/g, '.*');             // Convert ** to .*
-    
+      .replace(/\*\*\/\*/g, '___GLOBSTAR_ALL___') // Temporarily replace **/*
+      .replace(/\*\*\//g, '___GLOBSTAR_DIR___') // Temporarily replace **/
+      .replace(/\/\*\*/g, '___SLASH_GLOBSTAR___') // Temporarily replace /**
+      .replace(/\*\*/g, '___GLOBSTAR___') // Temporarily replace **
+      .replace(/\*/g, '[^/]*') // Convert * to [^/]* (matches within directory)
+      .replace(/\?/g, '.') // Convert ? to .
+      .replace(/___GLOBSTAR_ALL___/g, '.*') // Convert **/* to .*
+      .replace(/___GLOBSTAR_DIR___/g, '(?:.*/)?') // Convert **/ to (?:.*/)?
+      .replace(/___SLASH_GLOBSTAR___/g, '(?:/.*)?') // Convert /** to (?:/.*)?
+      .replace(/___GLOBSTAR___/g, '.*'); // Convert ** to .*
+
     // Handle brace expansion {a,b} -> (a|b)
     regexPattern = regexPattern.replace(/\\\{([^}]+)\\\}/g, (match, content) => {
       // Convert comma-separated alternatives to regex alternation
       const alternatives = content.split(',').map((alt: string) => alt.trim());
       return `(${alternatives.join('|')})`;
     });
-    
+
     return new RegExp(`^${regexPattern}$`);
   }
 
@@ -220,11 +222,11 @@ export class EventMapper {
     if (eventContext.pull_request) {
       return eventContext.pull_request.number;
     }
-    
+
     if (eventContext.issue?.pull_request) {
       return eventContext.issue.number;
     }
-    
+
     return undefined;
   }
 
@@ -232,7 +234,14 @@ export class EventMapper {
    * Get repository name from event context
    */
   private getRepositoryName(eventContext: GitHubEventContext): string {
-    if (eventContext.repository) {
+    if (
+      eventContext.repository &&
+      typeof eventContext.repository === 'object' &&
+      eventContext.repository.owner &&
+      typeof eventContext.repository.owner === 'object' &&
+      eventContext.repository.owner.login &&
+      eventContext.repository.name
+    ) {
       return `${eventContext.repository.owner.login}/${eventContext.repository.name}`;
     }
     return 'unknown/repository';
@@ -243,11 +252,11 @@ export class EventMapper {
    */
   private getTriggeredBy(eventContext: GitHubEventContext): string {
     const { event_name, action } = eventContext;
-    
+
     if (eventContext.comment?.user?.login) {
       return `comment_by_${eventContext.comment.user.login}`;
     }
-    
+
     return action ? `${event_name}_${action}` : event_name;
   }
 
@@ -260,7 +269,7 @@ export class EventMapper {
     fileContext?: FileChangeContext
   ): MappedExecution {
     const eventTrigger = this.mapGitHubEventToTrigger(eventContext);
-    
+
     if (!eventTrigger) {
       return {
         shouldExecute: false,
@@ -296,13 +305,13 @@ export class EventMapper {
    */
   public shouldProcessEvent(eventContext: GitHubEventContext): boolean {
     const eventTrigger = this.mapGitHubEventToTrigger(eventContext);
-    
+
     if (!eventTrigger) {
       return false;
     }
 
     // Check if any configured checks match this event
-    return Object.values(this.config.checks || {}).some(checkConfig => 
+    return Object.values(this.config.checks || {}).some(checkConfig =>
       checkConfig.on.includes(eventTrigger)
     );
   }
@@ -310,7 +319,11 @@ export class EventMapper {
   /**
    * Get available checks for display purposes
    */
-  public getAvailableChecks(): Array<{ name: string; description: string; triggers: EventTrigger[] }> {
+  public getAvailableChecks(): Array<{
+    name: string;
+    description: string;
+    triggers: EventTrigger[];
+  }> {
     return Object.entries(this.config.checks || {}).map(([name, config]) => ({
       name,
       description: config.prompt.split('\n')[0] || 'No description available',
@@ -321,7 +334,10 @@ export class EventMapper {
   /**
    * Validate event context
    */
-  public validateEventContext(eventContext: GitHubEventContext): { isValid: boolean; errors: string[] } {
+  public validateEventContext(eventContext: GitHubEventContext): {
+    isValid: boolean;
+    errors: string[];
+  } {
     const errors: string[] = [];
 
     if (!eventContext.event_name) {
@@ -365,7 +381,7 @@ export function createEventMapper(config: VisorConfig): EventMapper {
  * Utility function to extract file context from GitHub PR
  */
 export async function extractFileContext(
-  octokit: any,
+  octokit: import('@octokit/rest').Octokit,
   owner: string,
   repo: string,
   prNumber: number
@@ -384,7 +400,7 @@ export async function extractFileContext(
 
     for (const file of files) {
       changedFiles.push(file.filename);
-      
+
       switch (file.status) {
         case 'added':
           addedFiles.push(file.filename);

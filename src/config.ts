@@ -1,8 +1,8 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
-import { 
-  VisorConfig, 
+import {
+  VisorConfig,
   CheckConfig,
   ConfigCheckType,
   EventTrigger,
@@ -11,7 +11,7 @@ import {
   ConfigValidationError,
   EnvironmentOverrides,
   MergedConfig,
-  ConfigLoadOptions
+  ConfigLoadOptions,
 } from './types/config';
 import { CliOptions } from './types/cli';
 
@@ -27,7 +27,10 @@ export class ConfigManager {
   /**
    * Load configuration from a file
    */
-  public async loadConfig(configPath: string, options: ConfigLoadOptions = {}): Promise<VisorConfig> {
+  public async loadConfig(
+    configPath: string,
+    options: ConfigLoadOptions = {}
+  ): Promise<VisorConfig> {
     const { validate = true, mergeDefaults = true } = options;
 
     try {
@@ -59,7 +62,6 @@ export class ConfigManager {
       }
 
       return finalConfig as VisorConfig;
-
     } catch (error) {
       if (error instanceof Error) {
         if (error.message.includes('not found') || error.message.includes('Invalid YAML')) {
@@ -78,7 +80,7 @@ export class ConfigManager {
     const currentDir = process.cwd();
     const possiblePaths = [
       path.join(currentDir, 'visor.config.yaml'),
-      path.join(currentDir, 'visor.config.yml')
+      path.join(currentDir, 'visor.config.yml'),
     ];
 
     for (const configPath of possiblePaths) {
@@ -102,9 +104,9 @@ export class ConfigManager {
         pr_comment: {
           format: 'summary',
           group_by: 'check',
-          collapse: true
-        }
-      }
+          collapse: true,
+        },
+      },
     };
   }
 
@@ -115,14 +117,17 @@ export class ConfigManager {
     return {
       config,
       cliChecks: cliOptions.checks || [],
-      cliOutput: cliOptions.output || 'summary'
+      cliOutput: cliOptions.output || 'summary',
     };
   }
 
   /**
    * Load configuration with environment variable overrides
    */
-  public async loadConfigWithEnvOverrides(): Promise<{ config?: VisorConfig; environmentOverrides: EnvironmentOverrides }> {
+  public async loadConfigWithEnvOverrides(): Promise<{
+    config?: VisorConfig;
+    environmentOverrides: EnvironmentOverrides;
+  }> {
     const environmentOverrides: EnvironmentOverrides = {};
 
     // Check for environment variable overrides
@@ -138,7 +143,7 @@ export class ConfigManager {
     if (environmentOverrides.configPath) {
       try {
         config = await this.loadConfig(environmentOverrides.configPath);
-      } catch (error) {
+      } catch {
         // If environment config fails, fall back to default discovery
         config = await this.findAndLoadConfig();
       }
@@ -159,14 +164,14 @@ export class ConfigManager {
     if (!config.version) {
       errors.push({
         field: 'version',
-        message: 'Missing required field: version'
+        message: 'Missing required field: version',
       });
     }
 
     if (!config.checks) {
       errors.push({
         field: 'checks',
-        message: 'Missing required field: checks'
+        message: 'Missing required field: checks',
       });
     } else {
       // Validate each check configuration
@@ -177,7 +182,7 @@ export class ConfigManager {
 
     // Validate output configuration if present
     if (config.output) {
-      this.validateOutputConfig(config.output, errors);
+      this.validateOutputConfig(config.output as unknown as Record<string, unknown>, errors);
     }
 
     if (errors.length > 0) {
@@ -188,11 +193,15 @@ export class ConfigManager {
   /**
    * Validate individual check configuration
    */
-  private validateCheckConfig(checkName: string, checkConfig: CheckConfig, errors: ConfigValidationError[]): void {
+  private validateCheckConfig(
+    checkName: string,
+    checkConfig: CheckConfig,
+    errors: ConfigValidationError[]
+  ): void {
     if (!checkConfig.type) {
       errors.push({
         field: `checks.${checkName}.type`,
-        message: `Invalid check configuration for "${checkName}": missing type`
+        message: `Invalid check configuration for "${checkName}": missing type`,
       });
       return;
     }
@@ -201,21 +210,21 @@ export class ConfigManager {
       errors.push({
         field: `checks.${checkName}.type`,
         message: `Invalid check type "${checkConfig.type}". Must be: ${this.validCheckTypes.join(', ')}`,
-        value: checkConfig.type
+        value: checkConfig.type,
       });
     }
 
     if (!checkConfig.prompt) {
       errors.push({
         field: `checks.${checkName}.prompt`,
-        message: `Invalid check configuration for "${checkName}": missing prompt`
+        message: `Invalid check configuration for "${checkName}": missing prompt`,
       });
     }
 
     if (!checkConfig.on || !Array.isArray(checkConfig.on)) {
       errors.push({
         field: `checks.${checkName}.on`,
-        message: `Invalid check configuration for "${checkName}": missing or invalid 'on' field`
+        message: `Invalid check configuration for "${checkName}": missing or invalid 'on' field`,
       });
     } else {
       // Validate event triggers
@@ -224,7 +233,7 @@ export class ConfigManager {
           errors.push({
             field: `checks.${checkName}.on`,
             message: `Invalid event "${event}". Must be one of: ${this.validEventTriggers.join(', ')}`,
-            value: event
+            value: event,
           });
         }
       }
@@ -234,23 +243,32 @@ export class ConfigManager {
   /**
    * Validate output configuration
    */
-  private validateOutputConfig(outputConfig: any, errors: ConfigValidationError[]): void {
+  private validateOutputConfig(
+    outputConfig: Record<string, unknown>,
+    errors: ConfigValidationError[]
+  ): void {
     if (outputConfig.pr_comment) {
-      const prComment = outputConfig.pr_comment;
-      
-      if (prComment.format && !this.validOutputFormats.includes(prComment.format)) {
+      const prComment = outputConfig.pr_comment as Record<string, unknown>;
+
+      if (
+        typeof prComment.format === 'string' &&
+        !this.validOutputFormats.includes(prComment.format as ConfigOutputFormat)
+      ) {
         errors.push({
           field: 'output.pr_comment.format',
           message: `Invalid output format "${prComment.format}". Must be one of: ${this.validOutputFormats.join(', ')}`,
-          value: prComment.format
+          value: prComment.format as string,
         });
       }
 
-      if (prComment.group_by && !this.validGroupByOptions.includes(prComment.group_by)) {
+      if (
+        typeof prComment.group_by === 'string' &&
+        !this.validGroupByOptions.includes(prComment.group_by as GroupByOption)
+      ) {
         errors.push({
           field: 'output.pr_comment.group_by',
           message: `Invalid group_by option "${prComment.group_by}". Must be one of: ${this.validGroupByOptions.join(', ')}`,
-          value: prComment.group_by
+          value: prComment.group_by as string,
         });
       }
     }
@@ -267,9 +285,9 @@ export class ConfigManager {
         pr_comment: {
           format: 'summary' as ConfigOutputFormat,
           group_by: 'check' as GroupByOption,
-          collapse: true
-        }
-      }
+          collapse: true,
+        },
+      },
     };
 
     // Deep merge with defaults
@@ -279,7 +297,7 @@ export class ConfigManager {
     if (merged.output) {
       merged.output.pr_comment = {
         ...defaultConfig.output.pr_comment,
-        ...merged.output.pr_comment
+        ...merged.output.pr_comment,
       };
     } else {
       merged.output = defaultConfig.output;

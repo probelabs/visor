@@ -1,6 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { CheckExecutionEngine, CheckExecutionOptions } from '../../../src/check-execution-engine';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from '../../../src/git-repository-analyzer';
-import { PRReviewer } from '../../../src/reviewer';
+import { PRReviewer, ReviewSummary } from '../../../src/reviewer';
+import { PRInfo } from '../../../src/pr-analyzer';
 
 // Mock the dependencies
 jest.mock('../../../src/git-repository-analyzer');
@@ -10,7 +12,7 @@ describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
   let mockGitAnalyzer: jest.Mocked<GitRepositoryAnalyzer>;
   let mockReviewer: jest.Mocked<PRReviewer>;
-  
+
   const mockRepositoryInfo: GitRepositoryInfo = {
     title: 'Test Repository',
     body: 'Test repository description',
@@ -26,25 +28,48 @@ describe('CheckExecutionEngine', () => {
         additions: 10,
         deletions: 5,
         changes: 15,
-        patch: '@@ -1,5 +1,10 @@\n test changes'
-      }
+        patch: '@@ -1,5 +1,10 @@\n test changes',
+      },
     ],
     totalAdditions: 10,
-    totalDeletions: 5
+    totalDeletions: 5,
+  };
+
+  const mockPRInfo: PRInfo = {
+    number: 0,
+    title: 'Test Repository',
+    body: 'Test repository description',
+    author: 'test-author',
+    base: 'main',
+    head: 'feature-branch',
+    files: [
+      {
+        filename: 'src/test.ts',
+        status: 'modified',
+        additions: 10,
+        deletions: 5,
+        changes: 15,
+        patch: '@@ -1,5 +1,10 @@\n test changes',
+      },
+    ],
+    totalAdditions: 10,
+    totalDeletions: 5,
   };
 
   beforeEach(() => {
     // Clear all mocks before each test
     jest.clearAllMocks();
-    
+
     // Create mock instances
     mockGitAnalyzer = new GitRepositoryAnalyzer() as jest.Mocked<GitRepositoryAnalyzer>;
     mockReviewer = new PRReviewer(null as any) as jest.Mocked<PRReviewer>;
-    
+
     // Mock constructor behavior
-    (GitRepositoryAnalyzer as jest.MockedClass<typeof GitRepositoryAnalyzer>).mockImplementation(() => mockGitAnalyzer);
+    (GitRepositoryAnalyzer as jest.MockedClass<typeof GitRepositoryAnalyzer>).mockImplementation(
+      () => mockGitAnalyzer
+    );
     (PRReviewer as jest.MockedClass<typeof PRReviewer>).mockImplementation(() => mockReviewer);
-    
+
     checkEngine = new CheckExecutionEngine('/test/working/dir');
   });
 
@@ -62,7 +87,6 @@ describe('CheckExecutionEngine', () => {
   });
 
   describe('executeChecks', () => {
-
     const mockReviewSummary = {
       overallScore: 85,
       totalIssues: 2,
@@ -74,27 +98,28 @@ describe('CheckExecutionEngine', () => {
           line: 10,
           message: 'Potential security issue',
           severity: 'error' as const,
-          category: 'security' as const
+          category: 'security' as const,
         },
         {
           file: 'src/test.ts',
           line: 15,
           message: 'Style improvement needed',
           severity: 'info' as const,
-          category: 'style' as const
-        }
-      ]
+          category: 'style' as const,
+        },
+      ],
     };
 
     beforeEach(() => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue(mockRepositoryInfo);
+      mockGitAnalyzer.toPRInfo.mockReturnValue(mockPRInfo);
       mockReviewer.reviewPR.mockResolvedValue(mockReviewSummary);
     });
 
     it('should execute checks successfully', async () => {
       const options: CheckExecutionOptions = {
         checks: ['security', 'performance'],
-        workingDirectory: '/test/repo'
+        workingDirectory: '/test/repo',
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -107,7 +132,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
 
@@ -120,7 +145,7 @@ describe('CheckExecutionEngine', () => {
 
     it('should handle single security check', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       await checkEngine.executeChecks(options);
@@ -132,14 +157,14 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'security',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
 
     it('should handle single performance check', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['performance']
+        checks: ['performance'],
       };
 
       await checkEngine.executeChecks(options);
@@ -151,14 +176,14 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'performance',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
 
     it('should handle single style check', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['style']
+        checks: ['style'],
       };
 
       await checkEngine.executeChecks(options);
@@ -170,14 +195,14 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'style',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
 
     it('should handle all check', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['all']
+        checks: ['all'],
       };
 
       await checkEngine.executeChecks(options);
@@ -189,14 +214,14 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
 
     it('should handle architecture check (mapped to all)', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['architecture']
+        checks: ['architecture'],
       };
 
       await checkEngine.executeChecks(options);
@@ -208,14 +233,14 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
 
     it('should handle multiple mixed checks', async () => {
       const options: CheckExecutionOptions = {
-        checks: ['security', 'performance', 'style']
+        checks: ['security', 'performance', 'style'],
       };
 
       await checkEngine.executeChecks(options);
@@ -227,7 +252,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed'
+          format: 'detailed',
         })
       );
     });
@@ -235,13 +260,13 @@ describe('CheckExecutionEngine', () => {
     it('should handle non-git repository', async () => {
       const nonGitRepoInfo = {
         ...mockRepositoryInfo,
-        isGitRepository: false
+        isGitRepository: false,
       };
-      
+
       mockGitAnalyzer.analyzeRepository.mockResolvedValue(nonGitRepoInfo);
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -256,7 +281,7 @@ describe('CheckExecutionEngine', () => {
       mockGitAnalyzer.analyzeRepository.mockRejectedValue(new Error('Git command failed'));
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -270,7 +295,7 @@ describe('CheckExecutionEngine', () => {
       mockReviewer.reviewPR.mockRejectedValue(new Error('Review failed'));
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -287,7 +312,7 @@ describe('CheckExecutionEngine', () => {
       });
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -325,7 +350,7 @@ describe('CheckExecutionEngine', () => {
     it('should return true for git repository', async () => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue({
         ...mockRepositoryInfo,
-        isGitRepository: true
+        isGitRepository: true,
       } as GitRepositoryInfo);
 
       const isGit = await checkEngine.isGitRepository();
@@ -336,7 +361,7 @@ describe('CheckExecutionEngine', () => {
     it('should return false for non-git repository', async () => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue({
         ...mockRepositoryInfo,
-        isGitRepository: false
+        isGitRepository: false,
       } as GitRepositoryInfo);
 
       const isGit = await checkEngine.isGitRepository();
@@ -357,7 +382,7 @@ describe('CheckExecutionEngine', () => {
     describe('getAvailableCheckTypes', () => {
       it('should return all available check types', () => {
         const checkTypes = CheckExecutionEngine.getAvailableCheckTypes();
-        
+
         expect(checkTypes).toContain('security');
         expect(checkTypes).toContain('performance');
         expect(checkTypes).toContain('style');
@@ -371,7 +396,7 @@ describe('CheckExecutionEngine', () => {
       it('should validate all valid check types', () => {
         const checks = ['security', 'performance', 'style'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
-        
+
         expect(result.valid).toEqual(checks);
         expect(result.invalid).toHaveLength(0);
       });
@@ -379,14 +404,14 @@ describe('CheckExecutionEngine', () => {
       it('should identify invalid check types', () => {
         const checks = ['security', 'invalid-check', 'performance', 'another-invalid'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
-        
+
         expect(result.valid).toEqual(['security', 'performance']);
         expect(result.invalid).toEqual(['invalid-check', 'another-invalid']);
       });
 
       it('should handle empty check list', () => {
         const result = CheckExecutionEngine.validateCheckTypes([]);
-        
+
         expect(result.valid).toHaveLength(0);
         expect(result.invalid).toHaveLength(0);
       });
@@ -394,7 +419,7 @@ describe('CheckExecutionEngine', () => {
       it('should handle all check type', () => {
         const checks = ['all'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
-        
+
         expect(result.valid).toEqual(['all']);
         expect(result.invalid).toHaveLength(0);
       });
@@ -402,7 +427,7 @@ describe('CheckExecutionEngine', () => {
       it('should handle mixed valid and invalid checks', () => {
         const checks = ['all', 'invalid', 'security', 'bad-check', 'performance'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
-        
+
         expect(result.valid).toEqual(['all', 'security', 'performance']);
         expect(result.invalid).toEqual(['invalid', 'bad-check']);
       });
@@ -415,7 +440,7 @@ describe('CheckExecutionEngine', () => {
       mockGitAnalyzer.analyzeRepository.mockRejectedValue(new Error(errorMessage));
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -435,7 +460,7 @@ describe('CheckExecutionEngine', () => {
       mockGitAnalyzer.analyzeRepository.mockRejectedValue('String error');
 
       const options: CheckExecutionOptions = {
-        checks: ['security']
+        checks: ['security'],
       };
 
       const result = await checkEngine.executeChecks(options);
@@ -446,7 +471,7 @@ describe('CheckExecutionEngine', () => {
     it('should handle timeout scenarios', async () => {
       const options: CheckExecutionOptions = {
         checks: ['security'],
-        timeout: 100 // Very short timeout
+        timeout: 100, // Very short timeout
       };
 
       // Mock a long-running operation

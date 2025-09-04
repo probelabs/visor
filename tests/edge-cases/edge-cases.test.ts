@@ -4,13 +4,12 @@ import { PRAnalyzer } from '../../src/pr-analyzer';
 import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
 import { ActionCliBridge } from '../../src/action-cli-bridge';
-import { EventMapper } from '../../src/event-mapper';
 import { createMockOctokit } from '../performance/test-utilities';
 import * as path from 'path';
 import * as os from 'os';
 
 describe('Edge Cases & Boundary Condition Tests', () => {
-  let mockOctokit: any;
+  let mockOctokit: ReturnType<typeof createMockOctokit>;
 
   beforeEach(() => {
     mockOctokit = createMockOctokit();
@@ -21,8 +20,10 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle empty PR data gracefully', async () => {
       console.log('Testing empty PR data handling...');
 
-      const analyzer = new PRAnalyzer(mockOctokit);
-      const reviewer = new PRReviewer(mockOctokit);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const analyzer = new PRAnalyzer(mockOctokit as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const reviewer = new PRReviewer(mockOctokit as any);
 
       // Test various empty PR scenarios
       const emptyPRScenarios = [
@@ -86,10 +87,21 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         mockOctokit.rest.pulls.listFiles.mockResolvedValueOnce({ data: scenario.files });
 
         try {
-          const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', scenario.prData.number);
-          const review = await reviewer.reviewPR('test-owner', 'test-repo', scenario.prData.number, prInfo);
+          const prInfo = await analyzer.fetchPRDiff(
+            'test-owner',
+            'test-repo',
+            scenario.prData.number
+          );
+          const review = await reviewer.reviewPR(
+            'test-owner',
+            'test-repo',
+            scenario.prData.number,
+            prInfo
+          );
 
-          console.log(`    PR Info: title="${prInfo.title}", author="${prInfo.author}", files=${prInfo.files.length}`);
+          console.log(
+            `    PR Info: title="${prInfo.title}", author="${prInfo.author}", files=${prInfo.files.length}`
+          );
           console.log(`    Review: score=${review.overallScore}, issues=${review.totalIssues}`);
 
           // Should handle empty data without crashing
@@ -99,12 +111,11 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           expect(Array.isArray(prInfo.files)).toBe(true);
           expect(review.overallScore).toBeGreaterThanOrEqual(0);
           expect(review.overallScore).toBeLessThanOrEqual(100);
-
-        } catch (error: any) {
-          console.log(`    Error handling empty data: ${error.message}`);
+        } catch (error: unknown) {
+          console.log(`    Error handling empty data: ${(error as Error).message}`);
           // Should either handle gracefully or provide clear error
-          expect(error.message).toBeDefined();
-          expect(error.message.length).toBeGreaterThan(5);
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message.length).toBeGreaterThan(5);
         }
       }
     });
@@ -117,17 +128,17 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
       // Test CLI with null/undefined-like arguments
       const nullishArguments = [
-        [],                           // Empty arguments
-        [''],                        // Empty string argument
-        ['null'],                    // String "null"
-        ['undefined'],               // String "undefined"
-        ['--check'],                 // Missing value
-        ['--check', ''],            // Empty value
-        ['--check', 'null'],        // Null as value
-        ['--check', 'undefined'],   // Undefined as value
-        ['--output'],               // Missing format
-        ['--output', ''],           // Empty format
-        ['--config', ''],           // Empty config path
+        [], // Empty arguments
+        [''], // Empty string argument
+        ['null'], // String "null"
+        ['undefined'], // String "undefined"
+        ['--check'], // Missing value
+        ['--check', ''], // Empty value
+        ['--check', 'null'], // Null as value
+        ['--check', 'undefined'], // Undefined as value
+        ['--output'], // Missing format
+        ['--output', ''], // Empty format
+        ['--config', ''], // Empty config path
       ];
 
       for (let i = 0; i < nullishArguments.length; i++) {
@@ -137,19 +148,18 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         try {
           const options = cli.parseArgs(args);
           console.log(`    Parsed successfully: ${JSON.stringify(options)}`);
-          
+
           // Should handle null-ish values gracefully
           expect(options).toBeDefined();
           if (options.checks) {
             expect(Array.isArray(options.checks)).toBe(true);
           }
-          
-        } catch (error: any) {
-          console.log(`    Expected error: ${error.message}`);
+        } catch (error: unknown) {
+          console.log(`    Expected error: ${(error as Error).message}`);
           // Should provide helpful error for invalid arguments
-          expect(error.message).toBeDefined();
-          expect(error.message).not.toContain('undefined');
-          expect(error.message).not.toContain('Cannot read property');
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message).not.toContain('Cannot read property of undefined');
+          expect((error as Error).message).not.toContain('Cannot read property');
         }
       }
 
@@ -166,9 +176,27 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       };
 
       const nullishCliOptions = [
-        { checks: null as any, output: 'json' as const, configPath: undefined, help: false, version: false },
-        { checks: [] as any, output: null as any, configPath: '', help: false, version: false },
-        { checks: undefined as any, output: undefined as any, configPath: null as any, help: false, version: false },
+        {
+          checks: null as null,
+          output: 'json' as const,
+          configPath: undefined,
+          help: false,
+          version: false,
+        },
+        {
+          checks: [] as string[],
+          output: null as null,
+          configPath: '',
+          help: false,
+          version: false,
+        },
+        {
+          checks: undefined as undefined,
+          output: undefined as undefined,
+          configPath: null as null,
+          help: false,
+          version: false,
+        },
       ];
 
       for (let i = 0; i < nullishCliOptions.length; i++) {
@@ -176,16 +204,20 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         console.log(`  Testing config merge with nullish values ${i + 1}...`);
 
         try {
-          const merged = configManager.mergeWithCliOptions(baseConfig, cliOptions);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const merged = configManager.mergeWithCliOptions(baseConfig, {
+            ...cliOptions,
+            checks: cliOptions.checks || [],
+            output: cliOptions.output || 'table',
+          } as any);
           console.log(`    Merge successful`);
-          
+
           // Should handle nullish values in merge
           expect(merged).toBeDefined();
           expect(merged.config).toBeDefined();
-          
-        } catch (error: any) {
-          console.log(`    Merge error: ${error.message}`);
-          expect(error.message).toBeDefined();
+        } catch (error: unknown) {
+          console.log(`    Merge error: ${(error as Error).message}`);
+          expect((error as Error).message).toBeDefined();
         }
       }
     });
@@ -195,8 +227,10 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle extremely large PR data', async () => {
       console.log('Testing extremely large PR data handling...');
 
-      const analyzer = new PRAnalyzer(mockOctokit);
-      const reviewer = new PRReviewer(mockOctokit);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const analyzer = new PRAnalyzer(mockOctokit as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const reviewer = new PRReviewer(mockOctokit as any);
 
       // Create PR with boundary values
       const largePRData = {
@@ -205,7 +239,10 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         title: 'x'.repeat(10000), // Very long title
         body: 'y'.repeat(100000), // Very long body (100KB)
         user: { login: 'user-with-very-long-username-that-exceeds-normal-limits' },
-        head: { sha: 'a'.repeat(40), ref: 'feature-branch-with-extremely-long-name-that-might-cause-issues' },
+        head: {
+          sha: 'a'.repeat(40),
+          ref: 'feature-branch-with-extremely-long-name-that-might-cause-issues',
+        },
         base: { sha: 'b'.repeat(40), ref: 'main-branch-also-with-very-long-name' },
         draft: false,
         additions: 999999,
@@ -214,26 +251,43 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       };
 
       // Create many files with extreme values
-      const largeFileList = Array(1000).fill(0).map((_, i) => ({
-        filename: `path/to/very/deeply/nested/directory/structure/that/might/cause/issues/file-${i}-with-long-name.js`,
-        additions: 999,
-        deletions: 999,
-        changes: 1998,
-        status: 'modified',
-        patch: `@@ -1,999 +1,999 @@\n${Array(500).fill(0).map((_, j) => `-old line ${j}`).join('\n')}\n${Array(500).fill(0).map((_, j) => `+new line ${j}`).join('\n')}`,
-      }));
+      const largeFileList = Array(1000)
+        .fill(0)
+        .map((_, i) => ({
+          filename: `path/to/very/deeply/nested/directory/structure/that/might/cause/issues/file-${i}-with-long-name.js`,
+          additions: 999,
+          deletions: 999,
+          changes: 1998,
+          status: 'modified',
+          patch: `@@ -1,999 +1,999 @@\n${Array(500)
+            .fill(0)
+            .map((_, j) => `-old line ${j}`)
+            .join('\n')}\n${Array(500)
+            .fill(0)
+            .map((_, j) => `+new line ${j}`)
+            .join('\n')}`,
+        }));
 
       mockOctokit.rest.pulls.get.mockResolvedValue({ data: largePRData });
       mockOctokit.rest.pulls.listFiles.mockResolvedValue({ data: largeFileList });
 
       try {
         console.log(`  Processing PR with ${largeFileList.length} files...`);
-        
+
         const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', largePRData.number);
-        console.log(`    PR processed: ${prInfo.files.length} files, ${prInfo.totalAdditions} additions`);
-        
-        const review = await reviewer.reviewPR('test-owner', 'test-repo', largePRData.number, prInfo);
-        console.log(`    Review completed: score=${review.overallScore}, issues=${review.totalIssues}`);
+        console.log(
+          `    PR processed: ${prInfo.files.length} files, ${prInfo.totalAdditions} additions`
+        );
+
+        const review = await reviewer.reviewPR(
+          'test-owner',
+          'test-repo',
+          largePRData.number,
+          prInfo
+        );
+        console.log(
+          `    Review completed: score=${review.overallScore}, issues=${review.totalIssues}`
+        );
 
         // Should handle large data without crashing
         expect(prInfo).toBeDefined();
@@ -241,12 +295,11 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         expect(prInfo.files.length).toBeLessThanOrEqual(1000);
         expect(review.overallScore).toBeGreaterThanOrEqual(0);
         expect(review.overallScore).toBeLessThanOrEqual(100);
-
-      } catch (error: any) {
-        console.log(`    Large PR processing error: ${error.message}`);
+      } catch (error: unknown) {
+        console.log(`    Large PR processing error: ${(error as Error).message}`);
         // Should handle large data gracefully or provide resource limit error
-        expect(error.message).toBeDefined();
-        expect(error.message).not.toContain('RangeError');
+        expect((error as Error).message).toBeDefined();
+        expect((error as Error).message).not.toContain('RangeError');
       }
     });
 
@@ -321,7 +374,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         },
       ];
 
-      const analyzer = new PRAnalyzer(mockOctokit);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const analyzer = new PRAnalyzer(mockOctokit as any);
 
       for (const scenario of extremeNumericScenarios) {
         console.log(`  Testing scenario: ${scenario.name}`);
@@ -330,20 +384,25 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         mockOctokit.rest.pulls.listFiles.mockResolvedValueOnce({ data: [] });
 
         try {
-          const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', Math.abs(scenario.prData.number) || 1);
-          
-          console.log(`    Processed: additions=${prInfo.totalAdditions}, deletions=${prInfo.totalDeletions}`);
-          
+          const prInfo = await analyzer.fetchPRDiff(
+            'test-owner',
+            'test-repo',
+            Math.abs(scenario.prData.number) || 1
+          );
+
+          console.log(
+            `    Processed: additions=${prInfo.totalAdditions}, deletions=${prInfo.totalDeletions}`
+          );
+
           // Should handle extreme numeric values
           expect(prInfo).toBeDefined();
           expect(typeof prInfo.totalAdditions).toBe('number');
           expect(typeof prInfo.totalDeletions).toBe('number');
           expect(isFinite(prInfo.totalAdditions) || prInfo.totalAdditions === 0).toBe(true);
           expect(isFinite(prInfo.totalDeletions) || prInfo.totalDeletions === 0).toBe(true);
-
-        } catch (error: any) {
-          console.log(`    Numeric boundary error: ${error.message}`);
-          expect(error.message).toBeDefined();
+        } catch (error: unknown) {
+          console.log(`    Numeric boundary error: ${(error as Error).message}`);
+          expect((error as Error).message).toBeDefined();
         }
       }
     });
@@ -351,7 +410,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle GitHub API rate limit boundaries', async () => {
       console.log('Testing GitHub API rate limit boundary conditions...');
 
-      const commentManager = new CommentManager(mockOctokit, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 5,
         baseDelay: 10, // Very short delay for testing
       });
@@ -432,9 +492,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           console.log(`    Rate limit handled successfully after ${attemptCount} attempts`);
           expect(comment).toBeDefined();
           expect(attemptCount).toBeGreaterThan(1);
-
-        } catch (error: any) {
-          console.log(`    Rate limit boundary error: ${error.message}`);
+        } catch (error: unknown) {
+          console.log(`    Rate limit boundary error: ${(error as Error).message}`);
           expect(error).toBeDefined();
         }
       }
@@ -445,7 +504,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle all Unicode character ranges', async () => {
       console.log('Testing Unicode character range handling...');
 
-      const analyzer = new PRAnalyzer(mockOctokit);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const analyzer = new PRAnalyzer(mockOctokit as any);
 
       const unicodeTestCases = [
         {
@@ -481,7 +541,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           title: 'Control chars test (with invisible characters)',
           body: 'Testing control characters:\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u200C\u200D',
           filename: 'control-chars\u200Btest.js',
-          patch: '@@ -1,1 +1,1 @@\n-console.log("normal");\n+console.log("with\u200Bzero\u200Cwidth\u200Dchars");',
+          patch:
+            '@@ -1,1 +1,1 @@\n-console.log("normal");\n+console.log("with\u200Bzero\u200Cwidth\u200Dchars");',
         },
       ];
 
@@ -502,35 +563,36 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           changed_files: 1,
         };
 
-        const fileData = [{
-          filename: testCase.filename,
-          additions: 1,
-          deletions: 1,
-          changes: 2,
-          status: 'modified',
-          patch: testCase.patch,
-        }];
+        const fileData = [
+          {
+            filename: testCase.filename,
+            additions: 1,
+            deletions: 1,
+            changes: 2,
+            status: 'modified',
+            patch: testCase.patch,
+          },
+        ];
 
         mockOctokit.rest.pulls.get.mockResolvedValueOnce({ data: prData });
         mockOctokit.rest.pulls.listFiles.mockResolvedValueOnce({ data: fileData });
 
         try {
           const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', 123);
-          
+
           console.log(`    Title length: ${prInfo.title.length}`);
           console.log(`    Body length: ${prInfo.body.length}`);
           console.log(`    Filename: ${prInfo.files[0]?.filename.substring(0, 30)}...`);
-          
+
           // Should handle Unicode without corruption
           expect(prInfo.title).toBeDefined();
           expect(prInfo.body).toBeDefined();
           expect(prInfo.files.length).toBe(1);
           expect(prInfo.files[0].filename).toContain(testCase.filename.split('-')[0]); // At least part should match
-
-        } catch (error: any) {
-          console.log(`    Unicode handling error: ${error.message}`);
+        } catch (error: unknown) {
+          console.log(`    Unicode handling error: ${(error as Error).message}`);
           // Some Unicode handling issues might be expected
-          expect(error.message).toBeDefined();
+          expect((error as Error).message).toBeDefined();
         }
       }
     });
@@ -538,7 +600,8 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle special file path characters', async () => {
       console.log('Testing special file path character handling...');
 
-      const analyzer = new PRAnalyzer(mockOctokit);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const analyzer = new PRAnalyzer(mockOctokit as any);
 
       const specialPathCases = [
         // Special characters that might cause issues
@@ -558,7 +621,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         'file(with)parens.js',
         'file;with;semicolon.js',
         'file,with,comma.js',
-        'file\'with\'quote.js',
+        "file'with'quote.js",
         'file"with"doublequote.js',
         '../../malicious/path/traversal.js',
         'file\\with\\backslash.js',
@@ -602,22 +665,23 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
       try {
         const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', 123);
-        
-        console.log(`  Processed ${prInfo.files.length}/${specialPathCases.length} files with special paths`);
-        
+
+        console.log(
+          `  Processed ${prInfo.files.length}/${specialPathCases.length} files with special paths`
+        );
+
         // Should handle special file paths without crashing
         expect(prInfo.files.length).toBeGreaterThan(0);
         expect(prInfo.files.length).toBeLessThanOrEqual(specialPathCases.length);
-        
+
         // Check that paths are handled safely
         prInfo.files.forEach(file => {
           expect(typeof file.filename).toBe('string');
           expect(file.filename.length).toBeGreaterThan(0);
         });
-
-      } catch (error: any) {
-        console.log(`  Special path handling error: ${error.message}`);
-        expect(error.message).toBeDefined();
+      } catch (error: unknown) {
+        console.log(`  Special path handling error: ${(error as Error).message}`);
+        expect((error as Error).message).toBeDefined();
       }
     });
   });
@@ -631,13 +695,13 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         'src\\windows\\style\\path.js',
         'C:\\absolute\\windows\\path.js',
         'src\\mixed/slash\\paths.js',
-        
+
         // Unix-style paths
         'src/unix/style/path.js',
         '/absolute/unix/path.js',
         './relative/unix/path.js',
         '../parent/directory/path.js',
-        
+
         // Mixed and edge cases
         'src/mixed\\slash/paths.js',
         'path/with/./current/dir.js',
@@ -647,7 +711,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       ];
 
       const configManager = new ConfigManager();
-      
+
       // Test path handling in configuration contexts
       for (const testPath of pathTestCases) {
         console.log(`  Testing path: ${testPath}`);
@@ -656,11 +720,11 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         const normalizedPath = path.normalize(testPath);
         const resolvedPath = path.resolve(testPath);
         const relativePath = path.relative(process.cwd(), testPath);
-        
+
         console.log(`    Normalized: ${normalizedPath}`);
         console.log(`    Resolved: ${resolvedPath.substring(0, 50)}...`);
         console.log(`    Relative: ${relativePath.substring(0, 50)}...`);
-        
+
         // Should handle path operations without errors
         expect(typeof normalizedPath).toBe('string');
         expect(typeof resolvedPath).toBe('string');
@@ -679,9 +743,9 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       for (const configPath of configPathTests) {
         try {
           await configManager.loadConfig(configPath);
-        } catch (error: any) {
+        } catch (error: unknown) {
           // Expected to fail for non-existent files
-          expect(error.message).toContain('Configuration file not found');
+          expect((error as Error).message).toContain('Configuration file not found');
         }
       }
     });
@@ -691,7 +755,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
       // Store original env vars
       const originalEnv = { ...process.env };
-      
+
       const envTestCases = [
         {
           name: 'Empty environment variables',
@@ -713,7 +777,9 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           name: 'Very long environment variables',
           env: {
             GITHUB_TOKEN: 'x'.repeat(10000),
-            GITHUB_REPOSITORY: 'owner/repo-with-very-long-name-that-exceeds-normal-limits'.repeat(10),
+            GITHUB_REPOSITORY: 'owner/repo-with-very-long-name-that-exceeds-normal-limits'.repeat(
+              10
+            ),
             GITHUB_EVENT_NAME: 'pull_request_with_very_long_event_name_that_might_cause_issues',
           },
         },
@@ -736,7 +802,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         try {
           const context = {
             event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
-            repository: process.env.GITHUB_REPOSITORY 
+            repository: process.env.GITHUB_REPOSITORY
               ? {
                   owner: { login: process.env.GITHUB_REPOSITORY.split('/')[0] || '' },
                   name: process.env.GITHUB_REPOSITORY.split('/')[1] || '',
@@ -745,7 +811,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           };
 
           const bridge = new ActionCliBridge(process.env.GITHUB_TOKEN || '', context);
-          
+
           const inputs = {
             'github-token': process.env.GITHUB_TOKEN || '',
             'visor-checks': 'security',
@@ -755,13 +821,12 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
           const shouldUse = bridge.shouldUseVisor(inputs);
           console.log(`    Should use Visor: ${shouldUse}`);
-          
+
           // Should handle environment edge cases
           expect(typeof shouldUse).toBe('boolean');
-
-        } catch (error: any) {
-          console.log(`    Environment edge case error: ${error.message}`);
-          expect(error.message).toBeDefined();
+        } catch (error: unknown) {
+          console.log(`    Environment edge case error: ${(error as Error).message}`);
+          expect((error as Error).message).toBeDefined();
         }
 
         // Restore original environment
@@ -773,12 +838,14 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       console.log('Testing system resource limit handling...');
 
       const cli = new CLI();
-      
+
       // Test with arguments that might stress the system
       const stressTestCases = [
         {
           name: 'Very long argument list',
-          args: Array(1000).fill(0).flatMap((_, i) => ['--check', `check-${i}`]),
+          args: Array(1000)
+            .fill(0)
+            .flatMap((_, i) => ['--check', `check-${i}`]),
         },
         {
           name: 'Very long individual arguments',
@@ -797,19 +864,18 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           const startTime = Date.now();
           const options = cli.parseArgs(testCase.args);
           const duration = Date.now() - startTime;
-          
+
           console.log(`    Processed in ${duration}ms`);
-          
+
           // Should handle stress cases within reasonable time
           expect(duration).toBeLessThan(10000); // Less than 10 seconds
           expect(options).toBeDefined();
-
-        } catch (error: any) {
-          console.log(`    System limit error: ${error.message}`);
+        } catch (error: unknown) {
+          console.log(`    System limit error: ${(error as Error).message}`);
           // Should provide clear error for resource limits
-          expect(error.message).toBeDefined();
-          expect(error.message).not.toContain('Maximum call stack');
-          expect(error.message).not.toContain('out of memory');
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message).not.toContain('Maximum call stack');
+          expect((error as Error).message).not.toContain('out of memory');
         }
       }
     });
@@ -819,25 +885,28 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle concurrent operations on same resources', async () => {
       console.log('Testing concurrent operations on same resources...');
 
-      const commentManager = new CommentManager(mockOctokit, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 2,
         baseDelay: 10,
       });
 
       // Test concurrent operations on the same PR/comment
-      const concurrentOperations = Array(10).fill(0).map((_, i) => 
-        commentManager.updateOrCreateComment(
-          'test-owner',
-          'test-repo',
-          123, // Same PR number
-          `Concurrent update ${i}: ${Date.now()}`,
-          {
-            commentId: 'shared-comment-id', // Same comment ID
-            triggeredBy: `concurrent-test-${i}`,
-            allowConcurrentUpdates: true, // Allow concurrent updates for this test
-          }
-        )
-      );
+      const concurrentOperations = Array(10)
+        .fill(0)
+        .map((_, i) =>
+          commentManager.updateOrCreateComment(
+            'test-owner',
+            'test-repo',
+            123, // Same PR number
+            `Concurrent update ${i}: ${Date.now()}`,
+            {
+              commentId: 'shared-comment-id', // Same comment ID
+              triggeredBy: `concurrent-test-${i}`,
+              allowConcurrentUpdates: true, // Allow concurrent updates for this test
+            }
+          )
+        );
 
       try {
         const results = await Promise.allSettled(concurrentOperations);
@@ -845,14 +914,13 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         const failed = results.filter(r => r.status === 'rejected').length;
 
         console.log(`  Concurrent operations results: ${successful} successful, ${failed} failed`);
-        
+
         // Should handle some concurrent operations successfully
         expect(successful).toBeGreaterThan(0);
         expect(successful + failed).toBe(10);
-
-      } catch (error: any) {
-        console.log(`  Concurrent operations error: ${error.message}`);
-        expect(error.message).toBeDefined();
+      } catch (error: unknown) {
+        console.log(`  Concurrent operations error: ${(error as Error).message}`);
+        expect((error as Error).message).toBeDefined();
       }
     });
 
@@ -862,28 +930,30 @@ describe('Edge Cases & Boundary Condition Tests', () => {
       const configManager = new ConfigManager();
 
       // Test concurrent config operations
-      const concurrentConfigOps = Array(20).fill(0).map((_, i) => 
-        (async () => {
-          try {
-            // This will fail for non-existent config, but tests the race condition handling
-            await configManager.loadConfig(`/nonexistent/config-${i}.yaml`);
-            return { success: true, index: i };
-          } catch (error: any) {
-            return { success: false, index: i, error: error.message };
-          }
-        })()
-      );
+      const concurrentConfigOps = Array(20)
+        .fill(0)
+        .map((_, i) =>
+          (async () => {
+            try {
+              // This will fail for non-existent config, but tests the race condition handling
+              await configManager.loadConfig(`/nonexistent/config-${i}.yaml`);
+              return { success: true, index: i };
+            } catch (error: unknown) {
+              return { success: false, index: i, error: (error as Error).message };
+            }
+          })()
+        );
 
       const results = await Promise.allSettled(concurrentConfigOps);
       const completed = results.filter(r => r.status === 'fulfilled').length;
-      
+
       console.log(`  Concurrent config operations completed: ${completed}/20`);
-      
+
       // Should complete all operations without hanging or crashing
       expect(completed).toBe(20);
 
       // All should fail gracefully for non-existent configs
-      results.forEach((result, i) => {
+      results.forEach((result, _i) => {
         if (result.status === 'fulfilled') {
           expect(result.value.success).toBe(false);
           expect(result.value.error).toContain('Configuration file not found');

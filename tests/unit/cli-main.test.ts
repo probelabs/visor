@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { main } from '../../src/cli-main';
 
 // Mock process.argv and console methods for testing
@@ -54,7 +55,9 @@ describe('CLI Main Entry Point', () => {
     await main();
 
     expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Configuration version: 1.0'));
+    expect(mockConsoleLog).toHaveBeenCalledWith(
+      expect.stringContaining('Configuration version: 1.0')
+    );
     // CLI now shows repository status instead of config summary
     expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
   });
@@ -64,9 +67,10 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    // CLI now performs actual analysis, so expect analysis results instead of JSON config
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('ANALYSIS RESULTS'));
+    // For JSON output, decorative messages go to stderr
+    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
+    // CLI now performs actual analysis, so expect JSON output in stdout
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('"summary"'));
   });
 
   it('should handle CLI errors gracefully', async () => {
@@ -74,7 +78,10 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleError).toHaveBeenCalledWith('❌ Error:', expect.stringContaining('Invalid check type'));
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      '❌ Error:',
+      expect.stringContaining('Invalid check type')
+    );
     expect(mockProcessExit).toHaveBeenCalledWith(1);
   });
 
@@ -84,6 +91,8 @@ describe('CLI Main Entry Point', () => {
     await main();
 
     expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Configuration version: 1.0'));
+    expect(mockConsoleLog).toHaveBeenCalledWith(
+      expect.stringContaining('Configuration version: 1.0')
+    );
   });
 });

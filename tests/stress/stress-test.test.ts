@@ -1,16 +1,16 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { CLI } from '../../src/cli';
 import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
 import { PRReviewer } from '../../src/reviewer';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { CommentManager } from '../../src/github-comments';
 import { EventMapper } from '../../src/event-mapper';
-import { 
-  PerformanceTimer, 
-  MemoryProfiler, 
-  LoadTester, 
-  createLargePRFixture, 
-  createMockOctokit 
+import {
+  PerformanceTimer,
+  MemoryProfiler,
+  LoadTester,
+  createLargePRFixture,
+  createMockOctokit,
 } from '../performance/test-utilities';
 
 describe('Stress Testing Framework', () => {
@@ -25,7 +25,7 @@ describe('Stress Testing Framework', () => {
     timer = new PerformanceTimer();
     memoryProfiler = new MemoryProfiler();
     mockOctokit = createMockOctokit();
-    
+
     // Force garbage collection before each test
     if (global.gc) {
       global.gc();
@@ -48,7 +48,9 @@ describe('Stress Testing Framework', () => {
       const concurrency = 12;
       const totalOperations = 50;
 
-      console.log(`Starting concurrent stress test: ${concurrency} concurrent operations, ${totalOperations} total`);
+      console.log(
+        `Starting concurrent stress test: ${concurrency} concurrent operations, ${totalOperations} total`
+      );
 
       // Setup mock responses for all operations
       const largePRData = createLargePRFixture({
@@ -69,7 +71,7 @@ describe('Stress Testing Framework', () => {
           const prNumber = Math.floor(Math.random() * 10000);
           const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', prNumber);
           const review = await reviewer.reviewPR('test-owner', 'test-repo', prNumber, prInfo);
-          
+
           successfulOperations++;
           return { success: true, review, prInfo };
         } catch (error) {
@@ -80,7 +82,7 @@ describe('Stress Testing Framework', () => {
       };
 
       const memoryBefore = memoryProfiler.getCurrentUsage();
-      
+
       const results = await LoadTester.measureConcurrentOperations(
         operationFactory,
         concurrency,
@@ -95,7 +97,9 @@ describe('Stress Testing Framework', () => {
       console.log(`  Total operations: ${totalOperations}`);
       console.log(`  Successful: ${successfulOperations}`);
       console.log(`  Failed: ${failedOperations}`);
-      console.log(`  Success rate: ${((successfulOperations / totalOperations) * 100).toFixed(2)}%`);
+      console.log(
+        `  Success rate: ${((successfulOperations / totalOperations) * 100).toFixed(2)}%`
+      );
       console.log(`  Total duration: ${results.totalDuration.toFixed(2)}ms`);
       console.log(`  Operations per second: ${results.operationsPerSecond.toFixed(2)}`);
       console.log(`  Memory growth: ${(memoryGrowth / 1024 / 1024).toFixed(2)}MB`);
@@ -117,28 +121,32 @@ describe('Stress Testing Framework', () => {
       const totalUpdates = 25;
       const concurrency = 8;
 
-      console.log(`Testing rapid comment updates: ${concurrency} concurrent, ${totalUpdates} total`);
+      console.log(
+        `Testing rapid comment updates: ${concurrency} concurrent, ${totalUpdates} total`
+      );
 
       // Track comment update order to detect race conditions
       const updateOrder: number[] = [];
       const updatePromises: Promise<any>[] = [];
 
       for (let i = 0; i < totalUpdates; i++) {
-        const updatePromise = commentManager.updateOrCreateComment(
-          'test-owner',
-          'test-repo', 
-          prNumber,
-          `Update #${i} - Timestamp: ${Date.now()} - Random: ${Math.random()}`,
-          {
-            commentId: `${commentId}-${i % concurrency}`, // Use multiple comment IDs to simulate concurrency
-            triggeredBy: `stress_test_${i}`,
-            allowConcurrentUpdates: true, // Allow concurrent updates for this test
-          }
-        ).then(result => {
-          updateOrder.push(i);
-          return result;
-        });
-        
+        const updatePromise = commentManager
+          .updateOrCreateComment(
+            'test-owner',
+            'test-repo',
+            prNumber,
+            `Update #${i} - Timestamp: ${Date.now()} - Random: ${Math.random()}`,
+            {
+              commentId: `${commentId}-${i % concurrency}`, // Use multiple comment IDs to simulate concurrency
+              triggeredBy: `stress_test_${i}`,
+              allowConcurrentUpdates: true, // Allow concurrent updates for this test
+            }
+          )
+          .then(result => {
+            updateOrder.push(i);
+            return result;
+          });
+
         updatePromises.push(updatePromise);
 
         // Stagger the requests slightly to create realistic load
@@ -179,7 +187,7 @@ describe('Stress Testing Framework', () => {
       // Create progressively larger PRs to increase memory pressure
       const memoryReadings: number[] = [];
       const processingTimes: number[] = [];
-      
+
       for (let size = 50; size <= 500; size += 50) {
         const largePR = createLargePRFixture({
           filesCount: size,
@@ -191,20 +199,22 @@ describe('Stress Testing Framework', () => {
         mockOctokit.rest.pulls.get.mockResolvedValue({ data: largePR.prInfo });
         mockOctokit.rest.pulls.listFiles.mockResolvedValue({ data: largePR.files });
 
-        const memoryBefore = memoryProfiler.getCurrentUsage().heapUsed;
+        const _memoryBefore = memoryProfiler.getCurrentUsage().heapUsed;
         const startTime = timer.start();
 
         try {
           const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', size);
-          const review = await reviewer.reviewPR('test-owner', 'test-repo', size, prInfo);
-          
+          const _review = await reviewer.reviewPR('test-owner', 'test-repo', size, prInfo);
+
           const duration = timer.end(startTime);
           const memoryAfter = memoryProfiler.getCurrentUsage().heapUsed;
 
           processingTimes.push(duration);
           memoryReadings.push(memoryAfter / 1024 / 1024); // Convert to MB
 
-          console.log(`  PR size ${size}: ${duration.toFixed(2)}ms, Memory: ${(memoryAfter / 1024 / 1024).toFixed(2)}MB`);
+          console.log(
+            `  PR size ${size}: ${duration.toFixed(2)}ms, Memory: ${(memoryAfter / 1024 / 1024).toFixed(2)}MB`
+          );
 
           // Force garbage collection between iterations
           if (global.gc) {
@@ -213,11 +223,13 @@ describe('Stress Testing Framework', () => {
 
           // Check if memory usage is getting excessive
           const currentMemoryMB = memoryAfter / 1024 / 1024;
-          if (currentMemoryMB > 750) { // 750MB threshold
-            console.log(`Memory usage getting high (${currentMemoryMB.toFixed(2)}MB), testing graceful degradation...`);
+          if (currentMemoryMB > 750) {
+            // 750MB threshold
+            console.log(
+              `Memory usage getting high (${currentMemoryMB.toFixed(2)}MB), testing graceful degradation...`
+            );
             break;
           }
-
         } catch (error) {
           console.log(`Memory pressure test failed at size ${size}:`, error);
           break;
@@ -245,11 +257,11 @@ describe('Stress Testing Framework', () => {
 
       const cli = new CLI();
       const configManager = new ConfigManager();
-      
+
       // Baseline memory measurement
       if (global.gc) global.gc();
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       const baselineMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const memoryReadings: number[] = [baselineMemory];
 
@@ -258,7 +270,7 @@ describe('Stress Testing Framework', () => {
         // Simulate various CLI operations
         cli.parseArgs(['--check', 'performance', '--output', 'json']);
         cli.parseArgs(['--check', 'security', '--check', 'style', '--output', 'table']);
-        
+
         const config = await configManager.findAndLoadConfig();
         configManager.mergeWithCliOptions(config, {
           checks: ['performance' as any],
@@ -273,10 +285,10 @@ describe('Stress Testing Framework', () => {
           // Force garbage collection before measurement
           if (global.gc) global.gc();
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
           memoryReadings.push(currentMemory);
-          
+
           const growthMB = (currentMemory - baselineMemory) / 1024 / 1024;
           console.log(`  Iteration ${i}: Memory growth ${growthMB.toFixed(2)}MB`);
         }
@@ -318,20 +330,20 @@ describe('Stress Testing Framework', () => {
       };
 
       // Mock to simulate rate limiting for some requests
-      mockOctokit.rest.issues.listComments
-        .mockImplementation(() => {
-          if (Math.random() < 0.3) { // 30% chance of rate limit
-            rateLimitHit++;
-            return Promise.reject(rateLimitError);
-          }
-          return Promise.resolve({ data: [] });
-        });
+      mockOctokit.rest.issues.listComments.mockImplementation(() => {
+        if (Math.random() < 0.3) {
+          // 30% chance of rate limit
+          rateLimitHit++;
+          return Promise.reject(rateLimitError);
+        }
+        return Promise.resolve({ data: [] });
+      });
 
       const operations = 20;
       const results = [];
 
       const startTime = timer.start();
-      
+
       // Perform operations that might hit rate limits
       for (let i = 0; i < operations; i++) {
         try {
@@ -406,13 +418,13 @@ describe('Stress Testing Framework', () => {
             filesCount: 20,
             linesPerFile: 10,
           });
-          
+
           mockOctokit.rest.pulls.get.mockResolvedValue({ data: largePR.prInfo });
           mockOctokit.rest.pulls.listFiles.mockResolvedValue({ data: largePR.files });
-          
+
           return analyzer.fetchPRDiff('test-owner', 'test-repo', i);
         })();
-        
+
         operations.push(op);
       }
 
@@ -444,8 +456,14 @@ describe('Stress Testing Framework', () => {
     test('should handle complex configurations under load', async () => {
       console.log('Testing complex configuration handling under load...');
 
-      const dummyConfig = { version: '1.0', checks: {}, output: { pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true } } };
-      const eventMapper = new EventMapper(dummyConfig);
+      const dummyConfig = {
+        version: '1.0',
+        checks: {},
+        output: {
+          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+        },
+      };
+      const _eventMapper = new EventMapper(dummyConfig);
       const configManager = new ConfigManager();
 
       // Create an extremely complex configuration
@@ -467,12 +485,18 @@ describe('Stress Testing Framework', () => {
           type: 'ai' as const,
           prompt: `Ultra complex check ${i} with detailed analysis requirements: ${Array(50).fill(`requirement-${i}`).join(', ')}`,
           on: ['pr_opened' as const, 'pr_updated' as const, 'pr_closed' as const],
-          triggers: Array(20).fill(0).map((_, j) => `**/*${i}-${j}.{js,ts,py,java,go,rb}`),
+          triggers: Array(20)
+            .fill(0)
+            .map((_, j) => `**/*${i}-${j}.{js,ts,py,java,go,rb}`),
           conditions: {
             files_changed: { min: i % 10, max: (i % 50) + 100 },
             lines_changed: { min: i * 5, max: i * 50 },
-            branch_patterns: Array(10).fill(0).map((_, j) => `pattern-${i}-${j}/*`),
-            author_patterns: Array(5).fill(0).map((_, j) => `author-${i % 10}-${j}`),
+            branch_patterns: Array(10)
+              .fill(0)
+              .map((_, j) => `pattern-${i}-${j}/*`),
+            author_patterns: Array(5)
+              .fill(0)
+              .map((_, j) => `author-${i % 10}-${j}`),
           },
         };
       }
@@ -482,7 +506,7 @@ describe('Stress Testing Framework', () => {
 
       for (let i = 0; i < operations; i++) {
         const startTime = timer.start();
-        
+
         // Test configuration processing
         try {
           const cliOptions = {
@@ -492,17 +516,23 @@ describe('Stress Testing Framework', () => {
             help: false,
             version: false,
           };
-          
+
           const merged = configManager.mergeWithCliOptions(ultraComplexConfig, cliOptions);
           expect(merged).toBeDefined();
-          
-          // Test event mapping with the complex config  
+
+          // Test event mapping with the complex config
           const mapper = new EventMapper(ultraComplexConfig);
           const event = {
             event_name: 'pull_request',
             action: 'opened',
             repository: { owner: { login: 'test' }, name: 'repo' },
-            pull_request: { number: i, state: 'open', head: { sha: 'abc', ref: 'feature' }, base: { sha: 'def', ref: 'main' }, draft: false },
+            pull_request: {
+              number: i,
+              state: 'open',
+              head: { sha: 'abc', ref: 'feature' },
+              base: { sha: 'def', ref: 'main' },
+              draft: false,
+            },
           };
 
           const execution = mapper.mapEventToExecution(event, {
@@ -511,10 +541,9 @@ describe('Stress Testing Framework', () => {
           });
 
           expect(execution).toBeDefined();
-          
+
           const duration = timer.end(startTime);
           processingTimes.push(duration);
-          
         } catch (error) {
           console.log(`Complex config processing failed at iteration ${i}:`, error);
           const duration = timer.end(startTime);

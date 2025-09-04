@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { PRReviewer } from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
@@ -11,6 +12,21 @@ const mockOctokit = {
       getComment: jest.fn(),
     },
   },
+  request: jest.fn().mockResolvedValue({ data: {} }),
+  graphql: jest.fn().mockResolvedValue({}),
+  log: {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+  hook: {
+    before: jest.fn(),
+    after: jest.fn(),
+    error: jest.fn(),
+    wrap: jest.fn(),
+  },
+  auth: jest.fn().mockResolvedValue({ token: 'mock-token' }),
 } as any;
 
 describe('PRReviewer', () => {
@@ -229,7 +245,7 @@ describe('PRReviewer', () => {
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('**ERROR**: Critical security issue'); 
+      expect(callArgs.body).toContain('**ERROR**: Critical security issue');
       expect(callArgs.body).toContain('**WARNING**: Potential performance issue');
       expect(callArgs.body).toContain('**INFO**: Style improvement');
       expect(callArgs.body).toContain('🔒 Security Review');

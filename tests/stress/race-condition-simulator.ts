@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 /**
  * Race condition simulation utilities for testing concurrent operations
  */
@@ -33,7 +34,7 @@ export class RaceConditionSimulator {
     console.log(`🏃 Running race condition test: ${test.name}`);
 
     const startTime = Date.now();
-    
+
     // Setup phase
     let context: any;
     try {
@@ -44,12 +45,12 @@ export class RaceConditionSimulator {
     }
 
     // Execute operations concurrently with slight timing variations
-    const operationPromises = test.operations.map((operation, index) => 
-      this.executeWithRandomDelay(operation, index * 5, 50) // Stagger by 5ms + random up to 50ms
+    const operationPromises = test.operations.map(
+      (operation, index) => this.executeWithRandomDelay(operation, index * 5, 50) // Stagger by 5ms + random up to 50ms
     );
 
     const results = await Promise.allSettled(operationPromises);
-    
+
     const successful = results.filter(r => r.status === 'fulfilled').length;
     const failed = results.filter(r => r.status === 'rejected').length;
 
@@ -63,10 +64,9 @@ export class RaceConditionSimulator {
 
     try {
       passed = await test.validation(validationResults);
-      
+
       // Additional race condition detection
       raceConditionsDetected = this.detectRaceConditions(validationResults);
-      
     } catch (error) {
       console.error(`Validation failed for ${test.name}:`, error);
       passed = false;
@@ -94,7 +94,7 @@ export class RaceConditionSimulator {
     };
 
     this.results.set(test.name, result);
-    
+
     console.log(`✅ Completed ${test.name}:`);
     console.log(`   Success: ${successful}/${test.operations.length}`);
     console.log(`   Duration: ${duration}ms`);
@@ -185,11 +185,11 @@ export class RaceConditionSimulator {
    */
   private extractTimestamps(obj: any): number[] {
     const timestamps: number[] = [];
-    
+
     if (typeof obj !== 'object' || obj === null) return timestamps;
 
     const timestampKeys = ['timestamp', 'createdAt', 'updatedAt', 'processedAt', 'completedAt'];
-    
+
     for (const key of timestampKeys) {
       if (obj[key]) {
         const ts = typeof obj[key] === 'string' ? Date.parse(obj[key]) : obj[key];
@@ -211,7 +211,7 @@ export class RaceConditionSimulator {
         await this.runTest(test);
       } catch (error) {
         console.error(`Test suite error in ${test.name}:`, error);
-        
+
         // Record failed test
         this.results.set(test.name, {
           testName: test.name,
@@ -239,7 +239,7 @@ export class RaceConditionSimulator {
     averageDuration: number;
   } {
     const results = Array.from(this.results.values());
-    
+
     return {
       totalTests: results.length,
       passed: results.filter(r => r.passed).length,
@@ -280,22 +280,24 @@ export class RaceConditionTestBuilder {
         results.length = 0;
         return { counter, expectedValue };
       },
-      operations: Array(incrementCount).fill(0).map((_, i) => async () => {
-        const oldValue = counter;
-        // Simulate some processing time
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 10));
-        counter++;
-        results.push(counter);
-        return { operationId: i, oldValue, newValue: counter };
-      }),
-      validation: async (operationResults) => {
+      operations: Array(incrementCount)
+        .fill(0)
+        .map((_, i) => async () => {
+          const oldValue = counter;
+          // Simulate some processing time
+          await new Promise(resolve => setTimeout(resolve, Math.random() * 10));
+          counter++;
+          results.push(counter);
+          return { operationId: i, oldValue, newValue: counter };
+        }),
+      validation: async operationResults => {
         // Check if final counter value is correct
         const finalCounterCorrect = counter === expectedValue;
-        
+
         // Check for duplicate values (indicates race condition)
         const uniqueResults = new Set(results);
         const noDuplicates = uniqueResults.size === results.length;
-        
+
         return finalCounterCorrect && noDuplicates;
       },
     };
@@ -319,29 +321,32 @@ export class RaceConditionTestBuilder {
         allocations.length = 0;
         return { totalResources, allocationRequests };
       },
-      operations: Array(allocationRequests).fill(0).map((_, i) => async () => {
-        const timestamp = Date.now();
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 5));
-        
-        if (availableResources > 0) {
-          availableResources--;
-          const allocation = { id: i, allocated: true, timestamp };
-          allocations.push(allocation);
-          return allocation;
-        } else {
-          const allocation = { id: i, allocated: false, timestamp };
-          allocations.push(allocation);
-          return allocation;
-        }
-      }),
+      operations: Array(allocationRequests)
+        .fill(0)
+        .map((_, i) => async () => {
+          const timestamp = Date.now();
+          await new Promise(resolve => setTimeout(resolve, Math.random() * 5));
+
+          if (availableResources > 0) {
+            availableResources--;
+            const allocation = { id: i, allocated: true, timestamp };
+            allocations.push(allocation);
+            return allocation;
+          } else {
+            const allocation = { id: i, allocated: false, timestamp };
+            allocations.push(allocation);
+            return allocation;
+          }
+        }),
       validation: async () => {
         // Check that we didn't over-allocate
         const successfulAllocations = allocations.filter(a => a.allocated).length;
         const noOverAllocation = successfulAllocations <= totalResources;
-        
+
         // Check that final resource count is consistent
-        const finalResourcesCorrect = availableResources === Math.max(0, totalResources - successfulAllocations);
-        
+        const finalResourcesCorrect =
+          availableResources === Math.max(0, totalResources - successfulAllocations);
+
         return noOverAllocation && finalResourcesCorrect;
       },
     };
@@ -350,10 +355,7 @@ export class RaceConditionTestBuilder {
   /**
    * Create a test for concurrent map modifications
    */
-  static createMapModificationTest(
-    name: string,
-    operationCount: number = 20
-  ): RaceConditionTest {
+  static createMapModificationTest(name: string, operationCount: number = 20): RaceConditionTest {
     const sharedMap = new Map<string, any>();
     const operations: string[] = [];
 
@@ -364,34 +366,36 @@ export class RaceConditionTestBuilder {
         operations.length = 0;
         return { operationCount };
       },
-      operations: Array(operationCount).fill(0).map((_, i) => async () => {
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 3));
-        
-        const key = `key-${i % 5}`; // Use limited key set to create conflicts
-        const operation = Math.random() < 0.7 ? 'set' : 'delete';
-        
-        if (operation === 'set') {
-          const value = { id: i, timestamp: Date.now() };
-          sharedMap.set(key, value);
-          operations.push(`set:${key}:${i}`);
-          return { operation: 'set', key, value, success: true };
-        } else {
-          const existed = sharedMap.has(key);
-          sharedMap.delete(key);
-          operations.push(`delete:${key}:${i}`);
-          return { operation: 'delete', key, existed, success: true };
-        }
-      }),
+      operations: Array(operationCount)
+        .fill(0)
+        .map((_, i) => async () => {
+          await new Promise(resolve => setTimeout(resolve, Math.random() * 3));
+
+          const key = `key-${i % 5}`; // Use limited key set to create conflicts
+          const operation = Math.random() < 0.7 ? 'set' : 'delete';
+
+          if (operation === 'set') {
+            const value = { id: i, timestamp: Date.now() };
+            sharedMap.set(key, value);
+            operations.push(`set:${key}:${i}`);
+            return { operation: 'set', key, value, success: true };
+          } else {
+            const existed = sharedMap.has(key);
+            sharedMap.delete(key);
+            operations.push(`delete:${key}:${i}`);
+            return { operation: 'delete', key, existed, success: true };
+          }
+        }),
       validation: async () => {
         // Check that map is in a consistent state
         const finalSize = sharedMap.size;
-        const allKeysValid = Array.from(sharedMap.keys()).every(key => 
-          typeof key === 'string' && key.startsWith('key-')
+        const allKeysValid = Array.from(sharedMap.keys()).every(
+          key => typeof key === 'string' && key.startsWith('key-')
         );
-        
+
         // Check that operations array length matches expected
         const correctOperationCount = operations.length === operationCount;
-        
+
         return allKeysValid && correctOperationCount;
       },
     };

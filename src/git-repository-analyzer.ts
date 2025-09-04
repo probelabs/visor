@@ -47,15 +47,14 @@ export class GitRepositoryAnalyzer {
 
     try {
       // Get current branch and status
-      const [status, currentBranch, remoteInfo] = await Promise.all([
+      const [status, currentBranch] = await Promise.all([
         this.git.status(),
         this.getCurrentBranch(),
-        this.getRemoteInfo().catch(() => null)
       ]);
 
       // Get uncommitted changes
       const uncommittedFiles = await this.getUncommittedChanges();
-      
+
       // Get recent commit info
       const recentCommits = await this.git.log({ maxCount: 1 });
       const lastCommit = recentCommits.latest;
@@ -71,7 +70,7 @@ export class GitRepositoryAnalyzer {
         totalAdditions: uncommittedFiles.reduce((sum, file) => sum + file.additions, 0),
         totalDeletions: uncommittedFiles.reduce((sum, file) => sum + file.deletions, 0),
         isGitRepository: true,
-        workingDirectory: this.cwd
+        workingDirectory: this.cwd,
       };
 
       return repositoryInfo;
@@ -92,16 +91,18 @@ export class GitRepositoryAnalyzer {
       author: repositoryInfo.author,
       base: repositoryInfo.base,
       head: repositoryInfo.head,
-      files: repositoryInfo.files.map((file): PRDiff => ({
-        filename: file.filename,
-        additions: file.additions,
-        deletions: file.deletions,
-        changes: file.changes,
-        patch: file.patch,
-        status: file.status
-      })),
+      files: repositoryInfo.files.map(
+        (file): PRDiff => ({
+          filename: file.filename,
+          additions: file.additions,
+          deletions: file.deletions,
+          changes: file.changes,
+          patch: file.patch,
+          status: file.status,
+        })
+      ),
       totalAdditions: repositoryInfo.totalAdditions,
-      totalDeletions: repositoryInfo.totalDeletions
+      totalDeletions: repositoryInfo.totalDeletions,
     };
   }
 
@@ -128,7 +129,7 @@ export class GitRepositoryAnalyzer {
       // Try to get the default branch from remote
       const branches = await this.git.branch(['-r']);
       const mainBranches = ['origin/main', 'origin/master', 'origin/develop'];
-      
+
       for (const mainBranch of mainBranches) {
         if (branches.all.includes(mainBranch)) {
           return mainBranch.replace('origin/', '');
@@ -146,7 +147,9 @@ export class GitRepositoryAnalyzer {
     try {
       const remotes = await this.git.getRemotes(true);
       const origin = remotes.find(r => r.name === 'origin');
-      return origin ? { name: origin.name, url: origin.refs.fetch || origin.refs.push || '' } : null;
+      return origin
+        ? { name: origin.name, url: origin.refs.fetch || origin.refs.push || '' }
+        : null;
     } catch {
       return null;
     }
@@ -162,7 +165,10 @@ export class GitRepositoryAnalyzer {
         ...status.created.map(f => ({ file: f, status: 'added' as const })),
         ...status.deleted.map(f => ({ file: f, status: 'removed' as const })),
         ...status.modified.map(f => ({ file: f, status: 'modified' as const })),
-        ...status.renamed.map(f => ({ file: typeof f === 'string' ? f : f.to || f.from, status: 'renamed' as const }))
+        ...status.renamed.map(f => ({
+          file: typeof f === 'string' ? f : f.to || f.from,
+          status: 'renamed' as const,
+        })),
       ];
 
       for (const { file, status } of fileChanges) {
@@ -178,7 +184,11 @@ export class GitRepositoryAnalyzer {
     }
   }
 
-  private async analyzeFileChange(filename: string, status: 'added' | 'removed' | 'modified' | 'renamed', filePath: string): Promise<GitFileChange> {
+  private async analyzeFileChange(
+    filename: string,
+    status: 'added' | 'removed' | 'modified' | 'renamed',
+    filePath: string
+  ): Promise<GitFileChange> {
     let additions = 0;
     let deletions = 0;
     let patch: string | undefined;
@@ -201,7 +211,8 @@ export class GitRepositoryAnalyzer {
       if (status === 'added' && fs.existsSync(filePath)) {
         try {
           const stats = fs.statSync(filePath);
-          if (stats.isFile() && stats.size < 1024 * 1024) { // Skip files larger than 1MB
+          if (stats.isFile() && stats.size < 1024 * 1024) {
+            // Skip files larger than 1MB
             content = fs.readFileSync(filePath, 'utf8');
             additions = content.split('\n').length;
             patch = content; // For new files, the entire content is the "patch"
@@ -215,7 +226,6 @@ export class GitRepositoryAnalyzer {
       if (status === 'removed') {
         deletions = 1; // Placeholder - in real git we'd need the previous version
       }
-
     } catch (error) {
       console.error(`Error analyzing file change for ${filename}:`, error);
     }
@@ -227,11 +237,11 @@ export class GitRepositoryAnalyzer {
       deletions,
       changes: additions + deletions,
       content,
-      patch
+      patch,
     };
   }
 
-  private generateTitle(status: any, branch: string): string {
+  private generateTitle(status: import('simple-git').StatusResult, branch: string): string {
     if (status.files.length === 0) {
       return `Local Analysis: ${branch} (No changes)`;
     }
@@ -245,9 +255,12 @@ export class GitRepositoryAnalyzer {
     return `Local Analysis: ${branch} (${changeTypes.join(', ')})`;
   }
 
-  private generateDescription(status: any, lastCommit: any): string {
+  private generateDescription(
+    status: import('simple-git').StatusResult,
+    lastCommit: import('simple-git').DefaultLogFields | null
+  ): string {
     let description = `Analysis of local git repository working directory.\n\n`;
-    
+
     if (lastCommit) {
       description += `**Last Commit:** ${lastCommit.message}\n`;
       description += `**Author:** ${lastCommit.author_name} <${lastCommit.author_email}>\n`;
@@ -261,7 +274,7 @@ export class GitRepositoryAnalyzer {
       description += `- Files to be committed: ${status.staged.length}\n`;
       description += `- Modified files: ${status.modified.length}\n`;
       description += `- Untracked files: ${status.not_added.length}\n`;
-      
+
       if (status.conflicted.length > 0) {
         description += `- Conflicted files: ${status.conflicted.length}\n`;
       }
@@ -281,7 +294,7 @@ export class GitRepositoryAnalyzer {
       totalAdditions: 0,
       totalDeletions: 0,
       isGitRepository: false,
-      workingDirectory: this.cwd
+      workingDirectory: this.cwd,
     };
   }
 }

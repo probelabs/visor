@@ -2,9 +2,6 @@
 
 import { CLI } from './cli';
 import { ConfigManager } from './config';
-import { PRAnalyzer } from './pr-analyzer';
-import { PRReviewer } from './reviewer';
-import { Octokit } from '@octokit/rest';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters } from './output-formatters';
 
@@ -15,7 +12,7 @@ export async function main(): Promise<void> {
   try {
     const cli = new CLI();
     const configManager = new ConfigManager();
-    
+
     // Check for help flag before parsing
     const args = process.argv.slice(2);
     if (args.includes('--help') || args.includes('-h')) {
@@ -34,7 +31,15 @@ export async function main(): Promise<void> {
     // Load configuration
     let config;
     if (cliOptions.configPath) {
-      config = await configManager.loadConfig(cliOptions.configPath);
+      try {
+        config = await configManager.loadConfig(cliOptions.configPath);
+      } catch (error) {
+        console.error(
+          `⚠️  Warning: ${error instanceof Error ? error.message : 'Configuration file not found'}`
+        );
+        console.error('Falling back to default configuration...');
+        config = await configManager.getDefaultConfig();
+      }
     } else {
       config = await configManager.findAndLoadConfig();
     }
@@ -53,20 +58,22 @@ export async function main(): Promise<void> {
     }
 
     // Determine which checks to run
-    const checksToRun = mergedConfig.cliChecks.length > 0 
-      ? mergedConfig.cliChecks 
-      : Object.keys(config.checks || {});
+    const checksToRun =
+      mergedConfig.cliChecks.length > 0 ? mergedConfig.cliChecks : Object.keys(config.checks || {});
 
     // If no checks specified, show help
     if (checksToRun.length === 0) {
-      console.error('\n⚠️  No checks specified. Use --check <type> or configure checks in visor.config.yaml');
+      console.error(
+        '\n⚠️  No checks specified. Use --check <type> or configure checks in visor.config.yaml'
+      );
       console.error('Available check types: performance, architecture, security, style, all');
       process.exit(1);
     }
 
     // Validate check types
-    const { valid: validChecks, invalid: invalidChecks } = CheckExecutionEngine.validateCheckTypes(checksToRun);
-    
+    const { valid: validChecks, invalid: invalidChecks } =
+      CheckExecutionEngine.validateCheckTypes(checksToRun);
+
     if (invalidChecks.length > 0) {
       console.error(`❌ Invalid check types: ${invalidChecks.join(', ')}`);
       console.error('Available check types: performance, architecture, security, style, all');
@@ -78,17 +85,20 @@ export async function main(): Promise<void> {
 
     // Check if we're in a git repository
     const repositoryStatus = await executionEngine.getRepositoryStatus();
-    
+
     if (!repositoryStatus.isGitRepository) {
       console.error('❌ Not a git repository. Please run visor from within a git repository.');
       process.exit(1);
     }
 
     // Send repository status to stderr for JSON/SARIF, stdout for others
-    const logFn = (mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif') ? console.error : console.log;
+    const logFn =
+      mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif'
+        ? console.error
+        : console.log;
     logFn(`📂 Repository: ${repositoryStatus.branch} branch`);
     logFn(`📁 Files changed: ${repositoryStatus.filesChanged}`);
-    
+
     if (!repositoryStatus.hasChanges) {
       logFn('ℹ️  No uncommitted changes found. Analyzing working directory state...');
     }
@@ -104,12 +114,13 @@ export async function main(): Promise<void> {
 
       // Format and display the results
       await displayResults(analysisResult, mergedConfig.cliOutput);
-
     } catch (error) {
-      console.error('❌ Error executing checks:', error instanceof Error ? error.message : 'Unknown error');
+      console.error(
+        '❌ Error executing checks:',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
       process.exit(1);
     }
-
   } catch (error) {
     console.error('❌ Error:', error instanceof Error ? error.message : 'Unknown error');
     process.exit(1);
@@ -119,7 +130,10 @@ export async function main(): Promise<void> {
 /**
  * Display analysis results in the specified format
  */
-async function displayResults(result: any, outputFormat: string): Promise<void> {
+async function displayResults(
+  result: import('./output-formatters').AnalysisResult,
+  outputFormat: string
+): Promise<void> {
   switch (outputFormat) {
     case 'json':
       // Pure JSON output to stdout
@@ -127,7 +141,7 @@ async function displayResults(result: any, outputFormat: string): Promise<void> 
         showDetails: true,
         groupByCategory: true,
         includeFiles: true,
-        includeTimestamp: true
+        includeTimestamp: true,
       });
       console.log(jsonOutput);
       break;
@@ -138,7 +152,7 @@ async function displayResults(result: any, outputFormat: string): Promise<void> 
         showDetails: true,
         groupByCategory: true,
         includeFiles: true,
-        includeTimestamp: true
+        includeTimestamp: true,
       });
       console.log(sarifOutput);
       break;
@@ -148,24 +162,26 @@ async function displayResults(result: any, outputFormat: string): Promise<void> 
       console.log('\n' + '='.repeat(80));
       console.log('🎯 ANALYSIS RESULTS');
       console.log('='.repeat(80));
-      
+
       const markdownOutput = OutputFormatters.formatAsMarkdown(result, {
         showDetails: true,
         groupByCategory: true,
         includeFiles: true,
-        includeTimestamp: true
+        includeTimestamp: true,
       });
       console.log(markdownOutput);
-      
+
       // Show summary for markdown
       const score = result.reviewSummary.overallScore;
       const emoji = score >= 80 ? '✅' : score >= 60 ? '⚠️' : '❌';
       console.log(`\n${emoji} Analysis completed with score: ${score}/100`);
-      
+
       if (result.reviewSummary.totalIssues > 0) {
-        console.log(`📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`);
+        console.log(
+          `📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`
+        );
       }
-      
+
       console.log(`⏱️  Execution time: ${result.executionTime}ms`);
       break;
 
@@ -175,24 +191,26 @@ async function displayResults(result: any, outputFormat: string): Promise<void> 
       console.log('\n' + '='.repeat(80));
       console.log('🎯 ANALYSIS RESULTS');
       console.log('='.repeat(80));
-      
+
       const tableOutput = OutputFormatters.formatAsTable(result, {
         showDetails: true,
         groupByCategory: true,
         includeFiles: true,
-        includeTimestamp: true
+        includeTimestamp: true,
       });
       console.log(tableOutput);
-      
+
       // Show summary for table
       const tableScore = result.reviewSummary.overallScore;
       const tableEmoji = tableScore >= 80 ? '✅' : tableScore >= 60 ? '⚠️' : '❌';
       console.log(`\n${tableEmoji} Analysis completed with score: ${tableScore}/100`);
-      
+
       if (result.reviewSummary.totalIssues > 0) {
-        console.log(`📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`);
+        console.log(
+          `📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`
+        );
       }
-      
+
       console.log(`⏱️  Execution time: ${result.executionTime}ms`);
       break;
   }

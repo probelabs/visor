@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { CLI } from '../../src/cli';
 import { ConfigManager } from '../../src/config';
 import { CommentManager } from '../../src/github-comments';
@@ -67,22 +68,24 @@ describe('Resource Exhaustion Tests', () => {
       const operationTimes: number[] = [];
 
       // Create test config files
-      const testConfigs = Array(10).fill(0).map((_, i) => {
-        const configPath = path.join(tempDir, `test-config-${i}.yaml`);
-        const configContent = {
-          version: '1.0',
-          checks: {
-            [`test-check-${i}`]: {
-              type: 'ai',
-              prompt: `Test prompt ${i}`,
-              on: ['pr_opened'],
+      const testConfigs = Array(10)
+        .fill(0)
+        .map((_, i) => {
+          const configPath = path.join(tempDir, `test-config-${i}.yaml`);
+          const configContent = {
+            version: '1.0',
+            checks: {
+              [`test-check-${i}`]: {
+                type: 'ai',
+                prompt: `Test prompt ${i}`,
+                on: ['pr_opened'],
+              },
             },
-          },
-        };
-        
-        fs.writeFileSync(configPath, JSON.stringify(configContent));
-        return configPath;
-      });
+          };
+
+          fs.writeFileSync(configPath, JSON.stringify(configContent));
+          return configPath;
+        });
 
       const operationPromises: Promise<any>[] = [];
 
@@ -92,26 +95,26 @@ describe('Resource Exhaustion Tests', () => {
           const startTime = timer.start();
           try {
             const configPath = testConfigs[i % testConfigs.length];
-            
+
             // Perform multiple file operations that could exhaust handles
             await configManager.loadConfig(configPath);
-            
+
             // Additional file operations
             const stats = fs.statSync(configPath);
             const content = fs.readFileSync(configPath, 'utf8');
-            
+
             const duration = timer.end(startTime);
             operationTimes.push(duration);
             successfulOperations++;
-            
+
             return { success: true, configPath, stats, content: content.length };
           } catch (error) {
             const duration = timer.end(startTime);
             operationTimes.push(duration);
             failedOperations++;
-            
+
             console.error(`File operation ${i} failed:`, error);
-            return { success: false, error: error.message };
+            return { success: false, error: (error as Error).message || String(error) };
           }
         };
 
@@ -133,7 +136,9 @@ describe('Resource Exhaustion Tests', () => {
       console.log(`  Total operations: ${totalOperations}`);
       console.log(`  Successful: ${successfulOperations}`);
       console.log(`  Failed: ${failedOperations}`);
-      console.log(`  Success rate: ${((successfulOperations / totalOperations) * 100).toFixed(2)}%`);
+      console.log(
+        `  Success rate: ${((successfulOperations / totalOperations) * 100).toFixed(2)}%`
+      );
       console.log(`  Average operation time: ${avgOperationTime.toFixed(2)}ms`);
       console.log(`  Max operation time: ${maxOperationTime.toFixed(2)}ms`);
 
@@ -158,7 +163,7 @@ describe('Resource Exhaustion Tests', () => {
 
       const initialMemory = memoryProfiler.getCurrentUsage().heapUsed;
       const memoryReadings: Array<{ iteration: number; memory: number; operations: number }> = [];
-      
+
       let currentIteration = 0;
       let totalOperations = 0;
       const maxIterations = 20;
@@ -166,7 +171,7 @@ describe('Resource Exhaustion Tests', () => {
 
       while (currentIteration < maxIterations) {
         const iterationStart = timer.start();
-        
+
         try {
           // Create progressively more memory-intensive operations
           const operationsPerIteration = (currentIteration + 1) * 10;
@@ -174,31 +179,35 @@ describe('Resource Exhaustion Tests', () => {
 
           for (let i = 0; i < operationsPerIteration; i++) {
             // Create large data structures that consume memory
-            const largeArray = Array(1000).fill(0).map((_, idx) => ({
-              id: `${currentIteration}-${i}-${idx}`,
-              data: `${'x'.repeat(100)}`, // 100 character string per item
-              metadata: {
-                created: new Date(),
-                iteration: currentIteration,
-                operation: i,
-                large_field: Array(50).fill(`data-${idx}`),
-              },
-            }));
-            
+            const largeArray = Array(1000)
+              .fill(0)
+              .map((_, idx) => ({
+                id: `${currentIteration}-${i}-${idx}`,
+                data: `${'x'.repeat(100)}`, // 100 character string per item
+                metadata: {
+                  created: new Date(),
+                  iteration: currentIteration,
+                  operation: i,
+                  large_field: Array(50).fill(`data-${idx}`),
+                },
+              }));
+
             largeDataSets.push(largeArray);
             totalOperations++;
 
             // Simulate some processing
             const cli = new CLI();
             cli.parseArgs(['--check', 'performance', '--output', 'json']);
-            
+
             // Check memory periodically
             if (i % 10 === 0) {
               const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
               const memoryMB = currentMemory / 1024 / 1024;
-              
+
               if (memoryMB > memoryLimitMB) {
-                console.log(`Memory limit reached at iteration ${currentIteration}, operation ${i}: ${memoryMB.toFixed(2)}MB`);
+                console.log(
+                  `Memory limit reached at iteration ${currentIteration}, operation ${i}: ${memoryMB.toFixed(2)}MB`
+                );
                 break;
               }
             }
@@ -207,14 +216,16 @@ describe('Resource Exhaustion Tests', () => {
           const iterationDuration = timer.end(iterationStart);
           const currentMemory = memoryProfiler.getCurrentUsage().heapUsed;
           const memoryMB = currentMemory / 1024 / 1024;
-          
+
           memoryReadings.push({
             iteration: currentIteration,
             memory: memoryMB,
             operations: operationsPerIteration,
           });
 
-          console.log(`  Iteration ${currentIteration}: ${operationsPerIteration} ops, ${memoryMB.toFixed(2)}MB, ${iterationDuration.toFixed(2)}ms`);
+          console.log(
+            `  Iteration ${currentIteration}: ${operationsPerIteration} ops, ${memoryMB.toFixed(2)}MB, ${iterationDuration.toFixed(2)}ms`
+          );
 
           // Break if memory is getting too high
           if (memoryMB > memoryLimitMB) {
@@ -227,7 +238,6 @@ describe('Resource Exhaustion Tests', () => {
             global.gc();
             await new Promise(resolve => setTimeout(resolve, 100));
           }
-
         } catch (error) {
           console.log(`Memory pressure test failed at iteration ${currentIteration}:`, error);
           break;
@@ -271,11 +281,13 @@ describe('Resource Exhaustion Tests', () => {
       for (let i = 0; i < 100; i++) {
         largeObjects.push({
           id: i,
-          largeData: Array(10000).fill(0).map((_, j) => ({
-            index: j,
-            data: 'x'.repeat(200),
-            metadata: { created: new Date(), random: Math.random() },
-          })),
+          largeData: Array(10000)
+            .fill(0)
+            .map((_, j) => ({
+              index: j,
+              data: 'x'.repeat(200),
+              metadata: { created: new Date(), random: Math.random() },
+            })),
         });
       }
 
@@ -340,35 +352,37 @@ describe('Resource Exhaustion Tests', () => {
           sharedCommentData.lastUpdate = null;
           return { commentManager, sharedCommentData };
         },
-        operations: Array(10).fill(0).map((_, i) => async () => {
-          await new Promise(resolve => setTimeout(resolve, Math.random() * 20));
-          
-          const updateTime = new Date().toISOString();
-          sharedCommentData.updateCount++;
-          sharedCommentData.lastUpdate = updateTime;
-          
-          return commentManager.updateOrCreateComment(
-            'test-owner',
-            'test-repo',
-            123,
-            `Update ${i} at ${updateTime}`,
-            {
-              commentId: `race-test-${i % 3}`, // Use limited comment IDs to create conflicts
-              triggeredBy: `race_test_${i}`,
-              allowConcurrentUpdates: true,
-            }
-          );
-        }),
-        validation: async (results) => {
-          const successful = results.filter(r => r && r.id).length;
+        operations: Array(10)
+          .fill(0)
+          .map((_, i) => async () => {
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 20));
+
+            const updateTime = new Date().toISOString();
+            sharedCommentData.updateCount++;
+            sharedCommentData.lastUpdate = updateTime as any;
+
+            return commentManager.updateOrCreateComment(
+              'test-owner',
+              'test-repo',
+              123,
+              `Update ${i} at ${updateTime}`,
+              {
+                commentId: `race-test-${i % 3}`, // Use limited comment IDs to create conflicts
+                triggeredBy: `race_test_${i}`,
+                allowConcurrentUpdates: true,
+              }
+            );
+          }),
+        validation: async (results: any) => {
+          const successful = results.filter((r: any) => r && r.id).length;
           const expectedUpdates = 10;
-          
+
           // Check that all operations completed
           const allCompleted = successful === expectedUpdates;
-          
+
           // Check that update counter is correct
           const counterCorrect = sharedCommentData.updateCount === expectedUpdates;
-          
+
           return allCompleted && counterCorrect;
         },
       };
@@ -395,7 +409,7 @@ describe('Resource Exhaustion Tests', () => {
       console.log('Testing concurrent configuration loading race conditions...');
 
       const configManager = new ConfigManager();
-      
+
       // Create test configuration
       const testConfigPath = path.join(tempDir, 'concurrent-test-config.yaml');
       const testConfig = {
@@ -408,7 +422,7 @@ describe('Resource Exhaustion Tests', () => {
           },
         },
       };
-      
+
       fs.writeFileSync(testConfigPath, JSON.stringify(testConfig));
 
       const concurrentLoads = 15;
@@ -429,7 +443,7 @@ describe('Resource Exhaustion Tests', () => {
             return { success: false, error, loadId: i };
           }
         })();
-        
+
         loadPromises.push(loadPromise);
       }
 
@@ -460,9 +474,15 @@ describe('Resource Exhaustion Tests', () => {
       console.log('Testing system resource limit handling...');
 
       const cli = new CLI();
-      const dummyConfig = { version: '1.0', checks: {}, output: { pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true } } };
+      const dummyConfig = {
+        version: '1.0',
+        checks: {},
+        output: {
+          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+        },
+      };
       const eventMapper = new EventMapper(dummyConfig);
-      
+
       // Test with extremely large configurations that might hit limits
       const massiveConfig: any = {
         version: '1.0',
@@ -476,7 +496,9 @@ describe('Resource Exhaustion Tests', () => {
           type: 'ai',
           prompt: `Massive check ${i}: ${Array(500).fill('word').join(' ')}`,
           on: ['pr_opened', 'pr_updated'],
-          triggers: Array(100).fill(0).map((_, j) => `**/*-${i}-${j}.*`),
+          triggers: Array(100)
+            .fill(0)
+            .map((_, j) => `**/*-${i}-${j}.*`),
         };
       }
 
@@ -488,52 +510,62 @@ describe('Resource Exhaustion Tests', () => {
         // Test processing large configuration chunks
         const checkEntries = Object.entries(massiveConfig.checks);
         const chunkSize = 50;
-        
+
         for (let chunk = 0; chunk < checkEntries.length / chunkSize; chunk++) {
           const chunkStart = chunk * chunkSize;
           const chunkEnd = Math.min(chunkStart + chunkSize, checkEntries.length);
           const chunkChecks = checkEntries.slice(chunkStart, chunkEnd);
-          
+
           const chunkStartTime = timer.start();
-          
+
           // Process chunk
           const chunkConfig = {
             ...massiveConfig,
             checks: Object.fromEntries(chunkChecks),
           };
-          
+
           // Test CLI processing
           cli.parseArgs(['--check', 'performance', '--output', 'json']);
-          
+
           // Test event mapping
           const mapper = new EventMapper(chunkConfig);
           const event = {
             event_name: 'pull_request',
             action: 'opened',
             repository: { owner: { login: 'test' }, name: 'repo' },
-            pull_request: { number: 1, state: 'open', head: { sha: 'abc', ref: 'feature' }, base: { sha: 'def', ref: 'main' }, draft: false },
+            pull_request: {
+              number: 1,
+              state: 'open',
+              head: { sha: 'abc', ref: 'feature' },
+              base: { sha: 'def', ref: 'main' },
+              draft: false,
+            },
           };
-          
+
           mapper.mapEventToExecution(event);
-          
+
           const chunkDuration = timer.end(chunkStartTime);
           processingTimes.push(chunkDuration);
           processedChecks += chunkChecks.length;
-          
+
           // Check if processing is taking too long (resource limit indicator)
-          if (chunkDuration > 10000) { // 10 seconds per chunk
+          if (chunkDuration > 10000) {
+            // 10 seconds per chunk
             console.log(`Processing time exceeded limit at chunk ${chunk}: ${chunkDuration}ms`);
             processingStopped = true;
             break;
           }
-          
+
           // Force GC between chunks
           if (global.gc && chunk % 5 === 0) {
             global.gc();
           }
         }
       } catch (error) {
-        console.log('System resource limit encountered:', error.message);
+        console.log(
+          'System resource limit encountered:',
+          (error as Error).message || String(error)
+        );
         processingStopped = true;
       }
 

@@ -26,7 +26,7 @@ export async function run(): Promise<void> {
     // Create GitHub context for CLI bridge
     const context: GitHubContext = {
       event_name: eventName || 'unknown',
-      repository: process.env.GITHUB_REPOSITORY 
+      repository: process.env.GITHUB_REPOSITORY
         ? {
             owner: { login: process.env.GITHUB_REPOSITORY.split('/')[0] },
             name: process.env.GITHUB_REPOSITORY.split('/')[1],
@@ -38,7 +38,7 @@ export async function run(): Promise<void> {
 
     // Initialize CLI bridge
     const cliBridge = new ActionCliBridge(token, context);
-    
+
     // Check if we should use Visor CLI
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
@@ -59,7 +59,7 @@ export async function run(): Promise<void> {
 async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
-  context: GitHubContext
+  _context: GitHubContext
 ): Promise<void> {
   try {
     // Create temporary config if needed
@@ -70,11 +70,11 @@ async function handleVisorMode(
 
     // Execute CLI
     const result = await cliBridge.executeCliWithContext(inputs);
-    
+
     if (result.success) {
       console.log('✅ Visor CLI execution completed successfully');
       console.log(result.output);
-      
+
       // Set outputs based on CLI result
       const outputs = cliBridge.mergeActionAndCliOutputs(inputs, result);
       for (const [key, value] of Object.entries(outputs)) {

@@ -6,14 +6,29 @@ import { PRInfo } from './pr-analyzer';
 export interface MockOctokit {
   rest: {
     pulls: {
-      get: any;
-      listFiles: any;
+      get: () => Promise<{ data: Record<string, unknown> }>;
+      listFiles: () => Promise<{ data: Record<string, unknown>[] }>;
     };
     issues: {
-      listComments: any;
-      createComment: any;
+      listComments: () => Promise<{ data: Record<string, unknown>[] }>;
+      createComment: () => Promise<{ data: Record<string, unknown> }>;
     };
   };
+  request: () => Promise<{ data: Record<string, unknown> }>;
+  graphql: () => Promise<Record<string, unknown>>;
+  log: {
+    debug: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+  };
+  hook: {
+    before: (...args: unknown[]) => void;
+    after: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    wrap: (...args: unknown[]) => void;
+  };
+  auth: () => Promise<{ token: string }>;
 }
 
 export interface CheckExecutionOptions {
@@ -31,11 +46,11 @@ export class CheckExecutionEngine {
 
   constructor(workingDirectory?: string) {
     this.gitAnalyzer = new GitRepositoryAnalyzer(workingDirectory);
-    
+
     // Create a mock Octokit instance for local analysis
     // This allows us to reuse the existing PRReviewer logic without network calls
     this.mockOctokit = this.createMockOctokit();
-    this.reviewer = new PRReviewer(this.mockOctokit as any);
+    this.reviewer = new PRReviewer(this.mockOctokit as unknown as import('@octokit/rest').Octokit);
   }
 
   /**
@@ -47,8 +62,11 @@ export class CheckExecutionEngine {
 
     try {
       // Determine where to send log messages based on output format
-      const logFn = (options.outputFormat === 'json' || options.outputFormat === 'sarif') ? console.error : console.log;
-      
+      const logFn =
+        options.outputFormat === 'json' || options.outputFormat === 'sarif'
+          ? console.error
+          : console.log;
+
       // Analyze the repository
       logFn('🔍 Analyzing local git repository...');
       const repositoryInfo = await this.gitAnalyzer.analyzeRepository();
@@ -71,18 +89,17 @@ export class CheckExecutionEngine {
       const reviewSummary = await this.executeReviewChecks(prInfo, options.checks);
 
       const executionTime = Date.now() - startTime;
-      
+
       return {
         repositoryInfo,
         reviewSummary,
         executionTime,
         timestamp,
-        checksExecuted: options.checks
+        checksExecuted: options.checks,
       };
-
     } catch (error) {
       console.error('Error executing checks:', error);
-      
+
       const fallbackRepositoryInfo: GitRepositoryInfo = {
         title: 'Error during analysis',
         body: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -93,7 +110,7 @@ export class CheckExecutionEngine {
         totalAdditions: 0,
         totalDeletions: 0,
         isGitRepository: false,
-        workingDirectory: options.workingDirectory || process.cwd()
+        workingDirectory: options.workingDirectory || process.cwd(),
       };
 
       return this.createErrorResult(
@@ -112,32 +129,50 @@ export class CheckExecutionEngine {
   private async executeReviewChecks(prInfo: PRInfo, checks: string[]): Promise<ReviewSummary> {
     // Map CLI check types to reviewer focus options
     const focusMap: Record<string, ReviewOptions['focus']> = {
-      'security': 'security',
-      'performance': 'performance',
-      'style': 'style',
-      'all': 'all',
-      'architecture': 'all', // Map architecture to all for now
+      security: 'security',
+      performance: 'performance',
+      style: 'style',
+      all: 'all',
+      architecture: 'all', // Map architecture to all for now
     };
 
     // If multiple specific checks are requested, we'll run them separately and merge
     if (checks.length === 1 && checks[0] !== 'all') {
       const focus = focusMap[checks[0]] || 'all';
-      return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, { focus, format: 'detailed' });
+      return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, {
+        focus,
+        format: 'detailed',
+      });
     }
 
     // For multiple checks or 'all', run a comprehensive review
     let focus: ReviewOptions['focus'] = 'all';
-    
+
     // If specific checks are requested, determine the most appropriate focus
-    if (checks.includes('security') && !checks.includes('performance') && !checks.includes('style')) {
+    if (
+      checks.includes('security') &&
+      !checks.includes('performance') &&
+      !checks.includes('style')
+    ) {
       focus = 'security';
-    } else if (checks.includes('performance') && !checks.includes('security') && !checks.includes('style')) {
+    } else if (
+      checks.includes('performance') &&
+      !checks.includes('security') &&
+      !checks.includes('style')
+    ) {
       focus = 'performance';
-    } else if (checks.includes('style') && !checks.includes('security') && !checks.includes('performance')) {
+    } else if (
+      checks.includes('style') &&
+      !checks.includes('security') &&
+      !checks.includes('performance')
+    ) {
       focus = 'style';
     }
 
-    return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, { focus, format: 'detailed' });
+    return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, {
+      focus,
+      format: 'detailed',
+    });
   }
 
   /**
@@ -178,33 +213,48 @@ export class CheckExecutionEngine {
         body: 'Local repository analysis',
         user: { login: 'local-user' },
         base: { ref: 'main' },
-        head: { ref: 'HEAD' }
-      }
+        head: { ref: 'HEAD' },
+      },
     });
 
     const mockListFiles = async () => ({
-      data: []
+      data: [],
     });
 
     const mockListComments = async () => ({
-      data: []
+      data: [],
     });
 
     const mockCreateComment = async () => ({
-      data: { id: 1 }
+      data: { id: 1 },
     });
 
     return {
       rest: {
         pulls: {
           get: mockGet,
-          listFiles: mockListFiles
+          listFiles: mockListFiles,
         },
         issues: {
           listComments: mockListComments,
-          createComment: mockCreateComment
-        }
-      }
+          createComment: mockCreateComment,
+        },
+      },
+      request: async () => ({ data: {} }),
+      graphql: async () => ({}),
+      log: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+      hook: {
+        before: () => {},
+        after: () => {},
+        error: () => {},
+        wrap: () => {},
+      },
+      auth: async () => ({ token: 'mock-token' }),
     };
   }
 
@@ -219,7 +269,7 @@ export class CheckExecutionEngine {
     checksExecuted: string[]
   ): AnalysisResult {
     const executionTime = Date.now() - startTime;
-    
+
     return {
       repositoryInfo,
       reviewSummary: {
@@ -227,17 +277,19 @@ export class CheckExecutionEngine {
         totalIssues: 1,
         criticalIssues: 1,
         suggestions: [`Error: ${errorMessage}`],
-        comments: [{
-          file: 'system',
-          line: 0,
-          message: errorMessage,
-          severity: 'error',
-          category: 'logic'
-        }]
+        comments: [
+          {
+            file: 'system',
+            line: 0,
+            message: errorMessage,
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
       },
       executionTime,
       timestamp,
-      checksExecuted
+      checksExecuted,
     };
   }
 
@@ -268,14 +320,14 @@ export class CheckExecutionEngine {
         isGitRepository: repositoryInfo.isGitRepository,
         hasChanges: repositoryInfo.files.length > 0,
         branch: repositoryInfo.head,
-        filesChanged: repositoryInfo.files.length
+        filesChanged: repositoryInfo.files.length,
       };
-    } catch (error) {
+    } catch {
       return {
         isGitRepository: false,
         hasChanges: false,
         branch: 'unknown',
-        filesChanged: 0
+        filesChanged: 0,
       };
     }
   }

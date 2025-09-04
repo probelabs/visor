@@ -1,5 +1,3 @@
-import { PRInfo, PRDiff } from '../../src/pr-analyzer';
-
 export interface LargePRConfig {
   filesCount: number;
   linesPerFile: number;
@@ -8,8 +6,8 @@ export interface LargePRConfig {
 }
 
 export interface LargePRFixture {
-  prInfo: any;
-  files: any[];
+  prInfo: Record<string, unknown>;
+  files: Record<string, unknown>[];
 }
 
 /**
@@ -29,7 +27,7 @@ export class PerformanceTimer {
     if (!startTime) {
       throw new Error('Timer not found');
     }
-    
+
     const endTime = process.hrtime.bigint();
     const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
     this.startTimes.delete(id);
@@ -65,7 +63,7 @@ export class MemoryProfiler {
   takeSnapshot(label?: string): NodeJS.MemoryUsage {
     const snapshot = this.getCurrentUsage();
     this.snapshots.push(snapshot);
-    
+
     if (label) {
       console.log(`Memory Snapshot [${label}]:`);
       console.log(`  Heap Used: ${(snapshot.heapUsed / 1024 / 1024).toFixed(2)}MB`);
@@ -73,7 +71,7 @@ export class MemoryProfiler {
       console.log(`  RSS: ${(snapshot.rss / 1024 / 1024).toFixed(2)}MB`);
       console.log(`  External: ${(snapshot.external / 1024 / 1024).toFixed(2)}MB`);
     }
-    
+
     return snapshot;
   }
 
@@ -81,7 +79,7 @@ export class MemoryProfiler {
     if (this.snapshots.length < 2) {
       return 0;
     }
-    
+
     const first = this.snapshots[0];
     const last = this.snapshots[this.snapshots.length - 1];
     return last.heapUsed - first.heapUsed;
@@ -91,10 +89,12 @@ export class MemoryProfiler {
     this.snapshots = [];
   }
 
-  async trackMemoryDuringOperation<T>(operation: () => Promise<T>): Promise<{ result: T; memoryGrowth: number; peakMemory: number }> {
+  async trackMemoryDuringOperation<T>(
+    operation: () => Promise<T>
+  ): Promise<{ result: T; memoryGrowth: number; peakMemory: number }> {
     const initialMemory = this.getCurrentUsage().heapUsed;
     let peakMemory = initialMemory;
-    
+
     // Monitor memory during operation
     const memoryMonitor = setInterval(() => {
       const current = this.getCurrentUsage().heapUsed;
@@ -106,10 +106,10 @@ export class MemoryProfiler {
     try {
       const result = await operation();
       clearInterval(memoryMonitor);
-      
+
       const finalMemory = this.getCurrentUsage().heapUsed;
       const memoryGrowth = finalMemory - initialMemory;
-      
+
       return {
         result,
         memoryGrowth,
@@ -127,7 +127,7 @@ export class MemoryProfiler {
  */
 export function createLargePRFixture(config: LargePRConfig): LargePRFixture {
   const { filesCount, linesPerFile, totalAdditions = 0, totalDeletions = 0 } = config;
-  
+
   // Generate files with realistic content
   const files = [];
   const fileTypes = ['.ts', '.js', '.py', '.java', '.go', '.rb', '.php', '.cpp'];
@@ -137,13 +137,13 @@ export function createLargePRFixture(config: LargePRConfig): LargePRFixture {
     const fileType = fileTypes[i % fileTypes.length];
     const directory = directories[i % directories.length];
     const filename = `${directory}/module-${Math.floor(i / 10)}/file-${i}${fileType}`;
-    
+
     // Generate realistic patch content
     const additions = Math.floor(linesPerFile * (0.7 + Math.random() * 0.6)); // 70-130% of base
     const deletions = Math.floor(additions * (0.2 + Math.random() * 0.3)); // 20-50% of additions
-    
+
     const patch = generatePatchContent(filename, additions, deletions);
-    
+
     files.push({
       sha: `${i.toString().padStart(7, '0')}abcdef`,
       filename,
@@ -184,7 +184,7 @@ export function createLargePRFixture(config: LargePRConfig): LargePRFixture {
     },
     base: {
       label: 'test-owner:main',
-      ref: 'main', 
+      ref: 'main',
       sha: 'def456ghi789abc123',
       repo: {
         name: 'test-repo',
@@ -216,7 +216,7 @@ export function createLargePRFixture(config: LargePRConfig): LargePRFixture {
 function generatePatchContent(filename: string, additions: number, deletions: number): string {
   const fileExtension = filename.split('.').pop();
   const lines = [];
-  
+
   // Add patch header
   lines.push(`diff --git a/${filename} b/${filename}`);
   lines.push(`index 1234567..abcdefg 100644`);
@@ -226,22 +226,22 @@ function generatePatchContent(filename: string, additions: number, deletions: nu
 
   // Generate content based on file type
   const contentGenerator = getContentGenerator(fileExtension || 'txt');
-  
+
   // Add some unchanged context lines
   for (let i = 0; i < 3; i++) {
     lines.push(` ${contentGenerator.unchangedLine(i)}`);
   }
-  
+
   // Add deletions
   for (let i = 0; i < deletions; i++) {
     lines.push(`-${contentGenerator.deletedLine(i)}`);
   }
-  
+
   // Add additions
   for (let i = 0; i < additions; i++) {
     lines.push(`+${contentGenerator.addedLine(i)}`);
   }
-  
+
   // Add more context
   for (let i = 0; i < 3; i++) {
     lines.push(` ${contentGenerator.unchangedLine(i + 100)}`);
@@ -254,7 +254,14 @@ function generatePatchContent(filename: string, additions: number, deletions: nu
  * Content generators for different file types
  */
 function getContentGenerator(extension: string) {
-  const generators: Record<string, any> = {
+  const generators: Record<
+    string,
+    {
+      unchangedLine: (i: number) => string;
+      deletedLine: (i: number) => string;
+      addedLine: (i: number) => string;
+    }
+  > = {
     ts: {
       unchangedLine: (i: number) => `    // Existing TypeScript code line ${i}`,
       deletedLine: (i: number) => `    const oldVariable${i} = 'deprecated';`,
@@ -294,7 +301,7 @@ function getContentGenerator(extension: string) {
  * Create a mock Octokit instance for testing
  */
 export function createMockOctokit() {
-  return {
+  const mockOctokit = {
     rest: {
       pulls: {
         get: jest.fn(),
@@ -342,7 +349,25 @@ export function createMockOctokit() {
         }),
       },
     },
+    // Add missing required Octokit properties
+    request: jest.fn().mockResolvedValue({ data: {} }),
+    graphql: jest.fn().mockResolvedValue({}),
+    log: {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    },
+    hook: {
+      before: jest.fn(),
+      after: jest.fn(),
+      error: jest.fn(),
+      wrap: jest.fn(),
+    },
+    auth: jest.fn().mockResolvedValue({ token: 'mock-token' }),
   };
+
+  return mockOctokit;
 }
 
 /**
@@ -356,9 +381,7 @@ export class StatisticsCalculator {
   static median(values: number[]): number {
     const sorted = [...values].sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0 
-      ? (sorted[mid - 1] + sorted[mid]) / 2
-      : sorted[mid];
+    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
   }
 
   static standardDeviation(values: number[]): number {
@@ -369,7 +392,7 @@ export class StatisticsCalculator {
 
   static percentile(values: number[], percentile: number): number {
     const sorted = [...values].sort((a, b) => a - b);
-    const index = Math.ceil(sorted.length * percentile / 100) - 1;
+    const index = Math.ceil((sorted.length * percentile) / 100) - 1;
     return sorted[Math.max(0, index)];
   }
 
@@ -398,11 +421,7 @@ export class StatisticsCalculator {
  * Performance assertion helpers
  */
 export class PerformanceAssertions {
-  static expectPerformance(
-    actualMs: number, 
-    expectedMs: number, 
-    tolerance: number = 0.2
-  ): void {
+  static expectPerformance(actualMs: number, expectedMs: number, tolerance: number = 0.2): void {
     const maxAllowed = expectedMs * (1 + tolerance);
     if (actualMs > maxAllowed) {
       throw new Error(
@@ -411,11 +430,7 @@ export class PerformanceAssertions {
     }
   }
 
-  static expectMemoryUsage(
-    actualMB: number,
-    expectedMB: number,
-    tolerance: number = 0.3
-  ): void {
+  static expectMemoryUsage(actualMB: number, expectedMB: number, tolerance: number = 0.3): void {
     const maxAllowed = expectedMB * (1 + tolerance);
     if (actualMB > maxAllowed) {
       throw new Error(
@@ -439,8 +454,10 @@ export class LoadTester {
 
     for (let batch = 0; batch < batches; batch++) {
       const batchSize = Math.min(concurrency, iterations - batch * concurrency);
-      const promises = Array(batchSize).fill(0).map(() => operationFactory());
-      
+      const promises = Array(batchSize)
+        .fill(0)
+        .map(() => operationFactory());
+
       const batchResults = await Promise.all(promises);
       results.push(...batchResults);
     }
@@ -460,13 +477,9 @@ export class LoadTester {
     operationsPerSecond: number;
   }> {
     const startTime = timer.start();
-    
-    const results = await this.runConcurrentOperations(
-      operationFactory,
-      concurrency,
-      iterations
-    );
-    
+
+    const results = await this.runConcurrentOperations(operationFactory, concurrency, iterations);
+
     const totalDuration = timer.end(startTime);
     const avgDuration = totalDuration / iterations;
     const operationsPerSecond = (iterations * 1000) / totalDuration;
