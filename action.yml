@@ -1,37 +1,117 @@
-name: 'Gates Action'
-description: 'A GitHub Action with AI-powered PR review capabilities using Octokit'
-author: 'Your Name'
+name: 'Visor AI Code Review'
+description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues'
+author: 'Gates Team'
+branding:
+  icon: 'eye'
+  color: 'blue'
 
 inputs:
   github-token:
-    description: 'GitHub token for authentication'
+    description: 'GitHub token for API access'
     required: true
     default: ${{ github.token }}
-  owner:
-    description: 'Repository owner'
-    required: false
-  repo:
-    description: 'Repository name'
-    required: false
+  
   auto-review:
-    description: 'Enable automatic PR review on PR open events'
+    description: 'Enable automatic review on PR open/update'
+    required: false
+    default: 'true'
+  
+  checks:
+    description: 'Comma-separated list of checks to run (security,performance,style,architecture,all)'
+    required: false
+    default: 'all'
+  
+  output-format:
+    description: 'Output format for analysis results (table,json,markdown,sarif)'
+    required: false
+    default: 'markdown'
+  
+  config-path:
+    description: 'Path to visor configuration file'
+    required: false
+    default: 'visor.config.yaml'
+  
+  comment-on-pr:
+    description: 'Post review results as PR comment'
+    required: false
+    default: 'true'
+  
+  create-check:
+    description: 'Create GitHub check run with results'
+    required: false
+    default: 'true'
+  
+  add-labels:
+    description: 'Add quality labels to PR'
+    required: false
+    default: 'true'
+  
+  fail-on-critical:
+    description: 'Fail the action if critical issues are found'
     required: false
     default: 'false'
+  
+  min-score:
+    description: 'Minimum score required to pass (0-100)'
+    required: false
+    default: '0'
+  
+  # Legacy inputs for backward compatibility
+  owner:
+    description: 'Repository owner (legacy)'
+    required: false
+  repo:
+    description: 'Repository name (legacy)'
+    required: false
+  visor-config-path:
+    description: 'Path to Visor configuration file (legacy, use config-path)'
+    required: false
+  visor-checks:
+    description: 'Checks to run (legacy, use checks)'
+    required: false
 
 outputs:
+  overall-score:
+    description: 'Overall code quality score (0-100)'
+  
+  total-issues:
+    description: 'Total number of issues found'
+  
+  critical-issues:
+    description: 'Number of critical issues found'
+  
+  security-score:
+    description: 'Security analysis score'
+  
+  performance-score:
+    description: 'Performance analysis score'
+  
+  style-score:
+    description: 'Style analysis score'
+  
+  architecture-score:
+    description: 'Architecture analysis score'
+  
+  review-url:
+    description: 'URL to the detailed review comment'
+  
+  sarif-report:
+    description: 'SARIF format report (if output-format includes sarif)'
+  
+  # Legacy outputs for backward compatibility
   repo-name:
-    description: 'Name of the repository'
+    description: 'Name of the repository (legacy)'
   repo-description:
-    description: 'Description of the repository'
+    description: 'Description of the repository (legacy)'
   repo-stars:
-    description: 'Number of stars on the repository'
+    description: 'Number of stars on the repository (legacy)'
   review-score:
-    description: 'Overall review score (0-100) for PR reviews'
+    description: 'Overall review score (legacy, use overall-score)'
   issues-found:
-    description: 'Number of issues found during PR review'
+    description: 'Number of issues found (legacy, use total-issues)'
   auto-review-completed:
-    description: 'Whether automatic PR review was completed'
+    description: 'Whether automatic PR review was completed (legacy)'
 
 runs:
-  using: 'node20'
+  using: 'node18'
   main: 'dist/index.js'

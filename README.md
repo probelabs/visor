@@ -1,175 +1,373 @@
-# Gates - AI-Powered GitHub Action
+<div align="center">
+  <img src="site/visor.png" alt="Visor Logo" width="200" />
+  
+  # Visor - AI-Powered Code Review
+  
+  [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
+  [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
+  [![License](https://img.shields.io/badge/license-MIT-blue)]()
+  
+  **Intelligent code analysis for GitHub Pull Requests**
+</div>
 
-A GitHub Action built with TypeScript and Octokit featuring AI-powered PR review capabilities and comment-based commands.
+---
 
-## Features
+## 🚀 Quick Start
 
-- **AI-Powered PR Reviews**: Automated code analysis with security, performance, and style checks
-- **Comment Commands**: Interactive commands like `/review`, `/status`, `/help`
-- **Automatic PR Reviews**: Optional auto-review on PR open events
-- **Multiple Analysis Modes**: Focus on security, performance, or comprehensive analysis
-- **Built with TypeScript and Octokit**
-- **Comprehensive test suite** using Jest with E2E testing via mock-github and act-js
+### As GitHub Action (Recommended)
 
-## Usage
+Create `.github/workflows/code-review.yml`:
 
-### Basic Repository Information
 ```yaml
-- name: Get Repository Info
-  uses: ./
-  with:
-    github-token: ${{ secrets.GITHUB_TOKEN }}
-    owner: 'octocat'
-    repo: 'Hello-World'
+name: Code Review
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./  # or: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### PR Review Bot
+That's it! Visor will automatically review your PRs.
+
+### As CLI Tool
+
+```bash
+# Build the project
+npm install
+npm run build
+
+# Run analysis
+./dist/cli-main.js --check all
+
+# Output as JSON
+./dist/cli-main.js --check security --output json
+
+# Use custom config
+./dist/cli-main.js --config custom.yaml
+```
+
+## ✨ Features
+
+- **Automated PR Reviews** - Analyzes code changes and posts review comments
+- **Multiple Check Types** - Security, performance, style, and architecture analysis
+- **Flexible Output** - Table, JSON, Markdown, or SARIF format
+- **PR Commands** - Trigger reviews with `/review` comments
+- **GitHub Integration** - Creates check runs, adds labels, posts comments
+
+## 💬 PR Comment Commands
+
+Add comments to your PR to trigger Visor:
+
+- `/review` - Run all checks
+- `/review --check security` - Run security checks only
+- `/review --check performance` - Run performance checks only
+- `/review --help` - Show available commands
+
+## 📋 CLI Usage
+
+```bash
+visor [options]
+
+Options:
+  -c, --check <type>    Check type: security, performance, style, architecture, all
+                        Can be used multiple times: --check security --check style
+  -o, --output <format> Output format: table, json, markdown, sarif
+                        Default: table
+  --config <path>       Path to configuration file
+                        Default: visor.config.yaml
+  --version            Show version
+  --help               Show help
+
+Examples:
+  visor --check all                    # Run all checks
+  visor --check security --output json # Security check with JSON output
+  visor --check style --check performance # Multiple specific checks
+```
+
+## ⚙️ Configuration
+
+Create `visor.config.yaml` in your project root:
+
 ```yaml
-name: PR Review Bot
+# visor.config.yaml
+version: 1.0
+
+# Project metadata
+project:
+  name: "My Project"
+  description: "My awesome project"
+  language: "typescript"    # primary language
+  frameworks:               # frameworks in use
+    - "react"
+    - "nodejs"
+
+# Analysis configuration  
+analysis:
+  # File patterns to include/exclude
+  include:
+    - "src/**/*"           # Include all files in src
+    - "lib/**/*"           # Include all files in lib
+  exclude:
+    - "node_modules/**"    # Exclude node_modules
+    - "dist/**"           # Exclude build output
+    - "**/*.test.ts"      # Exclude test files
+  
+  # Limits
+  maxFileSize: 500000      # Max file size in bytes (500KB)
+  maxFiles: 1000          # Max number of files to analyze
+
+# Check-specific settings
+checks:
+  security:
+    enabled: true          # Enable/disable this check
+    severity: warning      # Minimum severity: info, warning, error, critical
+    rules:                 # Specific rules to apply
+      - detect-secrets
+      - xss-prevention
+      - sql-injection
+  
+  performance:
+    enabled: true
+    severity: info
+    rules:
+      - complexity-analysis
+      - memory-leaks
+      - algorithm-efficiency
+  
+  style:
+    enabled: true
+    severity: info
+    extends: "eslint:recommended"  # Extend from ESLint config
+    rules:
+      - naming-conventions
+      - formatting
+  
+  architecture:
+    enabled: true
+    severity: warning
+    rules:
+      - circular-dependencies
+      - design-patterns
+
+# Thresholds for pass/fail
+thresholds:
+  minScore: 70            # Minimum overall score (0-100)
+  maxIssues: 100         # Maximum total issues
+  maxCriticalIssues: 0   # Maximum critical issues
+
+# Output settings
+reporting:
+  format: markdown        # Default output format
+  verbose: false         # Show detailed output
+  includeFixSuggestions: true  # Include fix suggestions
+  groupByFile: true      # Group issues by file
+```
+
+## 🎯 GitHub Action Reference
+
+### Inputs
+
+| Input | Description | Default | Required |
+|-------|-------------|---------|----------|
+| `github-token` | GitHub token for API access | `${{ github.token }}` | Yes |
+| `auto-review` | Auto-review on PR open/update | `true` | No |
+| `checks` | Checks to run (comma-separated) | `all` | No |
+| `output-format` | Output format | `markdown` | No |
+| `config-path` | Path to config file | `visor.config.yaml` | No |
+| `comment-on-pr` | Post review as PR comment | `true` | No |
+| `create-check` | Create GitHub check run | `true` | No |
+| `add-labels` | Add quality labels to PR | `true` | No |
+| `fail-on-critical` | Fail if critical issues found | `false` | No |
+| `min-score` | Minimum score to pass (0-100) | `0` | No |
+
+### Outputs
+
+| Output | Description |
+|--------|-------------|
+| `overall-score` | Overall code quality score (0-100) |
+| `total-issues` | Total number of issues found |
+| `critical-issues` | Number of critical issues |
+| `security-score` | Security analysis score |
+| `performance-score` | Performance analysis score |
+| `style-score` | Style analysis score |
+| `architecture-score` | Architecture analysis score |
+| `review-url` | URL to the review comment |
+
+### Example Workflows
+
+#### Basic Review
+```yaml
+name: PR Review
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### Security Focus with SARIF Upload
+```yaml
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Visor Security Scan
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          checks: security
+          output-format: sarif
+      
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: visor-results.sarif
+```
+
+#### Quality Gate
+```yaml
+name: Quality Gate
+on: pull_request
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          min-score: 80
+          fail-on-critical: true
+```
+
+#### Command-Triggered Review
+```yaml
+name: Manual Review
 on:
-  pull_request:
-    types: [opened, synchronize]
   issue_comment:
     types: [created]
 
 jobs:
   review:
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     steps:
       - uses: actions/checkout@v4
-      - name: PR Review Bot
-        uses: ./
+      - uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
 ```
 
-## Comment Commands
+## 📊 Output Formats
 
-Use these commands in PR comments to trigger different actions:
+### Table (Default)
+```
+╔════════════════════════════════════════════════════════════════╗
+║                      Analysis Summary                          ║
+╠════════════════════════════════════════════════════════════════╣
+║ Overall Score: 85/100         Issues Found: 12                ║
+╟────────────────────────────────────────────────────────────────╢
+║ ✓ Security:     92/100    ⚠ Performance:  78/100             ║
+║ ✓ Style:        88/100    ✓ Architecture: 82/100             ║
+╚════════════════════════════════════════════════════════════════╝
+```
 
-- **`/review`** - Perform a comprehensive code review
-- **`/review --focus=security`** - Focus on security issues
-- **`/review --focus=performance`** - Focus on performance issues  
-- **`/review --format=detailed`** - Get detailed analysis with all issues
-- **`/status`** - Show PR status and metrics
-- **`/help`** - Display available commands
+### JSON
+```json
+{
+  "summary": {
+    "overallScore": 85,
+    "totalIssues": 12,
+    "criticalIssues": 1
+  },
+  "issues": [
+    {
+      "file": "src/api.ts",
+      "line": 45,
+      "severity": "critical",
+      "category": "security",
+      "message": "Potential SQL injection"
+    }
+  ]
+}
+```
 
-## Inputs
+### SARIF
+Compatible with GitHub Security tab and other SARIF consumers.
 
-- `github-token`: GitHub token for authentication (required)
-- `owner`: Repository owner (optional, defaults to repository owner)
-- `repo`: Repository name (optional, defaults to repository name)
-- `auto-review`: Enable automatic PR review on PR open events (optional, default: false)
+## 🛠️ Development
 
-## Outputs
-
-- `repo-name`: Name of the repository
-- `repo-description`: Description of the repository
-- `repo-stars`: Number of stars on the repository
-- `review-score`: Overall review score (0-100) for PR reviews
-- `issues-found`: Number of issues found during PR review
-- `auto-review-completed`: Whether automatic PR review was completed
-
-## Development
-
+### Setup
 ```bash
-# Install dependencies
+# Clone and install
+git clone https://github.com/your-org/visor.git
+cd visor
 npm install
 
 # Build
 npm run build
 
-# Run tests
+# Test
 npm test
-
-# Run tests with coverage
-npm run test:coverage
 ```
 
-## PR Review Analysis
-
-The AI reviewer analyzes:
-
-### Security Issues
-- Potential XSS vulnerabilities (`eval`, `innerHTML`)
-- Input validation concerns
-- Dangerous function usage
-
-### Performance Issues
-- Nested loops and O(n²) algorithms
-- Large dataset processing
-- Inefficient operations
-
-### Style & Code Quality
-- Naming conventions
-- Formatting consistency
-- Missing documentation
-
-### Logic Issues
-- Large file changes (>100 lines)
-- Missing error handling
-- Complex function logic
-
-## Testing
-
-This project includes comprehensive testing using:
-
-- **Jest**: For unit testing
-- **@kie/mock-github**: For mocking GitHub environments  
-- **@kie/act-js**: For testing GitHub Actions locally
-- **Multiple Act Scenarios**: Testing different event types and commands
-
-Run the test suite:
-
-```bash
-npm test                 # All tests
-npm run test:watch      # Watch mode
-npm run test:coverage   # With coverage
-npm test -- tests/scenarios/  # Only scenario tests
+### Project Structure
 ```
-
-## Act Scenarios
-
-The project includes multiple act.js scenarios for testing:
-
-### Comment Commands (`tests/scenarios/comment-commands.test.ts`)
-- Tests `/review`, `/status`, `/help` commands
-- Validates command parsing and argument handling
-- Mock GitHub comment events
-
-### PR Events (`tests/scenarios/pr-events.test.ts`)
-- Auto-review on PR opened
-- PR synchronize events
-- Auto-review enable/disable functionality
-
-### Workflow Integration (`tests/scenarios/workflow-integration.test.ts`)
-- Full workflow execution with act.js
-- YAML configuration validation
-- End-to-end action testing
-
-## Project Structure
-
-```
-.
+visor/
 ├── src/
-│   ├── index.ts          # Main action entry point
-│   ├── commands.ts       # Comment command parsing
-│   ├── pr-analyzer.ts    # PR diff and file analysis
-│   └── reviewer.ts       # AI-powered code review logic
-├── tests/
-│   ├── unit/             # Unit tests for each module
-│   ├── scenarios/        # Act.js E2E test scenarios
-│   ├── fixtures/         # Test data and sample files
-│   ├── unit.test.ts      # Main integration tests
-│   └── integration.test.ts # Basic integration tests
-├── .github/
-│   └── workflows/
-│       ├── test.yml      # CI workflow
-│       └── pr-review.yml # PR review bot workflow
-├── action.yml            # GitHub Action metadata
-├── tsconfig.json         # TypeScript configuration
-├── jest.config.js        # Jest test configuration
-└── package.json          # Dependencies and scripts
+│   ├── cli-main.ts         # CLI entry point
+│   ├── index.ts            # GitHub Action entry
+│   ├── reviewer.ts         # Core review logic
+│   └── output-formatters.ts # Output formatting
+├── tests/                  # Test suites
+├── .github/workflows/      # GitHub workflows
+├── action.yml             # Action metadata
+└── visor.config.yaml      # Default config
 ```
+
+### Available Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run build` | Build TypeScript |
+| `npm test` | Run tests |
+| `npm run test:watch` | Test watch mode |
+| `npm run test:coverage` | Coverage report |
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a PR
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file
+
+---
+
+<div align="center">
+  Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
+</div>

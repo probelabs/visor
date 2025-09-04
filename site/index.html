@@ -1,0 +1,2455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor - One orchestrator for code checks that actually helps you ship</title>
+    
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-3Y0Z9SZLF2"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-3Y0Z9SZLF2');
+    </script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #000;
+            overflow-x: hidden;
+            position: relative;
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .effects-wrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            min-height: 100vh;
+            z-index: 1;
+        }
+
+        #canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh;
+        }
+
+        .hero-content {
+            position: relative;
+            text-align: center;
+            z-index: 2;
+            pointer-events: auto;
+            width: 90%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding-top: 28vh;
+            padding-bottom: 10vh;
+        }
+
+        .hero-title {
+            font-size: clamp(3rem, 8vw, 6rem);
+            font-weight: 900;
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            color: rgba(255, 255, 255, 0.03);
+            text-transform: uppercase;
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            user-select: text;
+        }
+
+        .hero-subtitle {
+            font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.02);
+            letter-spacing: 0.02em;
+            line-height: 1.5;
+            max-width: 800px;
+            margin: 0 auto 2rem;
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
+            user-select: text;
+        }
+
+        .hero-title.illuminated {
+            color: rgba(255, 255, 255, 0.95);
+            text-shadow: 
+                -3px -1px 20px rgba(255, 50, 100, 0.5),
+                3px 1px 20px rgba(50, 100, 255, 0.5),
+                0 0 40px rgba(255, 255, 255, 0.2),
+                -5px 2px 30px rgba(255, 200, 0, 0.3),
+                5px -2px 30px rgba(0, 255, 200, 0.3);
+            animation: chromatic-shift 6s ease-in-out infinite alternate;
+        }
+
+        .hero-subtitle.illuminated {
+            color: rgba(255, 255, 255, 0.75);
+            text-shadow:
+                -2px 0 15px rgba(150, 255, 50, 0.4),
+                2px 0 15px rgba(255, 50, 255, 0.4),
+                0 0 25px rgba(255, 255, 255, 0.1);
+        }
+
+        @keyframes chromatic-shift {
+            0%, 100% {
+                filter: hue-rotate(0deg) brightness(1.2) contrast(1.1);
+            }
+            25% {
+                filter: hue-rotate(5deg) brightness(1.3) contrast(1.15);
+            }
+            50% {
+                filter: hue-rotate(-5deg) brightness(1.4) contrast(1.1);
+            }
+            75% {
+                filter: hue-rotate(3deg) brightness(1.25) contrast(1.05);
+            }
+        }
+
+        .light-particles {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            min-height: 100vh;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            mix-blend-mode: screen;
+        }
+
+        @keyframes galaxyRotate {
+            0% { transform: rotate(0deg) translateX(60px) rotate(0deg) scale(1); }
+            25% { transform: rotate(90deg) translateX(60px) rotate(-90deg) scale(1.1); }
+            50% { transform: rotate(180deg) translateX(60px) rotate(-180deg) scale(0.9); }
+            75% { transform: rotate(270deg) translateX(60px) rotate(-270deg) scale(1.1); }
+            100% { transform: rotate(360deg) translateX(60px) rotate(-360deg) scale(1); }
+        }
+        
+        @keyframes galaxyRotateReverse {
+            0% { transform: rotate(0deg) translateX(40px) rotate(0deg) scale(1); }
+            25% { transform: rotate(-90deg) translateX(40px) rotate(90deg) scale(0.9); }
+            50% { transform: rotate(-180deg) translateX(40px) rotate(180deg) scale(1.1); }
+            75% { transform: rotate(-270deg) translateX(40px) rotate(270deg) scale(0.9); }
+            100% { transform: rotate(-360deg) translateX(40px) rotate(360deg) scale(1); }
+        }
+
+        .particle {
+            position: absolute;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            opacity: 0;
+            transition: opacity 3s ease;
+        }
+
+        /* Hero CTAs */
+        .hero-ctas {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: center;
+            margin-bottom: 2rem;
+            position: relative;
+            z-index: 2;
+            opacity: 0.1;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .hero-ctas.illuminated {
+            opacity: 1;
+        }
+
+        .micro-credibility {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            justify-content: center;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.02);
+            position: relative;
+            z-index: 2;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
+        }
+
+        .micro-credibility.illuminated {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .micro-credibility span {
+            position: relative;
+            padding: 0 1rem;
+        }
+
+        .micro-credibility span:not(:last-child)::after {
+            content: "·";
+            position: absolute;
+            right: -0.75rem;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        @media (max-width: 768px) {
+            .hero-ctas {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .micro-credibility {
+                flex-direction: column;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            
+            .micro-credibility span::after {
+                display: none;
+            }
+        }
+
+        /* Visor Demo Section */
+        .visor-demo-section {
+            background: none;
+        }
+
+        .demo-description {
+            text-align: center;
+            font-size: 1.2rem;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 3rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .demo-card {
+            background: none;
+            border: none;
+            border-radius: 0;
+            padding: 0;
+        }
+
+        .demo-card h3,
+        .github-section h3,
+        .terminal-demo h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+            display: inline-block;
+        }
+
+        .yaml-block {
+            font-size: 0.85rem;
+            line-height: 1.4;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .yaml-block code {
+            color: #e6e6e6;
+        }
+
+        /* YAML Syntax Highlighting */
+        .yaml-key {
+            color: #79c0ff;
+            font-weight: 500;
+        }
+
+        .yaml-string {
+            color: #a5d6ff;
+        }
+
+        .yaml-value {
+            color: #ffa657;
+        }
+        
+        .yaml-comment {
+            color: #8b949e;
+            font-style: italic;
+        }
+
+        /* Right Column Layout */
+        .demo-right-column {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* GitHub Section */
+        .github-section {
+            width: 100%;
+        }
+
+
+        /* GitHub PR Mock */
+        .github-mock {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 0.9rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .pr-header {
+            padding: 1rem;
+            border-bottom: 1px solid #30363d;
+            background: #161b22;
+        }
+
+        .pr-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .pr-title strong {
+            color: #f0f6fc;
+        }
+
+        .pr-status {
+            font-size: 0.8rem;
+        }
+
+        .pr-meta {
+            color: #7d8590;
+            font-size: 0.8rem;
+        }
+
+        .visor-comment {
+            padding: 1rem;
+            background: #0d1117;
+            border-left: 3px solid #4f46e5;
+            margin: 0.5rem;
+            border-radius: 6px;
+        }
+
+        .comment-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .bot-avatar {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4f46e5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: white;
+            font-weight: bold;
+        }
+
+        .bot-avatar::after {
+            content: 'V';
+        }
+
+        .comment-header strong {
+            color: #f0f6fc;
+        }
+
+        .comment-time {
+            color: #7d8590;
+            font-size: 0.8rem;
+        }
+
+        .summary-section h4 {
+            color: #f0f6fc;
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+
+        .findings-overview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .finding-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .finding-badge.high {
+            background: rgba(248, 113, 113, 0.2);
+            color: #fca5a5;
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+
+        .finding-badge.medium {
+            background: rgba(251, 191, 36, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+
+        .finding-badge.passed {
+            background: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .collapsible-section {
+            margin-bottom: 0.75rem;
+        }
+
+        .collapsible-section summary {
+            cursor: pointer;
+            padding: 0.5rem 0;
+            color: #f0f6fc;
+            font-size: 0.9rem;
+        }
+
+        .collapsible-section[open] summary {
+            margin-bottom: 0.5rem;
+        }
+
+        .finding-list {
+            padding-left: 1rem;
+        }
+
+        .finding-item {
+            margin-bottom: 0.5rem;
+            color: #c9d1d9;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+
+        .finding-item code {
+            background: rgba(110, 118, 129, 0.4);
+            padding: 0.125rem 0.25rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+            color: #79c0ff;
+        }
+
+        /* Terminal Mock */
+        .terminal-demo {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+
+        .terminal-mock {
+            background: #1e1e1e;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .terminal-header {
+            background: #323233;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .terminal-dots {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .dot.red { background: #ff5f57; }
+        .dot.yellow { background: #ffbd2e; }
+        .dot.green { background: #28ca42; }
+
+        .terminal-title {
+            color: #ffffff;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .terminal-content {
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            color: #d4d4d4;
+            background: #1e1e1e;
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        .terminal-line {
+            margin-bottom: 0.125rem;
+        }
+
+        .status-warning {
+            color: #ffbd2e;
+            font-weight: 600;
+        }
+
+        .status-success {
+            color: #28ca42;
+            font-weight: 600;
+        }
+
+        .terminal-prompt {
+            color: #6a9955;
+        }
+
+        @media (max-width: 768px) {
+            .demo-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .demo-right-column {
+                gap: 1rem;
+            }
+            
+            .terminal-content {
+                font-size: 0.75rem;
+                padding: 0.75rem;
+            }
+            
+            .yaml-block {
+                font-size: 0.75rem;
+            }
+            
+            .findings-overview {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+
+
+        /* Content Sections */
+        .section {
+            position: relative;
+            z-index: 2;
+            padding: 4rem 0;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .section h2 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 2rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.95);
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+        }
+
+        /* Problem + Solution Section */
+        .problem-solution-section {
+            background: none;
+        }
+
+        .problem-story {
+            max-width: 800px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .problem-story h2 {
+            font-size: 2.8rem;
+            line-height: 1.2;
+            margin-bottom: 2rem;
+        }
+
+        .large-text {
+            font-size: 1.3rem;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .solution-highlight {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.95);
+            padding: 1.5rem;
+            background: rgba(79, 70, 229, 0.1);
+            border: 1px solid rgba(79, 70, 229, 0.3);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            margin-bottom: 3rem;
+        }
+
+        .what-is-visor {
+            max-width: 900px;
+            margin: 0 auto 3rem;
+            text-align: center;
+        }
+
+        .what-is-visor h3 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        /* Before/After Comparison */
+        .before-after {
+            margin-top: 3rem;
+        }
+
+        .comparison-cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .comparison-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .comparison-card h4 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .comparison-card.before {
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .comparison-card.after {
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+
+        .pr-mock {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        .alert-spam {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .alert-item {
+            padding: 0.25rem;
+            opacity: 0.8;
+        }
+
+        .alert-more {
+            padding: 0.25rem;
+            color: rgba(255, 255, 255, 0.5);
+            font-style: italic;
+        }
+
+        .clean-summary {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .summary-header {
+            font-weight: 600;
+            color: rgba(34, 197, 94, 0.9);
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .issue-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .issue-group strong {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .issue-item {
+            padding-left: 0.5rem;
+        }
+
+        .passed-checks {
+            color: rgba(34, 197, 94, 0.7);
+            font-style: italic;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .section-cta {
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            .comparison-cards {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+        }
+
+        /* What is Visor Section */
+        .what-is-section {
+            background: rgba(15, 23, 42, 0.2);
+        }
+
+        .definition {
+            font-size: 1.2rem;
+            line-height: 1.7;
+            max-width: 900px;
+            margin: 0 auto;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        /* Core Benefits Section */
+        .core-benefits-section {
+            background: none;
+        }
+
+        .how-it-works {
+            margin-top: 4rem;
+            padding-top: 3rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .how-it-works h2 {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .pillars-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .pillar {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+            transition: transform 0.2s ease;
+        }
+
+        .pillar:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .pillar-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .pillar h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .pillar p {
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+
+        .mid-page-cta {
+            text-align: center;
+            margin-top: 3rem;
+        }
+
+        /* How It Works Section */
+        .how-it-works-section {
+            background: rgba(30, 41, 59, 0.3);
+        }
+
+        .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .step {
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            font-weight: 900;
+            margin-bottom: 1.5rem;
+        }
+
+        .step h3 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .step p {
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+
+        .step-cta {
+            text-align: center;
+        }
+
+        /* Button System - Add back for new sections */
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+            cursor: pointer;
+        }
+
+        .btn-large {
+            padding: 1rem 2rem;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #5b52e8, #8b47ed);
+            box-shadow: 0 8px 25px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-ghost:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        /* Social Proof Section */
+        .social-proof-section {
+            background: none;
+        }
+
+        .use-cases {
+            margin-top: 4rem;
+            padding-top: 3rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .use-cases h2 {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .who-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+        }
+
+        .who-item {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            transition: transform 0.2s ease;
+        }
+
+        .who-item:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .who-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .who-item h3 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .who-item p {
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+
+        /* Comparison Section */
+        .comparison-section {
+            background: rgba(30, 41, 59, 0.4);
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .comparison-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .comparison-item h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .comparison-desc {
+            font-style: italic;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        .comparison-example {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.7);
+            border-left: 3px solid rgba(79, 70, 229, 0.5);
+            padding-left: 1rem;
+            margin-top: 1rem;
+        }
+
+        .visor-advantage {
+            background: linear-gradient(135deg, rgba(79, 70, 229, 0.2), rgba(124, 58, 237, 0.2));
+            border: 1px solid rgba(79, 70, 229, 0.3);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .visor-advantage h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        /* Features Section */
+        .features-section {
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: transform 0.2s ease;
+        }
+
+        .feature-item:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .feature-item h4 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .feature-item p {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        /* Examples Section */
+        .examples-section {
+            background: rgba(30, 41, 59, 0.3);
+        }
+
+        .examples-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+        }
+
+        .example-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+            position: relative;
+        }
+
+        .example-number {
+            position: absolute;
+            top: -15px;
+            left: 2rem;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .example-card h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+            margin-top: 0.5rem;
+        }
+
+        .example-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .example-card li {
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 0.5rem;
+            padding-left: 1rem;
+            position: relative;
+        }
+
+        .example-card li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: rgba(79, 70, 229, 0.8);
+            font-weight: 600;
+        }
+
+        /* Get Started Section */
+        .get-started-section {
+            background: none;
+        }
+
+        .get-started-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .option-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .option-card h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .code-block {
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1.5rem;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+
+        .code-block code {
+            color: #e6e6e6;
+        }
+
+        .get-started-ctas {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        /* Config Generator */
+        .config-generator {
+            margin: 3rem 0;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .config-generator h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .config-generator p {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .tool-selector {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .tool-option {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tool-option:hover {
+            border-color: rgba(79, 70, 229, 0.3);
+            background: rgba(79, 70, 229, 0.05);
+        }
+
+        .tool-option input[type="checkbox"] {
+            display: none;
+        }
+
+        .checkmark {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .tool-option input[type="checkbox"]:checked + .checkmark {
+            background: rgba(79, 70, 229, 0.8);
+            border-color: rgba(79, 70, 229, 1);
+        }
+
+        .tool-option input[type="checkbox"]:checked + .checkmark::after {
+            content: "✓";
+            position: absolute;
+            top: -2px;
+            left: 3px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .tool-option span:not(.checkmark) {
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 500;
+        }
+
+        .generated-config {
+            margin-top: 2rem;
+            position: relative;
+        }
+
+        #generated-yaml code {
+            color: #e6e6e6;
+        }
+
+        .copy-button {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(79, 70, 229, 0.8);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .generated-config:hover .copy-button {
+            opacity: 1;
+        }
+
+        .copy-button:hover {
+            background: rgba(79, 70, 229, 1);
+        }
+
+        .copy-button.copied {
+            background: rgba(34, 197, 94, 0.8);
+        }
+
+        /* FAQ Section */
+        .faq-section {
+            background: none;
+        }
+
+        .faq-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+        }
+
+        .faq-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .faq-item h3 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .faq-item p {
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+
+        /* Probe Ecosystem Section */
+        #probe-ecosystem {
+            padding: 80px 0;
+            background: none;
+            position: relative;
+            z-index: 10;
+        }
+        
+        #probe-ecosystem * {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+            -moz-user-select: text !important;
+            position: relative;
+            z-index: 11;
+        }
+
+        .probe-content {
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+        }
+
+        .probe-logo {
+            margin-bottom: 32px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .probe-logo img {
+            width: 80px;
+            height: auto;
+            opacity: 0.9;
+        }
+
+        #probe-ecosystem h2 {
+            font-size: 32px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #fff;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+        }
+
+        .probe-description {
+            font-size: 18px;
+            line-height: 1.7;
+            color: rgba(255, 255, 255, 0.7);
+            max-width: 600px;
+            margin: 0 auto 32px;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+        }
+
+        .probe-description a {
+            color: #fff;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            transition: opacity 0.2s ease;
+        }
+
+        .probe-description a:hover {
+            opacity: 0.8;
+        }
+
+        .probe-cta {
+            display: inline-flex;
+            align-items: center;
+            padding: 14px 28px;
+            background: #fff;
+            color: #000;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            position: relative;
+            z-index: 10;
+            cursor: pointer;
+        }
+
+        .probe-cta:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15);
+        }
+        }
+
+        @media (max-width: 768px) {
+            #probe-ecosystem {
+                padding: 60px 20px;
+            }
+
+        }
+
+        /* Footer */
+        .footer {
+            background: rgba(0, 0, 0, 0.8);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 3rem 0 2rem;
+            margin-top: 0;
+            position: relative;
+            z-index: 100;
+        }
+
+        .footer-content {
+            color: rgba(255, 255, 255, 0.8);
+            position: relative;
+            z-index: 101;
+        }
+        
+        .footer a {
+            position: relative;
+            z-index: 102;
+            pointer-events: auto;
+        }
+
+        .footer-main {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        .footer-brand h3 {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: rgba(255, 255, 255, 0.95);
+            margin-bottom: 0.5rem;
+        }
+
+        .footer-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 2rem;
+        }
+
+        .footer-column h4 {
+            font-size: 1rem;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.95);
+            margin-bottom: 1rem;
+        }
+
+        .footer-column a {
+            display: block;
+            color: rgba(255, 255, 255, 0.7);
+            text-decoration: none;
+            margin-bottom: 0.5rem;
+            transition: color 0.2s ease;
+        }
+
+        .footer-column a:hover {
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .footer-bottom {
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero-content {
+                padding-top: 20vh;
+                padding-bottom: 25vh;
+            }
+            
+            .hero-title {
+                font-size: clamp(2rem, 5vw, 3rem);
+                margin-bottom: 1rem;
+            }
+            
+            .hero-subtitle {
+                font-size: clamp(1rem, 2vw, 1.2rem);
+                margin-bottom: 1.5rem;
+            }
+            
+            .problem-story h2 {
+                font-size: 2.2rem;
+            }
+            
+            .large-text {
+                font-size: 1.1rem;
+            }
+            
+            .section h2 {
+                font-size: 2rem;
+            }
+            
+            .section {
+                padding: 3rem 0;
+            }
+            
+            .container {
+                padding: 0 1rem;
+            }
+            
+            .pillars-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .steps-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .who-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .examples-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .get-started-options {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .faq-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .tool-selector {
+                grid-template-columns: 1fr;
+            }
+            
+            .config-generator {
+                margin: 2rem 0;
+            }
+            
+            .code-block {
+                font-size: 0.8rem;
+                padding: 1rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .hero-title {
+                font-size: 1.8rem;
+                line-height: 1.2;
+            }
+            
+            .hero-subtitle {
+                font-size: 0.95rem;
+            }
+            
+            .btn {
+                padding: 0.6rem 1.2rem;
+                font-size: 0.85rem;
+            }
+            
+            .btn-large {
+                padding: 0.8rem 1.5rem;
+                font-size: 0.9rem;
+            }
+            
+            .pillar, .who-item, .example-card, .faq-item, .option-card {
+                padding: 1.5rem;
+            }
+        }
+
+
+    </style>
+</head>
+<body>
+    <div class="effects-wrapper">
+        <canvas id="canvas"></canvas>
+        <div class="light-particles" id="particles"></div>
+    </div>
+    
+    <!-- Keep existing hero with effects -->
+    <div class="hero-content">
+        <h1 class="hero-title">VISOR</h1>
+        <p class="hero-subtitle">Visor runs AI, security tools, and your scripts side‑by‑side—only when they're relevant—then reports back cleanly to PRs, CI, and JSON/SARIF. Fast, structured, and vendor‑neutral.</p>
+        
+        <div class="hero-ctas">
+            <a href="https://github.com/probelabs/visor" class="btn btn-primary btn-large">View on GitHub</a>
+            <a href="#example-config" class="btn btn-ghost btn-large">View example visor.yaml</a>
+        </div>
+        
+        <div class="micro-credibility">
+            <span>Open Source</span>
+            <span>Works with GitHub & GitLab</span>
+            <span>PR comments, SARIF & JSON output</span>
+            <span>Fast & Smart</span>
+        </div>
+    </div>
+
+    <!-- How Visor Works Demo Section -->
+    <section class="visor-demo-section section">
+        <div class="container">
+            <h2>See Visor in Action</h2>
+            <p class="demo-description">Configure once, get clean results everywhere</p>
+            
+            <div class="demo-grid">
+                <!-- YAML Config -->
+                <div class="demo-card config-card">
+                    <h3>visor.yaml</h3>
+                    <pre class="code-block yaml-block"><code><span class="yaml-key">version</span>: <span class="yaml-string">"1.0"</span>
+
+<span class="yaml-key">checks</span>:
+  <span class="yaml-key">performance</span>:
+    <span class="yaml-key">type</span>: <span class="yaml-value">ai</span>
+    <span class="yaml-key">prompt</span>: |
+      Review for performance issues:
+      - N+1 queries
+      - Memory leaks
+      - Inefficient algorithms
+      - Missing caching
+    <span class="yaml-key">on</span>: [<span class="yaml-value">pr_opened</span>, <span class="yaml-value">pr_updated</span>]
+  
+  <span class="yaml-key">security</span>:
+    <span class="yaml-key">type</span>: <span class="yaml-value">ai</span>
+    <span class="yaml-key">prompt</span>: |
+      Review security:
+      - OWASP Top 10
+      - Input validation
+      - Authentication issues
+      - Data exposure
+    <span class="yaml-key">on</span>: [<span class="yaml-value">pr_opened</span>, <span class="yaml-value">pr_updated</span>]
+  
+  <span class="yaml-comment"># That's how easy to add assistant to your project</span>
+  <span class="yaml-key">probe</span>:
+    <span class="yaml-key">type</span>: <span class="yaml-value">ai</span>
+    <span class="yaml-key">command</span>: <span class="yaml-value">probe</span>
+    <span class="yaml-key">prompt</span>: |
+      Your goal is to answer questions about this project
+    <span class="yaml-key">on</span>: [<span class="yaml-value">comment</span>, <span class="yaml-value">issue_open</span>]
+
+<span class="yaml-key">output</span>:
+  <span class="yaml-key">pr_comment</span>:
+    <span class="yaml-key">format</span>: <span class="yaml-value">summary</span></code></pre>
+                </div>
+                
+                <!-- Right column with GitHub PR and Terminal -->
+                <div class="demo-right-column">
+                    <!-- GitHub PR Mock -->
+                    <div class="github-section">
+                        <h3>GitHub PR Result</h3>
+                        <div class="github-mock">
+                            <div class="pr-header">
+                                <div class="pr-title">
+                                    <span class="pr-status">●</span>
+                                    <strong>feat: improve user authentication</strong>
+                                </div>
+                                <div class="pr-meta">#123 opened 2 hours ago by john-doe</div>
+                            </div>
+                            
+                            <div class="visor-comment">
+                                <div class="comment-header">
+                                    <div class="bot-avatar"></div>
+                                    <strong>Visor</strong>
+                                    <span class="comment-time">now</span>
+                                </div>
+                                <div class="comment-body">
+                                    <div class="summary-section">
+                                        <h4>Visor Summary</h4>
+                                        <div class="findings-overview">
+                                            <span class="finding-badge high">2 Performance Issues</span>
+                                            <span class="finding-badge medium">1 Security Issue</span>
+                                            <span class="finding-badge passed">5 checks passed</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <details class="collapsible-section">
+                                        <summary><strong>Performance Issues</strong> (2 found)</summary>
+                                        <div class="finding-list">
+                                            <div class="finding-item">
+                                                <code>src/auth.js:45</code><br>
+                                                N+1 query detected in user lookup loop
+                                            </div>
+                                            <div class="finding-item">
+                                                <code>src/cache.js:12</code><br>
+                                                Missing cache invalidation strategy
+                                            </div>
+                                        </div>
+                                    </details>
+                                    
+                                    <details class="collapsible-section">
+                                        <summary><strong>Security Issues</strong> (1 found)</summary>
+                                        <div class="finding-list">
+                                            <div class="finding-item">
+                                                <code>src/api.js:78</code><br>
+                                                Potential SQL injection in user input
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Terminal Output -->
+                    <div class="terminal-demo">
+                        <h3>Terminal Output</h3>
+                        <div class="terminal-mock">
+                            <div class="terminal-header">
+                                <div class="terminal-dots">
+                                    <span class="dot red"></span>
+                                    <span class="dot yellow"></span>
+                                    <span class="dot green"></span>
+                                </div>
+                                <div class="terminal-title">visor run</div>
+                            </div>
+                            <div class="terminal-content">$ npx -y @probelabs/visor run --format table
+
+┌─────────────┬────────┬──────────┬──────────────────────────────┐
+│ Check       │ Status │ Findings │ Summary                      │
+├─────────────┼────────┼──────────┼──────────────────────────────┤
+│ performance │ <span class="status-warning">ISSUES</span> │ 2 found  │ N+1 queries, missing caching │
+│ security    │ <span class="status-warning">ISSUES</span> │ 1 found  │ Potential SQL injection      │
+│ linting     │ <span class="status-success">PASSED</span> │ 0 issues │ All style checks passed      │
+│ dependencies│ <span class="status-success">PASSED</span> │ 0 issues │ No vulnerable packages       │
+└─────────────┴────────┴──────────┴──────────────────────────────┘
+
+<span class="status-warning">⚠</span>  3 issues found across 2 checks
+<span class="terminal-prompt">Results saved to visor-report.json and visor-report.sarif</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- What is Visor Section -->
+    <section class="problem-solution-section section">
+        <div class="container">
+            <div class="what-is-visor">
+                <h2>What is Visor?</h2>
+                <p class="definition">Visor is a code analysis orchestrator that unifies AI checks, security tools, and custom scripts under one declarative config. Define when checks run (on which files, branches, or events), set dependencies between them, and get focused summaries in your PRs. Visor executes everything in parallel, caches results intelligently, and outputs to multiple formats (PR comments, SARIF, JSON) for seamless integration with your existing workflow.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Get Started Section -->
+
+
+    <!-- Get Started -->
+    <section class="get-started-section section" id="example-config">
+        <div class="container">
+            <h2>Get Started (5 minutes)</h2>
+            <p style="text-align: center; color: rgba(255, 255, 255, 0.7); margin-bottom: 2rem;">Create a <code>visor.yaml</code> file in your repository root:</p>
+            
+            <div class="get-started-options">
+                <div class="option-card">
+                    <h3>Option A — GitHub Action</h3>
+                    <pre class="code-block"><code># .github/workflows/visor.yml
+name: Visor
+on:
+  pull_request:
+    types: [opened, synchronize]
+jobs:
+  visor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Visor
+        uses: probelabs/visor@v1
+        with:
+          config: visor.yaml
+          github_token: ${{ secrets.GITHUB_TOKEN }}</code></pre>
+                </div>
+                
+                <div class="option-card">
+                    <h3>Option B — CLI</h3>
+                    <pre class="code-block"><code>npx -y @probelabs/visor run --config visor.yaml</code></pre>
+                </div>
+            </div>
+            
+            <div class="config-generator">
+                <h3>Interactive Config Generator</h3>
+                <p>Select AI checks to generate your visor.yaml:</p>
+                
+                <div class="tool-selector">
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="ai-reviewer">
+                        <span class="checkmark"></span>
+                        AI Code Reviewer
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="ai-assistant">
+                        <span class="checkmark"></span>
+                        AI Code Assistant
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="code-review">
+                        <span class="checkmark"></span>
+                        AI Code Review
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="security">
+                        <span class="checkmark"></span>
+                        AI Security Analysis
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="performance">
+                        <span class="checkmark"></span>
+                        AI Performance Check
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="probe">
+                        <span class="checkmark"></span>
+                        Probe Assistant
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="docs">
+                        <span class="checkmark"></span>
+                        AI Documentation Check
+                    </label>
+                    <label class="tool-option">
+                        <input type="checkbox" name="tools" value="migration">
+                        <span class="checkmark"></span>
+                        AI Migration Guard
+                    </label>
+                </div>
+                
+                <div class="generated-config">
+                    <pre class="code-block" id="generated-yaml"><code></code></pre>
+                    <button class="copy-button" id="copy-config" onclick="copyConfig()">Copy</button>
+                </div>
+            </div>
+            
+            <div class="get-started-ctas">
+                <a href="https://github.com/probelabs/visor" class="btn btn-primary btn-large">Start on GitHub</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ + Footer -->
+    <section class="faq-section section">
+        <div class="container">
+            <h2>FAQ</h2>
+            <div class="faq-grid">
+                <div class="faq-item">
+                    <h3>Is Visor a scanner?</h3>
+                    <p>No. Visor orchestrates scanners, AI checks, and scripts you already trust—and makes their output usable.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Does it lock us into a vendor?</h3>
+                    <p>No. Everything is defined in visor.yaml. Tools run in your containers. Outputs are standard (PR comments, SARIF, JSON).</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>How does it integrate with existing tools?</h3>
+                    <p>Visor works alongside your current CI/CD. It doesn't replace tools—it orchestrates them with smart conditions and unified output.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>What about sensitive code?</h3>
+                    <p>Bring your own API keys approach - all major providers supported. Run local LLMs, use your own containers, set network policies. Your code stays under your control.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Can we trust AI results?</h3>
+                    <p>You can enforce JSON Schemas on AI outputs and gate merges on structured fields (severity, confidence, actions). No free‑form essays.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Where does it run?</h3>
+                    <p>Any CI/CD platform—GitHub Actions, GitLab CI, Jenkins, CircleCI, pre‑commit hooks, or CLI. Same config, same behavior everywhere.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Probe Ecosystem Section -->
+    <section id="probe-ecosystem">
+        <div class="container">
+            <div class="probe-content">
+                <div class="probe-logo">
+                    <img src="https://probelabs.com/logo.png" alt="Probe Labs" />
+                </div>
+                <h2>Built by Probe Labs</h2>
+                <p class="probe-description">
+                    Visor is part of Probe Labs' mission to bridge the gap between AI capabilities and developer trust. 
+                    We believe AI should amplify human judgment, not replace it. Every tool we build puts developers 
+                    in control while eliminating friction from their workflows.
+                </p>
+                <a href="https://probelabs.com" target="_blank" class="probe-cta">Learn more about our vision →</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-main">
+                    <div class="footer-brand">
+                        <h3>Visor</h3>
+                        <p>MIT License</p>
+                    </div>
+                    
+                    <div class="footer-links">
+                        <div class="footer-column">
+                            <h4>Product</h4>
+                            <a href="#">Docs</a>
+                            <a href="https://github.com/probelabs/visor">GitHub</a>
+                        </div>
+                        
+                        <div class="footer-column">
+                            <h4>Community</h4>
+                            <a href="#">Discussions</a>
+                            <a href="https://github.com/probelabs/visor/issues">Issues</a>
+                            <span style="color: rgba(255, 255, 255, 0.7);">hello@probelabs.com</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="footer-bottom">
+                    <p>© 2025 Visor · Built by <a href="https://probelabs.com" target="_blank" style="color: #fff; text-decoration: underline;">Probe Labs</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ 
+            canvas: document.getElementById('canvas'),
+            antialias: false,
+            alpha: true,
+            powerPreference: "high-performance"
+        });
+        
+        // Track scroll for dimming effect
+        let scrollOpacity = 1.0;
+        
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setClearColor(0x000000, 0);
+        camera.position.z = 5;
+
+        // Light wave shader (optimized)
+        const waveGeometry = new THREE.PlaneGeometry(1.5, 25, 5, 30);
+        const waveMaterial = new THREE.ShaderMaterial({
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            vertexShader: `
+                varying vec2 vUv;
+                uniform float wavePosition;
+                
+                void main() {
+                    vUv = uv;
+                    vec3 pos = position;
+                    float wave = sin(position.y * 3.0 + wavePosition * 0.5) * 0.05;
+                    pos.x += wave;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float time;
+                uniform float wavePosition;
+                varying vec2 vUv;
+                
+                void main() {
+                    float intensity = 1.0 - abs(vUv.x - 0.5) * 2.0;
+                    intensity = pow(intensity, 1.5);
+                    
+                    float shimmer = 0.7 + 0.3 * sin(vUv.y * 30.0 + time * 5.0);
+                    float brightness = intensity * shimmer;
+                    
+                    float fadeIn = smoothstep(-10.0, -8.0, wavePosition);
+                    float fadeOut = 1.0 - smoothstep(8.0, 10.0, wavePosition);
+                    brightness *= fadeIn * fadeOut;
+                    
+                    gl_FragColor = vec4(1.0, 1.0, 0.98, brightness * 0.9);
+                }
+            `,
+            uniforms: {
+                time: { value: 0 },
+                wavePosition: { value: -10 }
+            }
+        });
+        
+        const wave = new THREE.Mesh(waveGeometry, waveMaterial);
+        wave.position.y = 1.5; // Move wave up to align with moved hero text
+        scene.add(wave);
+
+        // Beautiful caustic background (from first version, optimized)
+        const causticGeometry = new THREE.PlaneGeometry(20, 20, 40, 40);
+        const causticMaterial = new THREE.ShaderMaterial({
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float time;
+                uniform float progress;
+                varying vec2 vUv;
+                
+                vec3 hsv2rgb(vec3 c) {
+                    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+                    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+                    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+                }
+                
+                void main() {
+                    vec2 center = vec2(0.5, 0.5);
+                    float dist = distance(vUv, center);
+                    
+                    // Beautiful caustic patterns
+                    float caustic1 = sin(dist * 20.0 - time * 2.0 + vUv.x * 10.0);
+                    float caustic2 = cos(dist * 15.0 + time * 1.5 - vUv.y * 8.0);
+                    float caustic3 = sin((vUv.x + vUv.y) * 12.0 + time * 1.8);
+                    float caustic = (caustic1 + caustic2 + caustic3) / 3.0;
+                    caustic = caustic * 0.5 + 0.5;
+                    caustic = smoothstep(0.2, 0.8, caustic);
+                    
+                    // Activate after wave passes center
+                    float activation = smoothstep(0.3, 0.8, progress);
+                    
+                    // Rainbow colors
+                    float hue = fract(dist * 0.5 + time * 0.05 + vUv.x * 0.3);
+                    vec3 color = hsv2rgb(vec3(hue, 0.8, 1.0));
+                    
+                    // Radial fade
+                    float radialFade = 1.0 - smoothstep(0.1, 0.8, dist);
+                    
+                    float intensity = caustic * activation * radialFade * 0.4;
+                    
+                    gl_FragColor = vec4(color * intensity, intensity);
+                }
+            `,
+            uniforms: {
+                time: { value: 0 },
+                progress: { value: 0 }
+            }
+        });
+        
+        const causticPlane = new THREE.Mesh(causticGeometry, causticMaterial);
+        causticPlane.position.z = -2;
+        scene.add(causticPlane);
+
+        // Rainbow beams (simplified but beautiful)
+        const rainbowColors = [
+            new THREE.Color(1.0, 0.0, 0.3),
+            new THREE.Color(1.0, 0.5, 0.0),
+            new THREE.Color(1.0, 1.0, 0.0),
+            new THREE.Color(0.0, 1.0, 0.3),
+            new THREE.Color(0.0, 0.5, 1.0),
+            new THREE.Color(0.3, 0.0, 1.0),
+            new THREE.Color(0.7, 0.0, 1.0)
+        ];
+
+        const rainbowBeams = [];
+        rainbowColors.forEach((color, i) => {
+            const beamGeometry = new THREE.PlaneGeometry(20, 0.2, 10, 1);  // Increased width to extend right side
+            const beamMaterial = new THREE.ShaderMaterial({
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform float progress;
+                    uniform vec3 color;
+                    uniform float delay;
+                    varying vec2 vUv;
+                    
+                    void main() {
+                        float intensity = 1.0 - abs(vUv.y - 0.5) * 2.0;
+                        intensity = pow(intensity, 2.0);
+                        
+                        float activation = smoothstep(0.4 + delay, 0.6 + delay, progress);
+                        
+                        // Reversed: long left (0.2 to 0.8), short right (0.8 to 1.0)
+                        float spread;
+                        if (vUv.x <= 0.2) {
+                            // Beyond 0.2 on left, completely transparent
+                            spread = 0.0;
+                        } else if (vUv.x <= 0.8) {
+                            // Left side: gradually fade in from 0.2 to 0.8
+                            float fadeIn = (vUv.x - 0.2) / 0.6;
+                            spread = activation * fadeIn;
+                        } else {
+                            // Right side: fade out from 0.8 to 1.0
+                            spread = smoothstep(1.0, 0.8, vUv.x) * activation;
+                        }
+                        
+                        gl_FragColor = vec4(color, intensity * spread * 0.6);
+                    }
+                `,
+                uniforms: {
+                    progress: { value: 0 },
+                    color: { value: color },
+                    delay: { value: i * 0.02 }
+                }
+            });
+            
+            const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+            beam.position.x = 2;  // Keep original position
+            beam.position.y = 1.5; // Move beam up to align with moved hero text
+            beam.rotation.z = (i - 3) * 0.08;
+            rainbowBeams.push(beam);
+            scene.add(beam);
+        });
+
+        // Animation
+        let startTime = Date.now();
+        let waveX = -10;
+        let progress = 0;
+        let textIlluminated = false;
+        let animationComplete = false;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const elapsed = (Date.now() - startTime) / 1000;
+            
+            if (!animationComplete) {
+                // Move wave across screen 30% faster (0.77 seconds total)
+                waveX = -10 + Math.min(elapsed * 26, 20);
+                wave.position.x = waveX;
+                progress = Math.min(elapsed / 0.77, 1);
+                
+                // Update shaders
+                waveMaterial.uniforms.time.value = elapsed;
+                waveMaterial.uniforms.wavePosition.value = waveX;
+                
+                causticMaterial.uniforms.progress.value = progress;
+                
+                rainbowBeams.forEach(beam => {
+                    beam.material.uniforms.progress.value = progress;
+                });
+                
+                // Illuminate text when wave hits center
+                if (waveX > -1 && waveX < 1 && !textIlluminated) {
+                    textIlluminated = true;
+                    const title = document.querySelector('.hero-title');
+                    const subtitle = document.querySelector('.hero-subtitle');
+                    const ctas = document.querySelector('.hero-ctas');
+                    const credibility = document.querySelector('.micro-credibility');
+                    
+                    if (title) title.classList.add('illuminated');
+                    if (subtitle) subtitle.classList.add('illuminated');
+                    if (ctas) ctas.classList.add('illuminated');
+                    if (credibility) credibility.classList.add('illuminated');
+                    
+                    // Create floating particles
+                    createParticles();
+                }
+                
+                // Stop animation when complete
+                if (waveX >= 10) {
+                    animationComplete = true;
+                }
+            }
+            
+            // Add gentle rotation to caustic plane
+            causticPlane.rotation.z = elapsed * 0.05;
+            
+            // Add subtle rotation to rainbow beams
+            rainbowBeams.forEach((beam, i) => {
+                beam.rotation.z = (i - 3) * 0.08 + Math.sin(elapsed * 0.3 + i * 0.5) * 0.02;
+            });
+            
+            // Gentle wave rotation
+            wave.rotation.z = Math.sin(elapsed * 0.4) * 0.01;
+            
+            // Continue animating caustics
+            causticMaterial.uniforms.time.value = elapsed;
+            
+            // Apply scroll-based opacity
+            renderer.domElement.style.opacity = scrollOpacity;
+            
+            renderer.render(scene, camera);
+        }
+
+        // Create floating light particles
+        function createParticles() {
+            const container = document.getElementById('particles');
+            for (let i = 0; i < 20; i++) {
+                setTimeout(() => {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    particle.style.left = Math.random() * 100 + '%';
+                    particle.style.top = Math.random() * 100 + '%';
+                    particle.style.background = `hsl(${Math.random() * 360}, 100%, 70%)`;
+                    particle.style.boxShadow = `0 0 10px currentColor`;
+                    const rotationType = Math.random() > 0.5 ? 'galaxyRotate' : 'galaxyRotateReverse';
+                    particle.style.animation = `${rotationType} ${8 + Math.random() * 4}s linear infinite`;
+                    particle.style.animationDelay = `${Math.random() * 2}s`;
+                    container.appendChild(particle);
+                    
+                    setTimeout(() => {
+                        particle.style.opacity = '0.6';
+                    }, 50);
+                }, i * 100);
+            }
+        }
+
+        // Handle resize
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }, 100);
+        });
+        
+        // Handle scroll for dimming effect
+        window.addEventListener('scroll', () => {
+            const scrollY = window.scrollY;
+            const heroHeight = window.innerHeight;
+            // Start dimming after scrolling past 70% of hero (was 50%)
+            const fadeStart = heroHeight * 0.7;
+            const fadeEnd = heroHeight * 2.0;  // Much slower fade (was 1.2)
+            
+            if (scrollY <= fadeStart) {
+                scrollOpacity = 1.0;
+            } else if (scrollY >= fadeEnd) {
+                scrollOpacity = 0.5;  // Less dimming (was 0.3)
+            } else {
+                // Smooth transition from 1.0 to 0.5
+                const progress = (scrollY - fadeStart) / (fadeEnd - fadeStart);
+                scrollOpacity = 1.0 - (progress * 0.5);  // Slower dimming rate
+            }
+        });
+
+        animate();
+
+        // Interactive Config Generator
+        function generateConfig() {
+            const checkboxes = document.querySelectorAll('input[name="tools"]:checked');
+            const selectedTools = Array.from(checkboxes).map(cb => cb.value);
+            
+            if (selectedTools.length === 0) {
+                document.getElementById('generated-yaml').innerHTML = '';
+                return;
+            }
+
+            const configs = {
+                'ai-reviewer': `  ai_code_reviewer:
+    type: ai
+    model: claude-3-5-sonnet
+    prompt: |
+      Review this PR thoroughly for:
+      - Logic errors and bugs
+      - Edge cases not handled
+      - Code maintainability and readability
+      - Performance optimizations
+      - Security vulnerabilities
+      - Best practices and patterns
+    on: [pr_opened, pr_updated]
+    output:
+      format: detailed_review`,
+                
+                'ai-assistant': `  ai_assistant:
+    type: ai
+    command: probe
+    prompt: |
+      You are a helpful AI assistant for this repository.
+      Answer questions, explain code, suggest improvements,
+      and help developers with their tasks.
+    on: [comment, issue_open]
+    capabilities:
+      - code_explanation
+      - bug_troubleshooting
+      - implementation_suggestions`,
+                
+                'code-review': `  code_review:
+    type: ai
+    prompt: |
+      Review this PR for:
+      - Logic errors and bugs
+      - Edge cases not handled
+      - Code maintainability
+      - Best practices
+    on: [pr_opened, pr_updated]`,
+                
+                'security-analysis': `  security_analysis:
+    type: ai
+    model: claude-3-5-sonnet
+    prompt: |
+      Analyze code for security vulnerabilities:
+      - Authentication and authorization issues
+      - Input validation problems
+      - Potential data exposure
+      - Dependency vulnerabilities
+    conditions:
+      files: ["**/*.js", "**/*.py", "**/*.go"]`,
+                
+                'performance-check': `  performance_check:
+    type: ai
+    model: gpt-4o
+    prompt: |
+      Review code for performance issues:
+      - Database query optimization
+      - Memory usage patterns
+      - Algorithmic complexity
+      - Resource management
+    conditions:
+      files: ["**/*.sql", "**/*.js", "**/*.py"]`,
+                
+                'documentation-check': `  documentation_check:
+    type: ai
+    model: claude-3-5-sonnet
+    prompt: |
+      Check documentation completeness:
+      - Missing function documentation
+      - Outdated README sections
+      - API endpoint documentation
+      - Code comments clarity
+    conditions:
+      files: ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]`,
+                
+                'probe': `  probe:
+    type: ai
+    command: probe
+    prompt: |
+      Your goal is to answer questions about this project and assist developers
+    on: [comment, issue_open]`,
+                
+                'migration-guard': `  migration_guard:
+    type: ai
+    model: gpt-4o
+    prompt: |
+      Check for breaking changes in:
+      - API contracts and interfaces
+      - Database schema modifications
+      - Configuration changes
+      - Dependency updates
+    conditions:
+      files: ["**/migration/**", "**/schema/**", "**/api/**"]`
+            };
+
+            const yamlConfig = `# visor.yaml
+version: "1"
+
+checks:
+${selectedTools.map(tool => configs[tool]).join('\n\n')}
+
+processors:
+  - name: ai-summarizer
+    type: ai
+    model: claude-3-5-sonnet
+    prompt: |
+      Analyze all findings from the checks.
+      Group by severity and provide actionable recommendations.
+      Focus on the most critical issues that could block deployment.
+    schema:
+      type: object
+      properties:
+        summary: { type: string }
+        critical_issues: { type: array }
+        recommendations: { type: array }
+        risk_assessment: { type: string }
+
+outputs:
+  pr_comment:
+    template: summary
+    max_findings: 10
+  sarif:
+    enabled: true
+  json:
+    enabled: true`;
+
+            document.getElementById('generated-yaml').innerHTML = `<code>${yamlConfig}</code>`;
+        }
+
+        // Add event listeners to checkboxes
+        document.querySelectorAll('input[name="tools"]').forEach(checkbox => {
+            checkbox.addEventListener('change', generateConfig);
+        });
+
+        // Copy configuration function
+        function copyConfig() {
+            const yamlText = document.querySelector('#generated-yaml code').textContent;
+            navigator.clipboard.writeText(yamlText).then(() => {
+                const button = document.getElementById('copy-config');
+                const originalText = button.textContent;
+                button.textContent = 'Copied!';
+                button.classList.add('copied');
+                
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+
+        // Add intersection observer for fade-in animations
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        // Observe all sections for animations
+        document.addEventListener('DOMContentLoaded', () => {
+            const sections = document.querySelectorAll('.section');
+            sections.forEach(section => {
+                section.style.opacity = '0';
+                section.style.transform = 'translateY(30px)';
+                section.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+                observer.observe(section);
+            });
+        });
+    </script>
+</body>
+</html>

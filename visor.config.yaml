@@ -1,0 +1,171 @@
+version: "1.0"
+name: "Gates Project Code Review Configuration"
+description: "AI-powered code review configuration for the Gates GitHub Action project"
+
+# Global settings
+settings:
+  maxFileSize: 500000  # 500KB max file size
+  excludePatterns:
+    - "node_modules/**"
+    - "dist/**" 
+    - "build/**"
+    - ".git/**"
+    - "*.log"
+    - "coverage/**"
+    - "*.min.js"
+    - "*.d.ts"
+    - "package-lock.json"
+  includePatterns:
+    - "src/**/*.ts"
+    - "tests/**/*.ts" 
+    - "*.ts"
+    - "*.js"
+    - "*.json"
+    - "*.yml"
+    - "*.yaml"
+    - "*.md"
+
+# Check configurations
+checks:
+  security:
+    enabled: true
+    type: ai
+    severity: "high"
+    description: "Security vulnerability analysis"
+    prompt: |
+      Perform comprehensive security analysis focusing on:
+      - SQL injection vulnerabilities
+      - XSS attack vectors  
+      - Authentication/authorization issues
+      - Sensitive data exposure
+      - Input validation and sanitization
+      - Unsafe eval() usage
+      - Environment variable security
+    patterns:
+      dangerous_functions:
+        - "eval\\("
+        - "innerHTML\\s*="
+        - "dangerouslySetInnerHTML"
+        - "exec\\("
+        - "system\\("
+      sensitive_data:
+        - "password\\s*[:=]"
+        - "api[_-]?key\\s*[:=]"
+        - "secret\\s*[:=]"
+        - "token\\s*[:=]"
+    on: [pr_opened, pr_updated]
+
+  performance:
+    enabled: true
+    type: ai
+    severity: "medium"
+    description: "Performance optimization analysis"
+    prompt: |
+      Review for performance issues:
+      - N+1 database queries
+      - Memory leaks and excessive allocations
+      - Inefficient algorithms and data structures
+      - Missing caching opportunities
+      - Unnecessary async operations
+      - Large file processing without streaming
+      - Blocking operations in event loops
+    patterns:
+      expensive_operations:
+        - "for\\s*\\("
+        - "while\\s*\\("
+        - "\\.map\\("
+        - "\\.filter\\("
+        - "\\.reduce\\("
+      async_patterns:
+        - "await\\s+"
+        - "Promise\\."
+        - "\\.then\\("
+    on: [pr_opened, pr_updated]
+
+  style:
+    enabled: true
+    type: ai
+    severity: "low"
+    description: "Code style and consistency analysis"
+    prompt: |
+      Check for style and consistency issues:
+      - Naming conventions adherence
+      - Code formatting consistency
+      - Comment quality and documentation
+      - Import organization
+      - Consistent error handling patterns
+      - TypeScript best practices
+    patterns:
+      console_statements:
+        - "console\\.(log|error|warn|info)"
+      naming_conventions:
+        - "[a-z][a-zA-Z0-9]*"
+        - "[A-Z][a-zA-Z0-9]*"
+    on: [pr_opened]
+
+  architecture:
+    enabled: true
+    type: ai
+    severity: "medium"
+    description: "Architecture and design pattern analysis"
+    prompt: |
+      Analyze architectural aspects:
+      - SOLID principles adherence
+      - Design pattern usage appropriateness
+      - Circular dependencies
+      - Module coupling and cohesion
+      - Error handling architecture
+      - Separation of concerns
+      - Code reusability and maintainability
+    patterns:
+      circular_dependencies:
+        - "import.*from\\s*['\"]\\./.*['\"]"
+      large_functions:
+        - "function\\s+\\w+.*\\{[\\s\\S]{500,}\\}"
+    on: [pr_opened, pr_updated]
+
+# Output configurations
+output:
+  formats:
+    table:
+      enabled: true
+      showDetails: true
+      groupByCategory: true
+      includeFiles: false
+    json:
+      enabled: true
+      showDetails: true
+      groupByCategory: true
+      includeFiles: true
+      includeTimestamp: true
+    markdown:
+      enabled: true
+      showDetails: true
+      groupByCategory: true
+      includeFiles: true
+      includeTimestamp: true
+    sarif:
+      enabled: true
+      showDetails: true
+      groupByCategory: true
+  pr_comment:
+    format: detailed
+    group_by: check
+    collapse: false
+
+# GitHub-specific settings
+github:
+  autoReview: true
+  commentOnPR: true
+  createChecks: true
+  addLabels: true
+  updateExistingComments: true
+  reviewTriggers:
+    - "/review"
+    - "/visor"
+    - "/analyze"
+  ignorePaths:
+    - "docs/**"
+    - "*.md"
+    - "LICENSE" 
+    - ".gitignore"

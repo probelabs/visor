@@ -1,5 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import { PRInfo, PRDiff } from './pr-analyzer';
+import { CommentManager } from './github-comments';
 
 export interface ReviewComment {
   file: string;
@@ -23,7 +24,11 @@ export interface ReviewOptions {
 }
 
 export class PRReviewer {
-  constructor(private octokit: Octokit) {}
+  private commentManager: CommentManager;
+  
+  constructor(private octokit: Octokit) {
+    this.commentManager = new CommentManager(octokit);
+  }
 
   async reviewPR(
     owner: string,
@@ -165,16 +170,76 @@ export class PRReviewer {
     repo: string,
     prNumber: number,
     summary: ReviewSummary,
-    options: ReviewOptions = {}
+    options: ReviewOptions & { commentId?: string; triggeredBy?: string } = {}
   ): Promise<void> {
-    const comment = this.formatReviewComment(summary, options);
+    const comment = this.formatReviewCommentWithVisorFormat(summary, options);
 
-    await this.octokit.rest.issues.createComment({
+    await this.commentManager.updateOrCreateComment(
       owner,
       repo,
-      issue_number: prNumber,
-      body: comment,
-    });
+      prNumber,
+      comment,
+      {
+        commentId: options.commentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+      }
+    );
+  }
+
+  private formatReviewCommentWithVisorFormat(summary: ReviewSummary, options: ReviewOptions): string {
+    const { format = 'summary' } = options;
+
+    // Create main summary section
+    let comment = `# 🔍 Visor Code Review Results\n\n`;
+    comment += `## 📊 Summary\n`;
+    comment += `- **Overall Score**: ${summary.overallScore}/100\n`;
+    comment += `- **Issues Found**: ${summary.totalIssues} (${summary.criticalIssues} Critical, ${summary.totalIssues - summary.criticalIssues} Other)\n`;
+    comment += `- **Files Analyzed**: ${new Set(summary.comments.map(c => c.file)).size}\n\n`;
+
+    // Group comments by category for collapsible sections
+    const groupedComments = this.groupCommentsByCategory(summary.comments);
+
+    for (const [category, comments] of Object.entries(groupedComments)) {
+      const categoryScore = this.calculateCategoryScore(comments);
+      const emoji = this.getCategoryEmoji(category);
+      const issuesCount = comments.length;
+      
+      const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Review (Score: ${categoryScore}/100)`;
+      
+      let sectionContent = '';
+      if (comments.length > 0) {
+        sectionContent += `### Issues Found:\n`;
+        for (const reviewComment of comments.slice(0, format === 'detailed' ? comments.length : 3)) {
+          const severityEmoji =
+            reviewComment.severity === 'error' ? '🚨' :
+            reviewComment.severity === 'warning' ? '⚠️' : 'ℹ️';
+          sectionContent += `- **${reviewComment.severity.toUpperCase()}**: ${reviewComment.message}\n`;
+          sectionContent += `  - **File**: \`${reviewComment.file}:${reviewComment.line}\`\n\n`;
+        }
+        
+        if (format === 'summary' && comments.length > 3) {
+          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=detailed\` for complete analysis.*\n\n`;
+        }
+      } else {
+        sectionContent += `No issues found in this category. Great job! ✅\n\n`;
+      }
+      
+      comment += this.commentManager.createCollapsibleSection(title, sectionContent, issuesCount > 0);
+      comment += '\n\n';
+    }
+
+    // Add suggestions if any
+    if (summary.suggestions.length > 0) {
+      comment += this.commentManager.createCollapsibleSection(
+        '💡 Recommendations',
+        summary.suggestions.map(s => `- ${s}`).join('\n') + '\n',
+        true
+      );
+      comment += '\n\n';
+    }
+
+    return comment;
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {
@@ -218,5 +283,45 @@ export class PRReviewer {
     comment += `---\n*Review powered by Gates Action - Use \`/help\` for available commands*`;
 
     return comment;
+  }
+
+  private groupCommentsByCategory(comments: ReviewComment[]): Record<string, ReviewComment[]> {
+    const grouped: Record<string, ReviewComment[]> = {
+      security: [],
+      performance: [],
+      style: [],
+      logic: [],
+      documentation: []
+    };
+
+    for (const comment of comments) {
+      if (!grouped[comment.category]) {
+        grouped[comment.category] = [];
+      }
+      grouped[comment.category].push(comment);
+    }
+
+    return grouped;
+  }
+
+  private calculateCategoryScore(comments: ReviewComment[]): number {
+    if (comments.length === 0) return 100;
+    
+    const errorCount = comments.filter(c => c.severity === 'error').length;
+    const warningCount = comments.filter(c => c.severity === 'warning').length;
+    const infoCount = comments.filter(c => c.severity === 'info').length;
+    
+    return Math.max(0, 100 - errorCount * 25 - warningCount * 10 - infoCount * 5);
+  }
+
+  private getCategoryEmoji(category: string): string {
+    const emojiMap: Record<string, string> = {
+      security: '🔒',
+      performance: '📈',
+      style: '🎨',
+      logic: '🧠',
+      documentation: '📚'
+    };
+    return emojiMap[category] || '📝';
   }
 }

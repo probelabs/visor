@@ -43,6 +43,13 @@ jest.mock('@octokit/rest', () => ({
         createComment: jest.fn().mockResolvedValue({
           data: { id: 123 },
         }),
+        listComments: jest.fn().mockResolvedValue({ data: [] }),
+        updateComment: jest.fn().mockResolvedValue({
+          data: { id: 123 },
+        }),
+        getComment: jest.fn().mockResolvedValue({
+          data: { id: 123 },
+        }),
       },
     },
   })),

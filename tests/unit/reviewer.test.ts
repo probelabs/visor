@@ -6,6 +6,9 @@ const mockOctokit = {
   rest: {
     issues: {
       createComment: jest.fn(),
+      listComments: jest.fn(),
+      updateComment: jest.fn(),
+      getComment: jest.fn(),
     },
   },
 } as any;
@@ -135,6 +138,18 @@ describe('PRReviewer', () => {
 
   describe('postReviewComment', () => {
     test('should post formatted review comment', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 123,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
       const mockReview = {
         overallScore: 85,
         totalIssues: 3,
@@ -153,21 +168,34 @@ describe('PRReviewer', () => {
 
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
+      expect(mockOctokit.rest.issues.listComments).toHaveBeenCalled();
       expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
         issue_number: 1,
-        body: expect.stringContaining('AI Code Review'),
+        body: expect.stringContaining('Visor Code Review Results'),
       });
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('Overall Score:** 85/100');
-      expect(callArgs.body).toContain('Issues Found:** 3');
+      expect(callArgs.body).toContain('Overall Score**: 85/100');
+      expect(callArgs.body).toContain('Issues Found**: 3');
       expect(callArgs.body).toContain('Add unit tests');
       expect(callArgs.body).toContain('src/test.ts:10');
     });
 
     test('should format comment with different severity levels', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 124,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
       const mockReview = {
         overallScore: 60,
         totalIssues: 3,
@@ -201,9 +229,12 @@ describe('PRReviewer', () => {
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('❌'); // Error emoji
-      expect(callArgs.body).toContain('⚠️'); // Warning emoji
-      expect(callArgs.body).toContain('ℹ️'); // Info emoji
+      expect(callArgs.body).toContain('**ERROR**: Critical security issue'); 
+      expect(callArgs.body).toContain('**WARNING**: Potential performance issue');
+      expect(callArgs.body).toContain('**INFO**: Style improvement');
+      expect(callArgs.body).toContain('🔒 Security Review');
+      expect(callArgs.body).toContain('📈 Performance Review');
+      expect(callArgs.body).toContain('🎨 Style Review');
     });
   });
 });

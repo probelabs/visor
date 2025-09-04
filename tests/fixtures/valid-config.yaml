@@ -1,0 +1,27 @@
+version: "1.0"
+checks:
+  performance:
+    type: ai
+    prompt: |
+      Review for performance issues:
+      - N+1 queries
+      - Memory leaks
+      - Inefficient algorithms
+      - Missing caching
+    on: [pr_opened, pr_updated]
+  
+  security:
+    type: ai
+    prompt: |
+      Check for security vulnerabilities:
+      - SQL injection
+      - XSS attacks
+      - Authentication issues
+      - Input validation
+    on: [pr_opened]
+
+output:
+  pr_comment:
+    format: summary
+    group_by: check
+    collapse: true

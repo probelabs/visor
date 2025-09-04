@@ -3,40 +3,129 @@ import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
 import { PRReviewer } from './reviewer';
+import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 
 export async function run(): Promise<void> {
   try {
     const token = getInput('github-token', { required: true });
     const octokit = new Octokit({ auth: token });
 
-    const owner = getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER;
-    const repo = getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1];
+    // Collect all GitHub Action inputs
+    const inputs: GitHubActionInputs = {
+      'github-token': token,
+      owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
+      repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
+      'auto-review': getInput('auto-review'),
+      'visor-config-path': getInput('visor-config-path'),
+      'visor-checks': getInput('visor-checks'),
+    };
+
     const eventName = process.env.GITHUB_EVENT_NAME;
-    const autoReview = getInput('auto-review') === 'true';
+    const autoReview = inputs['auto-review'] === 'true';
 
-    if (!owner || !repo) {
-      throw new Error('Owner and repo are required');
+    // Create GitHub context for CLI bridge
+    const context: GitHubContext = {
+      event_name: eventName || 'unknown',
+      repository: process.env.GITHUB_REPOSITORY 
+        ? {
+            owner: { login: process.env.GITHUB_REPOSITORY.split('/')[0] },
+            name: process.env.GITHUB_REPOSITORY.split('/')[1],
+          }
+        : undefined,
+      event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : {},
+      payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+    };
+
+    // Initialize CLI bridge
+    const cliBridge = new ActionCliBridge(token, context);
+    
+    // Check if we should use Visor CLI
+    if (cliBridge.shouldUseVisor(inputs)) {
+      console.log('🔍 Using Visor CLI mode');
+      await handleVisorMode(cliBridge, inputs, context);
+      return;
     }
 
-    console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
-
-    // Handle different GitHub events
-    switch (eventName) {
-      case 'issue_comment':
-        await handleIssueComment(octokit, owner, repo);
-        break;
-      case 'pull_request':
-        if (autoReview) {
-          await handlePullRequestEvent(octokit, owner, repo);
-        }
-        break;
-      default:
-        // Fallback to original repo info functionality
-        await handleRepoInfo(octokit, owner, repo);
-        break;
-    }
+    console.log('🤖 Using legacy GitHub Action mode');
+    await handleLegacyMode(octokit, inputs, eventName, autoReview);
   } catch (error) {
     setFailed(error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
+/**
+ * Handle Visor CLI mode
+ */
+async function handleVisorMode(
+  cliBridge: ActionCliBridge,
+  inputs: GitHubActionInputs,
+  context: GitHubContext
+): Promise<void> {
+  try {
+    // Create temporary config if needed
+    const tempConfigPath = await cliBridge.createTempConfigFromInputs(inputs);
+    if (tempConfigPath) {
+      inputs['visor-config-path'] = tempConfigPath;
+    }
+
+    // Execute CLI
+    const result = await cliBridge.executeCliWithContext(inputs);
+    
+    if (result.success) {
+      console.log('✅ Visor CLI execution completed successfully');
+      console.log(result.output);
+      
+      // Set outputs based on CLI result
+      const outputs = cliBridge.mergeActionAndCliOutputs(inputs, result);
+      for (const [key, value] of Object.entries(outputs)) {
+        setOutput(key, value);
+      }
+    } else {
+      console.error('❌ Visor CLI execution failed');
+      console.error(result.error || result.output);
+      setFailed(result.error || 'CLI execution failed');
+    }
+
+    // Cleanup temporary files
+    await cliBridge.cleanup();
+  } catch (error) {
+    console.error('❌ Visor mode error:', error);
+    setFailed(error instanceof Error ? error.message : 'Visor mode failed');
+  }
+}
+
+/**
+ * Handle legacy GitHub Action mode (backward compatibility)
+ */
+async function handleLegacyMode(
+  octokit: Octokit,
+  inputs: GitHubActionInputs,
+  eventName: string | undefined,
+  autoReview: boolean
+): Promise<void> {
+  const owner = inputs.owner;
+  const repo = inputs.repo;
+
+  if (!owner || !repo) {
+    throw new Error('Owner and repo are required');
+  }
+
+  console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
+
+  // Handle different GitHub events
+  switch (eventName) {
+    case 'issue_comment':
+      await handleIssueComment(octokit, owner, repo);
+      break;
+    case 'pull_request':
+      if (autoReview) {
+        await handlePullRequestEvent(octokit, owner, repo);
+      }
+      break;
+    default:
+      // Fallback to original repo info functionality
+      await handleRepoInfo(octokit, owner, repo);
+      break;
   }
 }
 

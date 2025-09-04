@@ -1,0 +1,102 @@
+name: 🧪 Test Visor CLI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  test-visor:
+    name: Test Visor Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🛒 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: 📦 Install dependencies
+        run: npm ci
+      
+      - name: 🏗️ Build Visor
+        run: npm run build
+      
+      - name: 🔍 Test CLI Basic Functionality
+        run: |
+          echo "Testing Visor CLI help..."
+          ./dist/cli-main.js --help
+          
+          echo "Testing Visor CLI version..."
+          ./dist/cli-main.js --version
+      
+      - name: 🧪 Test JSON Output
+        run: |
+          echo "Testing JSON output format..."
+          ./dist/cli-main.js --check security --output json 2>/dev/null | jq '.summary.overallScore' || {
+            echo "JSON output test failed"
+            exit 1
+          }
+      
+      - name: 🧪 Test SARIF Output
+        run: |
+          echo "Testing SARIF output format..."
+          ./dist/cli-main.js --check security --output sarif 2>/dev/null | jq '.version' || {
+            echo "SARIF output test failed"
+            exit 1
+          }
+      
+      - name: 🧪 Test Markdown Output
+        run: |
+          echo "Testing Markdown output format..."
+          ./dist/cli-main.js --check performance --output markdown 2>&1 | grep -q "Analysis Results" || {
+            echo "Markdown output test failed"
+            exit 1
+          }
+      
+      - name: 🧪 Test Table Output
+        run: |
+          echo "Testing Table output format..."
+          ./dist/cli-main.js --check style --output table 2>&1 | grep -q "Analysis Summary" || {
+            echo "Table output test failed"
+            exit 1
+          }
+      
+      - name: 📊 Generate Sample Reports
+        run: |
+          # Generate reports in all formats for artifact upload
+          ./dist/cli-main.js --check all --output json 2>/dev/null > sample-report.json
+          ./dist/cli-main.js --check all --output sarif 2>/dev/null > sample-report.sarif
+          ./dist/cli-main.js --check all --output markdown 2>&1 > sample-report.md
+          ./dist/cli-main.js --check all --output table 2>&1 > sample-report.txt
+      
+      - name: 📈 Upload Sample Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: visor-sample-reports
+          path: |
+            sample-report.json
+            sample-report.sarif
+            sample-report.md
+            sample-report.txt
+          retention-days: 7
+      
+      - name: ✅ Verify Configuration
+        run: |
+          echo "Verifying visor.config.yaml..."
+          if [ -f "visor.config.yaml" ]; then
+            echo "✅ Configuration file found"
+            # Basic YAML syntax check
+            python3 -c "import yaml; yaml.safe_load(open('visor.config.yaml'))" && echo "✅ YAML syntax valid"
+          else
+            echo "❌ Configuration file missing"
+            exit 1
+          fi
