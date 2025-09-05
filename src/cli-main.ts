@@ -48,6 +48,9 @@ export async function main(): Promise<void> {
     // Merge CLI options with configuration
     const mergedConfig = configManager.mergeWithCliOptions(config, cliOptions);
 
+    // Set environment variable so other modules know the output format
+    process.env.VISOR_OUTPUT_FORMAT = mergedConfig.cliOutput;
+
     // Only show decorative output for non-JSON formats
     if (mergedConfig.cliOutput !== 'json' && mergedConfig.cliOutput !== 'sarif') {
       console.log('🔍 Visor - AI-powered code review tool');

@@ -46,7 +46,8 @@ export class CheckProviderRegistry {
       throw new Error(`Provider '${name}' is already registered`);
     }
     this.providers.set(name, provider);
-    console.log(`Registered check provider: ${name}`);
+    // Send provider registration messages to stderr to avoid contaminating JSON output
+    console.error(`Registered check provider: ${name}`);
   }
 
   /**
@@ -57,7 +58,8 @@ export class CheckProviderRegistry {
       throw new Error(`Provider '${name}' not found`);
     }
     this.providers.delete(name);
-    console.log(`Unregistered check provider: ${name}`);
+    // Send provider unregistration messages to stderr to avoid contaminating JSON output
+    console.error(`Unregistered check provider: ${name}`);
   }
 
   /**
