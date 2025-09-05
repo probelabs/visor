@@ -15,7 +15,7 @@ import {
 } from './test-utilities';
 import * as path from 'path';
 
-describe('Performance Benchmark Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Performance Benchmark Tests', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;

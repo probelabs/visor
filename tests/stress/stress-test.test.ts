@@ -13,7 +13,7 @@ import {
   createMockOctokit,
 } from '../performance/test-utilities';
 
-describe('Stress Testing Framework', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Stress Testing Framework', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;

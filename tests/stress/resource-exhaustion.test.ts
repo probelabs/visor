@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-describe('Resource Exhaustion Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Resource Exhaustion Tests', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;

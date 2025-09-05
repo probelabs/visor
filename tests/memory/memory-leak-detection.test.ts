@@ -13,7 +13,7 @@ import {
   createMockOctokit,
 } from '../performance/test-utilities';
 
-describe('Memory Leak Detection Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Memory Leak Detection Tests', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;

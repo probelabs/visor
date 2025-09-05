@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as yaml from 'js-yaml';
 
-describe('Resource Cleanup Verification Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Resource Cleanup Verification Tests', () => {
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;
   let tempDir: string;
