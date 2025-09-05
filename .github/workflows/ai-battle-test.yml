@@ -19,6 +19,12 @@ on:
         - 'comment_management'
         - 'provider_types'
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
 jobs:
   ai-battle-test:
     name: AI Battle Test - ${{ github.event_name }}
