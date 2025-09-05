@@ -49,11 +49,11 @@ describe('Configuration Corruption & Recovery Tests', () => {
           await configManager.loadConfig(configPath);
           fail(`Should have thrown error for non-existent file: ${configPath}`);
         } catch (error) {
-          console.log(`    Error: ${error.message}`);
+          console.log(`    Error: ${(error as Error).message}`);
 
           // Should provide clear error message
-          expect(error.message).toContain('Configuration file not found');
-          expect(error.message).toContain(configPath);
+          expect((error as Error).message).toContain('Configuration file not found');
+          expect((error as Error).message).toContain(configPath);
         }
       }
     });
@@ -93,11 +93,11 @@ describe('Configuration Corruption & Recovery Tests', () => {
             expect(typeof config.checks).toBe('object');
           }
         } catch (error) {
-          console.log(`    Empty config error: ${error.message}`);
+          console.log(`    Empty config error: ${(error as Error).message}`);
 
           // Should provide helpful error for truly empty configs
-          expect(error.message).toBeDefined();
-          expect(error.message.length).toBeGreaterThan(10);
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message.length).toBeGreaterThan(10);
         }
 
         // Cleanup
@@ -137,10 +137,10 @@ describe('Configuration Corruption & Recovery Tests', () => {
           // If we got here, the system allows reading despite chmod (e.g., running as root)
           console.log('    Permission restriction not enforced on this system');
         } catch (error) {
-          console.log(`    Permission error: ${error.message}`);
+          console.log(`    Permission error: ${(error as Error).message}`);
 
           // Should handle permission errors gracefully
-          expect(error.message).toBeDefined();
+          expect((error as Error).message).toBeDefined();
           expect(error.code === 'EACCES' || error.code === 'EPERM').toBe(true);
         }
 
@@ -204,11 +204,11 @@ describe('Configuration Corruption & Recovery Tests', () => {
           // If it parsed, it should still be valid
           expect(config).toBeDefined();
         } catch (error) {
-          console.log(`    YAML syntax error: ${error.message}`);
+          console.log(`    YAML syntax error: ${(error as Error).message}`);
 
           // Should provide helpful YAML parsing error
-          expect(error.message).toBeDefined();
-          const lowerMessage = error.message.toLowerCase();
+          expect((error as Error).message).toBeDefined();
+          const lowerMessage = (error as Error).message.toLowerCase();
           expect(
             lowerMessage.includes('yaml') ||
               lowerMessage.includes('parse') ||
@@ -272,10 +272,10 @@ describe('Configuration Corruption & Recovery Tests', () => {
           // Should not have executed any dangerous operations
           expect(process.cwd()).toBeDefined(); // We should still exist!
         } catch (error) {
-          console.log(`    Dangerous construct blocked: ${error.message}`);
+          console.log(`    Dangerous construct blocked: ${(error as Error).message}`);
 
           // Should block dangerous constructs
-          expect(error.message).toBeDefined();
+          expect((error as Error).message).toBeDefined();
         }
 
         // Cleanup
@@ -349,11 +349,11 @@ describe('Configuration Corruption & Recovery Tests', () => {
           const eventMapper = new EventMapper(config);
           expect(eventMapper).toBeDefined();
         } catch (error) {
-          console.log(`    Incomplete config error: ${error.message}`);
+          console.log(`    Incomplete config error: ${(error as Error).message}`);
 
           // Should provide clear error about missing fields
-          expect(error.message).toBeDefined();
-          expect(error.message.includes('missing') || error.message.includes('required')).toBe(
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message.includes('missing') || (error as Error).message.includes('required')).toBe(
             true
           );
         }
@@ -425,11 +425,11 @@ describe('Configuration Corruption & Recovery Tests', () => {
             expect(typeof config.version).toMatch(/string|number/);
           }
         } catch (error) {
-          console.log(`    Type validation error: ${error.message}`);
+          console.log(`    Type validation error: ${(error as Error).message}`);
 
           // Should provide clear error about type issues
-          expect(error.message).toBeDefined();
-          expect(error.message.length).toBeGreaterThan(0);
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message.length).toBeGreaterThan(0);
         }
 
         // Cleanup
@@ -479,14 +479,14 @@ describe('Configuration Corruption & Recovery Tests', () => {
 
           fail(`Should have thrown error for ${scenario.name}`);
         } catch (error) {
-          console.log(`    Error message: ${error.message}`);
+          console.log(`    Error message: ${(error as Error).message}`);
 
           // Should provide helpful error message
-          expect(error.message).toBeDefined();
-          expect(error.message.length).toBeGreaterThan(20);
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message.length).toBeGreaterThan(20);
 
           // Should contain some recovery suggestions
-          const lowerMessage = error.message.toLowerCase();
+          const lowerMessage = (error as Error).message.toLowerCase();
           const hasSuggestions = scenario.expectedSuggestions.some(suggestion =>
             lowerMessage.includes(suggestion)
           );
@@ -570,12 +570,12 @@ describe('Configuration Corruption & Recovery Tests', () => {
             expect(Array.isArray(args)).toBe(true);
           }
         } catch (error) {
-          console.log(`    Corrupted input error: ${error.message}`);
+          console.log(`    Corrupted input error: ${(error as Error).message}`);
 
           // Should handle corrupted inputs gracefully
-          expect(error.message).toBeDefined();
-          expect(error.message).not.toContain('undefined is not a function');
-          expect(error.message).not.toContain('Cannot read property');
+          expect((error as Error).message).toBeDefined();
+          expect((error as Error).message).not.toContain('undefined is not a function');
+          expect((error as Error).message).not.toContain('Cannot read property');
         }
       }
     });
