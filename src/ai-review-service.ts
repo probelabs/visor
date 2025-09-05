@@ -412,6 +412,22 @@ ${this.escapeXml(prInfo.commitDiff)}
           };
         }
 
+        // Check if response is plain text and doesn't contain structured data
+        if (!response.includes('{') && !response.includes('}')) {
+          console.log('🔧 Plain text response detected, creating structured fallback...');
+          // Create a fallback response based on the plain text
+          const isNoChanges =
+            response.toLowerCase().includes('no') &&
+            (response.toLowerCase().includes('changes') || response.toLowerCase().includes('code'));
+
+          return {
+            issues: [],
+            suggestions: isNoChanges
+              ? ['No code changes detected in this analysis']
+              : [`AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`],
+          };
+        }
+
         // Try to find JSON within the response
         const jsonMatches = response.match(/\{[\s\S]*\}/g);
         if (jsonMatches && jsonMatches.length > 0) {
@@ -458,14 +474,33 @@ ${this.escapeXml(prInfo.commitDiff)}
           console.error('❌ Failed to parse AI review JSON:', parseError);
           console.error('🔍 Attempting fallback parsing strategies...');
 
-          // Try to extract JSON from anywhere in the response
-          const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            console.log('🔧 Found JSON pattern, attempting to parse...');
-            reviewData = JSON.parse(jsonMatch[0]);
-            console.log('✅ Successfully parsed JSON from pattern match');
+          // Check if the AI response is plain text without JSON structure
+          if (!cleanResponse.includes('{') && !cleanResponse.includes('}')) {
+            console.log('🔧 Plain text AI response detected, creating structured fallback...');
+            const isNoChanges =
+              cleanResponse.toLowerCase().includes('no') &&
+              (cleanResponse.toLowerCase().includes('changes') ||
+                cleanResponse.toLowerCase().includes('code'));
+
+            reviewData = {
+              issues: [],
+              suggestions: isNoChanges
+                ? ['No code changes detected in this analysis']
+                : [
+                    `AI response: ${cleanResponse.substring(0, 200)}${cleanResponse.length > 200 ? '...' : ''}`,
+                  ],
+            };
+            console.log('✅ Created structured fallback from plain text response');
           } else {
-            throw parseError;
+            // Try to extract JSON from anywhere in the response
+            const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              console.log('🔧 Found JSON pattern, attempting to parse...');
+              reviewData = JSON.parse(jsonMatch[0]);
+              console.log('✅ Successfully parsed JSON from pattern match');
+            } else {
+              throw parseError;
+            }
           }
         }
       } else if (probeChatResponse.overallScore !== undefined) {
