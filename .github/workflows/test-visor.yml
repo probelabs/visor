@@ -32,6 +32,7 @@ jobs:
       
       - name: 🔍 Test CLI Basic Functionality
         run: |
+          chmod +x ./dist/cli-main.js
           echo "Testing Visor CLI help..."
           ./dist/cli-main.js --help
           

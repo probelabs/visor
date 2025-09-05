@@ -45,6 +45,7 @@ jobs:
       - name: 🔍 Run Visor Analysis
         id: visor-analysis
         run: |
+          chmod +x ./dist/cli-main.js
           # Parse command arguments from comment if triggered by comment
           VISOR_ARGS="--check all --output markdown"
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then

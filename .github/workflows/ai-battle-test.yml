@@ -143,6 +143,7 @@ jobs:
       - name: 🧪 Test 4 - Different Check Types
         if: matrix.ai_provider.api_key_secret != ''
         run: |
+          chmod +x ./dist/cli-main.js
           echo "🔍 Testing different check provider types..."
           
           # Test AI provider
