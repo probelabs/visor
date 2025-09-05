@@ -19,7 +19,8 @@
       "Bash(./dist/cli-main.js --check style --output table)",
       "Bash(git checkout:*)",
       "Bash(git add:*)",
-      "Bash(npm run lint:*)"
+      "Bash(npm run lint:*)",
+      "Bash(find:*)"
     ]
   },
   "hooks": {
