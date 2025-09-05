@@ -1,0 +1,160 @@
+import { CheckProvider } from './check-provider.interface';
+import { AICheckProvider } from './ai-check-provider';
+import { ToolCheckProvider } from './tool-check-provider';
+import { ScriptCheckProvider } from './script-check-provider';
+import { WebhookCheckProvider } from './webhook-check-provider';
+
+/**
+ * Registry for managing check providers
+ */
+export class CheckProviderRegistry {
+  private providers: Map<string, CheckProvider> = new Map();
+  private static instance: CheckProviderRegistry;
+
+  private constructor() {
+    // Register default providers
+    this.registerDefaultProviders();
+  }
+
+  /**
+   * Get singleton instance
+   */
+  static getInstance(): CheckProviderRegistry {
+    if (!CheckProviderRegistry.instance) {
+      CheckProviderRegistry.instance = new CheckProviderRegistry();
+    }
+    return CheckProviderRegistry.instance;
+  }
+
+  /**
+   * Register default built-in providers
+   */
+  private registerDefaultProviders(): void {
+    // Register all built-in providers
+    this.register(new AICheckProvider());
+    this.register(new ToolCheckProvider());
+    this.register(new ScriptCheckProvider());
+    this.register(new WebhookCheckProvider());
+  }
+
+  /**
+   * Register a check provider
+   */
+  register(provider: CheckProvider): void {
+    const name = provider.getName();
+    if (this.providers.has(name)) {
+      throw new Error(`Provider '${name}' is already registered`);
+    }
+    this.providers.set(name, provider);
+    console.log(`Registered check provider: ${name}`);
+  }
+
+  /**
+   * Unregister a check provider
+   */
+  unregister(name: string): void {
+    if (!this.providers.has(name)) {
+      throw new Error(`Provider '${name}' not found`);
+    }
+    this.providers.delete(name);
+    console.log(`Unregistered check provider: ${name}`);
+  }
+
+  /**
+   * Get a provider by name
+   */
+  getProvider(name: string): CheckProvider | undefined {
+    return this.providers.get(name);
+  }
+
+  /**
+   * Get provider or throw if not found
+   */
+  getProviderOrThrow(name: string): CheckProvider {
+    const provider = this.providers.get(name);
+    if (!provider) {
+      throw new Error(
+        `Check provider '${name}' not found. Available providers: ${this.getAvailableProviders().join(', ')}`
+      );
+    }
+    return provider;
+  }
+
+  /**
+   * Check if a provider exists
+   */
+  hasProvider(name: string): boolean {
+    return this.providers.has(name);
+  }
+
+  /**
+   * Get all registered provider names
+   */
+  getAvailableProviders(): string[] {
+    return Array.from(this.providers.keys());
+  }
+
+  /**
+   * Get all providers
+   */
+  getAllProviders(): CheckProvider[] {
+    return Array.from(this.providers.values());
+  }
+
+  /**
+   * Get providers that are currently available (have required dependencies)
+   */
+  async getActiveProviders(): Promise<CheckProvider[]> {
+    const providers = this.getAllProviders();
+    const activeProviders: CheckProvider[] = [];
+
+    for (const provider of providers) {
+      if (await provider.isAvailable()) {
+        activeProviders.push(provider);
+      }
+    }
+
+    return activeProviders;
+  }
+
+  /**
+   * List provider information
+   */
+  async listProviders(): Promise<
+    Array<{
+      name: string;
+      description: string;
+      available: boolean;
+      requirements: string[];
+    }>
+  > {
+    const providers = this.getAllProviders();
+    const info = [];
+
+    for (const provider of providers) {
+      info.push({
+        name: provider.getName(),
+        description: provider.getDescription(),
+        available: await provider.isAvailable(),
+        requirements: provider.getRequirements(),
+      });
+    }
+
+    return info;
+  }
+
+  /**
+   * Reset registry (mainly for testing)
+   */
+  reset(): void {
+    this.providers.clear();
+    this.registerDefaultProviders();
+  }
+
+  /**
+   * Clear singleton instance (for testing)
+   */
+  static clearInstance(): void {
+    CheckProviderRegistry.instance = undefined as any;
+  }
+}

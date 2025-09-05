@@ -10,7 +10,16 @@
       "Bash(npm run build:*)",
       "Bash(npm test)",
       "WebFetch(domain:github.com)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(npx:*)",
+      "Bash(./dist/cli-main.js --help)",
+      "mcp__code-search__search_code",
+      "mcp__code-search__extract_code",
+      "Bash(chmod:*)",
+      "Bash(./dist/cli-main.js --check style --output table)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(npm run lint:*)"
     ]
   },
   "hooks": {

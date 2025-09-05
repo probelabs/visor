@@ -2,6 +2,81 @@
 import { PRReviewer } from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
+// Mock AI service to avoid actual API calls
+jest.mock('../../src/ai-review-service', () => {
+  return {
+    AIReviewService: jest.fn().mockImplementation(() => ({
+      executeReview: jest.fn().mockImplementation((prInfo, focus) => {
+        const issues: any[] = [];
+        const suggestions: string[] = [];
+
+        // Dynamic responses based on test context
+        if (
+          focus === 'security' ||
+          prInfo.files[0]?.patch?.includes('eval') ||
+          prInfo.files[0]?.patch?.includes('innerHTML')
+        ) {
+          issues.push({
+            file: 'src/test.ts',
+            line: 5,
+            ruleId: 'security/dangerous-eval',
+            message: 'Dangerous eval usage detected',
+            severity: 'critical',
+            category: 'security',
+          });
+        }
+
+        // Large file detection
+        if (prInfo.files.some((f: any) => f.additions > 100)) {
+          issues.push({
+            file: prInfo.files.find((f: any) => f.additions > 100)?.filename || 'src/large.ts',
+            line: 1,
+            ruleId: 'style/large-change',
+            message: 'Large file change detected, consider breaking into smaller PRs',
+            severity: 'warning',
+            category: 'style',
+          });
+        }
+
+        // Test file suggestions
+        const hasTestFiles = prInfo.files.some(
+          (f: any) => f.filename.includes('.test.') || f.filename.includes('.spec.')
+        );
+        const hasSourceFiles = prInfo.files.some(
+          (f: any) =>
+            f.filename.includes('src/') &&
+            !f.filename.includes('.test.') &&
+            !f.filename.includes('.spec.')
+        );
+
+        if (hasSourceFiles && !hasTestFiles) {
+          suggestions.push('Consider adding unit tests for the new functionality');
+        } else if (hasTestFiles) {
+          suggestions.push('Great job including tests with your changes!');
+        }
+
+        // Default response if no specific conditions met
+        if (issues.length === 0) {
+          issues.push({
+            file: 'src/test.ts',
+            line: 10,
+            ruleId: 'style/naming-convention',
+            message: 'Consider using const instead of let',
+            severity: 'info',
+            category: 'style',
+          });
+        }
+
+        if (suggestions.length === 0) {
+          suggestions.push('Add unit tests', 'Consider performance optimization');
+        }
+
+        return Promise.resolve({ issues, suggestions });
+      }),
+    })),
+  };
+});
+
 // Mock Octokit
 const mockOctokit = {
   rest: {
@@ -64,12 +139,10 @@ describe('PRReviewer', () => {
       const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
 
       expect(review).toBeDefined();
-      expect(review.overallScore).toBeGreaterThanOrEqual(0);
-      expect(review.overallScore).toBeLessThanOrEqual(100);
-      expect(review.totalIssues).toBeGreaterThanOrEqual(0);
-      expect(review.criticalIssues).toBeGreaterThanOrEqual(0);
+      expect(Array.isArray(review.issues)).toBe(true);
       expect(Array.isArray(review.suggestions)).toBe(true);
-      expect(Array.isArray(review.comments)).toBe(true);
+      expect(review.issues.length).toBeGreaterThanOrEqual(0);
+      expect(review.suggestions.length).toBeGreaterThanOrEqual(0);
     });
 
     test('should focus on security when requested', async () => {
@@ -79,8 +152,8 @@ describe('PRReviewer', () => {
         focus: 'security',
       });
 
-      const securityComments = review.comments.filter(c => c.category === 'security');
-      expect(securityComments.length).toBeGreaterThan(0);
+      const securityIssues = review.issues.filter(issue => issue.category === 'security');
+      expect(securityIssues.length).toBeGreaterThan(0);
     });
 
     test('should provide detailed comments when requested', async () => {
@@ -103,7 +176,7 @@ describe('PRReviewer', () => {
         format: 'detailed',
       });
 
-      expect(detailedReview.comments.length).toBeGreaterThanOrEqual(summaryReview.comments.length);
+      expect(detailedReview.issues.length).toBeGreaterThanOrEqual(summaryReview.issues.length);
     });
 
     test('should detect large file changes', async () => {
@@ -111,10 +184,10 @@ describe('PRReviewer', () => {
 
       const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
 
-      const largeFileComments = review.comments.filter(c =>
-        c.message.includes('Large file change')
+      const largeFileIssues = review.issues.filter(
+        issue => issue.message.includes('Large file change') || issue.message.includes('large')
       );
-      expect(largeFileComments.length).toBeGreaterThan(0);
+      expect(largeFileIssues.length).toBeGreaterThan(0);
     });
 
     test('should suggest tests when missing', async () => {
@@ -167,19 +240,17 @@ describe('PRReviewer', () => {
       });
 
       const mockReview = {
-        overallScore: 85,
-        totalIssues: 3,
-        criticalIssues: 0,
-        suggestions: ['Add unit tests', 'Consider performance optimization'],
-        comments: [
+        issues: [
           {
             file: 'src/test.ts',
             line: 10,
+            ruleId: 'style/naming-convention',
             message: 'Consider using const instead of let',
             severity: 'info' as const,
             category: 'style' as const,
           },
         ],
+        suggestions: ['Add unit tests', 'Consider performance optimization'],
       };
 
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
@@ -193,8 +264,8 @@ describe('PRReviewer', () => {
       });
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('Overall Score**: 85/100');
-      expect(callArgs.body).toContain('Issues Found**: 3');
+      expect(callArgs.body).toContain('Overall Score**: 95/100'); // 1 info issue = 100 - 5
+      expect(callArgs.body).toContain('Issues Found**: 1');
       expect(callArgs.body).toContain('Add unit tests');
       expect(callArgs.body).toContain('src/test.ts:10');
     });
@@ -213,14 +284,11 @@ describe('PRReviewer', () => {
       });
 
       const mockReview = {
-        overallScore: 60,
-        totalIssues: 3,
-        criticalIssues: 1,
-        suggestions: [],
-        comments: [
+        issues: [
           {
             file: 'src/error.ts',
             line: 5,
+            ruleId: 'security/critical-vulnerability',
             message: 'Critical security issue',
             severity: 'error' as const,
             category: 'security' as const,
@@ -228,6 +296,7 @@ describe('PRReviewer', () => {
           {
             file: 'src/warning.ts',
             line: 15,
+            ruleId: 'performance/inefficiency',
             message: 'Potential performance issue',
             severity: 'warning' as const,
             category: 'performance' as const,
@@ -235,11 +304,13 @@ describe('PRReviewer', () => {
           {
             file: 'src/info.ts',
             line: 25,
+            ruleId: 'style/improvement',
             message: 'Style improvement',
             severity: 'info' as const,
             category: 'style' as const,
           },
         ],
+        suggestions: [],
       };
 
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);

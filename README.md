@@ -30,9 +30,14 @@ jobs:
       - uses: ./  # or: gates-ai/visor-action@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          # Choose one AI provider (see AI Configuration below)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-That's it! Visor will automatically review your PRs.
+That's it! Visor will automatically review your PRs with AI-powered analysis.
 
 ### As CLI Tool
 
@@ -87,6 +92,125 @@ Examples:
   visor --check all                    # Run all checks
   visor --check security --output json # Security check with JSON output
   visor --check style --check performance # Multiple specific checks
+```
+
+## 🤖 AI Configuration
+
+Visor uses AI-powered code analysis to provide intelligent review feedback. Configure one of the following providers:
+
+### Supported AI Providers
+
+| Provider | Environment Variable | Recommended Models |
+|----------|---------------------|-------------------|
+| Google Gemini | `GOOGLE_API_KEY` | `gemini-2.0-flash-exp` (default), `gemini-1.5-pro` |
+| Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-3-opus`, `claude-3-sonnet` |
+| OpenAI GPT | `OPENAI_API_KEY` | `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo` |
+
+### Setting Up API Keys
+
+#### For GitHub Actions
+Add your API key as a repository secret:
+1. Go to Settings → Secrets and variables → Actions
+2. Click "New repository secret"
+3. Add one of: `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`
+4. (Optional) Add `AI_MODEL_NAME` to specify a model
+
+#### For Local Development
+Set environment variables:
+```bash
+# Using Google Gemini
+export GOOGLE_API_KEY="your-api-key"
+export MODEL_NAME="gemini-2.0-flash-exp"
+
+# Using Anthropic Claude
+export ANTHROPIC_API_KEY="your-api-key"
+export MODEL_NAME="claude-3-sonnet"
+
+# Using OpenAI GPT
+export OPENAI_API_KEY="your-api-key"
+export MODEL_NAME="gpt-4"
+```
+
+### Getting API Keys
+
+- **Google Gemini**: [Get API Key](https://makersuite.google.com/app/apikey) (Free tier available)
+- **Anthropic Claude**: [Get API Key](https://console.anthropic.com/)
+- **OpenAI GPT**: [Get API Key](https://platform.openai.com/api-keys)
+
+### Fallback Behavior
+
+If no API key is configured, Visor will fall back to basic pattern-matching analysis:
+- Keyword detection for security issues (e.g., `eval`, `innerHTML`)
+- Simple performance checks (nested loops, large files)
+- Basic style validation
+
+For best results, configure an AI provider for intelligent, context-aware code review.
+
+## 🧠 Advanced AI Features
+
+### XML-Formatted Analysis
+Visor now uses structured XML formatting when sending data to AI providers, enabling more precise and context-aware analysis:
+
+```xml
+<pull_request>
+  <metadata>
+    <title>Add user authentication</title>
+    <author>developer</author>
+    <files_changed_count>3</files_changed_count>
+  </metadata>
+  <description>
+    This PR implements JWT-based authentication
+  </description>
+  <full_diff>
+    --- src/auth.ts
+    +++ src/auth.ts
+    @@ -1,3 +1,10 @@
+    +import jwt from 'jsonwebtoken';
+    ...
+  </full_diff>
+</pull_request>
+```
+
+### Incremental Commit Analysis
+When new commits are pushed to a PR, Visor performs incremental analysis:
+- **Full Analysis**: Reviews the entire PR on initial creation
+- **Incremental Analysis**: On new commits, focuses only on the latest changes
+- **Smart Updates**: Updates existing review comments instead of creating duplicates
+
+### Intelligent Comment Management
+- **Unique Comment IDs**: Each PR gets a unique review comment that persists across updates
+- **Collision Detection**: Prevents conflicts when multiple reviews run simultaneously
+- **Context-Aware Updates**: Comments are updated with relevant context (PR opened, updated, synchronized)
+
+## 🔧 Pluggable Architecture
+
+Visor features a pluggable provider system for extensibility:
+
+### Supported Check Types
+- **AI Provider**: Intelligent analysis using LLMs (Google Gemini, Anthropic Claude, OpenAI GPT)
+- **Tool Provider**: Integration with external tools (ESLint, Prettier, SonarQube)
+- **Script Provider**: Custom shell scripts and commands
+- **Webhook Provider**: External service integration via HTTP calls
+
+### Adding Custom Providers
+```typescript
+// Custom provider implementation
+export class CustomCheckProvider extends CheckProvider {
+  getName(): string {
+    return 'custom-security-scan';
+  }
+  
+  async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+    // Your custom analysis logic
+    return {
+      issues: [...],
+      suggestions: [...]
+    };
+  }
+}
+
+// Register your provider
+CheckProviderRegistry.getInstance().registerProvider(new CustomCheckProvider());
 ```
 
 ## ⚙️ Configuration
@@ -189,21 +313,23 @@ reporting:
 
 | Output | Description |
 |--------|-------------|
-| `overall-score` | Overall code quality score (0-100) |
+| `review-score` | Overall code quality score (0-100) |
 | `total-issues` | Total number of issues found |
 | `critical-issues` | Number of critical issues |
-| `security-score` | Security analysis score |
-| `performance-score` | Performance analysis score |
-| `style-score` | Style analysis score |
-| `architecture-score` | Architecture analysis score |
+| `auto-review-completed` | Whether auto-review was completed (true/false) |
+| `pr-action` | The PR action that triggered the review (opened/synchronize/edited) |
+| `incremental-analysis` | Whether incremental analysis was used (true/false) |
+| `issues-found` | Total number of issues found (alias for total-issues) |
 | `review-url` | URL to the review comment |
 
 ### Example Workflows
 
-#### Basic Review
+#### Basic Review with Incremental Analysis
 ```yaml
 name: PR Review
-on: pull_request
+on:
+  pull_request:
+    types: [opened, synchronize, edited]  # Enable incremental analysis on new commits
 
 jobs:
   review:
@@ -213,6 +339,10 @@ jobs:
       - uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-review: true  # Enable automatic review
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          MODEL_NAME: gemini-2.0-flash-exp
 ```
 
 #### Security Focus with SARIF Upload

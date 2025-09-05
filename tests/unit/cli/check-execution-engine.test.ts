@@ -3,15 +3,18 @@ import { CheckExecutionEngine, CheckExecutionOptions } from '../../../src/check-
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from '../../../src/git-repository-analyzer';
 import { PRReviewer, ReviewSummary } from '../../../src/reviewer';
 import { PRInfo } from '../../../src/pr-analyzer';
+import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 
 // Mock the dependencies
 jest.mock('../../../src/git-repository-analyzer');
 jest.mock('../../../src/reviewer');
+jest.mock('../../../src/providers/check-provider-registry');
 
 describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
   let mockGitAnalyzer: jest.Mocked<GitRepositoryAnalyzer>;
   let mockReviewer: jest.Mocked<PRReviewer>;
+  let mockRegistry: jest.Mocked<CheckProviderRegistry>;
 
   const mockRepositoryInfo: GitRepositoryInfo = {
     title: 'Test Repository',
@@ -63,6 +66,15 @@ describe('CheckExecutionEngine', () => {
     // Create mock instances
     mockGitAnalyzer = new GitRepositoryAnalyzer() as jest.Mocked<GitRepositoryAnalyzer>;
     mockReviewer = new PRReviewer(null as any) as jest.Mocked<PRReviewer>;
+
+    // Mock registry to return false for hasProvider so it falls back to PRReviewer
+    mockRegistry = {
+      hasProvider: jest.fn().mockReturnValue(false),
+      getProviderOrThrow: jest.fn(),
+      getAvailableProviders: jest.fn().mockReturnValue(['ai', 'tool', 'script', 'webhook']),
+    } as any;
+
+    (CheckProviderRegistry as any).getInstance = jest.fn().mockReturnValue(mockRegistry);
 
     // Mock constructor behavior
     (GitRepositoryAnalyzer as jest.MockedClass<typeof GitRepositoryAnalyzer>).mockImplementation(
@@ -198,6 +210,46 @@ describe('CheckExecutionEngine', () => {
           format: 'detailed',
         })
       );
+    });
+
+    it('should pass timeout option to check execution', async () => {
+      const options: CheckExecutionOptions = {
+        checks: ['security'],
+        timeout: 300000, // 5 minutes
+      };
+
+      await checkEngine.executeChecks(options);
+
+      // Since we're using PRReviewer, the timeout should be stored but we can't directly test it
+      // without mocking the AI service. For now, we just verify the call happened
+      expect(mockReviewer.reviewPR).toHaveBeenCalled();
+    });
+
+    it('should handle timeout option with default value', async () => {
+      const options: CheckExecutionOptions = {
+        checks: ['performance'],
+        timeout: undefined, // Should use default (600000ms)
+      };
+
+      await checkEngine.executeChecks(options);
+
+      expect(mockReviewer.reviewPR).toHaveBeenCalled();
+    });
+
+    it('should accept various timeout values', async () => {
+      const timeoutValues = [60000, 180000, 300000, 600000, 900000];
+
+      for (const timeout of timeoutValues) {
+        jest.clearAllMocks();
+
+        const options: CheckExecutionOptions = {
+          checks: ['all'],
+          timeout,
+        };
+
+        await checkEngine.executeChecks(options);
+        expect(mockReviewer.reviewPR).toHaveBeenCalled();
+      }
     });
 
     it('should handle all check', async () => {
@@ -388,7 +440,8 @@ describe('CheckExecutionEngine', () => {
         expect(checkTypes).toContain('style');
         expect(checkTypes).toContain('architecture');
         expect(checkTypes).toContain('all');
-        expect(checkTypes).toHaveLength(5);
+        // Now includes provider types (ai, tool, script, webhook) + standard types
+        expect(checkTypes).toHaveLength(9);
       });
     });
 

@@ -19,6 +19,8 @@ export interface PRInfo {
   files: PRDiff[];
   totalAdditions: number;
   totalDeletions: number;
+  fullDiff?: string;
+  commitDiff?: string;
 }
 
 interface NetworkError {
@@ -33,7 +35,49 @@ export class PRAnalyzer {
     private maxRetries: number = 3
   ) {}
 
-  async fetchPRDiff(owner: string, repo: string, prNumber: number): Promise<PRInfo> {
+  /**
+   * Fetch commit diff for incremental analysis
+   */
+  async fetchCommitDiff(owner: string, repo: string, commitSha: string): Promise<string> {
+    try {
+      const { data: commit } = await this.withRetry(() =>
+        this.octokit.rest.repos.getCommit({
+          owner,
+          repo,
+          ref: commitSha,
+        })
+      );
+
+      // Extract patches from all files in the commit
+      const patches =
+        commit.files
+          ?.filter(file => file.patch)
+          .map(file => `--- ${file.filename}\n${file.patch}`)
+          .join('\n\n') || '';
+
+      return patches;
+    } catch (error) {
+      console.warn(`Failed to fetch commit diff for ${commitSha}:`, error);
+      return '';
+    }
+  }
+
+  /**
+   * Generate unified diff for all PR files
+   */
+  private generateFullDiff(files: PRDiff[]): string {
+    return files
+      .filter(file => file.patch)
+      .map(file => `--- ${file.filename}\n${file.patch}`)
+      .join('\n\n');
+  }
+
+  async fetchPRDiff(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    commitSha?: string
+  ): Promise<PRInfo> {
     const [prData, filesData] = await Promise.all([
       this.withRetry(() =>
         this.octokit.rest.pulls.get({
@@ -101,7 +145,7 @@ export class PRAnalyzer {
           .filter(file => file.filename.length > 0) // Remove files with empty names
       : [];
 
-    return {
+    const prInfo: PRInfo = {
       number: typeof pr.number === 'number' ? pr.number : parseInt(String(pr.number || 1), 10),
       title,
       body,
@@ -111,7 +155,15 @@ export class PRAnalyzer {
       files: validFiles,
       totalAdditions: validFiles.reduce((sum, file) => sum + file.additions, 0),
       totalDeletions: validFiles.reduce((sum, file) => sum + file.deletions, 0),
+      fullDiff: this.generateFullDiff(validFiles),
     };
+
+    // Add commit diff for incremental analysis
+    if (commitSha) {
+      prInfo.commitDiff = await this.fetchCommitDiff(owner, repo, commitSha);
+    }
+
+    return prInfo;
   }
 
   async fetchPRComments(owner: string, repo: string, prNumber: number) {

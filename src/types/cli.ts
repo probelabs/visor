@@ -18,6 +18,8 @@ export interface CliOptions {
   output: OutputFormat;
   /** Path to configuration file */
   configPath?: string;
+  /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
+  timeout?: number;
   /** Show help text */
   help?: boolean;
   /** Show version */

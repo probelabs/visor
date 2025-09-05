@@ -23,17 +23,33 @@ export type ConfigOutputFormat = 'summary' | 'detailed';
 export type GroupByOption = 'check' | 'file' | 'severity';
 
 /**
+ * AI provider configuration
+ */
+export interface AIProviderConfig {
+  /** AI provider to use */
+  provider?: 'google' | 'anthropic' | 'openai';
+  /** Model name to use */
+  model?: string;
+  /** API key (usually from environment variables) */
+  apiKey?: string;
+  /** Request timeout in milliseconds */
+  timeout?: number;
+}
+
+/**
  * Configuration for a single check
  */
 export interface CheckConfig {
   /** Type of check to perform */
   type: ConfigCheckType;
-  /** AI prompt for the check */
+  /** AI prompt for the check or focus type (security/performance/style/all) */
   prompt: string;
   /** Events that trigger this check */
   on: EventTrigger[];
   /** File patterns that trigger this check (optional) */
   triggers?: string[];
+  /** AI provider configuration (optional) */
+  ai?: AIProviderConfig;
 }
 
 /**

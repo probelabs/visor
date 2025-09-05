@@ -36,6 +36,16 @@ describe('CLI Argument Parser', () => {
       expect(result.configPath).toBe('/path/to/visor.config.yaml');
     });
 
+    it('should parse timeout argument in milliseconds', () => {
+      const result = cli.parseArgs(['--check', 'performance', '--timeout', '300000']);
+      expect(result.timeout).toBe(300000);
+    });
+
+    it('should parse timeout with default value when not specified', () => {
+      const result = cli.parseArgs(['--check', 'performance']);
+      expect(result.timeout).toBeUndefined(); // CLI doesn't set a default, that's done by the execution engine
+    });
+
     it('should parse all arguments together', () => {
       const result = cli.parseArgs([
         '--check',
@@ -46,10 +56,13 @@ describe('CLI Argument Parser', () => {
         'json',
         '--config',
         './custom.yaml',
+        '--timeout',
+        '180000',
       ]);
       expect(result.checks).toEqual(['performance', 'security']);
       expect(result.output).toBe('json');
       expect(result.configPath).toBe('./custom.yaml');
+      expect(result.timeout).toBe(180000);
     });
   });
 
@@ -59,6 +72,7 @@ describe('CLI Argument Parser', () => {
       expect(result.checks).toEqual([]);
       expect(result.output).toBe('table');
       expect(result.configPath).toBeUndefined();
+      expect(result.timeout).toBeUndefined();
     });
 
     it('should use default output format when only checks provided', () => {
@@ -112,6 +126,20 @@ describe('CLI Argument Parser', () => {
       expect(() => cli.parseArgs(['--config'])).toThrow();
     });
 
+    it('should throw error for timeout flag without value', () => {
+      expect(() => cli.parseArgs(['--timeout'])).toThrow();
+    });
+
+    it('should validate timeout is a number', () => {
+      expect(() => cli.parseArgs(['--timeout', 'invalid'])).toThrow();
+    });
+
+    it('should accept valid timeout values', () => {
+      expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '60000'])).not.toThrow();
+      expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '300000'])).not.toThrow();
+      expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '600000'])).not.toThrow();
+    });
+
     it('should provide helpful error messages', () => {
       try {
         cli.parseArgs(['--check', 'invalid']);
@@ -132,6 +160,7 @@ describe('CLI Argument Parser', () => {
       expect(helpText).toContain('--check');
       expect(helpText).toContain('--output');
       expect(helpText).toContain('--config');
+      expect(helpText).toContain('--timeout');
       expect(helpText).toContain('Examples:');
     });
 
@@ -141,6 +170,7 @@ describe('CLI Argument Parser', () => {
       expect(helpText).toContain(
         'visor --check performance --check security --config ./visor.config.yaml'
       );
+      expect(helpText).toContain('visor --check all --timeout 300000 --output json');
     });
   });
 
