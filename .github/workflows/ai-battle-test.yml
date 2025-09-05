@@ -146,9 +146,9 @@ jobs:
           chmod +x ./dist/cli-main.js
           echo "🔍 Testing different check provider types..."
           
-          # Test AI provider
-          echo "Testing AI provider..."
-          ./dist/cli-main.js --check ai --output json > ai_result.json
+          # Test all checks (which includes AI-powered review)
+          echo "Testing all checks with AI provider..."
+          ./dist/cli-main.js --check all --output json > ai_result.json
           
           # Validate AI result
           if ! jq -e '.summary.overallScore' ai_result.json > /dev/null; then
