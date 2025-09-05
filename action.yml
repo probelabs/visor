@@ -113,5 +113,5 @@ outputs:
     description: 'Whether automatic PR review was completed (legacy)'
 
 runs:
-  using: 'node18'
+  using: 'node20'
   main: 'dist/index.js'
