@@ -102,15 +102,15 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           console.log(
             `    PR Info: title="${prInfo.title}", author="${prInfo.author}", files=${prInfo.files.length}`
           );
-          console.log(`    Review: score=${review.overallScore}, issues=${review.totalIssues}`);
+          console.log(`    Review: issues=${review.issues.length}`);
 
           // Should handle empty data without crashing
           expect(prInfo).toBeDefined();
           expect(typeof prInfo.title).toBe('string');
           expect(typeof prInfo.author).toBe('string');
           expect(Array.isArray(prInfo.files)).toBe(true);
-          expect(review.overallScore).toBeGreaterThanOrEqual(0);
-          expect(review.overallScore).toBeLessThanOrEqual(100);
+          expect(Array.isArray(review.issues)).toBe(true);
+          expect(review.issues.length).toBeGreaterThanOrEqual(0);
         } catch (error: unknown) {
           console.log(`    Error handling empty data: ${(error as Error).message}`);
           // Should either handle gracefully or provide clear error
@@ -286,15 +286,15 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           prInfo
         );
         console.log(
-          `    Review completed: score=${review.overallScore}, issues=${review.totalIssues}`
+          `    Review completed: issues=${review.issues.length}`
         );
 
         // Should handle large data without crashing
         expect(prInfo).toBeDefined();
         expect(prInfo.files.length).toBeGreaterThan(0);
         expect(prInfo.files.length).toBeLessThanOrEqual(1000);
-        expect(review.overallScore).toBeGreaterThanOrEqual(0);
-        expect(review.overallScore).toBeLessThanOrEqual(100);
+        expect(Array.isArray(review.issues)).toBe(true);
+        expect(review.issues.length).toBeGreaterThanOrEqual(0);
       } catch (error: unknown) {
         console.log(`    Large PR processing error: ${(error as Error).message}`);
         // Should handle large data gracefully or provide resource limit error

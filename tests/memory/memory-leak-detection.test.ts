@@ -200,7 +200,7 @@ describe('Memory Leak Detection Tests', () => {
           // Validate results
           expect(prInfo).toBeDefined();
           expect(review).toBeDefined();
-          expect(typeof review.overallScore).toBe('number');
+          expect(Array.isArray(review.issues)).toBe(true);
 
           // Create some temporary large objects that should be GC'd
           const tempAnalysis = {
@@ -219,7 +219,7 @@ describe('Memory Leak Detection Tests', () => {
           // Use the data briefly
           JSON.stringify({
             cycle,
-            score: review.overallScore,
+            issues: review.issues.length,
             dataSize: tempAnalysis.largeBuffer.length,
           });
         } catch (error) {
