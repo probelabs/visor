@@ -17,18 +17,19 @@ export async function run(): Promise<void> {
       owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
-      checks: getInput('checks'),
-      'output-format': getInput('output-format'),
-      'config-path': getInput('config-path'),
-      'comment-on-pr': getInput('comment-on-pr'),
-      'create-check': getInput('create-check'),
-      'add-labels': getInput('add-labels'),
-      'fail-on-critical': getInput('fail-on-critical'),
-      'min-score': getInput('min-score'),
       debug: getInput('debug'),
+      // Only collect other inputs if they have values to avoid triggering CLI mode
+      checks: getInput('checks') || undefined,
+      'output-format': getInput('output-format') || undefined,
+      'config-path': getInput('config-path') || undefined,
+      'comment-on-pr': getInput('comment-on-pr') || undefined,
+      'create-check': getInput('create-check') || undefined,
+      'add-labels': getInput('add-labels') || undefined,
+      'fail-on-critical': getInput('fail-on-critical') || undefined,
+      'min-score': getInput('min-score') || undefined,
       // Legacy inputs for backward compatibility
-      'visor-config-path': getInput('visor-config-path'),
-      'visor-checks': getInput('visor-checks'),
+      'visor-config-path': getInput('visor-config-path') || undefined,
+      'visor-checks': getInput('visor-checks') || undefined,
     };
 
     const eventName = process.env.GITHUB_EVENT_NAME;
@@ -51,6 +52,12 @@ export async function run(): Promise<void> {
     const cliBridge = new ActionCliBridge(token, context);
 
     // Check if we should use Visor CLI
+    console.log('Debug: inputs.debug =', inputs.debug);
+    console.log('Debug: inputs.checks =', inputs.checks);
+    console.log('Debug: inputs.config-path =', inputs['config-path']);
+    console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
+    console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
+    
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
       await handleVisorMode(cliBridge, inputs, context);

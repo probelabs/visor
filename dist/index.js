@@ -18,18 +18,19 @@ async function run() {
             owner: (0, core_1.getInput)('owner') || process.env.GITHUB_REPOSITORY_OWNER,
             repo: (0, core_1.getInput)('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
             'auto-review': (0, core_1.getInput)('auto-review'),
-            checks: (0, core_1.getInput)('checks'),
-            'output-format': (0, core_1.getInput)('output-format'),
-            'config-path': (0, core_1.getInput)('config-path'),
-            'comment-on-pr': (0, core_1.getInput)('comment-on-pr'),
-            'create-check': (0, core_1.getInput)('create-check'),
-            'add-labels': (0, core_1.getInput)('add-labels'),
-            'fail-on-critical': (0, core_1.getInput)('fail-on-critical'),
-            'min-score': (0, core_1.getInput)('min-score'),
             debug: (0, core_1.getInput)('debug'),
+            // Only collect other inputs if they have values to avoid triggering CLI mode
+            checks: (0, core_1.getInput)('checks') || undefined,
+            'output-format': (0, core_1.getInput)('output-format') || undefined,
+            'config-path': (0, core_1.getInput)('config-path') || undefined,
+            'comment-on-pr': (0, core_1.getInput)('comment-on-pr') || undefined,
+            'create-check': (0, core_1.getInput)('create-check') || undefined,
+            'add-labels': (0, core_1.getInput)('add-labels') || undefined,
+            'fail-on-critical': (0, core_1.getInput)('fail-on-critical') || undefined,
+            'min-score': (0, core_1.getInput)('min-score') || undefined,
             // Legacy inputs for backward compatibility
-            'visor-config-path': (0, core_1.getInput)('visor-config-path'),
-            'visor-checks': (0, core_1.getInput)('visor-checks'),
+            'visor-config-path': (0, core_1.getInput)('visor-config-path') || undefined,
+            'visor-checks': (0, core_1.getInput)('visor-checks') || undefined,
         };
         const eventName = process.env.GITHUB_EVENT_NAME;
         const autoReview = inputs['auto-review'] === 'true';
@@ -48,6 +49,11 @@ async function run() {
         // Initialize CLI bridge
         const cliBridge = new action_cli_bridge_1.ActionCliBridge(token, context);
         // Check if we should use Visor CLI
+        console.log('Debug: inputs.debug =', inputs.debug);
+        console.log('Debug: inputs.checks =', inputs.checks);
+        console.log('Debug: inputs.config-path =', inputs['config-path']);
+        console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
+        console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
         if (cliBridge.shouldUseVisor(inputs)) {
             console.log('🔍 Using Visor CLI mode');
             await handleVisorMode(cliBridge, inputs, context);
