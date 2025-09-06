@@ -42,7 +42,7 @@ jobs:
         ai_provider:
           - name: 'Google Gemini'
             api_key_secret: 'GOOGLE_API_KEY'
-            model: 'gemini-2.0-flash-preview'
+            model: 'gemini-2.0-flash-exp'
             env_var: 'GOOGLE_API_KEY'
           - name: 'OpenAI GPT-4'
             api_key_secret: 'OPENAI_API_KEY'
