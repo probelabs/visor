@@ -105,6 +105,7 @@ describe('CheckExecutionEngine', () => {
         {
           file: 'src/test.ts',
           line: 10,
+          ruleId: 'security/potential-vulnerability',
           message: 'Potential security issue',
           severity: 'error' as const,
           category: 'security' as const,
@@ -112,6 +113,7 @@ describe('CheckExecutionEngine', () => {
         {
           file: 'src/test.ts',
           line: 15,
+          ruleId: 'style/improvement',
           message: 'Style improvement needed',
           severity: 'info' as const,
           category: 'style' as const,
@@ -141,7 +143,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'markdown',
+          format: 'table',
         })
       );
 
@@ -166,7 +168,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'security',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -185,7 +187,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'performance',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -204,7 +206,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'style',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -263,7 +265,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -282,7 +284,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -301,7 +303,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'markdown',
+          format: 'table',
         })
       );
     });
@@ -338,6 +340,7 @@ describe('CheckExecutionEngine', () => {
       expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.issues[0].message).toBe('Git command failed');
       expect(result.reviewSummary.issues[0].severity).toBe('error');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle reviewer errors', async () => {
@@ -351,6 +354,7 @@ describe('CheckExecutionEngine', () => {
 
       expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.issues[0].message).toBe('Review failed');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should measure execution time correctly', async () => {
@@ -501,6 +505,7 @@ describe('CheckExecutionEngine', () => {
       expect(result.reviewSummary.issues[0].category).toBe('logic');
       expect(result.reviewSummary.issues[0].file).toBe('system');
       expect(result.reviewSummary.issues[0].line).toBe(0);
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle non-Error exceptions', async () => {
@@ -513,6 +518,7 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.reviewSummary.issues[0].message).toBe('Unknown error occurred');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle timeout scenarios', async () => {

@@ -35,7 +35,7 @@ checks:
     on: [pr_opened]
 output:
   pr_comment:
-    format: summary
+    format: table
     group_by: check
     collapse: true
 `;
@@ -48,7 +48,7 @@ output:
       expect(config.version).toBe('1.0');
       expect(config.checks).toHaveProperty('performance');
       expect(config.checks).toHaveProperty('security');
-      expect(config.output.pr_comment.format).toBe('summary');
+      expect(config.output.pr_comment.format).toBe('table');
     });
 
     it('should handle missing config file gracefully', async () => {
@@ -115,7 +115,7 @@ checks:
 version: "1.0"
 output:
   pr_comment:
-    format: summary
+    format: table
 `;
 
       mockFs.existsSync.mockReturnValue(true);
@@ -196,7 +196,7 @@ output:
       mockFs.readFileSync.mockReturnValue(configWithInvalidOutput);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Invalid output format "invalid_format". Must be one of: summary, detailed'
+        'Invalid output format "invalid_format". Must be one of: table, json, markdown, sarif'
       );
     });
   });
@@ -209,7 +209,7 @@ output:
       expect(config.checks).toEqual({});
       expect(config.output).toEqual({
         pr_comment: {
-          format: 'table',
+          format: 'markdown',
           group_by: 'check',
           collapse: true,
         },
@@ -232,7 +232,7 @@ checks:
       const config = await configManager.loadConfig('/path/to/minimal.yaml');
 
       // Should have default output configuration
-      expect(config.output.pr_comment.format).toBe('summary');
+      expect(config.output.pr_comment.format).toBe('markdown');
       expect(config.output.pr_comment.group_by).toBe('check');
       expect(config.output.pr_comment.collapse).toBe(true);
     });
@@ -418,7 +418,7 @@ checks:
 
 output:
   pr_comment:
-    format: detailed
+    format: markdown
     group_by: check
     collapse: false
   
@@ -435,7 +435,7 @@ output:
       expect(config.checks.performance.prompt).toContain('N+1 database queries');
       expect(config.checks.security.prompt).toContain('SQL injection');
       expect(config.checks.architecture.prompt).toContain('SOLID principles');
-      expect(config.output.pr_comment.format).toBe('detailed');
+      expect(config.output.pr_comment.format).toBe('markdown');
       expect(config.output.pr_comment.collapse).toBe(false);
     });
   });
