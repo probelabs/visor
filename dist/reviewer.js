@@ -42,7 +42,11 @@ class PRReviewer {
         this.aiReviewService = new ai_review_service_1.AIReviewService();
     }
     async reviewPR(owner, repo, prNumber, prInfo, options = {}) {
-        const { focus = 'all', format = 'table' } = options;
+        const { focus = 'all', format = 'table', debug = false } = options;
+        // If debug is enabled, create a new AI service with debug enabled
+        if (debug) {
+            this.aiReviewService = new ai_review_service_1.AIReviewService({ debug: true });
+        }
         // Execute AI review (no fallback)
         const aiReview = await this.aiReviewService.executeReview(prInfo, focus);
         // Apply format filtering

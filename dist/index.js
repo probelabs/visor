@@ -18,6 +18,16 @@ async function run() {
             owner: (0, core_1.getInput)('owner') || process.env.GITHUB_REPOSITORY_OWNER,
             repo: (0, core_1.getInput)('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
             'auto-review': (0, core_1.getInput)('auto-review'),
+            checks: (0, core_1.getInput)('checks'),
+            'output-format': (0, core_1.getInput)('output-format'),
+            'config-path': (0, core_1.getInput)('config-path'),
+            'comment-on-pr': (0, core_1.getInput)('comment-on-pr'),
+            'create-check': (0, core_1.getInput)('create-check'),
+            'add-labels': (0, core_1.getInput)('add-labels'),
+            'fail-on-critical': (0, core_1.getInput)('fail-on-critical'),
+            'min-score': (0, core_1.getInput)('min-score'),
+            debug: (0, core_1.getInput)('debug'),
+            // Legacy inputs for backward compatibility
             'visor-config-path': (0, core_1.getInput)('visor-config-path'),
             'visor-checks': (0, core_1.getInput)('visor-checks'),
         };
@@ -101,7 +111,7 @@ async function handleLegacyMode(octokit, inputs, eventName, autoReview) {
             break;
         case 'pull_request':
             if (autoReview) {
-                await handlePullRequestEvent(octokit, owner, repo);
+                await handlePullRequestEvent(octokit, owner, repo, inputs);
             }
             break;
         default:
@@ -169,7 +179,7 @@ async function handleIssueComment(octokit, owner, repo) {
             break;
     }
 }
-async function handlePullRequestEvent(octokit, owner, repo) {
+async function handlePullRequestEvent(octokit, owner, repo, inputs) {
     const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
     const pullRequest = context.event?.pull_request;
     const action = context.event?.action;
@@ -219,9 +229,13 @@ async function handlePullRequestEvent(octokit, owner, repo) {
                 '## ✏️ PR Analysis Updated\n\nThis review has been updated based on PR changes.\n\n';
         }
     }
-    // Perform the review
-    const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo);
-    const reviewComment = reviewer['formatReviewComment'](review, {});
+    // Create review options, including debug if enabled
+    const reviewOptions = {
+        debug: inputs?.debug === 'true'
+    };
+    // Perform the review with debug options
+    const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+    const reviewComment = reviewer['formatReviewComment'](review, reviewOptions);
     const fullComment = reviewContext + reviewComment;
     // Use smart comment updating - will update existing comment or create new one
     try {

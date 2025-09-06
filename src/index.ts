@@ -17,6 +17,16 @@ export async function run(): Promise<void> {
       owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
+      checks: getInput('checks'),
+      'output-format': getInput('output-format'),
+      'config-path': getInput('config-path'),
+      'comment-on-pr': getInput('comment-on-pr'),
+      'create-check': getInput('create-check'),
+      'add-labels': getInput('add-labels'),
+      'fail-on-critical': getInput('fail-on-critical'),
+      'min-score': getInput('min-score'),
+      debug: getInput('debug'),
+      // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path'),
       'visor-checks': getInput('visor-checks'),
     };
@@ -120,7 +130,7 @@ async function handleLegacyMode(
       break;
     case 'pull_request':
       if (autoReview) {
-        await handlePullRequestEvent(octokit, owner, repo);
+        await handlePullRequestEvent(octokit, owner, repo, inputs);
       }
       break;
     default:
@@ -216,7 +226,8 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 async function handlePullRequestEvent(
   octokit: Octokit,
   owner: string,
-  repo: string
+  repo: string,
+  inputs?: GitHubActionInputs
 ): Promise<void> {
   const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
   const pullRequest = context.event?.pull_request;
@@ -274,9 +285,15 @@ async function handlePullRequestEvent(
     }
   }
 
-  // Perform the review
-  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo);
-  const reviewComment = reviewer['formatReviewComment'](review, {});
+  // Create review options, including debug if enabled
+  const reviewOptions = {
+    debug: inputs?.debug === 'true'
+  };
+  
+  // Perform the review with debug options
+  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+  
+  const reviewComment = reviewer['formatReviewComment'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one

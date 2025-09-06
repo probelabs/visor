@@ -28,6 +28,7 @@ export interface ReviewSummary {
 export interface ReviewOptions {
     focus?: 'security' | 'performance' | 'style' | 'all';
     format?: 'table' | 'json' | 'markdown' | 'sarif';
+    debug?: boolean;
 }
 export declare function calculateOverallScore(issues: ReviewIssue[]): number;
 export declare function calculateTotalIssues(issues: ReviewIssue[]): number;
