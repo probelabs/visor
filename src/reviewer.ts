@@ -40,6 +40,7 @@ export interface ReviewSummary {
 export interface ReviewOptions {
   focus?: 'security' | 'performance' | 'style' | 'all';
   format?: 'table' | 'json' | 'markdown' | 'sarif';
+  debug?: boolean;
 }
 
 // Helper functions for calculating metrics from issues
@@ -91,7 +92,12 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { focus = 'all', format = 'table' } = options;
+    const { focus = 'all', format = 'table', debug = false } = options;
+
+    // If debug is enabled, create a new AI service with debug enabled
+    if (debug) {
+      this.aiReviewService = new AIReviewService({ debug: true });
+    }
 
     // Execute AI review (no fallback)
     const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);

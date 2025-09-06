@@ -19,17 +19,14 @@ inputs:
   checks:
     description: 'Comma-separated list of checks to run (security,performance,style,architecture,all)'
     required: false
-    default: 'all'
   
   output-format:
     description: 'Output format for analysis results (table,json,markdown,sarif)'
     required: false
-    default: 'markdown'
   
   config-path:
     description: 'Path to visor configuration file'
     required: false
-    default: 'visor.config.yaml'
   
   comment-on-pr:
     description: 'Post review results as PR comment'

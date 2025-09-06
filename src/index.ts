@@ -17,8 +17,19 @@ export async function run(): Promise<void> {
       owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
-      'visor-config-path': getInput('visor-config-path'),
-      'visor-checks': getInput('visor-checks'),
+      debug: getInput('debug'),
+      // Only collect other inputs if they have values to avoid triggering CLI mode
+      checks: getInput('checks') || undefined,
+      'output-format': getInput('output-format') || undefined,
+      'config-path': getInput('config-path') || undefined,
+      'comment-on-pr': getInput('comment-on-pr') || undefined,
+      'create-check': getInput('create-check') || undefined,
+      'add-labels': getInput('add-labels') || undefined,
+      'fail-on-critical': getInput('fail-on-critical') || undefined,
+      'min-score': getInput('min-score') || undefined,
+      // Legacy inputs for backward compatibility
+      'visor-config-path': getInput('visor-config-path') || undefined,
+      'visor-checks': getInput('visor-checks') || undefined,
     };
 
     const eventName = process.env.GITHUB_EVENT_NAME;
@@ -41,6 +52,12 @@ export async function run(): Promise<void> {
     const cliBridge = new ActionCliBridge(token, context);
 
     // Check if we should use Visor CLI
+    console.log('Debug: inputs.debug =', inputs.debug);
+    console.log('Debug: inputs.checks =', inputs.checks);
+    console.log('Debug: inputs.config-path =', inputs['config-path']);
+    console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
+    console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
+    
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
       await handleVisorMode(cliBridge, inputs, context);
@@ -120,7 +137,7 @@ async function handleLegacyMode(
       break;
     case 'pull_request':
       if (autoReview) {
-        await handlePullRequestEvent(octokit, owner, repo);
+        await handlePullRequestEvent(octokit, owner, repo, inputs);
       }
       break;
     default:
@@ -216,7 +233,8 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 async function handlePullRequestEvent(
   octokit: Octokit,
   owner: string,
-  repo: string
+  repo: string,
+  inputs?: GitHubActionInputs
 ): Promise<void> {
   const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
   const pullRequest = context.event?.pull_request;
@@ -274,9 +292,38 @@ async function handlePullRequestEvent(
     }
   }
 
-  // Perform the review
-  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo);
-  const reviewComment = reviewer['formatReviewComment'](review, {});
+  // Create review options, including debug if enabled
+  const reviewOptions = {
+    debug: inputs?.debug === 'true'
+  };
+  
+  // Perform the review with debug options
+  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+  
+  // If debug mode is enabled, output debug information to console
+  if (reviewOptions.debug && review.debug) {
+    console.log('\n========================================');
+    console.log('🐛 DEBUG INFORMATION');
+    console.log('========================================');
+    console.log(`Provider: ${review.debug.provider}`);
+    console.log(`Model: ${review.debug.model}`);
+    console.log(`API Key Source: ${review.debug.apiKeySource}`);
+    console.log(`Processing Time: ${review.debug.processingTime}ms`);
+    console.log(`Prompt Length: ${review.debug.promptLength} characters`);
+    console.log(`Response Length: ${review.debug.responseLength} characters`);
+    console.log(`JSON Parse Success: ${review.debug.jsonParseSuccess ? '✅' : '❌'}`);
+    if (review.debug.errors && review.debug.errors.length > 0) {
+      console.log(`\n⚠️ Errors:`);
+      review.debug.errors.forEach(err => console.log(`  - ${err}`));
+    }
+    console.log('\n--- AI PROMPT ---');
+    console.log(review.debug.prompt.substring(0, 500) + '...');
+    console.log('\n--- RAW RESPONSE ---');
+    console.log(review.debug.rawResponse.substring(0, 500) + '...');
+    console.log('========================================\n');
+  }
+  
+  const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one
