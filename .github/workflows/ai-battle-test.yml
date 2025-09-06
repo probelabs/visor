@@ -42,8 +42,16 @@ jobs:
         ai_provider:
           - name: 'Google Gemini'
             api_key_secret: 'GOOGLE_API_KEY'
-            model: 'gemini-2.0-flash-exp'
+            model: 'gemini-2.0-flash-preview'
             env_var: 'GOOGLE_API_KEY'
+          - name: 'OpenAI GPT-4'
+            api_key_secret: 'OPENAI_API_KEY'
+            model: 'gpt-4o-mini'
+            env_var: 'OPENAI_API_KEY'
+          - name: 'Anthropic Claude'
+            api_key_secret: 'ANTHROPIC_API_KEY'
+            model: 'claude-3-haiku-20240307'
+            env_var: 'ANTHROPIC_API_KEY'
           - name: 'Mock AI (Fallback)'
             api_key_secret: ''
             model: 'mock'
@@ -76,8 +84,21 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
         env:
+          # Multiple API keys for fallback - similar to probe.yml approach
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}  # Aider expects GEMINI_API_KEY
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Custom API URLs for quota management
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          # Model and provider configuration
           MODEL_NAME: ${{ matrix.ai_provider.model }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
+          # GitHub context
           GITHUB_CONTEXT: ${{ toJson(github) }}
         continue-on-error: true
 
@@ -105,8 +126,20 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
         env:
+          # Multiple API keys for fallback
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Custom API URLs
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          # Model configuration
           MODEL_NAME: ${{ matrix.ai_provider.model }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
           GITHUB_CONTEXT: ${{ toJson(github) }}
         continue-on-error: true
 
@@ -142,6 +175,7 @@ jobs:
 
       - name: 🧪 Test 4 - Different Check Types
         if: matrix.ai_provider.api_key_secret != ''
+        continue-on-error: true  # Allow test to continue if quota issues occur
         run: |
           chmod +x ./dist/cli-main.js
           echo "🔍 Testing different check provider types..."
@@ -160,8 +194,20 @@ jobs:
           echo "AI Result:"
           jq '.summary' ai_result.json
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # Set the appropriate API key based on provider
+          GOOGLE_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && secrets.GOOGLE_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && secrets.GOOGLE_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ matrix.ai_provider.env_var == 'OPENAI_API_KEY' && secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ matrix.ai_provider.env_var == 'ANTHROPIC_API_KEY' && secrets.ANTHROPIC_API_KEY || '' }}
+          # Custom API URLs
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          # Model configuration
           MODEL_NAME: ${{ matrix.ai_provider.model }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
 
       - name: 🧪 Test 5 - Output Format Validation
         run: |
@@ -200,13 +246,16 @@ jobs:
           
           # Test with invalid API key (should gracefully handle)
           echo "Testing invalid API key handling..."
-          INVALID_API_KEY="invalid-key-test" ./dist/cli-main.js --check ai --output json > error_test.json || {
+          # Clear all API keys and set an invalid one
+          unset GOOGLE_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+          export GOOGLE_API_KEY="invalid-key-test"
+          ./dist/cli-main.js --check ai --output json > error_test.json || {
             echo "✅ Error handling working - invalid API key properly rejected"
           }
           
           # Test with no API key (should use fallback if available)
           echo "Testing fallback behavior..."
-          unset GOOGLE_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY
+          unset GOOGLE_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY LLM_BASE_URL
           ./dist/cli-main.js --check all --output json > fallback_test.json
           
           if jq -e '.summary' fallback_test.json > /dev/null; then
@@ -218,6 +267,7 @@ jobs:
 
       - name: 📈 Performance Benchmark
         if: matrix.ai_provider.name == 'Google Gemini'
+        continue-on-error: true  # Allow benchmark to continue if quota issues occur
         run: |
           chmod +x ./dist/cli-main.js
           echo "🚀 Running performance benchmark..."
@@ -236,8 +286,20 @@ jobs:
             echo "⚠️ Performance benchmark slow (${execution_time}ms)"
           fi
         env:
+          # Multiple API keys with fallback strategy
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Custom API URLs for better quota management
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          # Model configuration
           MODEL_NAME: ${{ matrix.ai_provider.model }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
 
       - name: 📋 Test Results Summary
         if: always()
