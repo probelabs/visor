@@ -300,7 +300,30 @@ async function handlePullRequestEvent(
   // Perform the review with debug options
   const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
   
-  const reviewComment = reviewer['formatReviewComment'](review, reviewOptions);
+  // If debug mode is enabled, output debug information to console
+  if (reviewOptions.debug && review.debug) {
+    console.log('\n========================================');
+    console.log('🐛 DEBUG INFORMATION');
+    console.log('========================================');
+    console.log(`Provider: ${review.debug.provider}`);
+    console.log(`Model: ${review.debug.model}`);
+    console.log(`API Key Source: ${review.debug.apiKeySource}`);
+    console.log(`Processing Time: ${review.debug.processingTime}ms`);
+    console.log(`Prompt Length: ${review.debug.promptLength} characters`);
+    console.log(`Response Length: ${review.debug.responseLength} characters`);
+    console.log(`JSON Parse Success: ${review.debug.jsonParseSuccess ? '✅' : '❌'}`);
+    if (review.debug.errors && review.debug.errors.length > 0) {
+      console.log(`\n⚠️ Errors:`);
+      review.debug.errors.forEach(err => console.log(`  - ${err}`));
+    }
+    console.log('\n--- AI PROMPT ---');
+    console.log(review.debug.prompt.substring(0, 500) + '...');
+    console.log('\n--- RAW RESPONSE ---');
+    console.log(review.debug.rawResponse.substring(0, 500) + '...');
+    console.log('========================================\n');
+  }
+  
+  const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one

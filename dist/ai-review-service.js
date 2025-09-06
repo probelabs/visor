@@ -33,10 +33,6 @@ class AIReviewService {
      * Execute AI review using probe-chat
      */
     async executeReview(prInfo, focus) {
-        // Check if API key is available
-        if (!this.config.apiKey) {
-            throw new Error('No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.');
-        }
         const startTime = Date.now();
         const timestamp = new Date().toISOString();
         const prompt = this.buildPrompt(prInfo, focus);
@@ -57,6 +53,29 @@ class AIReviewService {
                 timestamp,
             };
         }
+        // Check if API key is available
+        if (!this.config.apiKey) {
+            const errorMessage = 'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.';
+            // In debug mode, return a review with the error captured
+            if (debugInfo) {
+                debugInfo.errors = [errorMessage];
+                debugInfo.processingTime = Date.now() - startTime;
+                debugInfo.rawResponse = 'API call not attempted - no API key configured';
+                return {
+                    issues: [{
+                            file: 'system',
+                            line: 0,
+                            ruleId: 'system/api-key-missing',
+                            message: errorMessage,
+                            severity: 'error',
+                            category: 'logic'
+                        }],
+                    suggestions: ['Configure API keys in your GitHub repository secrets or environment variables'],
+                    debug: debugInfo
+                };
+            }
+            throw new Error(errorMessage);
+        }
         try {
             const response = await this.callProbeChat(prompt);
             const processingTime = Date.now() - startTime;
@@ -75,6 +94,19 @@ class AIReviewService {
             if (debugInfo) {
                 debugInfo.errors = [error instanceof Error ? error.message : String(error)];
                 debugInfo.processingTime = Date.now() - startTime;
+                // In debug mode, return a review with the error captured
+                return {
+                    issues: [{
+                            file: 'system',
+                            line: 0,
+                            ruleId: 'system/ai-execution-error',
+                            message: error instanceof Error ? error.message : String(error),
+                            severity: 'error',
+                            category: 'logic'
+                        }],
+                    suggestions: ['Check AI service configuration and API key validity'],
+                    debug: debugInfo
+                };
             }
             throw error;
         }
