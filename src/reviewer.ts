@@ -37,7 +37,7 @@ export interface ReviewSummary {
 
 export interface ReviewOptions {
   focus?: 'security' | 'performance' | 'style' | 'all';
-  format?: 'summary' | 'detailed';
+  format?: 'table' | 'json' | 'markdown' | 'sarif';
 }
 
 // Helper functions for calculating metrics from issues
@@ -89,7 +89,7 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { focus = 'all', format = 'summary' } = options;
+    const { focus = 'all', format = 'table' } = options;
 
     // Execute AI review (no fallback)
     const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
@@ -97,7 +97,7 @@ export class PRReviewer {
     // Apply format filtering
     return {
       ...aiReview,
-      issues: format === 'detailed' ? aiReview.issues : aiReview.issues.slice(0, 5),
+      issues: format === 'markdown' ? aiReview.issues : aiReview.issues.slice(0, 5),
     };
   }
 
@@ -121,7 +121,7 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions
   ): string {
-    const { format = 'summary' } = options;
+    const { format = 'table' } = options;
 
     // Calculate metrics from issues
     const overallScore = calculateOverallScore(summary.issues);
@@ -151,14 +151,14 @@ export class PRReviewer {
         sectionContent += `### Issues Found:\n`;
         for (const reviewComment of comments.slice(
           0,
-          format === 'detailed' ? comments.length : 3
+          format === 'markdown' ? comments.length : 3
         )) {
           sectionContent += `- **${reviewComment.severity.toUpperCase()}**: ${reviewComment.message}\n`;
           sectionContent += `  - **File**: \`${reviewComment.file}:${reviewComment.line}\`\n\n`;
         }
 
-        if (format === 'summary' && comments.length > 3) {
-          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=detailed\` for complete analysis.*\n\n`;
+        if (format === 'table' && comments.length > 3) {
+          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
         }
       } else {
         sectionContent += `No issues found in this category. Great job! ✅\n\n`;
@@ -186,7 +186,7 @@ export class PRReviewer {
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {
-    const { format = 'summary' } = options;
+    const { format = 'table' } = options;
 
     // Calculate metrics from issues
     const overallScore = calculateOverallScore(summary.issues);
@@ -225,8 +225,8 @@ export class PRReviewer {
       }
     }
 
-    if (format === 'summary' && totalIssues > 5) {
-      comment += `*Showing top 5 issues. Use \`/review --format=detailed\` for complete analysis.*\n\n`;
+    if (format === 'table' && totalIssues > 5) {
+      comment += `*Showing top 5 issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
     }
 
     comment += `---\n*Review powered by Gates Action - Use \`/help\` for available commands*`;

@@ -209,7 +209,7 @@ output:
       expect(config.checks).toEqual({});
       expect(config.output).toEqual({
         pr_comment: {
-          format: 'summary',
+          format: 'table',
           group_by: 'check',
           collapse: true,
         },

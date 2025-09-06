@@ -15,7 +15,7 @@ export type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed';
 /**
  * Valid output formats
  */
-export type ConfigOutputFormat = 'summary' | 'detailed';
+export type ConfigOutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 
 /**
  * Valid grouping options

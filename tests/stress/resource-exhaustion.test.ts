@@ -478,7 +478,7 @@ import * as os from 'os';
         version: '1.0',
         checks: {},
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
       const eventMapper = new EventMapper(dummyConfig);
@@ -487,7 +487,7 @@ import * as os from 'os';
       const massiveConfig: any = {
         version: '1.0',
         checks: {},
-        output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+        output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       };
 
       // Create massive configuration

@@ -76,7 +76,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
         env:
-          GOOGLE_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && matrix.ai_provider.api_key_secret && secrets[matrix.ai_provider.api_key_secret] || '' }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           MODEL_NAME: ${{ matrix.ai_provider.model }}
           GITHUB_CONTEXT: ${{ toJson(github) }}
         continue-on-error: true
@@ -105,7 +105,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
         env:
-          GOOGLE_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && matrix.ai_provider.api_key_secret && secrets[matrix.ai_provider.api_key_secret] || '' }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           MODEL_NAME: ${{ matrix.ai_provider.model }}
           GITHUB_CONTEXT: ${{ toJson(github) }}
         continue-on-error: true
@@ -160,7 +160,7 @@ jobs:
           echo "AI Result:"
           jq '.summary' ai_result.json
         env:
-          GOOGLE_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && matrix.ai_provider.api_key_secret && secrets[matrix.ai_provider.api_key_secret] || '' }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           MODEL_NAME: ${{ matrix.ai_provider.model }}
 
       - name: 🧪 Test 5 - Output Format Validation
@@ -236,7 +236,7 @@ jobs:
             echo "⚠️ Performance benchmark slow (${execution_time}ms)"
           fi
         env:
-          GOOGLE_API_KEY: ${{ matrix.ai_provider.env_var == 'GOOGLE_API_KEY' && matrix.ai_provider.api_key_secret && secrets[matrix.ai_provider.api_key_secret] || '' }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           MODEL_NAME: ${{ matrix.ai_provider.model }}
 
       - name: 📋 Test Results Summary

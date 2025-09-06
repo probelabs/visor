@@ -167,8 +167,10 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         | 'all'
         | undefined;
       const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
-        | 'summary'
-        | 'detailed'
+        | 'table'
+        | 'json'
+        | 'markdown'
+        | 'sarif'
         | undefined;
 
       console.log(`Starting PR review for #${prNumber}`);

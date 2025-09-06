@@ -460,7 +460,7 @@ import {
         version: '1.0',
         checks: {},
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
       const _eventMapper = new EventMapper(dummyConfig);
@@ -472,7 +472,7 @@ import {
         checks: {},
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },

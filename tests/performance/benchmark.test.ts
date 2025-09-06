@@ -75,7 +75,7 @@ import * as path from 'path';
         checks: {} as any,
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -160,8 +160,8 @@ import * as path from 'path';
 
       // Target: <30 seconds (30000ms)
       expect(duration).toBeLessThan(30000);
-      expect(review.overallScore).toBeDefined();
-      expect(review.totalIssues).toBeDefined();
+      expect(review.issues).toBeDefined();
+      expect(review.suggestions).toBeDefined();
     });
 
     test('Memory usage should stay under 500MB during intensive operations', async () => {
@@ -324,7 +324,7 @@ import * as path from 'path';
         checks: {} as any,
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },

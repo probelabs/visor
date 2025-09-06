@@ -169,11 +169,11 @@ describe('PRReviewer', () => {
         }));
 
       const summaryReview = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
-        format: 'summary',
+        format: 'table',
       });
 
       const detailedReview = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
-        format: 'detailed',
+        format: 'markdown',
       });
 
       expect(detailedReview.issues.length).toBeGreaterThanOrEqual(summaryReview.issues.length);

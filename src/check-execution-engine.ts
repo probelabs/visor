@@ -206,7 +206,7 @@ export class CheckExecutionEngine {
 
     return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, {
       focus,
-      format: 'detailed',
+      format: 'table',
     });
   }
 

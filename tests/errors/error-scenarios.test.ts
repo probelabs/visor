@@ -628,7 +628,7 @@ describe('Error Scenarios & Recovery Testing', () => {
       const __eventMapper = new EventMapper({
         version: '1.0',
         checks: {},
-        output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+        output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       });
 
       // Test with various invalid configurations

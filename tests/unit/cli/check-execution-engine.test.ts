@@ -100,11 +100,8 @@ describe('CheckExecutionEngine', () => {
 
   describe('executeChecks', () => {
     const mockReviewSummary = {
-      overallScore: 85,
-      totalIssues: 2,
-      criticalIssues: 1,
       suggestions: ['Add input validation', 'Improve error handling'],
-      comments: [
+      issues: [
         {
           file: 'src/test.ts',
           line: 10,
@@ -144,7 +141,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
 
@@ -169,7 +166,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'security',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -188,7 +185,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'performance',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -207,7 +204,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'style',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -266,7 +263,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -285,7 +282,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -304,7 +301,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'markdown',
         })
       );
     });
@@ -324,8 +321,8 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.repositoryInfo.isGitRepository).toBe(false);
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toContain('Not a git repository');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toContain('Not a git repository');
       expect(mockReviewer.reviewPR).not.toHaveBeenCalled();
     });
 
@@ -338,9 +335,9 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toBe('Git command failed');
-      expect(result.reviewSummary.comments[0].severity).toBe('error');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toBe('Git command failed');
+      expect(result.reviewSummary.issues[0].severity).toBe('error');
     });
 
     it('should handle reviewer errors', async () => {
@@ -352,8 +349,8 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toBe('Review failed');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toBe('Review failed');
     });
 
     it('should measure execution time correctly', async () => {
@@ -498,15 +495,12 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.overallScore).toBe(0);
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.criticalIssues).toBe(1);
+      expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.suggestions).toEqual([`Error: ${errorMessage}`]);
-      expect(result.reviewSummary.comments).toHaveLength(1);
-      expect(result.reviewSummary.comments[0].severity).toBe('error');
-      expect(result.reviewSummary.comments[0].category).toBe('logic');
-      expect(result.reviewSummary.comments[0].file).toBe('system');
-      expect(result.reviewSummary.comments[0].line).toBe(0);
+      expect(result.reviewSummary.issues[0].severity).toBe('error');
+      expect(result.reviewSummary.issues[0].category).toBe('logic');
+      expect(result.reviewSummary.issues[0].file).toBe('system');
+      expect(result.reviewSummary.issues[0].line).toBe(0);
     });
 
     it('should handle non-Error exceptions', async () => {
@@ -518,7 +512,7 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.comments[0].message).toBe('Unknown error occurred');
+      expect(result.reviewSummary.issues[0].message).toBe('Unknown error occurred');
     });
 
     it('should handle timeout scenarios', async () => {

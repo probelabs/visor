@@ -21,7 +21,7 @@ import { CliOptions } from './types/cli';
 export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = ['ai'];
   private validEventTriggers: EventTrigger[] = ['pr_opened', 'pr_updated', 'pr_closed'];
-  private validOutputFormats: ConfigOutputFormat[] = ['summary', 'detailed'];
+  private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
 
   /**
@@ -102,7 +102,7 @@ export class ConfigManager {
       checks: {},
       output: {
         pr_comment: {
-          format: 'summary',
+          format: 'markdown',
           group_by: 'check',
           collapse: true,
         },
@@ -117,7 +117,7 @@ export class ConfigManager {
     return {
       config,
       cliChecks: cliOptions.checks || [],
-      cliOutput: cliOptions.output || 'summary',
+      cliOutput: cliOptions.output || 'table',
     };
   }
 
@@ -283,7 +283,7 @@ export class ConfigManager {
       checks: {},
       output: {
         pr_comment: {
-          format: 'summary' as ConfigOutputFormat,
+          format: 'markdown' as ConfigOutputFormat,
           group_by: 'check' as GroupByOption,
           collapse: true,
         },

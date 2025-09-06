@@ -141,7 +141,7 @@ describe('Configuration Corruption & Recovery Tests', () => {
 
           // Should handle permission errors gracefully
           expect((error as Error).message).toBeDefined();
-          expect(error.code === 'EACCES' || error.code === 'EPERM').toBe(true);
+          expect((error as any).code === 'EACCES' || (error as any).code === 'EPERM').toBe(true);
         }
 
         // Restore permissions for cleanup
@@ -312,7 +312,7 @@ describe('Configuration Corruption & Recovery Tests', () => {
             version: '1.0',
             // checks missing
             output: {
-              pr_comment: { format: 'summary', group_by: 'check', collapse: true },
+              pr_comment: { format: 'table', group_by: 'check', collapse: true },
             },
           },
         },
@@ -353,9 +353,10 @@ describe('Configuration Corruption & Recovery Tests', () => {
 
           // Should provide clear error about missing fields
           expect((error as Error).message).toBeDefined();
-          expect((error as Error).message.includes('missing') || (error as Error).message.includes('required')).toBe(
-            true
-          );
+          expect(
+            (error as Error).message.includes('missing') ||
+              (error as Error).message.includes('required')
+          ).toBe(true);
         }
 
         // Cleanup
@@ -551,7 +552,6 @@ describe('Configuration Corruption & Recovery Tests', () => {
         try {
           const bridge = new ActionCliBridge('test-token', context);
 
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const shouldUse = bridge.shouldUseVisor({
             ...inputs,
             'github-token': 'test-token',
@@ -559,7 +559,6 @@ describe('Configuration Corruption & Recovery Tests', () => {
           console.log(`    Should use Visor: ${shouldUse}`);
 
           if (shouldUse) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const args = bridge.parseGitHubInputsToCliArgs({
               ...inputs,
               'github-token': 'test-token',
@@ -595,7 +594,7 @@ describe('Configuration Corruption & Recovery Tests', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -634,7 +633,6 @@ describe('Configuration Corruption & Recovery Tests', () => {
         console.log(`  Testing merge case ${i + 1}...`);
 
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const mergedConfig = configManager.mergeWithCliOptions(baseConfig, {
             ...cliOptions,
             checks: cliOptions.checks || [],

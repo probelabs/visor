@@ -311,7 +311,7 @@ export class ActionCliBridge {
       checks: {},
       output: {
         pr_comment: {
-          format: 'summary',
+          format: 'markdown',
           group_by: 'check',
           collapse: true,
         },
