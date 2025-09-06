@@ -44,6 +44,7 @@ export interface CheckExecutionOptions {
     showDetails?: boolean;
     timeout?: number;
     outputFormat?: string;
+    config?: import('./types/config').VisorConfig;
 }
 export declare class CheckExecutionEngine {
     private gitAnalyzer;
@@ -56,9 +57,25 @@ export declare class CheckExecutionEngine {
      */
     executeChecks(options: CheckExecutionOptions): Promise<AnalysisResult>;
     /**
-     * Execute review checks using the provider registry
+     * Execute review checks using parallel execution for multiple AI checks
      */
     private executeReviewChecks;
+    /**
+     * Execute multiple checks in parallel using Promise.allSettled
+     */
+    private executeParallelChecks;
+    /**
+     * Execute a single configured check
+     */
+    private executeSingleConfiguredCheck;
+    /**
+     * Map check name to focus for AI provider
+     */
+    private mapCheckNameToFocus;
+    /**
+     * Aggregate results from parallel check execution
+     */
+    private aggregateParallelResults;
     /**
      * Get available check types
      */

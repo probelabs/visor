@@ -57,7 +57,7 @@ export async function run(): Promise<void> {
     console.log('Debug: inputs.config-path =', inputs['config-path']);
     console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
     console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
-    
+
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
       await handleVisorMode(cliBridge, inputs, context);
@@ -80,21 +80,51 @@ async function handleVisorMode(
   _context: GitHubContext
 ): Promise<void> {
   try {
-    // Create temporary config if needed
-    const tempConfigPath = await cliBridge.createTempConfigFromInputs(inputs);
-    if (tempConfigPath) {
-      inputs['visor-config-path'] = tempConfigPath;
-    }
-
-    // Execute CLI
+    // Execute CLI with the provided config file (no temp config creation)
     const result = await cliBridge.executeCliWithContext(inputs);
 
     if (result.success) {
       console.log('✅ Visor CLI execution completed successfully');
-      console.log(result.output);
+
+      // Parse JSON output for PR comment creation
+      let cliOutput;
+      try {
+        // Extract JSON from CLI output
+        const outputLines = result.output?.split('\n') || [];
+        const jsonLine = outputLines.find(
+          line => line.trim().startsWith('{') && line.trim().endsWith('}')
+        );
+
+        if (jsonLine) {
+          cliOutput = JSON.parse(jsonLine);
+          console.log('📊 CLI Review Results:', cliOutput);
+
+          // Post PR comment if we have review results
+          if (cliOutput.issues || cliOutput.suggestions) {
+            await postCliReviewComment(cliOutput, inputs);
+          }
+        } else {
+          console.log('📄 CLI Output (non-JSON):', result.output);
+        }
+      } catch (parseError) {
+        console.log('⚠️ Could not parse CLI output as JSON:', parseError);
+        console.log('📄 Raw CLI Output:', result.output);
+      }
 
       // Set outputs based on CLI result
       const outputs = cliBridge.mergeActionAndCliOutputs(inputs, result);
+
+      // Add additional outputs from parsed JSON
+      if (cliOutput) {
+        outputs['overall-score'] = cliOutput.overallScore?.toString() || '0';
+        outputs['total-issues'] = cliOutput.totalIssues?.toString() || '0';
+        outputs['critical-issues'] = cliOutput.criticalIssues?.toString() || '0';
+        outputs['security-score'] = cliOutput.securityScore?.toString() || '100';
+        outputs['performance-score'] = cliOutput.performanceScore?.toString() || '100';
+        outputs['style-score'] = cliOutput.styleScore?.toString() || '100';
+        outputs['architecture-score'] = cliOutput.architectureScore?.toString() || '100';
+      }
+
       for (const [key, value] of Object.entries(outputs)) {
         setOutput(key, value);
       }
@@ -103,13 +133,168 @@ async function handleVisorMode(
       console.error(result.error || result.output);
       setFailed(result.error || 'CLI execution failed');
     }
-
-    // Cleanup temporary files
-    await cliBridge.cleanup();
   } catch (error) {
     console.error('❌ Visor mode error:', error);
     setFailed(error instanceof Error ? error.message : 'Visor mode failed');
   }
+}
+
+/**
+ * Post CLI review results as PR comment
+ */
+async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs): Promise<void> {
+  try {
+    const token = inputs['github-token'];
+    const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+    const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+    if (!owner || !repo || !token) {
+      console.log('⚠️ Missing required parameters for PR comment creation');
+      return;
+    }
+
+    // Get PR number from GitHub context
+    const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
+    const prNumber = context.event?.pull_request?.number;
+
+    if (!prNumber) {
+      console.log('⚠️ No PR number found in GitHub context');
+      return;
+    }
+
+    const octokit = new Octokit({ auth: token });
+    const commentManager = new CommentManager(octokit);
+
+    // Create Visor-formatted comment from CLI output
+    let comment = `# 🔍 Visor Code Review Results\n\n`;
+    comment += `## 📊 Summary\n`;
+    comment += `- **Overall Score**: ${cliOutput.overallScore || 0}/100\n`;
+    comment += `- **Issues Found**: ${cliOutput.totalIssues || 0} (${cliOutput.criticalIssues || 0} Critical)\n`;
+    comment += `- **Files Analyzed**: ${cliOutput.filesAnalyzed || 'N/A'}\n\n`;
+
+    // Add category scores if available
+    if (
+      cliOutput.securityScore ||
+      cliOutput.performanceScore ||
+      cliOutput.styleScore ||
+      cliOutput.architectureScore
+    ) {
+      comment += `## 📈 Category Scores\n`;
+      if (cliOutput.securityScore !== undefined)
+        comment += `- **Security**: ${cliOutput.securityScore}/100\n`;
+      if (cliOutput.performanceScore !== undefined)
+        comment += `- **Performance**: ${cliOutput.performanceScore}/100\n`;
+      if (cliOutput.styleScore !== undefined)
+        comment += `- **Style**: ${cliOutput.styleScore}/100\n`;
+      if (cliOutput.architectureScore !== undefined)
+        comment += `- **Architecture**: ${cliOutput.architectureScore}/100\n`;
+      comment += '\n';
+    }
+
+    // Add issues grouped by category
+    if (cliOutput.issues && cliOutput.issues.length > 0) {
+      const groupedIssues = groupIssuesByCategory(cliOutput.issues);
+
+      for (const [category, issues] of Object.entries(groupedIssues)) {
+        if (issues.length === 0) continue;
+
+        const emoji = getCategoryEmoji(category);
+        const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+
+        let sectionContent = '';
+        for (const issue of issues.slice(0, 5)) {
+          // Limit to 5 issues per category
+          sectionContent += `- **${issue.severity?.toUpperCase() || 'UNKNOWN'}**: ${issue.message}\n`;
+          sectionContent += `  - **File**: \`${issue.file}:${issue.line}\`\n\n`;
+        }
+
+        if (issues.length > 5) {
+          sectionContent += `*...and ${issues.length - 5} more issues in this category.*\n\n`;
+        }
+
+        comment += commentManager.createCollapsibleSection(title, sectionContent, true);
+        comment += '\n\n';
+      }
+    }
+
+    // Add suggestions if any
+    if (cliOutput.suggestions && cliOutput.suggestions.length > 0) {
+      const suggestionsContent =
+        cliOutput.suggestions.map((s: string) => `- ${s}`).join('\n') + '\n';
+      comment += commentManager.createCollapsibleSection(
+        '💡 Recommendations',
+        suggestionsContent,
+        true
+      );
+      comment += '\n\n';
+    }
+
+    // Add debug information if available
+    if (cliOutput.debug) {
+      const debugContent = formatDebugInfo(cliOutput.debug);
+      comment += commentManager.createCollapsibleSection(
+        '🐛 Debug Information',
+        debugContent,
+        false
+      );
+      comment += '\n\n';
+    }
+
+    // Use smart comment updating with unique ID
+    const commentId = `visor-cli-review-${prNumber}`;
+    await commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+      commentId,
+      triggeredBy: 'visor-cli',
+      allowConcurrentUpdates: true,
+    });
+
+    console.log('✅ Posted CLI review comment to PR');
+  } catch (error) {
+    console.error('❌ Failed to post CLI review comment:', error);
+  }
+}
+
+function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
+  const grouped: Record<string, any[]> = {
+    security: [],
+    performance: [],
+    style: [],
+    logic: [],
+    documentation: [],
+    architecture: [],
+  };
+
+  for (const issue of issues) {
+    const category = issue.category || 'logic';
+    if (!grouped[category]) grouped[category] = [];
+    grouped[category].push(issue);
+  }
+
+  return grouped;
+}
+
+function getCategoryEmoji(category: string): string {
+  const emojiMap: Record<string, string> = {
+    security: '🔒',
+    performance: '📈',
+    style: '🎨',
+    logic: '🧠',
+    documentation: '📚',
+    architecture: '🏗️',
+  };
+  return emojiMap[category] || '📝';
+}
+
+function formatDebugInfo(debug: any): string {
+  let content = '';
+  if (debug.provider) content += `**Provider:** ${debug.provider}\n`;
+  if (debug.model) content += `**Model:** ${debug.model}\n`;
+  if (debug.processingTime) content += `**Processing Time:** ${debug.processingTime}ms\n`;
+  if (debug.parallelExecution !== undefined)
+    content += `**Parallel Execution:** ${debug.parallelExecution ? '✅' : '❌'}\n`;
+  if (debug.checksExecuted) content += `**Checks Executed:** ${debug.checksExecuted.join(', ')}\n`;
+  content += '\n';
+  return content;
 }
 
 /**
@@ -294,12 +479,12 @@ async function handlePullRequestEvent(
 
   // Create review options, including debug if enabled
   const reviewOptions = {
-    debug: inputs?.debug === 'true'
+    debug: inputs?.debug === 'true',
   };
-  
+
   // Perform the review with debug options
   const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
-  
+
   // If debug mode is enabled, output debug information to console
   if (reviewOptions.debug && review.debug) {
     console.log('\n========================================');
@@ -322,7 +507,7 @@ async function handlePullRequestEvent(
     console.log(review.debug.rawResponse.substring(0, 500) + '...');
     console.log('========================================\n');
   }
-  
+
   const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 

@@ -57,6 +57,17 @@ async function main() {
         }
         // Determine which checks to run
         const checksToRun = mergedConfig.cliChecks.length > 0 ? mergedConfig.cliChecks : Object.keys(config.checks || {});
+        // Log check extraction for debugging
+        if (mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif') {
+            console.error(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
+            console.error(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
+            console.error(`🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`);
+        }
+        else {
+            console.log(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
+            console.log(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
+            console.log(`🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`);
+        }
         // If no checks specified, show help
         if (checksToRun.length === 0) {
             console.error('\n⚠️  No checks specified. Use --check <type> or configure checks in visor.config.yaml');
@@ -95,6 +106,7 @@ async function main() {
                 showDetails: cliOptions.output !== 'json', // Show details for non-JSON output
                 timeout: cliOptions.timeout, // Pass timeout from CLI options
                 outputFormat: mergedConfig.cliOutput,
+                config: config, // Pass the full config so engine can access check definitions
             });
             // Format and display the results
             await displayResults(analysisResult, mergedConfig.cliOutput);
