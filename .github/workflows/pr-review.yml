@@ -42,7 +42,7 @@ jobs:
           auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
           debug: 'true'
           checks: all
-          output-format: markdown
+          output-format: json
           config-path: visor.config.yaml
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}

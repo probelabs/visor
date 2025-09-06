@@ -24,7 +24,7 @@ inputs:
   output-format:
     description: 'Output format for analysis results (table,json,markdown,sarif)'
     required: false
-    default: 'markdown'
+    default: 'json'
   
   config-path:
     description: 'Path to visor configuration file'
