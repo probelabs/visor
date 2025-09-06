@@ -540,7 +540,7 @@ async function runBenchmarkSuite(monitor: PerformanceMonitor): Promise<void> {
   await monitor.runRepeatedTest(
     'cli-parsing-performance',
     () => {
-      return cli.parseArgs(['--check', 'all', '--output', 'detailed', '--config', './config.yaml']);
+      return cli.parseArgs(['--check', 'all', '--output', 'markdown', '--config', './config.yaml']);
     },
     20,
     'cli'

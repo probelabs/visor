@@ -149,7 +149,7 @@ output:
       showDetails: true
       groupByCategory: true
   pr_comment:
-    format: detailed
+    format: markdown
     group_by: check
     collapse: false
 
