@@ -31,7 +31,7 @@ describe('Visor Integration E2E Tests', () => {
       },
       output: {
         pr_comment: {
-          format: 'summary',
+          format: 'table',
           group_by: 'check',
           collapse: true,
         },
@@ -171,7 +171,7 @@ describe('Visor Integration E2E Tests', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -224,7 +224,7 @@ describe('Visor Integration E2E Tests', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },

@@ -2,9 +2,15 @@ name: PR Review Bot
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, edited]  # Include edited for complete PR lifecycle
   issue_comment:
     types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
 
 jobs:
   review:
@@ -29,9 +35,27 @@ jobs:
         run: npm run build
 
       - name: PR Review Bot
+        id: visor_review
         uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
+          # AI Provider API Keys (configure one of these in your repository secrets)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional: Specify the AI model to use
+          MODEL_NAME: ${{ secrets.MODEL_NAME || 'gemini-2.0-flash-exp' }}
+
+      - name: Validate Review Results
+        if: steps.visor_review.outputs.review-score
+        run: |
+          echo "✅ Visor Review Completed Successfully"
+          echo "📊 Review Score: ${{ steps.visor_review.outputs.review-score }}/100"
+          echo "🔍 Total Issues: ${{ steps.visor_review.outputs.total-issues }}"
+          echo "🚨 Critical Issues: ${{ steps.visor_review.outputs.critical-issues || '0' }}"
+          echo "📝 PR Action: ${{ steps.visor_review.outputs.pr-action }}"
+          echo "🔄 Incremental Analysis: ${{ steps.visor_review.outputs.incremental-analysis }}"
+          echo "✅ Auto Review Completed: ${{ steps.visor_review.outputs.auto-review-completed }}"

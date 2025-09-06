@@ -35,33 +35,44 @@ describe('OutputFormatters', () => {
         totalDeletions: 5,
       },
       reviewSummary: {
-        overallScore: 85,
-        totalIssues: 3,
-        criticalIssues: 1,
-        suggestions: ['Consider adding input validation', 'Add error handling for edge cases'],
-        comments: [
+        issues: [
           {
             file: 'src/test.ts',
             line: 10,
+            endLine: undefined,
+            ruleId: 'security/sql-injection',
             message: 'Potential SQL injection vulnerability',
             severity: 'error',
             category: 'security' as const,
+            suggestion: 'Use parameterized queries to prevent SQL injection',
+            replacement:
+              'const query = "SELECT * FROM users WHERE id = ?";\nconst result = await db.query(query, [userId]);',
           },
           {
             file: 'src/test.ts',
             line: 15,
+            endLine: undefined,
+            ruleId: 'style/readability',
             message: 'Consider using async/await for better readability',
             severity: 'warning',
             category: 'style' as const,
+            suggestion: 'Replace promises with async/await for better readability',
+            replacement: 'const data = await fetchData();\nreturn data;',
           },
           {
             file: 'src/utils.js',
             line: 5,
+            endLine: undefined,
+            ruleId: 'performance/caching',
             message: 'This operation could be optimized with caching',
             severity: 'info',
             category: 'performance' as const,
+            suggestion: 'Add caching to avoid repeated expensive computations',
+            replacement:
+              'const cache = new Map();\nif (cache.has(key)) {\n  return cache.get(key);\n}\nconst result = expensiveOperation();\ncache.set(key, result);\nreturn result;',
           },
         ],
+        suggestions: ['Consider adding input validation', 'Add error handling for edge cases'],
       },
       executionTime: 1500,
       timestamp: '2025-01-15T10:30:00.000Z',
@@ -75,11 +86,11 @@ describe('OutputFormatters', () => {
 
       expect(result).toContain('📊 Analysis Summary');
       expect(result).toContain('Overall Score');
-      expect(result).toContain('85/100');
+      expect(result).toContain('60/100'); // Updated score: 100 - 1*25 (error) - 1*10 (warning) - 1*5 (info) = 60
       expect(result).toContain('Total Issues');
       expect(result).toContain('3');
       expect(result).toContain('Critical Issues');
-      expect(result).toContain('1');
+      expect(result).toContain('0'); // No critical issues in our test data
       expect(result).toContain('Execution Time');
       expect(result).toContain('1500ms');
       expect(result).toContain('security, performance, style');
@@ -115,6 +126,24 @@ describe('OutputFormatters', () => {
       expect(result).toContain('Add error handling for edge cases');
     });
 
+    it('should include issue suggestions with 💡 emoji', () => {
+      const result = OutputFormatters.formatAsTable(mockAnalysisResult, { showDetails: true });
+
+      expect(result).toContain('💡 Use parameterized queries to prevent SQL injection');
+      // The other suggestions might not appear depending on table pagination or truncation
+      // Let's just check that suggestions are formatted with the emoji
+      expect(result).toContain('💡');
+    });
+
+    it('should include code replacements with 📝 prefix', () => {
+      const result = OutputFormatters.formatAsTable(mockAnalysisResult, { showDetails: true });
+
+      expect(result).toContain('📝 Code fix:');
+      expect(result).toContain('const query = "SELECT * FROM users WHERE id = ?";');
+      expect(result).toContain('const data = await fetchData();');
+      expect(result).toContain('const cache = new Map();');
+    });
+
     it('should include files table when requested', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult, {
         includeFiles: true,
@@ -142,10 +171,8 @@ describe('OutputFormatters', () => {
       const noIssuesResult = {
         ...mockAnalysisResult,
         reviewSummary: {
-          ...mockAnalysisResult.reviewSummary,
-          totalIssues: 0,
-          criticalIssues: 0,
-          comments: [],
+          issues: [],
+          suggestions: [],
         },
       };
 
@@ -166,8 +193,9 @@ describe('OutputFormatters', () => {
       expect(parsed).toHaveProperty('issues');
       expect(parsed).toHaveProperty('suggestions');
 
-      expect(parsed.summary.overallScore).toBe(85);
+      expect(parsed.summary.overallScore).toBe(60); // Calculated from issues: 100 - 25 - 10 - 5 = 60
       expect(parsed.summary.totalIssues).toBe(3);
+      expect(parsed.summary.criticalIssues).toBe(0);
       expect(parsed.summary.executionTime).toBe(1500);
       expect(parsed.summary.checksExecuted).toEqual(['security', 'performance', 'style']);
 
@@ -237,8 +265,9 @@ describe('OutputFormatters', () => {
 
       expect(result).toContain('# 🔍 Visor Analysis Results');
       expect(result).toContain('## 📊 Summary');
-      expect(result).toContain('| Overall Score | 85/100 |');
+      expect(result).toContain('| Overall Score | 60/100 |'); // Updated calculated score
       expect(result).toContain('| Total Issues | 3 |');
+      expect(result).toContain('| Critical Issues | 0 |');
       expect(result).toContain('| Execution Time | 1500ms |');
 
       expect(result).toContain('## 📁 Repository Information');
@@ -264,20 +293,49 @@ describe('OutputFormatters', () => {
       expect(result).toContain('**Severity**: WARNING');
     });
 
+    it('should include suggestions and replacements in markdown', () => {
+      const result = OutputFormatters.formatAsMarkdown(mockAnalysisResult, {
+        groupByCategory: true,
+        showDetails: true,
+      });
+
+      // Check for suggestions with 💡 emoji
+      expect(result).toContain(
+        '**💡 Suggestion**: Use parameterized queries to prevent SQL injection'
+      );
+      expect(result).toContain(
+        '**💡 Suggestion**: Replace promises with async/await for better readability'
+      );
+      expect(result).toContain(
+        '**💡 Suggestion**: Add caching to avoid repeated expensive computations'
+      );
+
+      // Check for code replacements with proper markdown code blocks
+      expect(result).toContain('**📝 Suggested Fix**:');
+      expect(result).toContain('```typescript'); // Language detection from .ts extension
+      expect(result).toContain('```javascript'); // Language detection from .js extension
+      expect(result).toContain('const query = "SELECT * FROM users WHERE id = ?";');
+      expect(result).toContain('const data = await fetchData();');
+      expect(result).toContain('const cache = new Map();');
+    });
+
     it('should handle show more issues with details', () => {
       // Create a result with many issues to test truncation
       const manyIssuesResult = {
         ...mockAnalysisResult,
         reviewSummary: {
-          ...mockAnalysisResult.reviewSummary,
-          totalIssues: 10,
-          comments: Array.from({ length: 10 }, (_, i) => ({
+          issues: Array.from({ length: 10 }, (_, i) => ({
             file: `src/file${i}.ts`,
             line: i + 1,
+            endLine: undefined,
+            ruleId: `security/issue-${i}`,
             message: `Issue ${i + 1}`,
             severity: 'warning' as const,
             category: 'security' as const,
+            suggestion: undefined,
+            replacement: undefined,
           })),
+          suggestions: [],
         },
       };
 
@@ -323,10 +381,8 @@ describe('OutputFormatters', () => {
       const noIssuesResult = {
         ...mockAnalysisResult,
         reviewSummary: {
-          ...mockAnalysisResult.reviewSummary,
-          totalIssues: 0,
-          criticalIssues: 0,
-          comments: [],
+          issues: [],
+          suggestions: [],
         },
       };
 
@@ -356,7 +412,7 @@ describe('OutputFormatters', () => {
       expect(run.tool.driver.rules.length).toBeGreaterThan(0);
 
       expect(run).toHaveProperty('results');
-      expect(run.results).toHaveLength(3); // Same as mockAnalysisResult.reviewSummary.comments.length
+      expect(run.results).toHaveLength(3); // Same as mockAnalysisResult.reviewSummary.issues.length
     });
 
     it('should map Visor categories to SARIF rule IDs correctly', () => {
@@ -414,8 +470,8 @@ describe('OutputFormatters', () => {
       const emptyResult = {
         ...mockAnalysisResult,
         reviewSummary: {
-          ...mockAnalysisResult.reviewSummary,
-          comments: [],
+          issues: [],
+          suggestions: [],
         },
       };
 
@@ -460,11 +516,8 @@ describe('OutputFormatters', () => {
           totalDeletions: 0,
         },
         reviewSummary: {
-          overallScore: 0,
-          totalIssues: 0,
-          criticalIssues: 0,
+          issues: [],
           suggestions: [],
-          comments: [],
         },
         executionTime: 0,
         timestamp: '',
@@ -480,16 +533,20 @@ describe('OutputFormatters', () => {
       const longMessageResult = {
         ...mockAnalysisResult,
         reviewSummary: {
-          ...mockAnalysisResult.reviewSummary,
-          comments: [
+          issues: [
             {
               file: 'src/test.ts',
               line: 1,
+              endLine: undefined,
+              ruleId: 'security/long-message',
               message: 'A'.repeat(200), // Very long message
               severity: 'error' as const,
               category: 'security' as const,
+              suggestion: undefined,
+              replacement: undefined,
             },
           ],
+          suggestions: [],
         },
       };
 

@@ -4,6 +4,7 @@ import { CLI } from './cli';
 import { ConfigManager } from './config';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters } from './output-formatters';
+import { calculateOverallScore, calculateTotalIssues, calculateCriticalIssues } from './reviewer';
 
 /**
  * Main CLI entry point for Visor
@@ -46,6 +47,9 @@ export async function main(): Promise<void> {
 
     // Merge CLI options with configuration
     const mergedConfig = configManager.mergeWithCliOptions(config, cliOptions);
+
+    // Set environment variable so other modules know the output format
+    process.env.VISOR_OUTPUT_FORMAT = mergedConfig.cliOutput;
 
     // Only show decorative output for non-JSON formats
     if (mergedConfig.cliOutput !== 'json' && mergedConfig.cliOutput !== 'sarif') {
@@ -109,6 +113,7 @@ export async function main(): Promise<void> {
         checks: validChecks,
         workingDirectory: process.cwd(),
         showDetails: cliOptions.output !== 'json', // Show details for non-JSON output
+        timeout: cliOptions.timeout, // Pass timeout from CLI options
         outputFormat: mergedConfig.cliOutput,
       });
 
@@ -172,14 +177,14 @@ async function displayResults(
       console.log(markdownOutput);
 
       // Show summary for markdown
-      const score = result.reviewSummary.overallScore;
+      const score = calculateOverallScore(result.reviewSummary.issues);
+      const totalIssues = calculateTotalIssues(result.reviewSummary.issues);
+      const criticalIssues = calculateCriticalIssues(result.reviewSummary.issues);
       const emoji = score >= 80 ? '✅' : score >= 60 ? '⚠️' : '❌';
       console.log(`\n${emoji} Analysis completed with score: ${score}/100`);
 
-      if (result.reviewSummary.totalIssues > 0) {
-        console.log(
-          `📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`
-        );
+      if (totalIssues > 0) {
+        console.log(`📋 Found ${totalIssues} issues (${criticalIssues} critical)`);
       }
 
       console.log(`⏱️  Execution time: ${result.executionTime}ms`);
@@ -201,14 +206,14 @@ async function displayResults(
       console.log(tableOutput);
 
       // Show summary for table
-      const tableScore = result.reviewSummary.overallScore;
+      const tableScore = calculateOverallScore(result.reviewSummary.issues);
+      const tableTotalIssues = calculateTotalIssues(result.reviewSummary.issues);
+      const tableCriticalIssues = calculateCriticalIssues(result.reviewSummary.issues);
       const tableEmoji = tableScore >= 80 ? '✅' : tableScore >= 60 ? '⚠️' : '❌';
       console.log(`\n${tableEmoji} Analysis completed with score: ${tableScore}/100`);
 
-      if (result.reviewSummary.totalIssues > 0) {
-        console.log(
-          `📋 Found ${result.reviewSummary.totalIssues} issues (${result.reviewSummary.criticalIssues} critical)`
-        );
+      if (tableTotalIssues > 0) {
+        console.log(`📋 Found ${tableTotalIssues} issues (${tableCriticalIssues} critical)`);
       }
 
       console.log(`⏱️  Execution time: ${result.executionTime}ms`);

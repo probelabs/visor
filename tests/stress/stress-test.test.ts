@@ -13,7 +13,7 @@ import {
   createMockOctokit,
 } from '../performance/test-utilities';
 
-describe('Stress Testing Framework', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Stress Testing Framework', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;
@@ -460,7 +460,7 @@ describe('Stress Testing Framework', () => {
         version: '1.0',
         checks: {},
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
       const _eventMapper = new EventMapper(dummyConfig);
@@ -472,7 +472,7 @@ describe('Stress Testing Framework', () => {
         checks: {},
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },

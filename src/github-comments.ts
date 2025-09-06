@@ -221,9 +221,20 @@ ${content}
    */
   private isVisorComment(body: string, commentId?: string): boolean {
     if (commentId) {
-      return body.includes(`visor-comment-id:${commentId}`);
+      // Check for the new format first
+      if (body.includes(`visor-comment-id:${commentId}`)) {
+        return true;
+      }
+      // Check for legacy format (visor-review-* pattern) for backwards compatibility
+      if (commentId.startsWith('pr-review-') && body.includes('visor-review-')) {
+        return true;
+      }
     }
-    return body.includes('visor-comment-id:') && body.includes('<!-- /visor-comment-id:');
+    // General Visor comment detection
+    return (
+      (body.includes('visor-comment-id:') && body.includes('<!-- /visor-comment-id:')) ||
+      body.includes('visor-review-')
+    );
   }
 
   /**

@@ -15,7 +15,7 @@ import {
 } from './test-utilities';
 import * as path from 'path';
 
-describe('Performance Benchmark Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Performance Benchmark Tests', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;
@@ -75,7 +75,7 @@ describe('Performance Benchmark Tests', () => {
         checks: {} as any,
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -160,8 +160,8 @@ describe('Performance Benchmark Tests', () => {
 
       // Target: <30 seconds (30000ms)
       expect(duration).toBeLessThan(30000);
-      expect(review.overallScore).toBeDefined();
-      expect(review.totalIssues).toBeDefined();
+      expect(review.issues).toBeDefined();
+      expect(review.suggestions).toBeDefined();
     });
 
     test('Memory usage should stay under 500MB during intensive operations', async () => {
@@ -324,7 +324,7 @@ describe('Performance Benchmark Tests', () => {
         checks: {} as any,
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },

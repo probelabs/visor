@@ -2,6 +2,8 @@ import { PRReviewer, ReviewSummary, ReviewOptions } from './reviewer';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
+import { CheckProviderRegistry } from './providers/check-provider-registry';
+import { CheckProviderConfig } from './providers/check-provider.interface';
 
 export interface MockOctokit {
   rest: {
@@ -43,9 +45,11 @@ export class CheckExecutionEngine {
   private gitAnalyzer: GitRepositoryAnalyzer;
   private mockOctokit: MockOctokit;
   private reviewer: PRReviewer;
+  private providerRegistry: CheckProviderRegistry;
 
   constructor(workingDirectory?: string) {
     this.gitAnalyzer = new GitRepositoryAnalyzer(workingDirectory);
+    this.providerRegistry = CheckProviderRegistry.getInstance();
 
     // Create a mock Octokit instance for local analysis
     // This allows us to reuse the existing PRReviewer logic without network calls
@@ -86,7 +90,7 @@ export class CheckExecutionEngine {
 
       // Execute checks using the existing PRReviewer
       logFn(`🤖 Executing checks: ${options.checks.join(', ')}`);
-      const reviewSummary = await this.executeReviewChecks(prInfo, options.checks);
+      const reviewSummary = await this.executeReviewChecks(prInfo, options.checks, options.timeout);
 
       const executionTime = Date.now() - startTime;
 
@@ -124,54 +128,85 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute review checks using the existing PRReviewer logic
+   * Execute review checks using the provider registry
    */
-  private async executeReviewChecks(prInfo: PRInfo, checks: string[]): Promise<ReviewSummary> {
-    // Map CLI check types to reviewer focus options
+  private async executeReviewChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number
+  ): Promise<ReviewSummary> {
+    // First, try to use the new provider system for AI checks
+    if (checks.length === 1 && this.providerRegistry.hasProvider(checks[0])) {
+      const provider = this.providerRegistry.getProviderOrThrow(checks[0]);
+
+      // Create config for the provider
+      const config: CheckProviderConfig = {
+        type: checks[0],
+        prompt: 'all', // Default to comprehensive review
+        ai: timeout ? { timeout } : undefined,
+      };
+
+      // Execute using the provider
+      return await provider.execute(prInfo, config);
+    }
+
+    // Check if 'ai' provider is available for focus-based checks
+    if (this.providerRegistry.hasProvider('ai')) {
+      const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+      // Map CLI check types to focus options
+      let focus = 'all';
+      if (checks.length === 1) {
+        if (checks[0] === 'security' || checks[0] === 'performance' || checks[0] === 'style') {
+          focus = checks[0];
+        }
+      } else if (
+        checks.includes('security') &&
+        !checks.includes('performance') &&
+        !checks.includes('style')
+      ) {
+        focus = 'security';
+      } else if (
+        checks.includes('performance') &&
+        !checks.includes('security') &&
+        !checks.includes('style')
+      ) {
+        focus = 'performance';
+      } else if (
+        checks.includes('style') &&
+        !checks.includes('security') &&
+        !checks.includes('performance')
+      ) {
+        focus = 'style';
+      }
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: focus,
+        focus: focus,
+        ai: timeout ? { timeout } : undefined,
+      };
+
+      return await provider.execute(prInfo, config);
+    }
+
+    // Fallback to existing PRReviewer for backward compatibility
     const focusMap: Record<string, ReviewOptions['focus']> = {
       security: 'security',
       performance: 'performance',
       style: 'style',
       all: 'all',
-      architecture: 'all', // Map architecture to all for now
+      architecture: 'all',
     };
 
-    // If multiple specific checks are requested, we'll run them separately and merge
-    if (checks.length === 1 && checks[0] !== 'all') {
-      const focus = focusMap[checks[0]] || 'all';
-      return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, {
-        focus,
-        format: 'detailed',
-      });
-    }
-
-    // For multiple checks or 'all', run a comprehensive review
     let focus: ReviewOptions['focus'] = 'all';
-
-    // If specific checks are requested, determine the most appropriate focus
-    if (
-      checks.includes('security') &&
-      !checks.includes('performance') &&
-      !checks.includes('style')
-    ) {
-      focus = 'security';
-    } else if (
-      checks.includes('performance') &&
-      !checks.includes('security') &&
-      !checks.includes('style')
-    ) {
-      focus = 'performance';
-    } else if (
-      checks.includes('style') &&
-      !checks.includes('security') &&
-      !checks.includes('performance')
-    ) {
-      focus = 'style';
+    if (checks.length === 1 && focusMap[checks[0]]) {
+      focus = focusMap[checks[0]];
     }
 
     return await this.reviewer.reviewPR('local', 'repository', 0, prInfo, {
       focus,
-      format: 'detailed',
+      format: 'table',
     });
   }
 
@@ -179,7 +214,12 @@ export class CheckExecutionEngine {
    * Get available check types
    */
   static getAvailableCheckTypes(): string[] {
-    return ['security', 'performance', 'style', 'architecture', 'all'];
+    const registry = CheckProviderRegistry.getInstance();
+    const providerTypes = registry.getAvailableProviders();
+    // Add standard focus-based checks
+    const standardTypes = ['security', 'performance', 'style', 'architecture', 'all'];
+    // Combine provider types with standard types (remove duplicates)
+    return [...new Set([...providerTypes, ...standardTypes])];
   }
 
   /**
@@ -199,6 +239,20 @@ export class CheckExecutionEngine {
     }
 
     return { valid, invalid };
+  }
+
+  /**
+   * List available providers with their status
+   */
+  async listProviders(): Promise<
+    Array<{
+      name: string;
+      description: string;
+      available: boolean;
+      requirements: string[];
+    }>
+  > {
+    return await this.providerRegistry.listProviders();
   }
 
   /**
@@ -273,19 +327,20 @@ export class CheckExecutionEngine {
     return {
       repositoryInfo,
       reviewSummary: {
-        overallScore: 0,
-        totalIssues: 1,
-        criticalIssues: 1,
-        suggestions: [`Error: ${errorMessage}`],
-        comments: [
+        issues: [
           {
             file: 'system',
             line: 0,
+            endLine: undefined,
+            ruleId: 'system/error',
             message: errorMessage,
             severity: 'error',
             category: 'logic',
+            suggestion: undefined,
+            replacement: undefined,
           },
         ],
+        suggestions: [`Error: ${errorMessage}`],
       },
       executionTime,
       timestamp,

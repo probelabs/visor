@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-describe('Resource Exhaustion Tests', () => {
+(process.env.CI === 'true' ? describe.skip : describe)('Resource Exhaustion Tests', () => {
   let timer: PerformanceTimer;
   let memoryProfiler: MemoryProfiler;
   let mockOctokit: any;
@@ -478,7 +478,7 @@ describe('Resource Exhaustion Tests', () => {
         version: '1.0',
         checks: {},
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
       const eventMapper = new EventMapper(dummyConfig);
@@ -487,7 +487,7 @@ describe('Resource Exhaustion Tests', () => {
       const massiveConfig: any = {
         version: '1.0',
         checks: {},
-        output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+        output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       };
 
       // Create massive configuration

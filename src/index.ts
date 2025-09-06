@@ -2,8 +2,9 @@ import { Octokit } from '@octokit/rest';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
-import { PRReviewer } from './reviewer';
+import { PRReviewer, calculateOverallScore, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
+import { CommentManager } from './github-comments';
 
 export async function run(): Promise<void> {
   try {
@@ -166,8 +167,10 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         | 'all'
         | undefined;
       const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
-        | 'summary'
-        | 'detailed'
+        | 'table'
+        | 'json'
+        | 'markdown'
+        | 'sarif'
         | undefined;
 
       console.log(`Starting PR review for #${prNumber}`);
@@ -176,8 +179,8 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 
       await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
 
-      setOutput('review-score', review.overallScore.toString());
-      setOutput('issues-found', review.totalIssues.toString());
+      setOutput('review-score', calculateOverallScore(review.issues).toString());
+      setOutput('issues-found', calculateTotalIssues(review.issues).toString());
       break;
 
     case 'status':
@@ -219,36 +222,96 @@ async function handlePullRequestEvent(
   const pullRequest = context.event?.pull_request;
   const action = context.event?.action;
 
-  if (!pullRequest || action !== 'opened') {
-    console.log('Not a PR opened event');
+  if (!pullRequest) {
+    console.log('No pull request found in context');
     return;
   }
 
-  console.log(`Auto-reviewing opened PR #${pullRequest.number}`);
+  // Handle multiple PR actions: opened, synchronize, edited
+  const supportedActions = ['opened', 'synchronize', 'edited'];
+  if (!supportedActions.includes(action)) {
+    console.log(
+      `Unsupported PR action: ${action}. Supported actions: ${supportedActions.join(', ')}`
+    );
+    return;
+  }
+
+  console.log(`Auto-reviewing PR #${pullRequest.number} (action: ${action})`);
 
   const prNumber = pullRequest.number;
   const analyzer = new PRAnalyzer(octokit);
   const reviewer = new PRReviewer(octokit);
+  const commentManager = new CommentManager(octokit);
 
-  const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+  // Generate comment ID for this PR to enable smart updating
+  const commentId = `pr-review-${prNumber}`;
+
+  let prInfo;
+  let reviewContext = '';
+
+  // For synchronize (new commits), get the latest commit SHA for incremental analysis
+  if (action === 'synchronize') {
+    const latestCommitSha = pullRequest.head?.sha;
+    if (latestCommitSha) {
+      console.log(`Analyzing incremental changes from commit: ${latestCommitSha}`);
+      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha);
+      reviewContext =
+        '## 🔄 Updated PR Analysis\n\nThis review has been updated to include the latest changes.\n\n';
+    } else {
+      // Fallback to full analysis if no commit SHA available
+      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+      reviewContext = '## 🔄 Updated PR Analysis\n\nAnalyzing all changes in this PR.\n\n';
+    }
+  } else {
+    // For opened and edited events, do full PR analysis
+    prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+    if (action === 'opened') {
+      reviewContext =
+        '## 🚀 Welcome to Automated PR Review!\n\nThis PR has been automatically analyzed. Use `/help` to see available commands.\n\n';
+    } else {
+      reviewContext =
+        '## ✏️ PR Analysis Updated\n\nThis review has been updated based on PR changes.\n\n';
+    }
+  }
+
+  // Perform the review
   const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo);
+  const reviewComment = reviewer['formatReviewComment'](review, {});
+  const fullComment = reviewContext + reviewComment;
 
-  // Add welcome message for auto-review
-  const welcomeComment =
-    `## 🚀 Welcome to Automated PR Review!\n\n` +
-    `This PR has been automatically analyzed. Use \`/help\` to see available commands.\n\n`;
+  // Use smart comment updating - will update existing comment or create new one
+  try {
+    const comment = await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+      commentId,
+      triggeredBy: action,
+      allowConcurrentUpdates: true, // Allow updates even if comment was modified externally
+    });
 
-  const fullComment = welcomeComment + reviewer['formatReviewComment'](review, {});
+    console.log(
+      `✅ ${action === 'opened' ? 'Created' : 'Updated'} PR review comment (ID: ${comment.id})`
+    );
+  } catch (error) {
+    console.error(
+      `❌ Failed to ${action === 'opened' ? 'create' : 'update'} PR review comment:`,
+      error
+    );
 
-  await octokit.rest.issues.createComment({
-    owner,
-    repo,
-    issue_number: prNumber,
-    body: fullComment,
-  });
+    // Fallback to creating a new comment without the smart updating
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: prNumber,
+      body: fullComment,
+    });
+    console.log('✅ Created fallback PR review comment');
+  }
 
+  // Set outputs
   setOutput('auto-review-completed', 'true');
-  setOutput('review-score', review.overallScore.toString());
+  setOutput('review-score', calculateOverallScore(review.issues).toString());
+  setOutput('issues-found', calculateTotalIssues(review.issues).toString());
+  setOutput('pr-action', action);
+  setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
 }
 
 async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Promise<void> {

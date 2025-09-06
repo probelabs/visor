@@ -3,15 +3,18 @@ import { CheckExecutionEngine, CheckExecutionOptions } from '../../../src/check-
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from '../../../src/git-repository-analyzer';
 import { PRReviewer, ReviewSummary } from '../../../src/reviewer';
 import { PRInfo } from '../../../src/pr-analyzer';
+import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 
 // Mock the dependencies
 jest.mock('../../../src/git-repository-analyzer');
 jest.mock('../../../src/reviewer');
+jest.mock('../../../src/providers/check-provider-registry');
 
 describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
   let mockGitAnalyzer: jest.Mocked<GitRepositoryAnalyzer>;
   let mockReviewer: jest.Mocked<PRReviewer>;
+  let mockRegistry: jest.Mocked<CheckProviderRegistry>;
 
   const mockRepositoryInfo: GitRepositoryInfo = {
     title: 'Test Repository',
@@ -64,6 +67,15 @@ describe('CheckExecutionEngine', () => {
     mockGitAnalyzer = new GitRepositoryAnalyzer() as jest.Mocked<GitRepositoryAnalyzer>;
     mockReviewer = new PRReviewer(null as any) as jest.Mocked<PRReviewer>;
 
+    // Mock registry to return false for hasProvider so it falls back to PRReviewer
+    mockRegistry = {
+      hasProvider: jest.fn().mockReturnValue(false),
+      getProviderOrThrow: jest.fn(),
+      getAvailableProviders: jest.fn().mockReturnValue(['ai', 'tool', 'script', 'webhook']),
+    } as any;
+
+    (CheckProviderRegistry as any).getInstance = jest.fn().mockReturnValue(mockRegistry);
+
     // Mock constructor behavior
     (GitRepositoryAnalyzer as jest.MockedClass<typeof GitRepositoryAnalyzer>).mockImplementation(
       () => mockGitAnalyzer
@@ -88,14 +100,12 @@ describe('CheckExecutionEngine', () => {
 
   describe('executeChecks', () => {
     const mockReviewSummary = {
-      overallScore: 85,
-      totalIssues: 2,
-      criticalIssues: 1,
       suggestions: ['Add input validation', 'Improve error handling'],
-      comments: [
+      issues: [
         {
           file: 'src/test.ts',
           line: 10,
+          ruleId: 'security/potential-vulnerability',
           message: 'Potential security issue',
           severity: 'error' as const,
           category: 'security' as const,
@@ -103,6 +113,7 @@ describe('CheckExecutionEngine', () => {
         {
           file: 'src/test.ts',
           line: 15,
+          ruleId: 'style/improvement',
           message: 'Style improvement needed',
           severity: 'info' as const,
           category: 'style' as const,
@@ -132,7 +143,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'table',
         })
       );
 
@@ -157,7 +168,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'security',
-          format: 'detailed',
+          format: 'table',
         })
       );
     });
@@ -176,7 +187,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'performance',
-          format: 'detailed',
+          format: 'table',
         })
       );
     });
@@ -195,9 +206,49 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'style',
-          format: 'detailed',
+          format: 'table',
         })
       );
+    });
+
+    it('should pass timeout option to check execution', async () => {
+      const options: CheckExecutionOptions = {
+        checks: ['security'],
+        timeout: 300000, // 5 minutes
+      };
+
+      await checkEngine.executeChecks(options);
+
+      // Since we're using PRReviewer, the timeout should be stored but we can't directly test it
+      // without mocking the AI service. For now, we just verify the call happened
+      expect(mockReviewer.reviewPR).toHaveBeenCalled();
+    });
+
+    it('should handle timeout option with default value', async () => {
+      const options: CheckExecutionOptions = {
+        checks: ['performance'],
+        timeout: undefined, // Should use default (600000ms)
+      };
+
+      await checkEngine.executeChecks(options);
+
+      expect(mockReviewer.reviewPR).toHaveBeenCalled();
+    });
+
+    it('should accept various timeout values', async () => {
+      const timeoutValues = [60000, 180000, 300000, 600000, 900000];
+
+      for (const timeout of timeoutValues) {
+        jest.clearAllMocks();
+
+        const options: CheckExecutionOptions = {
+          checks: ['all'],
+          timeout,
+        };
+
+        await checkEngine.executeChecks(options);
+        expect(mockReviewer.reviewPR).toHaveBeenCalled();
+      }
     });
 
     it('should handle all check', async () => {
@@ -214,7 +265,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'table',
         })
       );
     });
@@ -233,7 +284,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'table',
         })
       );
     });
@@ -252,7 +303,7 @@ describe('CheckExecutionEngine', () => {
         expect.any(Object),
         expect.objectContaining({
           focus: 'all',
-          format: 'detailed',
+          format: 'table',
         })
       );
     });
@@ -272,8 +323,8 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.repositoryInfo.isGitRepository).toBe(false);
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toContain('Not a git repository');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toContain('Not a git repository');
       expect(mockReviewer.reviewPR).not.toHaveBeenCalled();
     });
 
@@ -286,9 +337,10 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toBe('Git command failed');
-      expect(result.reviewSummary.comments[0].severity).toBe('error');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toBe('Git command failed');
+      expect(result.reviewSummary.issues[0].severity).toBe('error');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle reviewer errors', async () => {
@@ -300,8 +352,9 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.comments[0].message).toBe('Review failed');
+      expect(result.reviewSummary.issues).toHaveLength(1);
+      expect(result.reviewSummary.issues[0].message).toBe('Review failed');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should measure execution time correctly', async () => {
@@ -388,7 +441,8 @@ describe('CheckExecutionEngine', () => {
         expect(checkTypes).toContain('style');
         expect(checkTypes).toContain('architecture');
         expect(checkTypes).toContain('all');
-        expect(checkTypes).toHaveLength(5);
+        // Now includes provider types (ai, tool, script, webhook) + standard types
+        expect(checkTypes).toHaveLength(9);
       });
     });
 
@@ -445,15 +499,13 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.overallScore).toBe(0);
-      expect(result.reviewSummary.totalIssues).toBe(1);
-      expect(result.reviewSummary.criticalIssues).toBe(1);
+      expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.suggestions).toEqual([`Error: ${errorMessage}`]);
-      expect(result.reviewSummary.comments).toHaveLength(1);
-      expect(result.reviewSummary.comments[0].severity).toBe('error');
-      expect(result.reviewSummary.comments[0].category).toBe('logic');
-      expect(result.reviewSummary.comments[0].file).toBe('system');
-      expect(result.reviewSummary.comments[0].line).toBe(0);
+      expect(result.reviewSummary.issues[0].severity).toBe('error');
+      expect(result.reviewSummary.issues[0].category).toBe('logic');
+      expect(result.reviewSummary.issues[0].file).toBe('system');
+      expect(result.reviewSummary.issues[0].line).toBe(0);
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle non-Error exceptions', async () => {
@@ -465,7 +517,8 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.comments[0].message).toBe('Unknown error occurred');
+      expect(result.reviewSummary.issues[0].message).toBe('Unknown error occurred');
+      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
     });
 
     it('should handle timeout scenarios', async () => {

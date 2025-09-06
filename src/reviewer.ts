@@ -1,33 +1,87 @@
 import { Octokit } from '@octokit/rest';
-import { PRInfo, PRDiff } from './pr-analyzer';
+import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
+import { AIReviewService, ReviewFocus, AIDebugInfo } from './ai-review-service';
 
+export interface ReviewIssue {
+  // Location
+  file: string;
+  line: number;
+  endLine?: number;
+
+  // Issue details
+  ruleId: string;
+  message: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+
+  // Optional enhancement
+  suggestion?: string;
+  replacement?: string;
+}
+
+// Keep old interface for backward compatibility during transition
 export interface ReviewComment {
   file: string;
   line: number;
   message: string;
-  severity: 'info' | 'warning' | 'error';
+  severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
 }
 
 export interface ReviewSummary {
-  overallScore: number; // 0-100
-  totalIssues: number;
-  criticalIssues: number;
+  // Simplified - only raw data, calculations done elsewhere
+  issues: ReviewIssue[];
   suggestions: string[];
-  comments: ReviewComment[];
+  /** Debug information (only included when debug mode is enabled) */
+  debug?: AIDebugInfo;
 }
 
 export interface ReviewOptions {
   focus?: 'security' | 'performance' | 'style' | 'all';
-  format?: 'summary' | 'detailed';
+  format?: 'table' | 'json' | 'markdown' | 'sarif';
+}
+
+// Helper functions for calculating metrics from issues
+export function calculateOverallScore(issues: ReviewIssue[]): number {
+  if (issues.length === 0) return 100;
+
+  const criticalCount = issues.filter(i => i.severity === 'critical').length;
+  const errorCount = issues.filter(i => i.severity === 'error').length;
+  const warningCount = issues.filter(i => i.severity === 'warning').length;
+  const infoCount = issues.filter(i => i.severity === 'info').length;
+
+  return Math.max(
+    0,
+    100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
+  );
+}
+
+export function calculateTotalIssues(issues: ReviewIssue[]): number {
+  return issues.length;
+}
+
+export function calculateCriticalIssues(issues: ReviewIssue[]): number {
+  return issues.filter(i => i.severity === 'critical').length;
+}
+
+export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] {
+  return issues.map(issue => ({
+    file: issue.file,
+    line: issue.line,
+    message: issue.message,
+    severity: issue.severity,
+    category: issue.category,
+  }));
 }
 
 export class PRReviewer {
   private commentManager: CommentManager;
+  private aiReviewService: AIReviewService;
 
   constructor(private octokit: Octokit) {
     this.commentManager = new CommentManager(octokit);
+    this.aiReviewService = new AIReviewService();
   }
 
   async reviewPR(
@@ -37,132 +91,16 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { focus = 'all', format = 'summary' } = options;
+    const { focus = 'all', format = 'table' } = options;
 
-    // Mock analysis - in real implementation this would use AI or static analysis tools
-    const comments = this.analyzePRFiles(prInfo.files, focus);
-    const suggestions = this.generateSuggestions(prInfo, comments);
+    // Execute AI review (no fallback)
+    const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
 
-    const criticalIssues = comments.filter(c => c.severity === 'error').length;
-    const totalIssues = comments.length;
-    const overallScore = Math.max(0, 100 - criticalIssues * 20 - totalIssues * 5);
-
+    // Apply format filtering
     return {
-      overallScore,
-      totalIssues,
-      criticalIssues,
-      suggestions,
-      comments: format === 'detailed' ? comments : comments.slice(0, 5), // Limit for summary
+      ...aiReview,
+      issues: format === 'markdown' ? aiReview.issues : aiReview.issues.slice(0, 5),
     };
-  }
-
-  private analyzePRFiles(files: PRDiff[], focus: string): ReviewComment[] {
-    const comments: ReviewComment[] = [];
-
-    for (const file of files) {
-      // Mock security analysis
-      if ((focus === 'security' || focus === 'all') && this.hasSecurityConcerns(file)) {
-        comments.push({
-          file: file.filename,
-          line: 1,
-          message: 'Consider input validation and sanitization',
-          severity: 'warning',
-          category: 'security',
-        });
-      }
-
-      // Mock performance analysis
-      if ((focus === 'performance' || focus === 'all') && this.hasPerformanceConcerns(file)) {
-        comments.push({
-          file: file.filename,
-          line: 10,
-          message: 'This operation might be expensive - consider caching',
-          severity: 'info',
-          category: 'performance',
-        });
-      }
-
-      // Mock style analysis
-      if ((focus === 'style' || focus === 'all') && this.hasStyleIssues(file)) {
-        comments.push({
-          file: file.filename,
-          line: 5,
-          message: 'Consider consistent naming conventions',
-          severity: 'info',
-          category: 'style',
-        });
-      }
-
-      // Mock large file warning
-      if (file.additions > 100) {
-        comments.push({
-          file: file.filename,
-          line: 1,
-          message: 'Large file change detected - consider breaking into smaller commits',
-          severity: 'warning',
-          category: 'logic',
-        });
-      }
-
-      // Mock missing documentation
-      if (file.filename.endsWith('.ts') && !file.patch?.includes('/**')) {
-        comments.push({
-          file: file.filename,
-          line: 1,
-          message: 'Consider adding JSDoc comments for public functions',
-          severity: 'info',
-          category: 'documentation',
-        });
-      }
-    }
-
-    return comments;
-  }
-
-  private hasSecurityConcerns(file: PRDiff): boolean {
-    if (!file.patch) return false;
-    const securityKeywords = ['eval', 'innerHTML', 'dangerouslySetInnerHTML', 'exec', 'system'];
-    return securityKeywords.some(keyword => file.patch!.includes(keyword));
-  }
-
-  private hasPerformanceConcerns(file: PRDiff): boolean {
-    if (!file.patch) return false;
-    const performanceKeywords = ['for', 'while', 'map', 'filter', 'reduce'];
-    return performanceKeywords.some(keyword => file.patch!.includes(keyword));
-  }
-
-  private hasStyleIssues(file: PRDiff): boolean {
-    if (!file.patch) return false;
-    // Mock style check - inconsistent spacing, naming, etc.
-    return file.patch.includes('  ') || file.patch.includes('\t');
-  }
-
-  private generateSuggestions(prInfo: PRInfo, comments: ReviewComment[]): string[] {
-    const suggestions: string[] = [];
-
-    if (prInfo.totalAdditions > 500) {
-      suggestions.push('Consider breaking this large PR into smaller, more focused changes');
-    }
-
-    if (comments.some(c => c.category === 'security')) {
-      suggestions.push('Run security audit tools like npm audit or Snyk');
-    }
-
-    if (comments.some(c => c.category === 'performance')) {
-      suggestions.push('Consider performance profiling for critical paths');
-    }
-
-    if (prInfo.files.some(f => f.filename.includes('test'))) {
-      suggestions.push('Great job including tests! Consider edge cases and error scenarios');
-    } else {
-      suggestions.push('Consider adding unit tests for the new functionality');
-    }
-
-    if (!prInfo.body.trim()) {
-      suggestions.push('Add a detailed PR description explaining the changes and their purpose');
-    }
-
-    return suggestions;
   }
 
   async postReviewComment(
@@ -185,17 +123,23 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions
   ): string {
-    const { format = 'summary' } = options;
+    const { format = 'table' } = options;
+
+    // Calculate metrics from issues
+    const overallScore = calculateOverallScore(summary.issues);
+    const totalIssues = calculateTotalIssues(summary.issues);
+    const criticalIssues = calculateCriticalIssues(summary.issues);
+    const comments = convertIssuesToComments(summary.issues);
 
     // Create main summary section
     let comment = `# 🔍 Visor Code Review Results\n\n`;
     comment += `## 📊 Summary\n`;
-    comment += `- **Overall Score**: ${summary.overallScore}/100\n`;
-    comment += `- **Issues Found**: ${summary.totalIssues} (${summary.criticalIssues} Critical, ${summary.totalIssues - summary.criticalIssues} Other)\n`;
-    comment += `- **Files Analyzed**: ${new Set(summary.comments.map(c => c.file)).size}\n\n`;
+    comment += `- **Overall Score**: ${overallScore}/100\n`;
+    comment += `- **Issues Found**: ${totalIssues} (${criticalIssues} Critical, ${totalIssues - criticalIssues} Other)\n`;
+    comment += `- **Files Analyzed**: ${new Set(comments.map(c => c.file)).size}\n\n`;
 
     // Group comments by category for collapsible sections
-    const groupedComments = this.groupCommentsByCategory(summary.comments);
+    const groupedComments = this.groupCommentsByCategory(comments);
 
     for (const [category, comments] of Object.entries(groupedComments)) {
       const categoryScore = this.calculateCategoryScore(comments);
@@ -209,14 +153,14 @@ export class PRReviewer {
         sectionContent += `### Issues Found:\n`;
         for (const reviewComment of comments.slice(
           0,
-          format === 'detailed' ? comments.length : 3
+          format === 'markdown' ? comments.length : 3
         )) {
           sectionContent += `- **${reviewComment.severity.toUpperCase()}**: ${reviewComment.message}\n`;
           sectionContent += `  - **File**: \`${reviewComment.file}:${reviewComment.line}\`\n\n`;
         }
 
-        if (format === 'summary' && comments.length > 3) {
-          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=detailed\` for complete analysis.*\n\n`;
+        if (format === 'table' && comments.length > 3) {
+          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
         }
       } else {
         sectionContent += `No issues found in this category. Great job! ✅\n\n`;
@@ -240,20 +184,32 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
+    // Add debug section if debug information is available
+    if (summary.debug) {
+      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n';
+    }
+
     return comment;
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {
-    const { format = 'summary' } = options;
+    const { format = 'table' } = options;
+
+    // Calculate metrics from issues
+    const overallScore = calculateOverallScore(summary.issues);
+    const totalIssues = calculateTotalIssues(summary.issues);
+    const criticalIssues = calculateCriticalIssues(summary.issues);
+    const comments = convertIssuesToComments(summary.issues);
 
     let comment = `## 🤖 AI Code Review\n\n`;
-    comment += `**Overall Score:** ${summary.overallScore}/100 `;
+    comment += `**Overall Score:** ${overallScore}/100 `;
 
-    if (summary.overallScore >= 80) comment += '✅\n';
-    else if (summary.overallScore >= 60) comment += '⚠️\n';
+    if (overallScore >= 80) comment += '✅\n';
+    else if (overallScore >= 60) comment += '⚠️\n';
     else comment += '❌\n';
 
-    comment += `**Issues Found:** ${summary.totalIssues} (${summary.criticalIssues} critical)\n\n`;
+    comment += `**Issues Found:** ${totalIssues} (${criticalIssues} critical)\n\n`;
 
     if (summary.suggestions.length > 0) {
       comment += `### 💡 Suggestions\n`;
@@ -263,9 +219,9 @@ export class PRReviewer {
       comment += '\n';
     }
 
-    if (summary.comments.length > 0) {
+    if (comments.length > 0) {
       comment += `### 🔍 Code Issues\n`;
-      for (const reviewComment of summary.comments) {
+      for (const reviewComment of comments) {
         const emoji =
           reviewComment.severity === 'error'
             ? '❌'
@@ -277,11 +233,17 @@ export class PRReviewer {
       }
     }
 
-    if (format === 'summary' && summary.totalIssues > 5) {
-      comment += `*Showing top 5 issues. Use \`/review --format=detailed\` for complete analysis.*\n\n`;
+    if (format === 'table' && totalIssues > 5) {
+      comment += `*Showing top 5 issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
     }
 
-    comment += `---\n*Review powered by Gates Action - Use \`/help\` for available commands*`;
+    // Add debug section if debug information is available
+    if (summary.debug) {
+      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n';
+    }
+
+    comment += `---\n*Review powered by Visor - Use \`/help\` for available commands*`;
 
     return comment;
   }
@@ -324,5 +286,41 @@ export class PRReviewer {
       documentation: '📚',
     };
     return emojiMap[category] || '📝';
+  }
+
+  private formatDebugSection(debug: AIDebugInfo): string {
+    const formattedContent = [
+      `**Provider:** ${debug.provider}`,
+      `**Model:** ${debug.model}`,
+      `**API Key Source:** ${debug.apiKeySource}`,
+      `**Processing Time:** ${debug.processingTime}ms`,
+      `**Timestamp:** ${debug.timestamp}`,
+      `**Prompt Length:** ${debug.promptLength} characters`,
+      `**Response Length:** ${debug.responseLength} characters`,
+      `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+      '',
+      '### AI Prompt',
+      '```',
+      debug.prompt,
+      '```',
+      '',
+      '### Raw AI Response',
+      '```json',
+      debug.rawResponse,
+      '```',
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      formattedContent.push('', '### Errors');
+      debug.errors.forEach(error => {
+        formattedContent.push(`- ${error}`);
+      });
+    }
+
+    return this.commentManager.createCollapsibleSection(
+      '🐛 Debug Information',
+      formattedContent.join('\n'),
+      false // Start collapsed
+    );
   }
 }

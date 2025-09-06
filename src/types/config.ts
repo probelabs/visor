@@ -15,7 +15,7 @@ export type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed';
 /**
  * Valid output formats
  */
-export type ConfigOutputFormat = 'summary' | 'detailed';
+export type ConfigOutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 
 /**
  * Valid grouping options
@@ -23,17 +23,49 @@ export type ConfigOutputFormat = 'summary' | 'detailed';
 export type GroupByOption = 'check' | 'file' | 'severity';
 
 /**
+ * AI provider configuration
+ */
+export interface AIProviderConfig {
+  /** AI provider to use */
+  provider?: 'google' | 'anthropic' | 'openai';
+  /** Model name to use */
+  model?: string;
+  /** API key (usually from environment variables) */
+  apiKey?: string;
+  /** Request timeout in milliseconds */
+  timeout?: number;
+}
+
+/**
  * Configuration for a single check
  */
 export interface CheckConfig {
   /** Type of check to perform */
   type: ConfigCheckType;
-  /** AI prompt for the check */
+  /** AI prompt for the check or focus type (security/performance/style/all) */
   prompt: string;
   /** Events that trigger this check */
   on: EventTrigger[];
   /** File patterns that trigger this check (optional) */
   triggers?: string[];
+  /** AI provider configuration (optional) */
+  ai?: AIProviderConfig;
+}
+
+/**
+ * Debug mode configuration
+ */
+export interface DebugConfig {
+  /** Enable debug mode */
+  enabled: boolean;
+  /** Include AI prompts in debug output */
+  includePrompts: boolean;
+  /** Include raw AI responses in debug output */
+  includeRawResponses: boolean;
+  /** Include timing information */
+  includeTiming: boolean;
+  /** Include provider information */
+  includeProviderInfo: boolean;
 }
 
 /**
@@ -46,6 +78,8 @@ export interface PrCommentOutput {
   group_by: GroupByOption;
   /** Whether to collapse sections by default */
   collapse: boolean;
+  /** Debug mode configuration (optional) */
+  debug?: DebugConfig;
 }
 
 /**

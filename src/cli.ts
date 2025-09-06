@@ -32,6 +32,12 @@ export class CLI {
       )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--config <path>', 'Path to configuration file')
+      .option(
+        '--timeout <ms>',
+        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        value => parseInt(value, 10)
+      )
+      .option('--debug', 'Enable debug mode for detailed output')
       .addHelpText('after', this.getExamplesText());
 
     // Add validation for options
@@ -67,6 +73,12 @@ export class CLI {
         )
         .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
         .option('--config <path>', 'Path to configuration file')
+        .option(
+          '--timeout <ms>',
+          'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+          value => parseInt(value, 10)
+        )
+        .option('--debug', 'Enable debug mode for detailed output')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -85,6 +97,8 @@ export class CLI {
         checks: uniqueChecks,
         output: options.output as OutputFormat,
         configPath: options.config,
+        timeout: options.timeout,
+        debug: options.debug,
         help: options.help,
         version: options.version,
       };
@@ -130,6 +144,15 @@ export class CLI {
         `Invalid output format: ${options.output}. Available options: ${this.validOutputs.join(', ')}`
       );
     }
+
+    // Validate timeout
+    if (options.timeout !== undefined) {
+      if (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout < 0) {
+        throw new Error(
+          `Invalid timeout value: ${options.timeout}. Timeout must be a positive number in milliseconds.`
+        );
+      }
+    }
   }
 
   /**
@@ -150,6 +173,12 @@ export class CLI {
       )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--config <path>', 'Path to configuration file')
+      .option(
+        '--timeout <ms>',
+        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        value => parseInt(value, 10)
+      )
+      .option('--debug', 'Enable debug mode for detailed output')
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work
@@ -183,7 +212,9 @@ Examples:
   visor --check performance --check security --config ./visor.config.yaml
   visor --check all --output json
   visor --check architecture --check security --output markdown
-  visor --check security --output sarif > results.sarif`;
+  visor --check security --output sarif > results.sarif
+  visor --check all --timeout 300000 --output json   # 5 minute timeout
+  visor --check all --debug --output markdown        # Enable debug mode`;
   }
 
   /**

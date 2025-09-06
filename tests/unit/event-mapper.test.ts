@@ -29,7 +29,7 @@ describe('EventMapper', () => {
       },
       output: {
         pr_comment: {
-          format: 'summary',
+          format: 'table',
           group_by: 'check',
           collapse: true,
         },

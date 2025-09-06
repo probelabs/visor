@@ -291,7 +291,7 @@ describe('Malformed Data Handling Tests', () => {
         {
           version: '1.0',
           checks: 'not-an-object', // Should be object
-          output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+          output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
         },
         // Invalid check definitions
         {
@@ -302,7 +302,7 @@ describe('Malformed Data Handling Tests', () => {
             'invalid-check-3': { type: 'unknown-type' }, // Invalid type
             'invalid-check-4': { type: 'ai' }, // Missing required fields
           },
-          output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+          output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
         },
         // Invalid trigger patterns
         {
@@ -315,7 +315,7 @@ describe('Malformed Data Handling Tests', () => {
               triggers: 'not-an-array', // Should be array
             },
           },
-          output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+          output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
         },
       ];
 
@@ -364,7 +364,7 @@ describe('Malformed Data Handling Tests', () => {
       const circularConfig: any = {
         version: '1.0',
         checks: {},
-        output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+        output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       };
 
       circularConfig.checks.circularCheck = {
@@ -447,7 +447,7 @@ describe('Malformed Data Handling Tests', () => {
           }
 
           if (options.output) {
-            expect(['summary', 'detailed', 'json']).toContain(options.output);
+            expect(['table', 'json', 'markdown', 'sarif']).toContain(options.output);
           }
         } catch (error: any) {
           console.log(`    Expected error: ${error.message}`);
@@ -509,7 +509,7 @@ describe('Malformed Data Handling Tests', () => {
 
           if (options.output) {
             console.log(`    Output: ${options.output}`);
-            expect(['summary', 'detailed', 'json']).toContain(options.output);
+            expect(['table', 'json', 'markdown', 'sarif']).toContain(options.output);
           }
         } catch (error: any) {
           console.log(`    Injection blocked: ${error.message}`);
@@ -560,7 +560,7 @@ describe('Malformed Data Handling Tests', () => {
           },
         },
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
 
@@ -628,7 +628,7 @@ describe('Malformed Data Handling Tests', () => {
           },
         },
         output: {
-          pr_comment: { format: 'summary' as const, group_by: 'check' as const, collapse: true },
+          pr_comment: { format: 'table' as const, group_by: 'check' as const, collapse: true },
         },
       };
 

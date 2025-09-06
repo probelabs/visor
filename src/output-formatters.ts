@@ -1,5 +1,13 @@
 import CliTable3 from 'cli-table3';
-import { ReviewSummary, ReviewComment } from './reviewer';
+import {
+  ReviewSummary,
+  ReviewComment,
+  ReviewIssue,
+  calculateOverallScore,
+  calculateTotalIssues,
+  calculateCriticalIssues,
+  convertIssuesToComments,
+} from './reviewer';
 import { GitRepositoryInfo } from './git-repository-analyzer';
 
 export interface AnalysisResult {
@@ -25,6 +33,12 @@ export class OutputFormatters {
     const { showDetails = false, groupByCategory = true } = options;
     let output = '';
 
+    // Calculate metrics from issues once at the top
+    const issues = result.reviewSummary.issues || [];
+    const totalIssues = issues.length;
+    const criticalIssues = issues.filter(i => i.severity === 'critical').length;
+    const overallScore = calculateOverallScore(issues);
+
     // Summary table
     const summaryTable = new CliTable3({
       head: ['Metric', 'Value'],
@@ -36,9 +50,9 @@ export class OutputFormatters {
     });
 
     summaryTable.push(
-      ['Overall Score', `${result.reviewSummary.overallScore}/100`],
-      ['Total Issues', result.reviewSummary.totalIssues.toString()],
-      ['Critical Issues', result.reviewSummary.criticalIssues.toString()],
+      ['Overall Score', `${overallScore}/100`],
+      ['Total Issues', totalIssues.toString()],
+      ['Critical Issues', criticalIssues.toString()],
       ['Files Analyzed', result.repositoryInfo.files.length.toString()],
       ['Total Additions', result.repositoryInfo.totalAdditions.toString()],
       ['Total Deletions', result.repositoryInfo.totalDeletions.toString()],
@@ -47,19 +61,22 @@ export class OutputFormatters {
     );
 
     output += '📊 Analysis Summary\n';
-    output += summaryTable.toString() + '\n\n';
+    output += summaryTable.toString() + '\n';
+
+    output += '\n';
 
     // Issues by category table
-    if (result.reviewSummary.comments.length > 0) {
+    if (issues.length > 0) {
       if (groupByCategory) {
-        const groupedComments = this.groupCommentsByCategory(result.reviewSummary.comments);
+        const groupedComments = this.groupCommentsByCategory(convertIssuesToComments(issues));
 
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
 
           const categoryTable = new CliTable3({
             head: ['File', 'Line', 'Severity', 'Message'],
-            colWidths: [25, 8, 12, 50],
+            colWidths: [25, 8, 15, 60],
+            wordWrap: true,
             style: {
               head: ['cyan', 'bold'],
               border: ['grey'],
@@ -70,11 +87,31 @@ export class OutputFormatters {
           output += `${emoji} ${category.toUpperCase()} Issues (${comments.length})\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
+            // Convert comment back to issue to access suggestion/replacement fields
+            const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+
+            let messageContent = this.wrapText(comment.message, 55);
+
+            // Add suggestion if available
+            if (issue?.suggestion) {
+              messageContent += '\n💡 ' + this.wrapText(issue.suggestion, 53);
+            }
+
+            // Add replacement code if available
+            if (issue?.replacement) {
+              messageContent +=
+                '\n📝 Code fix:\n' +
+                issue.replacement
+                  .split('\n')
+                  .map(line => '  ' + line)
+                  .join('\n');
+            }
+
             categoryTable.push([
               comment.file,
               comment.line.toString(),
-              { content: comment.severity.toUpperCase(), hAlign: 'center' },
-              this.truncateText(comment.message, 45),
+              { content: this.formatSeverity(comment.severity), hAlign: 'center' },
+              messageContent,
             ]);
           }
 
@@ -89,7 +126,8 @@ export class OutputFormatters {
         // All issues in one table
         const issuesTable = new CliTable3({
           head: ['File', 'Line', 'Category', 'Severity', 'Message'],
-          colWidths: [20, 6, 12, 10, 40],
+          colWidths: [20, 6, 12, 15, 50],
+          wordWrap: true,
           style: {
             head: ['cyan', 'bold'],
             border: ['grey'],
@@ -98,16 +136,30 @@ export class OutputFormatters {
 
         output += '🔍 All Issues\n';
 
-        for (const comment of result.reviewSummary.comments.slice(
-          0,
-          showDetails ? undefined : 10
-        )) {
+        for (const issue of issues.slice(0, showDetails ? undefined : 10)) {
+          let messageContent = this.wrapText(issue.message, 45);
+
+          // Add suggestion if available
+          if (issue.suggestion) {
+            messageContent += '\n💡 ' + this.wrapText(issue.suggestion, 43);
+          }
+
+          // Add replacement code if available
+          if (issue.replacement) {
+            messageContent +=
+              '\n📝 Code fix:\n' +
+              issue.replacement
+                .split('\n')
+                .map(line => '  ' + line)
+                .join('\n');
+          }
+
           issuesTable.push([
-            this.truncateText(comment.file, 18),
-            comment.line.toString(),
-            comment.category,
-            comment.severity.toUpperCase(),
-            this.truncateText(comment.message, 35),
+            this.truncateText(issue.file, 18),
+            issue.line.toString(),
+            issue.category,
+            this.formatSeverity(issue.severity),
+            messageContent,
           ]);
         }
 
@@ -174,11 +226,17 @@ export class OutputFormatters {
    * Format analysis results as JSON
    */
   static formatAsJSON(result: AnalysisResult, options: OutputFormatterOptions = {}): string {
+    // Calculate metrics from issues
+    const issues = result.reviewSummary.issues;
+    const overallScore = calculateOverallScore(issues);
+    const totalIssues = calculateTotalIssues(issues);
+    const criticalIssues = calculateCriticalIssues(issues);
+
     const jsonResult = {
       summary: {
-        overallScore: result.reviewSummary.overallScore,
-        totalIssues: result.reviewSummary.totalIssues,
-        criticalIssues: result.reviewSummary.criticalIssues,
+        overallScore,
+        totalIssues,
+        criticalIssues,
         executionTime: result.executionTime,
         timestamp: result.timestamp,
         checksExecuted: result.checksExecuted,
@@ -195,8 +253,8 @@ export class OutputFormatters {
         totalDeletions: result.repositoryInfo.totalDeletions,
       },
       issues: options.groupByCategory
-        ? this.groupCommentsByCategory(result.reviewSummary.comments)
-        : result.reviewSummary.comments,
+        ? this.groupCommentsByCategory(convertIssuesToComments(issues))
+        : issues,
       suggestions: result.reviewSummary.suggestions,
       files: options.includeFiles ? result.repositoryInfo.files : undefined,
     };
@@ -208,6 +266,9 @@ export class OutputFormatters {
    * Format analysis results as SARIF 2.1.0
    */
   static formatAsSarif(result: AnalysisResult, _options: OutputFormatterOptions = {}): string {
+    // Get issues from result
+    const issues = result.reviewSummary.issues;
+
     // Generate unique rule definitions for each issue category
     const rules: Array<{
       id: string;
@@ -278,32 +339,33 @@ export class OutputFormatters {
 
     // Map Visor severity to SARIF level
     const severityToLevel: Record<string, string> = {
+      critical: 'error',
       error: 'error',
       warning: 'warning',
       info: 'note',
     };
 
-    // Convert ReviewComments to SARIF results
-    const sarifResults = result.reviewSummary.comments.map((comment, _index) => {
-      const ruleId = categoryToRuleId[comment.category] || 'visor-logic-complexity';
+    // Convert ReviewIssues to SARIF results
+    const sarifResults = issues.map((issue: ReviewIssue, _index: number) => {
+      const ruleId = categoryToRuleId[issue.category] || 'visor-logic-complexity';
       const ruleIndex = rules.findIndex(rule => rule.id === ruleId);
 
       return {
         ruleId: ruleId,
         ruleIndex: ruleIndex,
-        level: severityToLevel[comment.severity] || 'warning',
+        level: severityToLevel[issue.severity] || 'warning',
         message: {
-          text: comment.message,
+          text: issue.message,
         },
         locations: [
           {
             physicalLocation: {
               artifactLocation: {
-                uri: comment.file,
+                uri: issue.file,
                 uriBaseId: '%SRCROOT%',
               },
               region: {
-                startLine: comment.line,
+                startLine: issue.line,
                 startColumn: 1,
               },
             },
@@ -341,14 +403,20 @@ export class OutputFormatters {
     const { showDetails = false, groupByCategory = true } = options;
     let output = '';
 
+    // Calculate metrics from issues
+    const issues = result.reviewSummary.issues;
+    const overallScore = calculateOverallScore(issues);
+    const totalIssues = calculateTotalIssues(issues);
+    const criticalIssues = calculateCriticalIssues(issues);
+
     // Header with summary
     output += `# 🔍 Visor Analysis Results\n\n`;
     output += `## 📊 Summary\n\n`;
     output += `| Metric | Value |\n`;
     output += `|--------|-------|\n`;
-    output += `| Overall Score | ${result.reviewSummary.overallScore}/100 |\n`;
-    output += `| Total Issues | ${result.reviewSummary.totalIssues} |\n`;
-    output += `| Critical Issues | ${result.reviewSummary.criticalIssues} |\n`;
+    output += `| Overall Score | ${overallScore}/100 |\n`;
+    output += `| Total Issues | ${totalIssues} |\n`;
+    output += `| Critical Issues | ${criticalIssues} |\n`;
     output += `| Files Analyzed | ${result.repositoryInfo.files.length} |\n`;
     output += `| Execution Time | ${result.executionTime}ms |\n`;
     output += `| Checks Executed | ${result.checksExecuted.join(', ')} |\n\n`;
@@ -362,9 +430,9 @@ export class OutputFormatters {
     output += `- **Changes**: +${result.repositoryInfo.totalAdditions}/-${result.repositoryInfo.totalDeletions}\n\n`;
 
     // Issues
-    if (result.reviewSummary.comments.length > 0) {
+    if (issues.length > 0) {
       if (groupByCategory) {
-        const groupedComments = this.groupCommentsByCategory(result.reviewSummary.comments);
+        const groupedComments = this.groupCommentsByCategory(convertIssuesToComments(issues));
 
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
@@ -374,10 +442,50 @@ export class OutputFormatters {
           output += `## ${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (Score: ${score}/100)\n\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
+            // Convert comment back to issue to access suggestion/replacement fields
+            const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+
             const severityEmoji = this.getSeverityEmoji(comment.severity);
             output += `### ${severityEmoji} \`${comment.file}:${comment.line}\`\n`;
             output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
-            output += `**Message**: ${comment.message}\n\n`;
+            output += `**Message**: ${comment.message}  \n`;
+
+            // Add suggestion if available
+            if (issue?.suggestion) {
+              output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+            }
+
+            // Add replacement code if available
+            if (issue?.replacement) {
+              // Determine language from file extension
+              const ext = comment.file.split('.').pop() || '';
+              const langMap: Record<string, string> = {
+                js: 'javascript',
+                jsx: 'javascript',
+                ts: 'typescript',
+                tsx: 'typescript',
+                py: 'python',
+                rb: 'ruby',
+                go: 'go',
+                java: 'java',
+                cpp: 'cpp',
+                c: 'c',
+                cs: 'csharp',
+                php: 'php',
+                swift: 'swift',
+                kt: 'kotlin',
+                rs: 'rust',
+                sh: 'bash',
+                yaml: 'yaml',
+                yml: 'yaml',
+                json: 'json',
+              };
+              const lang = langMap[ext] || '';
+
+              output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+            }
+
+            output += '\n';
           }
 
           if (!showDetails && comments.length > 5) {
@@ -385,10 +493,50 @@ export class OutputFormatters {
             output += `<summary>Show ${comments.length - 5} more issues...</summary>\n\n`;
 
             for (const comment of comments.slice(5)) {
+              // Convert comment back to issue to access suggestion/replacement fields
+              const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+
               const severityEmoji = this.getSeverityEmoji(comment.severity);
               output += `### ${severityEmoji} \`${comment.file}:${comment.line}\`\n`;
               output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
-              output += `**Message**: ${comment.message}\n\n`;
+              output += `**Message**: ${comment.message}  \n`;
+
+              // Add suggestion if available
+              if (issue?.suggestion) {
+                output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+              }
+
+              // Add replacement code if available
+              if (issue?.replacement) {
+                // Determine language from file extension
+                const ext = comment.file.split('.').pop() || '';
+                const langMap: Record<string, string> = {
+                  js: 'javascript',
+                  jsx: 'javascript',
+                  ts: 'typescript',
+                  tsx: 'typescript',
+                  py: 'python',
+                  rb: 'ruby',
+                  go: 'go',
+                  java: 'java',
+                  cpp: 'cpp',
+                  c: 'c',
+                  cs: 'csharp',
+                  php: 'php',
+                  swift: 'swift',
+                  kt: 'kotlin',
+                  rs: 'rust',
+                  sh: 'bash',
+                  yaml: 'yaml',
+                  yml: 'yaml',
+                  json: 'json',
+                };
+                const lang = langMap[ext] || '';
+
+                output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+              }
+
+              output += '\n';
             }
 
             output += `</details>\n\n`;
@@ -397,11 +545,48 @@ export class OutputFormatters {
       } else {
         output += `## 🔍 All Issues\n\n`;
 
-        for (const comment of result.reviewSummary.comments) {
-          const severityEmoji = this.getSeverityEmoji(comment.severity);
-          output += `### ${severityEmoji} \`${comment.file}:${comment.line}\` (${comment.category})\n`;
-          output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
-          output += `**Message**: ${comment.message}\n\n`;
+        for (const issue of issues) {
+          const severityEmoji = this.getSeverityEmoji(issue.severity);
+          output += `### ${severityEmoji} \`${issue.file}:${issue.line}\` (${issue.category})\n`;
+          output += `**Severity**: ${issue.severity.toUpperCase()}  \n`;
+          output += `**Message**: ${issue.message}  \n`;
+
+          // Add suggestion if available
+          if (issue.suggestion) {
+            output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+          }
+
+          // Add replacement code if available
+          if (issue.replacement) {
+            // Determine language from file extension
+            const ext = issue.file.split('.').pop() || '';
+            const langMap: Record<string, string> = {
+              js: 'javascript',
+              jsx: 'javascript',
+              ts: 'typescript',
+              tsx: 'typescript',
+              py: 'python',
+              rb: 'ruby',
+              go: 'go',
+              java: 'java',
+              cpp: 'cpp',
+              c: 'c',
+              cs: 'csharp',
+              php: 'php',
+              swift: 'swift',
+              kt: 'kotlin',
+              rs: 'rust',
+              sh: 'bash',
+              yaml: 'yaml',
+              yml: 'yaml',
+              json: 'json',
+            };
+            const lang = langMap[ext] || '';
+
+            output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+          }
+
+          output += '\n';
         }
       }
     } else {
@@ -465,11 +650,74 @@ export class OutputFormatters {
   private static calculateCategoryScore(comments: ReviewComment[]): number {
     if (comments.length === 0) return 100;
 
+    const criticalCount = comments.filter(c => c.severity === 'critical').length;
     const errorCount = comments.filter(c => c.severity === 'error').length;
     const warningCount = comments.filter(c => c.severity === 'warning').length;
     const infoCount = comments.filter(c => c.severity === 'info').length;
 
-    return Math.max(0, 100 - errorCount * 25 - warningCount * 10 - infoCount * 5);
+    return Math.max(
+      0,
+      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
+    );
+  }
+
+  /**
+   * Calculate overall score from issues
+   */
+  private static calculateOverallScore(issues: (ReviewIssue | ReviewComment)[]): number {
+    if (issues.length === 0) return 100;
+
+    const criticalCount = issues.filter(i => i.severity === 'critical').length;
+    const errorCount = issues.filter(i => i.severity === 'error').length;
+    const warningCount = issues.filter(i => i.severity === 'warning').length;
+    const infoCount = issues.filter(i => i.severity === 'info').length;
+
+    return Math.max(
+      0,
+      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
+    );
+  }
+
+  /**
+   * Convert ReviewIssue to ReviewComment for backward compatibility
+   */
+  private static issueToComment(issue: ReviewIssue | ReviewComment): ReviewComment {
+    // If it's already a ReviewComment, return as-is
+    if ('ruleId' in issue) {
+      return {
+        file: issue.file,
+        line: issue.line,
+        message: issue.message,
+        severity: issue.severity,
+        category: issue.category,
+      };
+    }
+    return issue;
+  }
+
+  /**
+   * Group issues by category for display
+   */
+  private static groupIssuesByCategory(
+    issues: (ReviewIssue | ReviewComment)[]
+  ): Record<string, ReviewComment[]> {
+    const grouped: Record<string, ReviewComment[]> = {
+      security: [],
+      performance: [],
+      style: [],
+      logic: [],
+      documentation: [],
+    };
+
+    for (const issue of issues) {
+      const comment = this.issueToComment(issue);
+      if (!grouped[comment.category]) {
+        grouped[comment.category] = [];
+      }
+      grouped[comment.category].push(comment);
+    }
+
+    return grouped;
   }
 
   private static getCategoryEmoji(category: string): string {
@@ -485,11 +733,22 @@ export class OutputFormatters {
 
   private static getSeverityEmoji(severity: string): string {
     const emojiMap: Record<string, string> = {
+      critical: '🔥',
       error: '🚨',
       warning: '⚠️',
       info: 'ℹ️',
     };
     return emojiMap[severity] || '📝';
+  }
+
+  private static formatSeverity(severity: string): string {
+    const severityMap: Record<string, string> = {
+      info: 'INFO',
+      warning: 'WARNING',
+      error: 'ERROR',
+      critical: '🔥 CRITICAL',
+    };
+    return severityMap[severity.toLowerCase()] || severity.toUpperCase();
   }
 
   private static getFileStatusEmoji(status: string): string {
@@ -504,6 +763,7 @@ export class OutputFormatters {
 
   private static getSeverityColor(severity: string): string {
     const colorMap: Record<string, string> = {
+      critical: 'red',
       error: 'red',
       warning: 'yellow',
       info: 'cyan',

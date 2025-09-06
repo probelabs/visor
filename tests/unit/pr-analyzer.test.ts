@@ -8,6 +8,9 @@ const mockOctokit = {
       get: jest.fn(),
       listFiles: jest.fn(),
     },
+    repos: {
+      getCommit: jest.fn(),
+    },
     issues: {
       listComments: jest.fn(),
     },
@@ -104,6 +107,7 @@ describe('PRAnalyzer', () => {
         ],
         totalAdditions: 75,
         totalDeletions: 10,
+        fullDiff: expect.stringContaining('--- src/test.ts'),
       });
 
       expect(mockOctokit.rest.pulls.get).toHaveBeenCalledWith({
@@ -232,6 +236,166 @@ describe('PRAnalyzer', () => {
 
       expect(result[0].author).toBe('unknown');
       expect(result[0].body).toBe('');
+    });
+  });
+
+  describe('fetchCommitDiff', () => {
+    test('should fetch commit diff for incremental analysis', async () => {
+      const mockCommitData = {
+        data: {
+          sha: 'abc123',
+          files: [
+            {
+              filename: 'src/updated.ts',
+              patch:
+                '@@ -1,3 +1,4 @@\n function updated() {\n+  console.log("updated");\n   return true;\n }',
+            },
+            {
+              filename: 'src/new.ts',
+              patch: '@@ -0,0 +1,3 @@\n+export function newFunc() {\n+  return "new";\n+}',
+            },
+          ],
+        },
+      };
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue(mockCommitData);
+
+      const result = await analyzer.fetchCommitDiff('owner', 'repo', 'abc123');
+
+      expect(result).toContain('--- src/updated.ts');
+      expect(result).toContain('--- src/new.ts');
+      expect(result).toContain('console.log("updated")');
+      expect(result).toContain('export function newFunc()');
+
+      expect(mockOctokit.rest.repos.getCommit).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'abc123',
+      });
+    });
+
+    test('should handle commit with no files', async () => {
+      const mockCommitData = {
+        data: {
+          sha: 'abc123',
+          files: [],
+        },
+      };
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue(mockCommitData);
+
+      const result = await analyzer.fetchCommitDiff('owner', 'repo', 'abc123');
+
+      expect(result).toBe('');
+    });
+
+    test('should handle commit fetch error gracefully', async () => {
+      mockOctokit.rest.repos.getCommit.mockRejectedValue(new Error('Commit not found'));
+
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await analyzer.fetchCommitDiff('owner', 'repo', 'invalid');
+
+      expect(result).toBe('');
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Failed to fetch commit diff for invalid:',
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('fetchPRDiff with commit SHA', () => {
+    test('should include commit diff when commit SHA is provided', async () => {
+      const mockPRData = {
+        data: {
+          number: 1,
+          title: 'Test PR',
+          body: 'This is a test PR',
+          user: { login: 'test-user' },
+          base: { ref: 'main' },
+          head: { ref: 'feature-branch' },
+        },
+      };
+
+      const mockFilesData = {
+        data: [
+          {
+            filename: 'src/test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            patch: '@@ -1,3 +1,3 @@\n function test() {\n-  return false;\n+  return true;\n }',
+            status: 'modified',
+          },
+        ],
+      };
+
+      const mockCommitData = {
+        data: {
+          sha: 'commit123',
+          files: [
+            {
+              filename: 'src/test.ts',
+              patch: '@@ -2,1 +2,1 @@\n-  return false;\n+  return true;',
+            },
+          ],
+        },
+      };
+
+      mockOctokit.rest.pulls.get.mockResolvedValue(mockPRData);
+      mockOctokit.rest.pulls.listFiles.mockResolvedValue(mockFilesData);
+      mockOctokit.rest.repos.getCommit.mockResolvedValue(mockCommitData);
+
+      const result = await analyzer.fetchPRDiff('owner', 'repo', 1, 'commit123');
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          number: 1,
+          title: 'Test PR',
+          fullDiff: expect.stringContaining('--- src/test.ts'),
+          commitDiff: expect.stringContaining('--- src/test.ts'),
+        })
+      );
+
+      expect(result.commitDiff).toContain('return true');
+      expect(mockOctokit.rest.repos.getCommit).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'commit123',
+      });
+    });
+
+    test('should work without commit SHA', async () => {
+      const mockPRData = {
+        data: {
+          number: 1,
+          title: 'Test PR',
+          body: 'This is a test PR',
+          user: { login: 'test-user' },
+          base: { ref: 'main' },
+          head: { ref: 'feature-branch' },
+        },
+      };
+
+      const mockFilesData = { data: [] };
+
+      mockOctokit.rest.pulls.get.mockResolvedValue(mockPRData);
+      mockOctokit.rest.pulls.listFiles.mockResolvedValue(mockFilesData);
+
+      const result = await analyzer.fetchPRDiff('owner', 'repo', 1);
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          number: 1,
+          title: 'Test PR',
+          fullDiff: '',
+        })
+      );
+
+      expect(result).not.toHaveProperty('commitDiff');
+      expect(mockOctokit.rest.repos.getCommit).not.toHaveBeenCalled();
     });
   });
 });

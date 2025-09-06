@@ -511,13 +511,15 @@ describe('Error Scenarios & Recovery Testing', () => {
           const review = await reviewer.reviewPR('test-owner', 'test-repo', 123, prInfo);
 
           console.log(`    Review completed despite potential AI issues`);
-          console.log(`    Score: ${review.overallScore}/100`);
-          console.log(`    Issues: ${review.totalIssues}`);
+          console.log(`    Issues found: ${review.issues.length}`);
+          console.log(`    Suggestions: ${review.suggestions.length}`);
 
           // Should provide reasonable fallback behavior
-          expect(review.overallScore).toBeGreaterThanOrEqual(0);
-          expect(review.overallScore).toBeLessThanOrEqual(100);
-          expect(review.totalIssues).toBeGreaterThanOrEqual(0);
+          expect(review.issues).toBeDefined();
+          expect(Array.isArray(review.issues)).toBe(true);
+          expect(review.issues.length).toBeGreaterThanOrEqual(0);
+          expect(review.suggestions).toBeDefined();
+          expect(Array.isArray(review.suggestions)).toBe(true);
         } catch (error: any) {
           console.log(`    AI service error handled: ${error.message}`);
           // Should handle AI service errors gracefully
@@ -559,12 +561,14 @@ describe('Error Scenarios & Recovery Testing', () => {
         const review = await reviewer.reviewPR('test-owner', 'test-repo', 123, malformedPRInfo);
 
         console.log(`  Malformed PR data handled gracefully`);
-        console.log(`  Review score: ${review.overallScore}`);
+        console.log(`  Issues found: ${review.issues.length}`);
 
         // Should handle malformed data without crashing
         expect(review).toBeDefined();
-        expect(typeof review.overallScore).toBe('number');
-        expect(review.overallScore).toBeGreaterThanOrEqual(0);
+        expect(review.issues).toBeDefined();
+        expect(Array.isArray(review.issues)).toBe(true);
+        expect(review.suggestions).toBeDefined();
+        expect(Array.isArray(review.suggestions)).toBe(true);
       } catch (error: any) {
         console.log(`  Expected error for malformed PR data: ${error.message}`);
         // Should provide clear error messages for malformed data
@@ -624,7 +628,7 @@ describe('Error Scenarios & Recovery Testing', () => {
       const __eventMapper = new EventMapper({
         version: '1.0',
         checks: {},
-        output: { pr_comment: { format: 'summary', group_by: 'check', collapse: true } },
+        output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       });
 
       // Test with various invalid configurations

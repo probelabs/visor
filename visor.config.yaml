@@ -1,6 +1,6 @@
 version: "1.0"
-name: "Gates Project Code Review Configuration"
-description: "AI-powered code review configuration for the Gates GitHub Action project"
+name: "Visor Project Code Review Configuration"
+description: "AI-powered code review configuration for the Visor GitHub Action project"
 
 # Global settings
 settings:
@@ -149,7 +149,7 @@ output:
       showDetails: true
       groupByCategory: true
   pr_comment:
-    format: detailed
+    format: markdown
     group_by: check
     collapse: false
 

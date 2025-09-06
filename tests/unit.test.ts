@@ -2,6 +2,29 @@ import * as core from '@actions/core';
 import { run } from '../src/index';
 
 jest.mock('@actions/core');
+
+// Mock AI review service to prevent API calls in tests
+jest.mock('../src/ai-review-service', () => ({
+  AIReviewService: jest.fn().mockImplementation(() => ({
+    executeReview: jest.fn().mockResolvedValue({
+      issues: [
+        {
+          file: 'test.ts',
+          line: 10,
+          endLine: undefined,
+          ruleId: 'test/mock-issue',
+          message: 'Mock issue for testing',
+          severity: 'warning',
+          category: 'style',
+          suggestion: 'This is a mock suggestion',
+          replacement: 'mockFixedCode();',
+        },
+      ],
+      suggestions: ['Mock suggestion'],
+    }),
+  })),
+}));
+
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn().mockImplementation(() => ({
     rest: {

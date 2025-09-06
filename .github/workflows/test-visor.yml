@@ -21,7 +21,7 @@ jobs:
       - name: 🔧 Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
       
       - name: 📦 Install dependencies
@@ -32,6 +32,7 @@ jobs:
       
       - name: 🔍 Test CLI Basic Functionality
         run: |
+          chmod +x ./dist/cli-main.js
           echo "Testing Visor CLI help..."
           ./dist/cli-main.js --help
           

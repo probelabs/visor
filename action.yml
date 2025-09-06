@@ -1,6 +1,6 @@
 name: 'Visor AI Code Review'
 description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues'
-author: 'Gates Team'
+author: 'Visor Team'
 branding:
   icon: 'eye'
   color: 'blue'
@@ -55,6 +55,11 @@ inputs:
     description: 'Minimum score required to pass (0-100)'
     required: false
     default: '0'
+  
+  debug:
+    description: 'Enable debug mode for detailed output in comments'
+    required: false
+    default: 'false'
   
   # Legacy inputs for backward compatibility
   owner:
@@ -113,5 +118,5 @@ outputs:
     description: 'Whether automatic PR review was completed (legacy)'
 
 runs:
-  using: 'node18'
+  using: 'node20'
   main: 'dist/index.js'

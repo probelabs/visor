@@ -126,7 +126,7 @@ describe('Visor Regression Test Suite', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary',
+            format: 'table',
             group_by: 'check',
             collapse: true,
           },
@@ -231,7 +231,7 @@ describe('Visor Regression Test Suite', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -300,7 +300,7 @@ describe('Visor Regression Test Suite', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -476,7 +476,7 @@ describe('Visor Regression Test Suite', () => {
         checks: {} as any,
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
@@ -581,7 +581,7 @@ describe('Visor Regression Test Suite', () => {
         },
         output: {
           pr_comment: {
-            format: 'summary' as const,
+            format: 'table' as const,
             group_by: 'check' as const,
             collapse: true,
           },
