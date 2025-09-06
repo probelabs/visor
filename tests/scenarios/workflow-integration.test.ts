@@ -114,7 +114,7 @@ describe('Act Scenarios - Workflow Integration', () => {
       try {
         const parsed = yaml.load(actionContent);
         expect(parsed).toBeDefined();
-        expect(parsed.name).toBe('Gates Action');
+        expect(parsed.name).toBe('Visor AI Code Review');
         expect(parsed.inputs).toHaveProperty('auto-review');
         expect(parsed.outputs).toHaveProperty('review-score');
         expect(parsed.runs.main).toBe('dist/index.js');

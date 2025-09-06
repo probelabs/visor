@@ -1,6 +1,6 @@
 name: 'Visor AI Code Review'
 description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues'
-author: 'Gates Team'
+author: 'Visor Team'
 branding:
   icon: 'eye'
   color: 'blue'

@@ -229,7 +229,7 @@ export class PRReviewer {
       comment += `*Showing top 5 issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
     }
 
-    comment += `---\n*Review powered by Gates Action - Use \`/help\` for available commands*`;
+    comment += `---\n*Review powered by Visor - Use \`/help\` for available commands*`;
 
     return comment;
   }
