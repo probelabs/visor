@@ -16,4 +16,5 @@ function inefficientSearch(array, target) {
   return -1;
 }
 
+// Export functions for testing
 module.exports = { processUserInput, inefficientSearch };

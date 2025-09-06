@@ -40,7 +40,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
-          debug: 'true'
+          debug: 'false'
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           # AI Provider API Keys (configure one of these in your repository secrets)
