@@ -56,6 +56,11 @@ inputs:
     required: false
     default: '0'
   
+  debug:
+    description: 'Enable debug mode for detailed output in comments'
+    required: false
+    default: 'false'
+  
   # Legacy inputs for backward compatibility
   owner:
     description: 'Repository owner (legacy)'

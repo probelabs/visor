@@ -37,6 +37,7 @@ export class CLI {
         'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
         value => parseInt(value, 10)
       )
+      .option('--debug', 'Enable debug mode for detailed output')
       .addHelpText('after', this.getExamplesText());
 
     // Add validation for options
@@ -77,6 +78,7 @@ export class CLI {
           'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
           value => parseInt(value, 10)
         )
+        .option('--debug', 'Enable debug mode for detailed output')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -96,6 +98,7 @@ export class CLI {
         output: options.output as OutputFormat,
         configPath: options.config,
         timeout: options.timeout,
+        debug: options.debug,
         help: options.help,
         version: options.version,
       };
@@ -175,6 +178,7 @@ export class CLI {
         'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
         value => parseInt(value, 10)
       )
+      .option('--debug', 'Enable debug mode for detailed output')
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work
@@ -209,7 +213,8 @@ Examples:
   visor --check all --output json
   visor --check architecture --check security --output markdown
   visor --check security --output sarif > results.sarif
-  visor --check all --timeout 300000 --output json   # 5 minute timeout`;
+  visor --check all --timeout 300000 --output json   # 5 minute timeout
+  visor --check all --debug --output markdown        # Enable debug mode`;
   }
 
   /**

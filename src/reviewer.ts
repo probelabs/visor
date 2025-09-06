@@ -1,7 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
-import { AIReviewService, ReviewFocus } from './ai-review-service';
+import { AIReviewService, ReviewFocus, AIDebugInfo } from './ai-review-service';
 
 export interface ReviewIssue {
   // Location
@@ -33,6 +33,8 @@ export interface ReviewSummary {
   // Simplified - only raw data, calculations done elsewhere
   issues: ReviewIssue[];
   suggestions: string[];
+  /** Debug information (only included when debug mode is enabled) */
+  debug?: AIDebugInfo;
 }
 
 export interface ReviewOptions {
@@ -182,6 +184,12 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
+    // Add debug section if debug information is available
+    if (summary.debug) {
+      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n';
+    }
+
     return comment;
   }
 
@@ -229,6 +237,12 @@ export class PRReviewer {
       comment += `*Showing top 5 issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
     }
 
+    // Add debug section if debug information is available
+    if (summary.debug) {
+      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n';
+    }
+
     comment += `---\n*Review powered by Visor - Use \`/help\` for available commands*`;
 
     return comment;
@@ -272,5 +286,41 @@ export class PRReviewer {
       documentation: '📚',
     };
     return emojiMap[category] || '📝';
+  }
+
+  private formatDebugSection(debug: AIDebugInfo): string {
+    const formattedContent = [
+      `**Provider:** ${debug.provider}`,
+      `**Model:** ${debug.model}`,
+      `**API Key Source:** ${debug.apiKeySource}`,
+      `**Processing Time:** ${debug.processingTime}ms`,
+      `**Timestamp:** ${debug.timestamp}`,
+      `**Prompt Length:** ${debug.promptLength} characters`,
+      `**Response Length:** ${debug.responseLength} characters`,
+      `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+      '',
+      '### AI Prompt',
+      '```',
+      debug.prompt,
+      '```',
+      '',
+      '### Raw AI Response',
+      '```json',
+      debug.rawResponse,
+      '```',
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      formattedContent.push('', '### Errors');
+      debug.errors.forEach(error => {
+        formattedContent.push(`- ${error}`);
+      });
+    }
+
+    return this.commentManager.createCollapsibleSection(
+      '🐛 Debug Information',
+      formattedContent.join('\n'),
+      false // Start collapsed
+    );
   }
 }

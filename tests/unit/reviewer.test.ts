@@ -323,5 +323,100 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('📈 Performance Review');
       expect(callArgs.body).toContain('🎨 Style Review');
     });
+
+    test('should include debug information when debug data is provided', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 125,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const mockReview = {
+        issues: [
+          {
+            file: 'src/test.ts',
+            line: 10,
+            ruleId: 'style/naming-convention',
+            message: 'Consider using const instead of let',
+            severity: 'info' as const,
+            category: 'style' as const,
+          },
+        ],
+        suggestions: ['Add unit tests'],
+        debug: {
+          prompt: 'Test prompt for AI review',
+          rawResponse: '{"issues":[{"file":"src/test.ts","line":10,"message":"test"}]}',
+          provider: 'google',
+          model: 'gemini-1.5-flash',
+          apiKeySource: 'GOOGLE_API_KEY environment variable',
+          processingTime: 1250,
+          promptLength: 2048,
+          responseLength: 512,
+          jsonParseSuccess: true,
+          timestamp: '2023-01-01T00:00:00.000Z',
+          errors: [],
+        },
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Check that debug section is included
+      expect(callArgs.body).toContain('🐛 Debug Information');
+      expect(callArgs.body).toContain('**Provider:** google');
+      expect(callArgs.body).toContain('**Model:** gemini-1.5-flash');
+      expect(callArgs.body).toContain('**API Key Source:** GOOGLE_API_KEY environment variable');
+      expect(callArgs.body).toContain('**Processing Time:** 1250ms');
+      expect(callArgs.body).toContain('**JSON Parse Success:** ✅');
+      expect(callArgs.body).toContain('### AI Prompt');
+      expect(callArgs.body).toContain('Test prompt for AI review');
+      expect(callArgs.body).toContain('### Raw AI Response');
+      expect(callArgs.body).toContain('"file":"src/test.ts"');
+    });
+
+    test('should not include debug information when debug data is not provided', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 126,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const mockReview = {
+        issues: [
+          {
+            file: 'src/test.ts',
+            line: 10,
+            ruleId: 'style/naming-convention',
+            message: 'Consider using const instead of let',
+            severity: 'info' as const,
+            category: 'style' as const,
+          },
+        ],
+        suggestions: ['Add unit tests'],
+        // No debug field
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Check that debug section is NOT included
+      expect(callArgs.body).not.toContain('🐛 Debug Information');
+      expect(callArgs.body).not.toContain('**Provider:**');
+      expect(callArgs.body).not.toContain('### AI Prompt');
+    });
   });
 });

@@ -7,6 +7,32 @@ export interface AIReviewConfig {
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 600000ms (10 minutes)
   provider?: 'google' | 'anthropic' | 'openai';
+  debug?: boolean; // Enable debug mode
+}
+
+export interface AIDebugInfo {
+  /** The prompt sent to the AI */
+  prompt: string;
+  /** Raw response from the AI service */
+  rawResponse: string;
+  /** Provider used (google, anthropic, openai) */
+  provider: string;
+  /** Model used */
+  model: string;
+  /** API key source (for privacy, just show which env var) */
+  apiKeySource: string;
+  /** Processing time in milliseconds */
+  processingTime: number;
+  /** Prompt length in characters */
+  promptLength: number;
+  /** Response length in characters */
+  responseLength: number;
+  /** Any errors encountered */
+  errors?: string[];
+  /** Whether JSON parsing succeeded */
+  jsonParseSuccess: boolean;
+  /** Timestamp when request was made */
+  timestamp: string;
 }
 
 export type ReviewFocus = 'security' | 'performance' | 'style' | 'all';
@@ -67,10 +93,53 @@ export class AIReviewService {
       );
     }
 
+    const startTime = Date.now();
+    const timestamp = new Date().toISOString();
     const prompt = this.buildPrompt(prInfo, focus);
+
     console.log(`Executing AI review with ${this.config.provider} provider...`);
-    const response = await this.callProbeChat(prompt);
-    return this.parseAIResponse(response);
+
+    let debugInfo: AIDebugInfo | undefined;
+    if (this.config.debug) {
+      debugInfo = {
+        prompt,
+        rawResponse: '',
+        provider: this.config.provider || 'unknown',
+        model: this.config.model || 'default',
+        apiKeySource: this.getApiKeySource(),
+        processingTime: 0,
+        promptLength: prompt.length,
+        responseLength: 0,
+        errors: [],
+        jsonParseSuccess: false,
+        timestamp,
+      };
+    }
+
+    try {
+      const response = await this.callProbeChat(prompt);
+      const processingTime = Date.now() - startTime;
+
+      if (debugInfo) {
+        debugInfo.rawResponse = response;
+        debugInfo.responseLength = response.length;
+        debugInfo.processingTime = processingTime;
+      }
+
+      const result = this.parseAIResponse(response, debugInfo);
+
+      if (debugInfo) {
+        result.debug = debugInfo;
+      }
+
+      return result;
+    } catch (error) {
+      if (debugInfo) {
+        debugInfo.errors = [error instanceof Error ? error.message : String(error)];
+        debugInfo.processingTime = Date.now() - startTime;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -374,7 +443,7 @@ ${this.escapeXml(prInfo.commitDiff)}
   /**
    * Parse AI response JSON
    */
-  private parseAIResponse(response: string): ReviewSummary {
+  private parseAIResponse(response: string, debugInfo?: AIDebugInfo): ReviewSummary {
     console.log('🔍 Parsing AI response...');
     console.log(`📊 Raw response length: ${response.length} characters`);
 
@@ -395,6 +464,7 @@ ${this.escapeXml(prInfo.commitDiff)}
       try {
         probeChatResponse = JSON.parse(response);
         console.log('✅ Successfully parsed probe-chat JSON wrapper');
+        if (debugInfo) debugInfo.jsonParseSuccess = true;
       } catch (initialError) {
         console.log('🔍 Initial parsing failed, trying to extract JSON from response...');
 
@@ -470,6 +540,7 @@ ${this.escapeXml(prInfo.commitDiff)}
         try {
           reviewData = JSON.parse(cleanResponse);
           console.log('✅ Successfully parsed AI review JSON');
+          if (debugInfo) debugInfo.jsonParseSuccess = true;
         } catch (parseError) {
           console.error('❌ Failed to parse AI review JSON:', parseError);
           console.error('🔍 Attempting fallback parsing strategies...');
@@ -498,6 +569,7 @@ ${this.escapeXml(prInfo.commitDiff)}
               console.log('🔧 Found JSON pattern, attempting to parse...');
               reviewData = JSON.parse(jsonMatch[0]);
               console.log('✅ Successfully parsed JSON from pattern match');
+              if (debugInfo) debugInfo.jsonParseSuccess = true;
             } else {
               throw parseError;
             }
@@ -659,5 +731,21 @@ ${this.escapeXml(prInfo.commitDiff)}
       100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
     );
     return score;
+  }
+
+  /**
+   * Get the API key source for debugging (without revealing the key)
+   */
+  private getApiKeySource(): string {
+    if (process.env.GOOGLE_API_KEY && this.config.provider === 'google') {
+      return 'GOOGLE_API_KEY';
+    }
+    if (process.env.ANTHROPIC_API_KEY && this.config.provider === 'anthropic') {
+      return 'ANTHROPIC_API_KEY';
+    }
+    if (process.env.OPENAI_API_KEY && this.config.provider === 'openai') {
+      return 'OPENAI_API_KEY';
+    }
+    return 'unknown';
   }
 }

@@ -53,6 +53,22 @@ export interface CheckConfig {
 }
 
 /**
+ * Debug mode configuration
+ */
+export interface DebugConfig {
+  /** Enable debug mode */
+  enabled: boolean;
+  /** Include AI prompts in debug output */
+  includePrompts: boolean;
+  /** Include raw AI responses in debug output */
+  includeRawResponses: boolean;
+  /** Include timing information */
+  includeTiming: boolean;
+  /** Include provider information */
+  includeProviderInfo: boolean;
+}
+
+/**
  * PR comment output configuration
  */
 export interface PrCommentOutput {
@@ -62,6 +78,8 @@ export interface PrCommentOutput {
   group_by: GroupByOption;
   /** Whether to collapse sections by default */
   collapse: boolean;
+  /** Debug mode configuration (optional) */
+  debug?: DebugConfig;
 }
 
 /**

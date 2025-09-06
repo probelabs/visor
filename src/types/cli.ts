@@ -20,6 +20,8 @@ export interface CliOptions {
   configPath?: string;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
+  /** Enable debug mode for detailed output */
+  debug?: boolean;
   /** Show help text */
   help?: boolean;
   /** Show version */
