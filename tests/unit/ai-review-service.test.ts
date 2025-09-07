@@ -507,9 +507,13 @@ describe('AIReviewService', () => {
       const service = new AIReviewService();
       const invalidResponse = 'Not a JSON response';
 
-      expect(() => {
-        (service as any).parseAIResponse(invalidResponse);
-      }).toThrow('Invalid AI response format');
+      const result = (service as any).parseAIResponse(invalidResponse);
+
+      // Should return a structured fallback instead of throwing
+      expect(result).toHaveProperty('issues');
+      expect(result).toHaveProperty('suggestions');
+      expect(result.issues).toEqual([]);
+      expect(result.suggestions[0]).toContain('AI response: Not a JSON response');
     });
   });
 

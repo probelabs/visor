@@ -2,6 +2,17 @@ import { spawn } from 'child_process';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 
+/**
+ * Helper function to log messages respecting JSON/SARIF output format
+ * Routes to stderr for JSON/SARIF to avoid contaminating structured output
+ */
+function log(...args: unknown[]): void {
+  const isStructuredOutput =
+    process.env.VISOR_OUTPUT_FORMAT === 'json' || process.env.VISOR_OUTPUT_FORMAT === 'sarif';
+  const logFn = isStructuredOutput ? console.error : console.log;
+  logFn(...args);
+}
+
 export interface AIReviewConfig {
   apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
@@ -97,7 +108,7 @@ export class AIReviewService {
     const timestamp = new Date().toISOString();
     const prompt = this.buildPrompt(prInfo, focus);
 
-    console.log(`Executing AI review with ${this.config.provider} provider...`);
+    log(`Executing AI review with ${this.config.provider} provider...`);
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -320,11 +331,9 @@ ${this.escapeXml(prInfo.commitDiff)}
    * Call probe-chat CLI tool using stdin to avoid shell escaping issues
    */
   private async callProbeChat(prompt: string): Promise<string> {
-    console.log('🤖 Calling probe-chat for AI review...');
-    console.log(`📝 Prompt length: ${prompt.length} characters`);
-    console.log(
-      `⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`
-    );
+    log('🤖 Calling probe-chat for AI review...');
+    log(`📝 Prompt length: ${prompt.length} characters`);
+    log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
     return new Promise((resolve, reject) => {
       const env: Record<string, string | undefined> = {
@@ -334,22 +343,22 @@ ${this.escapeXml(prInfo.commitDiff)}
       // Set API key based on provider
       if (this.config.provider === 'google' && this.config.apiKey) {
         env.GOOGLE_API_KEY = this.config.apiKey;
-        console.log('🔑 Using Google API key');
+        log('🔑 Using Google API key');
       } else if (this.config.provider === 'anthropic' && this.config.apiKey) {
         env.ANTHROPIC_API_KEY = this.config.apiKey;
-        console.log('🔑 Using Anthropic API key');
+        log('🔑 Using Anthropic API key');
       } else if (this.config.provider === 'openai' && this.config.apiKey) {
         env.OPENAI_API_KEY = this.config.apiKey;
-        console.log('🔑 Using OpenAI API key');
+        log('🔑 Using OpenAI API key');
       }
 
       // Set model if specified
       if (this.config.model) {
         env.MODEL_NAME = this.config.model;
-        console.log(`🎯 Using model: ${this.config.model}`);
+        log(`🎯 Using model: ${this.config.model}`);
       }
 
-      console.log('🚀 Spawning probe-chat process...');
+      log('🚀 Spawning probe-chat process...');
 
       // Use stdin instead of -m flag to avoid shell escaping issues
       const child = spawn('npx', ['-y', '@buger/probe-chat@latest', '--json'], {
@@ -365,7 +374,7 @@ ${this.escapeXml(prInfo.commitDiff)}
       child.stdout.on('data', data => {
         const chunk = data.toString();
         output += chunk;
-        console.log(
+        log(
           '📤 Received stdout chunk:',
           chunk.substring(0, 200) + (chunk.length > 200 ? '...' : '')
         );
@@ -374,7 +383,7 @@ ${this.escapeXml(prInfo.commitDiff)}
       child.stderr.on('data', data => {
         const chunk = data.toString();
         error += chunk;
-        console.log('⚠️ Received stderr:', chunk);
+        log('⚠️ Received stderr:', chunk);
       });
 
       child.on('error', err => {
@@ -387,10 +396,10 @@ ${this.escapeXml(prInfo.commitDiff)}
 
       // Write prompt to stdin and close it
       try {
-        console.log('📝 Writing prompt to stdin...');
+        log('📝 Writing prompt to stdin...');
         child.stdin.write(prompt, 'utf8');
         child.stdin.end();
-        console.log('✅ Prompt written to stdin and closed');
+        log('✅ Prompt written to stdin and closed');
       } catch (err) {
         if (!isResolved) {
           isResolved = true;
@@ -419,12 +428,12 @@ ${this.escapeXml(prInfo.commitDiff)}
         if (!isResolved) {
           isResolved = true;
 
-          console.log(`🏁 Process closed with code: ${code}, signal: ${signal}`);
-          console.log(`📤 Final output length: ${output.length} characters`);
-          console.log(`⚠️ Final error length: ${error.length} characters`);
+          log(`🏁 Process closed with code: ${code}, signal: ${signal}`);
+          log(`📤 Final output length: ${output.length} characters`);
+          log(`⚠️ Final error length: ${error.length} characters`);
 
           if (code === 0) {
-            console.log('✅ probe-chat completed successfully');
+            log('✅ probe-chat completed successfully');
             resolve(output.trim());
           } else {
             console.error('❌ probe-chat failed with code:', code);
@@ -444,18 +453,15 @@ ${this.escapeXml(prInfo.commitDiff)}
    * Parse AI response JSON
    */
   private parseAIResponse(response: string, debugInfo?: AIDebugInfo): ReviewSummary {
-    console.log('🔍 Parsing AI response...');
-    console.log(`📊 Raw response length: ${response.length} characters`);
+    log('🔍 Parsing AI response...');
+    log(`📊 Raw response length: ${response.length} characters`);
 
     // Log first and last 200 chars for debugging
     if (response.length > 400) {
-      console.log('📋 Response preview (first 200 chars):', response.substring(0, 200));
-      console.log(
-        '📋 Response preview (last 200 chars):',
-        response.substring(response.length - 200)
-      );
+      log('📋 Response preview (first 200 chars):', response.substring(0, 200));
+      log('📋 Response preview (last 200 chars):', response.substring(response.length - 200));
     } else {
-      console.log('📋 Full response preview:', response);
+      log('📋 Full response preview:', response);
     }
 
     try {
@@ -463,10 +469,10 @@ ${this.escapeXml(prInfo.commitDiff)}
       let probeChatResponse;
       try {
         probeChatResponse = JSON.parse(response);
-        console.log('✅ Successfully parsed probe-chat JSON wrapper');
+        log('✅ Successfully parsed probe-chat JSON wrapper');
         if (debugInfo) debugInfo.jsonParseSuccess = true;
       } catch (initialError) {
-        console.log('🔍 Initial parsing failed, trying to extract JSON from response...');
+        log('🔍 Initial parsing failed, trying to extract JSON from response...');
 
         // If the response starts with "I cannot" or similar, it's likely a refusal
         if (
@@ -484,7 +490,7 @@ ${this.escapeXml(prInfo.commitDiff)}
 
         // Check if response is plain text and doesn't contain structured data
         if (!response.includes('{') && !response.includes('}')) {
-          console.log('🔧 Plain text response detected, creating structured fallback...');
+          log('🔧 Plain text response detected, creating structured fallback...');
           // Create a fallback response based on the plain text
           const isNoChanges =
             response.toLowerCase().includes('no') &&
@@ -501,10 +507,10 @@ ${this.escapeXml(prInfo.commitDiff)}
         // Try to find JSON within the response
         const jsonMatches = response.match(/\{[\s\S]*\}/g);
         if (jsonMatches && jsonMatches.length > 0) {
-          console.log('🔧 Found potential JSON in response, attempting to parse...');
+          log('🔧 Found potential JSON in response, attempting to parse...');
           // Try the largest JSON-like string (likely the complete response)
           const largestJson = jsonMatches.reduce((a, b) => (a.length > b.length ? a : b));
-          console.log('🔧 Attempting to parse extracted JSON...');
+          log('🔧 Attempting to parse extracted JSON...');
           probeChatResponse = { response: largestJson };
         } else {
           // Re-throw the original error if we can't find JSON
@@ -516,11 +522,11 @@ ${this.escapeXml(prInfo.commitDiff)}
       let reviewData: AIResponseFormat;
 
       if (probeChatResponse.response) {
-        console.log('📝 Found response field in probe-chat output');
+        log('📝 Found response field in probe-chat output');
         const aiResponse = probeChatResponse.response;
 
         // Log the AI response for debugging
-        console.log(
+        log(
           '🤖 AI response content:',
           aiResponse.substring(0, 300) + (aiResponse.length > 300 ? '...' : '')
         );
@@ -531,7 +537,7 @@ ${this.escapeXml(prInfo.commitDiff)}
           .replace(/\n?```$/, '')
           .trim();
 
-        console.log(
+        log(
           '🧹 Cleaned response:',
           cleanResponse.substring(0, 300) + (cleanResponse.length > 300 ? '...' : '')
         );
@@ -539,7 +545,7 @@ ${this.escapeXml(prInfo.commitDiff)}
         // Try to parse the cleaned response as JSON
         try {
           reviewData = JSON.parse(cleanResponse);
-          console.log('✅ Successfully parsed AI review JSON');
+          log('✅ Successfully parsed AI review JSON');
           if (debugInfo) debugInfo.jsonParseSuccess = true;
         } catch (parseError) {
           console.error('❌ Failed to parse AI review JSON:', parseError);
@@ -547,7 +553,7 @@ ${this.escapeXml(prInfo.commitDiff)}
 
           // Check if the AI response is plain text without JSON structure
           if (!cleanResponse.includes('{') && !cleanResponse.includes('}')) {
-            console.log('🔧 Plain text AI response detected, creating structured fallback...');
+            log('🔧 Plain text AI response detected, creating structured fallback...');
             const isNoChanges =
               cleanResponse.toLowerCase().includes('no') &&
               (cleanResponse.toLowerCase().includes('changes') ||
@@ -561,14 +567,14 @@ ${this.escapeXml(prInfo.commitDiff)}
                     `AI response: ${cleanResponse.substring(0, 200)}${cleanResponse.length > 200 ? '...' : ''}`,
                   ],
             };
-            console.log('✅ Created structured fallback from plain text response');
+            log('✅ Created structured fallback from plain text response');
           } else {
             // Try to extract JSON from anywhere in the response
             const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
-              console.log('🔧 Found JSON pattern, attempting to parse...');
+              log('🔧 Found JSON pattern, attempting to parse...');
               reviewData = JSON.parse(jsonMatch[0]);
-              console.log('✅ Successfully parsed JSON from pattern match');
+              log('✅ Successfully parsed JSON from pattern match');
               if (debugInfo) debugInfo.jsonParseSuccess = true;
             } else {
               throw parseError;
@@ -577,7 +583,7 @@ ${this.escapeXml(prInfo.commitDiff)}
         }
       } else if (probeChatResponse.overallScore !== undefined) {
         // Direct response without wrapper
-        console.log('📦 Direct response format detected');
+        log('📦 Direct response format detected');
         reviewData = probeChatResponse;
       } else {
         console.error('❌ No response field found and not direct format');
@@ -586,23 +592,21 @@ ${this.escapeXml(prInfo.commitDiff)}
       }
 
       // Validate the parsed data
-      console.log('🔍 Validating parsed review data...');
-      console.log(`📊 Overall score: ${0}`);
-      console.log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
-      console.log(
+      log('🔍 Validating parsed review data...');
+      log(`📊 Overall score: ${0}`);
+      log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
+      log(
         `🚨 Critical issues: ${reviewData.issues?.filter((i: any) => i.severity === 'critical').length || 0}`
       );
-      console.log(
+      log(
         `💡 Suggestions count: ${Array.isArray(reviewData.suggestions) ? reviewData.suggestions.length : 0}`
       );
-      console.log(
-        `💬 Comments count: ${Array.isArray(reviewData.issues) ? reviewData.issues.length : 0}`
-      );
+      log(`💬 Comments count: ${Array.isArray(reviewData.issues) ? reviewData.issues.length : 0}`);
 
       // Process issues from the simplified format
       const processedIssues = Array.isArray(reviewData.issues)
         ? reviewData.issues.map((issue, index) => {
-            console.log(`🔍 Processing issue ${index + 1}:`, issue);
+            log(`🔍 Processing issue ${index + 1}:`, issue);
             return {
               file: issue.file || 'unknown',
               line: issue.line || 1,
@@ -626,11 +630,11 @@ ${this.escapeXml(prInfo.commitDiff)}
       // Log issue counts
       const criticalCount = result.issues.filter(i => i.severity === 'critical').length;
       if (criticalCount > 0) {
-        console.log(`🚨 Found ${criticalCount} critical severity issue(s)`);
+        log(`🚨 Found ${criticalCount} critical severity issue(s)`);
       }
-      console.log(`📈 Total issues: ${result.issues.length}`);
+      log(`📈 Total issues: ${result.issues.length}`);
 
-      console.log('✅ Successfully created ReviewSummary');
+      log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
       console.error('❌ Failed to parse AI response:', error);
