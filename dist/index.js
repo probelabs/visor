@@ -57,6 +57,13 @@ async function run() {
         console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
         if (cliBridge.shouldUseVisor(inputs)) {
             console.log('🔍 Using Visor CLI mode');
+            // CRITICAL FIX: For PR auto-reviews, use GitHub API instead of CLI for accurate diff analysis
+            const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
+            if (isAutoPRReview) {
+                console.log('🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis');
+                await handlePullRequestVisorMode(inputs, context);
+                return;
+            }
             await handleVisorMode(cliBridge, inputs, context);
             return;
         }
@@ -70,16 +77,9 @@ async function run() {
 /**
  * Handle Visor CLI mode
  */
-async function handleVisorMode(cliBridge, inputs, context) {
+async function handleVisorMode(cliBridge, inputs, _context) {
     try {
-        // For PR events, we need to analyze the actual PR diff, not local repository state
-        const eventName = process.env.GITHUB_EVENT_NAME;
-        const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
-        if (isAutoPRReview) {
-            console.log('🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis');
-            await handlePullRequestVisorMode(inputs, context);
-            return;
-        }
+        // Note: PR auto-review cases are now handled upstream in the main run() function
         // Execute CLI with the provided config file (no temp config creation)
         const result = await cliBridge.executeCliWithContext(inputs);
         if (result.success) {
@@ -93,10 +93,8 @@ async function handleVisorMode(cliBridge, inputs, context) {
                 if (jsonLine) {
                     cliOutput = JSON.parse(jsonLine);
                     console.log('📊 CLI Review Results:', cliOutput);
-                    // Post PR comment if we have review results and PR context exists
-                    if ((cliOutput.issues || cliOutput.suggestions) && isAutoPRReview) {
-                        await postCliReviewComment(cliOutput, inputs);
-                    }
+                    // Note: PR comment posting is now handled by handlePullRequestVisorMode for PR events
+                    // CLI mode output is intended for non-PR scenarios
                 }
                 else {
                     console.log('📄 CLI Output (non-JSON):', result.output);
@@ -136,6 +134,7 @@ async function handleVisorMode(cliBridge, inputs, context) {
 /**
  * Post CLI review results as PR comment
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function postCliReviewComment(cliOutput, inputs) {
     try {
         const token = inputs['github-token'];
@@ -472,7 +471,7 @@ async function handleRepoInfo(octokit, owner, repo) {
 /**
  * Handle PR review using Visor config but with proper GitHub API PR diff analysis
  */
-async function handlePullRequestVisorMode(inputs, context) {
+async function handlePullRequestVisorMode(inputs, _context) {
     const token = inputs['github-token'];
     const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
     const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
@@ -535,7 +534,7 @@ async function handlePullRequestVisorMode(inputs, context) {
             debug: inputs.debug === 'true',
             config: config,
             checks: checksToRun,
-            parallelExecution: true
+            parallelExecution: true,
         };
         // Perform the review
         console.log('🤖 Starting parallel AI review with Visor config...');
@@ -551,10 +550,12 @@ async function handlePullRequestVisorMode(inputs, context) {
         // Add context based on action
         let reviewContext = '';
         if (action === 'opened') {
-            reviewContext = '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
+            reviewContext =
+                '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
         }
         else {
-            reviewContext = '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
+            reviewContext =
+                '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
         }
         const fullComment = reviewContext + reviewComment;
         await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {

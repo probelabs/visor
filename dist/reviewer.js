@@ -75,7 +75,7 @@ class PRReviewer {
         this.aiReviewService = new ai_review_service_1.AIReviewService();
     }
     async reviewPR(owner, repo, prNumber, prInfo, options = {}) {
-        const { focus = 'all', format = 'table', debug = false, config, checks, parallelExecution } = options;
+        const { focus = 'all', format = 'table', debug = false, config, checks, parallelExecution, } = options;
         // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
         if (config && checks && checks.length > 1 && parallelExecution) {
             console.error(`🔧 Debug: PRReviewer using CheckExecutionEngine for parallel execution of ${checks.length} checks`);

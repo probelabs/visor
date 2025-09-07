@@ -51,8 +51,10 @@ class ActionCliBridge {
      * Determine if Visor CLI should be used based on inputs
      */
     shouldUseVisor(inputs) {
-        return !!(inputs['config-path'] || inputs['visor-config-path'] ||
-            inputs.checks || inputs['visor-checks']);
+        return !!(inputs['config-path'] ||
+            inputs['visor-config-path'] ||
+            inputs.checks ||
+            inputs['visor-checks']);
     }
     /**
      * Parse GitHub Action inputs to CLI arguments

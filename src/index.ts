@@ -61,6 +61,17 @@ export async function run(): Promise<void> {
 
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
+
+      // CRITICAL FIX: For PR auto-reviews, use GitHub API instead of CLI for accurate diff analysis
+      const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
+      if (isAutoPRReview) {
+        console.log(
+          '🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis'
+        );
+        await handlePullRequestVisorMode(inputs, context);
+        return;
+      }
+
       await handleVisorMode(cliBridge, inputs, context);
       return;
     }
@@ -78,20 +89,10 @@ export async function run(): Promise<void> {
 async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
-  context: GitHubContext
+  _context: GitHubContext
 ): Promise<void> {
   try {
-    // For PR events, we need to analyze the actual PR diff, not local repository state
-    const eventName = process.env.GITHUB_EVENT_NAME;
-    const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
-
-    if (isAutoPRReview) {
-      console.log(
-        '🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis'
-      );
-      await handlePullRequestVisorMode(inputs, context);
-      return;
-    }
+    // Note: PR auto-review cases are now handled upstream in the main run() function
 
     // Execute CLI with the provided config file (no temp config creation)
     const result = await cliBridge.executeCliWithContext(inputs);
@@ -112,10 +113,8 @@ async function handleVisorMode(
           cliOutput = JSON.parse(jsonLine);
           console.log('📊 CLI Review Results:', cliOutput);
 
-          // Post PR comment if we have review results and PR context exists
-          if ((cliOutput.issues || cliOutput.suggestions) && isAutoPRReview) {
-            await postCliReviewComment(cliOutput, inputs);
-          }
+          // Note: PR comment posting is now handled by handlePullRequestVisorMode for PR events
+          // CLI mode output is intended for non-PR scenarios
         } else {
           console.log('📄 CLI Output (non-JSON):', result.output);
         }
@@ -155,6 +154,7 @@ async function handleVisorMode(
 /**
  * Post CLI review results as PR comment
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs): Promise<void> {
   try {
     const token = inputs['github-token'];
