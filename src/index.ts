@@ -646,6 +646,7 @@ async function handlePullRequestVisorMode(
       setOutput('review-score', '100');
       setOutput('issues-found', '0');
       setOutput('pr-action', action || 'unknown');
+      setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
       return;
     }
 
@@ -696,6 +697,7 @@ async function handlePullRequestVisorMode(
     setOutput('review-score', calculateOverallScore(review.issues).toString());
     setOutput('issues-found', calculateTotalIssues(review.issues).toString());
     setOutput('pr-action', action || 'unknown');
+    setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
     setOutput('visor-config-used', 'true');
     setOutput('checks-executed', checksToRun.join(','));
   } catch (error) {
