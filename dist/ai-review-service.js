@@ -67,16 +67,20 @@ class AIReviewService {
                     debugInfo.processingTime = Date.now() - startTime;
                     debugInfo.rawResponse = 'API call not attempted - no API key configured';
                     return {
-                        issues: [{
+                        issues: [
+                            {
                                 file: 'system',
                                 line: 0,
                                 ruleId: 'system/api-key-missing',
                                 message: errorMessage,
                                 severity: 'error',
-                                category: 'logic'
-                            }],
-                        suggestions: ['Configure API keys in your GitHub repository secrets or environment variables'],
-                        debug: debugInfo
+                                category: 'logic',
+                            },
+                        ],
+                        suggestions: [
+                            'Configure API keys in your GitHub repository secrets or environment variables',
+                        ],
+                        debug: debugInfo,
                     };
                 }
                 throw new Error(errorMessage);
@@ -102,16 +106,18 @@ class AIReviewService {
                 debugInfo.processingTime = Date.now() - startTime;
                 // In debug mode, return a review with the error captured
                 return {
-                    issues: [{
+                    issues: [
+                        {
                             file: 'system',
                             line: 0,
                             ruleId: 'system/ai-execution-error',
                             message: error instanceof Error ? error.message : String(error),
                             severity: 'error',
-                            category: 'logic'
-                        }],
+                            category: 'logic',
+                        },
+                    ],
                     suggestions: ['Check AI service configuration and API key validity'],
-                    debug: debugInfo
+                    debug: debugInfo,
                 };
             }
             throw error;
@@ -652,7 +658,7 @@ ${this.escapeXml(prInfo.commitDiff)}
                         message: 'SQL injection vulnerability detected in dynamic query construction',
                         severity: 'critical',
                         category: 'security',
-                        suggestion: 'Use parameterized queries or ORM methods to prevent SQL injection'
+                        suggestion: 'Use parameterized queries or ORM methods to prevent SQL injection',
                     },
                     {
                         file: 'test.ts',
@@ -662,7 +668,7 @@ ${this.escapeXml(prInfo.commitDiff)}
                         message: 'Inefficient nested loops with O(n²) complexity',
                         severity: 'warning',
                         category: 'performance',
-                        suggestion: 'Consider using more efficient algorithms or caching mechanisms'
+                        suggestion: 'Consider using more efficient algorithms or caching mechanisms',
                     },
                     {
                         file: 'test.ts',
@@ -671,15 +677,15 @@ ${this.escapeXml(prInfo.commitDiff)}
                         message: 'Inconsistent variable naming and formatting',
                         severity: 'info',
                         category: 'style',
-                        suggestion: 'Use consistent camelCase naming and proper spacing'
-                    }
+                        suggestion: 'Use consistent camelCase naming and proper spacing',
+                    },
                 ],
                 summary: {
                     totalIssues: 3,
                     criticalIssues: 1,
-                    overallScore: 75
-                }
-            })
+                    overallScore: 75,
+                },
+            }),
         };
         return JSON.stringify(mockResponse);
     }

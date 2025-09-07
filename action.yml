@@ -103,6 +103,12 @@ outputs:
   sarif-report:
     description: 'SARIF format report (if output-format includes sarif)'
   
+  incremental-analysis:
+    description: 'Whether incremental analysis was performed (true for synchronize events)'
+  
+  pr-action:
+    description: 'The GitHub PR action that triggered this run (opened, synchronize, edited)'
+  
   # Legacy outputs for backward compatibility
   repo-name:
     description: 'Name of the repository (legacy)'
