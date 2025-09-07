@@ -8,6 +8,7 @@ const pr_analyzer_1 = require("./pr-analyzer");
 const reviewer_1 = require("./reviewer");
 const action_cli_bridge_1 = require("./action-cli-bridge");
 const github_comments_1 = require("./github-comments");
+const config_1 = require("./config");
 async function run() {
     try {
         const token = (0, core_1.getInput)('github-token', { required: true });
@@ -69,8 +70,16 @@ async function run() {
 /**
  * Handle Visor CLI mode
  */
-async function handleVisorMode(cliBridge, inputs, _context) {
+async function handleVisorMode(cliBridge, inputs, context) {
     try {
+        // For PR events, we need to analyze the actual PR diff, not local repository state
+        const eventName = process.env.GITHUB_EVENT_NAME;
+        const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
+        if (isAutoPRReview) {
+            console.log('🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis');
+            await handlePullRequestVisorMode(inputs, context);
+            return;
+        }
         // Execute CLI with the provided config file (no temp config creation)
         const result = await cliBridge.executeCliWithContext(inputs);
         if (result.success) {
@@ -84,8 +93,8 @@ async function handleVisorMode(cliBridge, inputs, _context) {
                 if (jsonLine) {
                     cliOutput = JSON.parse(jsonLine);
                     console.log('📊 CLI Review Results:', cliOutput);
-                    // Post PR comment if we have review results
-                    if (cliOutput.issues || cliOutput.suggestions) {
+                    // Post PR comment if we have review results and PR context exists
+                    if ((cliOutput.issues || cliOutput.suggestions) && isAutoPRReview) {
                         await postCliReviewComment(cliOutput, inputs);
                     }
                 }
@@ -459,6 +468,113 @@ async function handleRepoInfo(octokit, owner, repo) {
     console.log(`Repository: ${repoData.full_name}`);
     console.log(`Description: ${repoData.description || 'No description'}`);
     console.log(`Stars: ${repoData.stargazers_count}`);
+}
+/**
+ * Handle PR review using Visor config but with proper GitHub API PR diff analysis
+ */
+async function handlePullRequestVisorMode(inputs, context) {
+    const token = inputs['github-token'];
+    const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+    const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+    if (!owner || !repo || !token) {
+        console.error('❌ Missing required GitHub parameters for PR analysis');
+        (0, core_1.setFailed)('Missing required GitHub parameters');
+        return;
+    }
+    const octokit = new rest_1.Octokit({ auth: token });
+    // Get PR number from GitHub context
+    const gitHubContext = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
+    const prNumber = gitHubContext.event?.pull_request?.number;
+    const action = gitHubContext.event?.action;
+    if (!prNumber) {
+        console.error('❌ No PR number found in GitHub context');
+        (0, core_1.setFailed)('No PR number found');
+        return;
+    }
+    console.log(`🔍 Analyzing PR #${prNumber} using Visor config (action: ${action})`);
+    try {
+        // Use the existing PR analysis infrastructure but with Visor config
+        const analyzer = new pr_analyzer_1.PRAnalyzer(octokit);
+        const reviewer = new reviewer_1.PRReviewer(octokit);
+        const commentManager = new github_comments_1.CommentManager(octokit);
+        // Load Visor config
+        const configManager = new config_1.ConfigManager();
+        let config;
+        const configPath = inputs['config-path'];
+        if (configPath) {
+            try {
+                config = await configManager.loadConfig(configPath);
+                console.log(`📋 Loaded Visor config from: ${configPath}`);
+            }
+            catch (error) {
+                console.error(`⚠️ Could not load config from ${configPath}:`, error);
+                config = await configManager.getDefaultConfig();
+            }
+        }
+        else {
+            config = await configManager.getDefaultConfig();
+        }
+        // Extract checks from config
+        const configChecks = Object.keys(config.checks || {});
+        const checksToRun = configChecks.length > 0 ? configChecks : ['security', 'performance', 'style', 'architecture'];
+        console.log(`🔧 Running checks: ${checksToRun.join(', ')}`);
+        // Fetch PR diff using GitHub API
+        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+        console.log(`📄 Found ${prInfo.files.length} changed files`);
+        if (prInfo.files.length === 0) {
+            console.log('⚠️ No files changed in this PR - skipping review');
+            // Set basic outputs
+            (0, core_1.setOutput)('auto-review-completed', 'true');
+            (0, core_1.setOutput)('review-score', '100');
+            (0, core_1.setOutput)('issues-found', '0');
+            (0, core_1.setOutput)('pr-action', action || 'unknown');
+            return;
+        }
+        // Create a custom review options with Visor config
+        const reviewOptions = {
+            debug: inputs.debug === 'true',
+            config: config,
+            checks: checksToRun,
+            parallelExecution: true
+        };
+        // Perform the review
+        console.log('🤖 Starting parallel AI review with Visor config...');
+        const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+        // Update the review summary to show correct checks executed
+        if (review.debug) {
+            review.debug.checksExecuted = checksToRun;
+            review.debug.parallelExecution = true;
+        }
+        // Post comment using existing comment manager
+        const commentId = `visor-config-review-${prNumber}`;
+        const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
+        // Add context based on action
+        let reviewContext = '';
+        if (action === 'opened') {
+            reviewContext = '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
+        }
+        else {
+            reviewContext = '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
+        }
+        const fullComment = reviewContext + reviewComment;
+        await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+            commentId,
+            triggeredBy: `visor-config-${action}`,
+            allowConcurrentUpdates: true,
+        });
+        console.log('✅ Posted Visor config-based review comment');
+        // Set outputs
+        (0, core_1.setOutput)('auto-review-completed', 'true');
+        (0, core_1.setOutput)('review-score', (0, reviewer_1.calculateOverallScore)(review.issues).toString());
+        (0, core_1.setOutput)('issues-found', (0, reviewer_1.calculateTotalIssues)(review.issues).toString());
+        (0, core_1.setOutput)('pr-action', action || 'unknown');
+        (0, core_1.setOutput)('visor-config-used', 'true');
+        (0, core_1.setOutput)('checks-executed', checksToRun.join(','));
+    }
+    catch (error) {
+        console.error('❌ Error in Visor PR analysis:', error);
+        (0, core_1.setFailed)(error instanceof Error ? error.message : 'Visor PR analysis failed');
+    }
 }
 if (require.main === module) {
     run();

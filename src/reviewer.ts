@@ -41,6 +41,9 @@ export interface ReviewOptions {
   focus?: 'security' | 'performance' | 'style' | 'all';
   format?: 'table' | 'json' | 'markdown' | 'sarif';
   debug?: boolean;
+  config?: import('./types/config').VisorConfig;
+  checks?: string[];
+  parallelExecution?: boolean;
 }
 
 // Helper functions for calculating metrics from issues
@@ -92,14 +95,41 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { focus = 'all', format = 'table', debug = false } = options;
+    const {
+      focus = 'all',
+      format = 'table',
+      debug = false,
+      config,
+      checks,
+      parallelExecution,
+    } = options;
+
+    // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
+    if (config && checks && checks.length > 1 && parallelExecution) {
+      console.error(
+        `🔧 Debug: PRReviewer using CheckExecutionEngine for parallel execution of ${checks.length} checks`
+      );
+
+      // Import CheckExecutionEngine dynamically to avoid circular dependencies
+      const { CheckExecutionEngine } = await import('./check-execution-engine');
+      const engine = new CheckExecutionEngine();
+
+      // Execute checks using the engine's parallel execution capability
+      const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config);
+
+      // Apply format filtering
+      return {
+        ...reviewSummary,
+        issues: format === 'markdown' ? reviewSummary.issues : reviewSummary.issues.slice(0, 5),
+      };
+    }
 
     // If debug is enabled, create a new AI service with debug enabled
     if (debug) {
       this.aiReviewService = new AIReviewService({ debug: true });
     }
 
-    // Execute AI review (no fallback)
+    // Execute AI review (no fallback) - single check or legacy mode
     const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
 
     // Apply format filtering

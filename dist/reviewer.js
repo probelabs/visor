@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PRReviewer = void 0;
 exports.calculateOverallScore = calculateOverallScore;
@@ -42,12 +75,26 @@ class PRReviewer {
         this.aiReviewService = new ai_review_service_1.AIReviewService();
     }
     async reviewPR(owner, repo, prNumber, prInfo, options = {}) {
-        const { focus = 'all', format = 'table', debug = false } = options;
+        const { focus = 'all', format = 'table', debug = false, config, checks, parallelExecution } = options;
+        // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
+        if (config && checks && checks.length > 1 && parallelExecution) {
+            console.error(`🔧 Debug: PRReviewer using CheckExecutionEngine for parallel execution of ${checks.length} checks`);
+            // Import CheckExecutionEngine dynamically to avoid circular dependencies
+            const { CheckExecutionEngine } = await Promise.resolve().then(() => __importStar(require('./check-execution-engine')));
+            const engine = new CheckExecutionEngine();
+            // Execute checks using the engine's parallel execution capability
+            const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config);
+            // Apply format filtering
+            return {
+                ...reviewSummary,
+                issues: format === 'markdown' ? reviewSummary.issues : reviewSummary.issues.slice(0, 5),
+            };
+        }
         // If debug is enabled, create a new AI service with debug enabled
         if (debug) {
             this.aiReviewService = new ai_review_service_1.AIReviewService({ debug: true });
         }
-        // Execute AI review (no fallback)
+        // Execute AI review (no fallback) - single check or legacy mode
         const aiReview = await this.aiReviewService.executeReview(prInfo, focus);
         // Apply format filtering
         return {
