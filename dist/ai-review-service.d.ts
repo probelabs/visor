@@ -76,6 +76,10 @@ export declare class AIReviewService {
      */
     private calculateScore;
     /**
+     * Generate mock response for testing
+     */
+    private generateMockResponse;
+    /**
      * Get the API key source for debugging (without revealing the key)
      */
     private getApiKeySource;

@@ -109,31 +109,41 @@ export class AIReviewService {
       };
     }
 
-    // Check if API key is available
-    if (!this.config.apiKey) {
-      const errorMessage = 'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.';
-      
-      // In debug mode, return a review with the error captured
-      if (debugInfo) {
-        debugInfo.errors = [errorMessage];
-        debugInfo.processingTime = Date.now() - startTime;
-        debugInfo.rawResponse = 'API call not attempted - no API key configured';
-        
-        return {
-          issues: [{
-            file: 'system',
-            line: 0,
-            ruleId: 'system/api-key-missing',
-            message: errorMessage,
-            severity: 'error',
-            category: 'logic'
-          }],
-          suggestions: ['Configure API keys in your GitHub repository secrets or environment variables'],
-          debug: debugInfo
-        };
+    // Handle mock model first (no API key needed)
+    if (this.config.model === 'mock') {
+      console.log('🎭 Using mock AI model for testing - skipping API key validation');
+    } else {
+      // Check if API key is available for real AI models
+      if (!this.config.apiKey) {
+        const errorMessage =
+          'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.';
+
+        // In debug mode, return a review with the error captured
+        if (debugInfo) {
+          debugInfo.errors = [errorMessage];
+          debugInfo.processingTime = Date.now() - startTime;
+          debugInfo.rawResponse = 'API call not attempted - no API key configured';
+
+          return {
+            issues: [
+              {
+                file: 'system',
+                line: 0,
+                ruleId: 'system/api-key-missing',
+                message: errorMessage,
+                severity: 'error',
+                category: 'logic',
+              },
+            ],
+            suggestions: [
+              'Configure API keys in your GitHub repository secrets or environment variables',
+            ],
+            debug: debugInfo,
+          };
+        }
+
+        throw new Error(errorMessage);
       }
-      
-      throw new Error(errorMessage);
     }
 
     try {
@@ -157,19 +167,21 @@ export class AIReviewService {
       if (debugInfo) {
         debugInfo.errors = [error instanceof Error ? error.message : String(error)];
         debugInfo.processingTime = Date.now() - startTime;
-        
+
         // In debug mode, return a review with the error captured
         return {
-          issues: [{
-            file: 'system',
-            line: 0,
-            ruleId: 'system/ai-execution-error',
-            message: error instanceof Error ? error.message : String(error),
-            severity: 'error',
-            category: 'logic'
-          }],
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'system/ai-execution-error',
+              message: error instanceof Error ? error.message : String(error),
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
           suggestions: ['Check AI service configuration and API key validity'],
-          debug: debugInfo
+          debug: debugInfo,
         };
       }
       throw error;
@@ -354,6 +366,12 @@ ${this.escapeXml(prInfo.commitDiff)}
    * Call probe-chat CLI tool using stdin to avoid shell escaping issues
    */
   private async callProbeChat(prompt: string): Promise<string> {
+    // Handle mock model for testing
+    if (this.config.model === 'mock') {
+      console.log('🎭 Using mock AI model for testing');
+      return this.generateMockResponse(prompt);
+    }
+
     console.log('🤖 Calling probe-chat for AI review...');
     console.log(`📝 Prompt length: ${prompt.length} characters`);
     console.log(
@@ -624,7 +642,7 @@ ${this.escapeXml(prInfo.commitDiff)}
       console.log(`📊 Overall score: ${0}`);
       console.log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
       console.log(
-        `🚨 Critical issues: ${reviewData.issues?.filter((i: any) => i.severity === 'critical').length || 0}`
+        `🚨 Critical issues: ${reviewData.issues?.filter((i: { severity?: string }) => i.severity === 'critical').length || 0}`
       );
       console.log(
         `💡 Suggestions count: ${Array.isArray(reviewData.suggestions) ? reviewData.suggestions.length : 0}`
@@ -765,6 +783,58 @@ ${this.escapeXml(prInfo.commitDiff)}
       100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
     );
     return score;
+  }
+
+  /**
+   * Generate mock response for testing
+   */
+  private async generateMockResponse(_prompt: string): Promise<string> {
+    // Simulate some processing time
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Generate mock response based on prompt content
+    const mockResponse = {
+      response: JSON.stringify({
+        issues: [
+          {
+            file: 'test.ts',
+            line: 7,
+            endLine: 11,
+            ruleId: 'security/sql-injection',
+            message: 'SQL injection vulnerability detected in dynamic query construction',
+            severity: 'critical',
+            category: 'security',
+            suggestion: 'Use parameterized queries or ORM methods to prevent SQL injection',
+          },
+          {
+            file: 'test.ts',
+            line: 14,
+            endLine: 23,
+            ruleId: 'performance/nested-loops',
+            message: 'Inefficient nested loops with O(n²) complexity',
+            severity: 'warning',
+            category: 'performance',
+            suggestion: 'Consider using more efficient algorithms or caching mechanisms',
+          },
+          {
+            file: 'test.ts',
+            line: 28,
+            ruleId: 'style/inconsistent-naming',
+            message: 'Inconsistent variable naming and formatting',
+            severity: 'info',
+            category: 'style',
+            suggestion: 'Use consistent camelCase naming and proper spacing',
+          },
+        ],
+        summary: {
+          totalIssues: 3,
+          criticalIssues: 1,
+          overallScore: 75,
+        },
+      }),
+    };
+
+    return JSON.stringify(mockResponse);
   }
 
   /**
