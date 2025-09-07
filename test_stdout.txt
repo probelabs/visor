@@ -1,0 +1,43 @@
+Executing AI review with undefined provider...
+{
+  "summary": {
+    "overallScore": 75,
+    "totalIssues": 1,
+    "criticalIssues": 0,
+    "executionTime": 759,
+    "timestamp": "2025-09-07T09:08:42.178Z",
+    "checksExecuted": [
+      "all"
+    ]
+  },
+  "repository": {
+    "title": "Error during analysis",
+    "author": "system",
+    "base": "main",
+    "head": "HEAD",
+    "isGitRepository": false,
+    "workingDirectory": "/Users/leonidbugaev/go/src/gates",
+    "filesChanged": 0,
+    "totalAdditions": 0,
+    "totalDeletions": 0
+  },
+  "issues": {
+    "security": [],
+    "performance": [],
+    "style": [],
+    "logic": [
+      {
+        "file": "system",
+        "line": 0,
+        "message": "No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.",
+        "severity": "error",
+        "category": "logic"
+      }
+    ],
+    "documentation": []
+  },
+  "suggestions": [
+    "Error: No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable."
+  ],
+  "files": []
+}

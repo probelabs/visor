@@ -527,6 +527,7 @@ async function handlePullRequestVisorMode(inputs, _context) {
             (0, core_1.setOutput)('review-score', '100');
             (0, core_1.setOutput)('issues-found', '0');
             (0, core_1.setOutput)('pr-action', action || 'unknown');
+            (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
             return;
         }
         // Create a custom review options with Visor config
@@ -569,6 +570,7 @@ async function handlePullRequestVisorMode(inputs, _context) {
         (0, core_1.setOutput)('review-score', (0, reviewer_1.calculateOverallScore)(review.issues).toString());
         (0, core_1.setOutput)('issues-found', (0, reviewer_1.calculateTotalIssues)(review.issues).toString());
         (0, core_1.setOutput)('pr-action', action || 'unknown');
+        (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
         (0, core_1.setOutput)('visor-config-used', 'true');
         (0, core_1.setOutput)('checks-executed', checksToRun.join(','));
     }

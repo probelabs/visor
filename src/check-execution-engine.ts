@@ -95,7 +95,8 @@ export class CheckExecutionEngine {
         prInfo,
         options.checks,
         options.timeout,
-        options.config
+        options.config,
+        options.outputFormat
       );
 
       const executionTime = Date.now() - startTime;
@@ -140,26 +141,28 @@ export class CheckExecutionEngine {
     prInfo: PRInfo,
     checks: string[],
     timeout?: number,
-    config?: import('./types/config').VisorConfig
+    config?: import('./types/config').VisorConfig,
+    outputFormat?: string
   ): Promise<ReviewSummary> {
-    console.error(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
-    console.error(
-      `🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`
-    );
+    // Determine where to send log messages based on output format
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+
+    logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
+    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
 
     // If we have a config with individual check definitions, use parallel execution
     if (config?.checks && checks.length > 1) {
-      console.error(`🔧 Debug: Using parallel execution for ${checks.length} checks`);
-      return await this.executeParallelChecks(prInfo, checks, timeout, config);
+      logFn(`🔧 Debug: Using parallel execution for ${checks.length} checks`);
+      return await this.executeParallelChecks(prInfo, checks, timeout, config, logFn);
     }
 
     // Single check execution (existing logic)
     if (checks.length === 1) {
-      console.error(`🔧 Debug: Using single check execution for: ${checks[0]}`);
+      logFn(`🔧 Debug: Using single check execution for: ${checks[0]}`);
 
       // If we have a config definition for this check, use it
       if (config?.checks?.[checks[0]]) {
-        return await this.executeSingleConfiguredCheck(prInfo, checks[0], timeout, config);
+        return await this.executeSingleConfiguredCheck(prInfo, checks[0], timeout, config, logFn);
       }
 
       // Try provider system for single checks
@@ -176,7 +179,7 @@ export class CheckExecutionEngine {
 
     // Check if 'ai' provider is available for focus-based checks (legacy support)
     if (this.providerRegistry.hasProvider('ai')) {
-      console.error(`🔧 Debug: Using AI provider with focus mapping`);
+      logFn(`🔧 Debug: Using AI provider with focus mapping`);
       const provider = this.providerRegistry.getProviderOrThrow('ai');
 
       let focus = 'all';
@@ -200,7 +203,7 @@ export class CheckExecutionEngine {
     }
 
     // Fallback to existing PRReviewer for backward compatibility
-    console.error(`🔧 Debug: Using legacy PRReviewer fallback`);
+    logFn(`🔧 Debug: Using legacy PRReviewer fallback`);
     const focusMap: Record<string, ReviewOptions['focus']> = {
       security: 'security',
       performance: 'performance',
@@ -227,9 +230,11 @@ export class CheckExecutionEngine {
     prInfo: PRInfo,
     checks: string[],
     timeout?: number,
-    config?: import('./types/config').VisorConfig
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void
   ): Promise<ReviewSummary> {
-    console.error(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
+    const log = logFn || console.error;
+    log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
 
     if (!config?.checks) {
       throw new Error('Config with check definitions required for parallel execution');
@@ -241,7 +246,7 @@ export class CheckExecutionEngine {
     const checkTasks = checks.map(async checkName => {
       const checkConfig = config.checks[checkName];
       if (!checkConfig) {
-        console.error(`🔧 Debug: No config found for check: ${checkName}`);
+        log(`🔧 Debug: No config found for check: ${checkName}`);
         return {
           checkName,
           error: `No configuration found for check: ${checkName}`,
@@ -277,7 +282,7 @@ export class CheckExecutionEngine {
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+        log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
 
         return {
           checkName,
@@ -288,7 +293,7 @@ export class CheckExecutionEngine {
     });
 
     // Execute all checks in parallel using Promise.allSettled
-    console.error(`🔧 Debug: Executing ${checkTasks.length} checks in parallel`);
+    log(`🔧 Debug: Executing ${checkTasks.length} checks in parallel`);
     const results = await Promise.allSettled(checkTasks);
 
     // Aggregate results from all checks
@@ -302,7 +307,8 @@ export class CheckExecutionEngine {
     prInfo: PRInfo,
     checkName: string,
     timeout?: number,
-    config?: import('./types/config').VisorConfig
+    config?: import('./types/config').VisorConfig,
+    _logFn?: (message: string) => void
   ): Promise<ReviewSummary> {
     if (!config?.checks?.[checkName]) {
       throw new Error(`No configuration found for check: ${checkName}`);
@@ -364,7 +370,8 @@ export class CheckExecutionEngine {
 
         if (checkResult.error) {
           failedChecks++;
-          console.error(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
+          const log = console.error;
+          log(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
           debugInfo.push(`❌ Check "${checkName}" failed: ${checkResult.error}`);
 
           // Add error as an issue
@@ -406,7 +413,8 @@ export class CheckExecutionEngine {
         failedChecks++;
         const errorMessage =
           result.reason instanceof Error ? result.reason.message : String(result.reason);
-        console.error(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
+        const log = console.error;
+        log(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
         debugInfo.push(`❌ Check "${checkName}" promise rejected: ${errorMessage}`);
 
         aggregatedIssues.push({
