@@ -13,5 +13,11 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!(@octokit|@actions|@kie)/)',
   ],
-  testTimeout: 30000,
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
+  testTimeout: 10000, // Reduced from 30s to 10s for faster CI
+  // Prevent Jest from hanging on async operations
+  forceExit: true,
+  detectOpenHandles: true,
+  // Speed up test execution
+  maxWorkers: process.env.CI ? 2 : '50%',
 };

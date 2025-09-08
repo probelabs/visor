@@ -24,12 +24,12 @@ inputs:
   output-format:
     description: 'Output format for analysis results (table,json,markdown,sarif)'
     required: false
-    default: 'markdown'
+    default: 'json'
   
   config-path:
     description: 'Path to visor configuration file'
     required: false
-    default: 'visor.config.yaml'
+    default: ''
   
   comment-on-pr:
     description: 'Post review results as PR comment'
@@ -102,6 +102,12 @@ outputs:
   
   sarif-report:
     description: 'SARIF format report (if output-format includes sarif)'
+  
+  incremental-analysis:
+    description: 'Whether incremental analysis was performed (true for synchronize events)'
+  
+  pr-action:
+    description: 'The GitHub PR action that triggered this run (opened, synchronize, edited)'
   
   # Legacy outputs for backward compatibility
   repo-name:

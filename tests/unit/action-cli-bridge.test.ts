@@ -40,7 +40,7 @@ describe('ActionCliBridge', () => {
     it('should return true when visor-config-path is provided', () => {
       const inputs: GitHubActionInputs = {
         'github-token': 'token',
-        'visor-config-path': './visor.config.yaml',
+        'visor-config-path': './.visor.yaml',
       };
 
       expect(bridge.shouldUseVisor(inputs)).toBe(true);

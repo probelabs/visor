@@ -39,6 +39,8 @@ export interface CheckExecutionOptions {
   showDetails?: boolean;
   timeout?: number;
   outputFormat?: string;
+  config?: import('./types/config').VisorConfig;
+  debug?: boolean; // Enable debug mode to collect AI execution details
 }
 
 export class CheckExecutionEngine {
@@ -90,9 +92,30 @@ export class CheckExecutionEngine {
 
       // Execute checks using the existing PRReviewer
       logFn(`🤖 Executing checks: ${options.checks.join(', ')}`);
-      const reviewSummary = await this.executeReviewChecks(prInfo, options.checks, options.timeout);
+      const reviewSummary = await this.executeReviewChecks(
+        prInfo,
+        options.checks,
+        options.timeout,
+        options.config,
+        options.outputFormat,
+        options.debug
+      );
 
       const executionTime = Date.now() - startTime;
+
+      // Collect debug information when debug mode is enabled
+      let debugInfo: import('./output-formatters').DebugInfo | undefined;
+      if (options.debug && reviewSummary.debug) {
+        debugInfo = {
+          provider: reviewSummary.debug.provider,
+          model: reviewSummary.debug.model,
+          processingTime: reviewSummary.debug.processingTime,
+          parallelExecution: options.checks.length > 1,
+          checksExecuted: options.checks,
+          totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
+          apiCallDetails: reviewSummary.debug.apiCallDetails,
+        };
+      }
 
       return {
         repositoryInfo,
@@ -100,6 +123,7 @@ export class CheckExecutionEngine {
         executionTime,
         timestamp,
         checksExecuted: options.checks,
+        debug: debugInfo,
       };
     } catch (error) {
       console.error('Error executing checks:', error);
@@ -128,69 +152,76 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute review checks using the provider registry
+   * Execute review checks using parallel execution for multiple AI checks
    */
   private async executeReviewChecks(
     prInfo: PRInfo,
     checks: string[],
-    timeout?: number
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    outputFormat?: string,
+    debug?: boolean
   ): Promise<ReviewSummary> {
-    // First, try to use the new provider system for AI checks
-    if (checks.length === 1 && this.providerRegistry.hasProvider(checks[0])) {
-      const provider = this.providerRegistry.getProviderOrThrow(checks[0]);
+    // Determine where to send log messages based on output format
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
 
-      // Create config for the provider
-      const config: CheckProviderConfig = {
-        type: checks[0],
-        prompt: 'all', // Default to comprehensive review
-        ai: timeout ? { timeout } : undefined,
-      };
+    logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
+    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
 
-      // Execute using the provider
-      return await provider.execute(prInfo, config);
+    // If we have a config with individual check definitions, use parallel execution
+    if (config?.checks && checks.length > 1) {
+      logFn(`🔧 Debug: Using parallel execution for ${checks.length} checks`);
+      return await this.executeParallelChecks(prInfo, checks, timeout, config, logFn, debug);
     }
 
-    // Check if 'ai' provider is available for focus-based checks
+    // Single check execution (existing logic)
+    if (checks.length === 1) {
+      logFn(`🔧 Debug: Using single check execution for: ${checks[0]}`);
+
+      // If we have a config definition for this check, use it
+      if (config?.checks?.[checks[0]]) {
+        return await this.executeSingleConfiguredCheck(prInfo, checks[0], timeout, config, logFn);
+      }
+
+      // Try provider system for single checks
+      if (this.providerRegistry.hasProvider(checks[0])) {
+        const provider = this.providerRegistry.getProviderOrThrow(checks[0]);
+        const providerConfig: CheckProviderConfig = {
+          type: checks[0],
+          prompt: 'all',
+          ai: timeout ? { timeout } : undefined,
+        };
+        return await provider.execute(prInfo, providerConfig);
+      }
+    }
+
+    // Check if 'ai' provider is available for focus-based checks (legacy support)
     if (this.providerRegistry.hasProvider('ai')) {
+      logFn(`🔧 Debug: Using AI provider with focus mapping`);
       const provider = this.providerRegistry.getProviderOrThrow('ai');
 
-      // Map CLI check types to focus options
       let focus = 'all';
       if (checks.length === 1) {
         if (checks[0] === 'security' || checks[0] === 'performance' || checks[0] === 'style') {
           focus = checks[0];
         }
-      } else if (
-        checks.includes('security') &&
-        !checks.includes('performance') &&
-        !checks.includes('style')
-      ) {
-        focus = 'security';
-      } else if (
-        checks.includes('performance') &&
-        !checks.includes('security') &&
-        !checks.includes('style')
-      ) {
-        focus = 'performance';
-      } else if (
-        checks.includes('style') &&
-        !checks.includes('security') &&
-        !checks.includes('performance')
-      ) {
-        focus = 'style';
+      } else {
+        // For multiple checks, combine them into 'all' focus
+        focus = 'all';
       }
 
-      const config: CheckProviderConfig = {
+      const providerConfig: CheckProviderConfig = {
         type: 'ai',
         prompt: focus,
         focus: focus,
         ai: timeout ? { timeout } : undefined,
       };
 
-      return await provider.execute(prInfo, config);
+      return await provider.execute(prInfo, providerConfig);
     }
 
     // Fallback to existing PRReviewer for backward compatibility
+    logFn(`🔧 Debug: Using legacy PRReviewer fallback`);
     const focusMap: Record<string, ReviewOptions['focus']> = {
       security: 'security',
       performance: 'performance',
@@ -208,6 +239,332 @@ export class CheckExecutionEngine {
       focus,
       format: 'table',
     });
+  }
+
+  /**
+   * Execute multiple checks in parallel using Promise.allSettled
+   */
+  private async executeParallelChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean
+  ): Promise<ReviewSummary> {
+    const log = logFn || console.error;
+    log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
+
+    if (!config?.checks) {
+      throw new Error('Config with check definitions required for parallel execution');
+    }
+
+    const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+    // Create individual check tasks
+    const checkTasks = checks.map(async checkName => {
+      const checkConfig = config.checks[checkName];
+      if (!checkConfig) {
+        log(`🔧 Debug: No config found for check: ${checkName}`);
+        return {
+          checkName,
+          error: `No configuration found for check: ${checkName}`,
+          result: null,
+        };
+      }
+
+      try {
+        console.error(
+          `🔧 Debug: Starting check: ${checkName} with prompt type: ${typeof checkConfig.prompt}`
+        );
+
+        // Create provider config for this specific check
+        const providerConfig: CheckProviderConfig = {
+          type: 'ai',
+          prompt: checkConfig.prompt,
+          focus: this.mapCheckNameToFocus(checkName),
+          ai: {
+            timeout: timeout || 600000,
+            ...(checkConfig.ai || {}),
+          },
+        };
+
+        const result = await provider.execute(prInfo, providerConfig);
+        console.error(
+          `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
+        );
+
+        return {
+          checkName,
+          error: null,
+          result,
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+
+        return {
+          checkName,
+          error: errorMessage,
+          result: null,
+        };
+      }
+    });
+
+    // Execute all checks in parallel using Promise.allSettled
+    log(`🔧 Debug: Executing ${checkTasks.length} checks in parallel`);
+    const results = await Promise.allSettled(checkTasks);
+
+    // Aggregate results from all checks
+    return this.aggregateParallelResults(results, checks, debug);
+  }
+
+  /**
+   * Execute a single configured check
+   */
+  private async executeSingleConfiguredCheck(
+    prInfo: PRInfo,
+    checkName: string,
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    _logFn?: (message: string) => void
+  ): Promise<ReviewSummary> {
+    if (!config?.checks?.[checkName]) {
+      throw new Error(`No configuration found for check: ${checkName}`);
+    }
+
+    const checkConfig = config.checks[checkName];
+    const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+    const providerConfig: CheckProviderConfig = {
+      type: 'ai',
+      prompt: checkConfig.prompt,
+      focus: this.mapCheckNameToFocus(checkName),
+      ai: {
+        timeout: timeout || 600000,
+        ...(checkConfig.ai || {}),
+      },
+    };
+
+    return await provider.execute(prInfo, providerConfig);
+  }
+
+  /**
+   * Map check name to focus for AI provider
+   */
+  private mapCheckNameToFocus(checkName: string): string {
+    const focusMap: Record<string, string> = {
+      security: 'security',
+      performance: 'performance',
+      style: 'style',
+      architecture: 'all', // architecture maps to 'all' focus
+    };
+
+    return focusMap[checkName] || 'all';
+  }
+
+  /**
+   * Aggregate results from parallel check execution
+   */
+  private aggregateParallelResults(
+    results: PromiseSettledResult<{
+      checkName: string;
+      error: string | null;
+      result: ReviewSummary | null;
+    }>[],
+    checkNames: string[],
+    debug?: boolean
+  ): ReviewSummary {
+    const aggregatedIssues: ReviewSummary['issues'] = [];
+    const aggregatedSuggestions: string[] = [];
+    const debugInfo: string[] = [];
+
+    let successfulChecks = 0;
+    let failedChecks = 0;
+
+    results.forEach((result, index) => {
+      const checkName = checkNames[index];
+
+      if (result.status === 'fulfilled') {
+        const checkResult = result.value;
+
+        if (checkResult.error) {
+          failedChecks++;
+          const log = console.error;
+          log(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
+          debugInfo.push(`❌ Check "${checkName}" failed: ${checkResult.error}`);
+
+          // Add error as an issue
+          aggregatedIssues.push({
+            file: 'system',
+            line: 0,
+            endLine: undefined,
+            ruleId: `${checkName}/error`,
+            message: `Check "${checkName}" failed: ${checkResult.error}`,
+            severity: 'error',
+            category: 'logic',
+            suggestion: undefined,
+            replacement: undefined,
+          });
+        } else if (checkResult.result) {
+          successfulChecks++;
+          console.error(
+            `🔧 Debug: Check ${checkName} succeeded with ${checkResult.result.issues.length} issues`
+          );
+          debugInfo.push(
+            `✅ Check "${checkName}" completed: ${checkResult.result.issues.length} issues found`
+          );
+
+          // Prefix issues with check name for identification
+          const prefixedIssues = checkResult.result.issues.map(issue => ({
+            ...issue,
+            ruleId: `${checkName}/${issue.ruleId}`,
+          }));
+
+          aggregatedIssues.push(...prefixedIssues);
+
+          // Add suggestions with check name prefix
+          const prefixedSuggestions = checkResult.result.suggestions.map(
+            suggestion => `[${checkName}] ${suggestion}`
+          );
+          aggregatedSuggestions.push(...prefixedSuggestions);
+        }
+      } else {
+        failedChecks++;
+        const errorMessage =
+          result.reason instanceof Error ? result.reason.message : String(result.reason);
+        const log = console.error;
+        log(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
+        debugInfo.push(`❌ Check "${checkName}" promise rejected: ${errorMessage}`);
+
+        aggregatedIssues.push({
+          file: 'system',
+          line: 0,
+          endLine: undefined,
+          ruleId: `${checkName}/promise-error`,
+          message: `Check "${checkName}" execution failed: ${errorMessage}`,
+          severity: 'error',
+          category: 'logic',
+          suggestion: undefined,
+          replacement: undefined,
+        });
+      }
+    });
+
+    // Add summary information
+    debugInfo.unshift(
+      `🔍 Parallel execution completed: ${successfulChecks} successful, ${failedChecks} failed`
+    );
+    aggregatedSuggestions.unshift(...debugInfo);
+
+    console.error(
+      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
+    );
+
+    // Collect debug information when debug mode is enabled
+    let aggregatedDebug: import('./ai-review-service').AIDebugInfo | undefined;
+    if (debug) {
+      // Find the first successful result with debug information to use as template
+      const debugResults = results
+        .map((result, index) => ({
+          result,
+          checkName: checkNames[index],
+        }))
+        .filter(({ result }) => result.status === 'fulfilled' && result.value?.result?.debug);
+
+      if (debugResults.length > 0) {
+        const firstResult = debugResults[0].result;
+        if (firstResult.status === 'fulfilled') {
+          const firstDebug = firstResult.value!.result!.debug!;
+          const totalProcessingTime = debugResults.reduce((sum, { result }) => {
+            if (result.status === 'fulfilled') {
+              return sum + (result.value!.result!.debug!.processingTime || 0);
+            }
+            return sum;
+          }, 0);
+
+          aggregatedDebug = {
+            // Use first result as template for provider/model info
+            provider: firstDebug.provider,
+            model: firstDebug.model,
+            apiKeySource: firstDebug.apiKeySource,
+            // Aggregate processing time from all checks
+            processingTime: totalProcessingTime,
+            // Combine prompts with check names
+            prompt: debugResults
+              .map(({ checkName, result }) => {
+                if (result.status === 'fulfilled') {
+                  return `[${checkName}] ${result.value!.result!.debug!.prompt.substring(0, 200)}...`;
+                }
+                return `[${checkName}] Error: Promise was rejected`;
+              })
+              .join('\n\n'),
+            // Combine responses
+            rawResponse: debugResults
+              .map(({ checkName, result }) => {
+                if (result.status === 'fulfilled') {
+                  return `[${checkName}] ${result.value!.result!.debug!.rawResponse.substring(0, 500)}...`;
+                }
+                return `[${checkName}] Error: Promise was rejected`;
+              })
+              .join('\n\n'),
+            promptLength: debugResults.reduce((sum, { result }) => {
+              if (result.status === 'fulfilled') {
+                return sum + (result.value!.result!.debug!.promptLength || 0);
+              }
+              return sum;
+            }, 0),
+            responseLength: debugResults.reduce((sum, { result }) => {
+              if (result.status === 'fulfilled') {
+                return sum + (result.value!.result!.debug!.responseLength || 0);
+              }
+              return sum;
+            }, 0),
+            jsonParseSuccess: debugResults.every(({ result }) => {
+              if (result.status === 'fulfilled') {
+                return result.value!.result!.debug!.jsonParseSuccess;
+              }
+              return false;
+            }),
+            errors: debugResults.flatMap(({ result, checkName }) => {
+              if (result.status === 'fulfilled') {
+                return (result.value!.result!.debug!.errors || []).map(
+                  (error: string) => `[${checkName}] ${error}`
+                );
+              }
+              return [`[${checkName}] Promise was rejected`];
+            }),
+            timestamp: new Date().toISOString(),
+            // Add additional debug information for parallel execution
+            totalApiCalls: debugResults.length,
+            apiCallDetails: debugResults.map(({ checkName, result }) => {
+              if (result.status === 'fulfilled') {
+                return {
+                  checkName,
+                  provider: result.value!.result!.debug!.provider,
+                  model: result.value!.result!.debug!.model,
+                  processingTime: result.value!.result!.debug!.processingTime,
+                  success: result.value!.result!.debug!.jsonParseSuccess,
+                };
+              }
+              return {
+                checkName,
+                provider: 'unknown',
+                model: 'unknown',
+                processingTime: 0,
+                success: false,
+              };
+            }),
+          };
+        }
+      }
+    }
+
+    return {
+      issues: aggregatedIssues,
+      suggestions: aggregatedSuggestions,
+      debug: aggregatedDebug,
+    };
   }
 
   /**

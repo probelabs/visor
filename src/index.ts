@@ -5,6 +5,8 @@ import { PRAnalyzer } from './pr-analyzer';
 import { PRReviewer, calculateOverallScore, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { CommentManager } from './github-comments';
+import { ConfigManager } from './config';
+import { PRDetector, GitHubEventContext } from './pr-detector';
 
 export async function run(): Promise<void> {
   try {
@@ -17,8 +19,19 @@ export async function run(): Promise<void> {
       owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
-      'visor-config-path': getInput('visor-config-path'),
-      'visor-checks': getInput('visor-checks'),
+      debug: getInput('debug'),
+      // Only collect other inputs if they have values to avoid triggering CLI mode
+      checks: getInput('checks') || undefined,
+      'output-format': getInput('output-format') || undefined,
+      'config-path': getInput('config-path') || undefined,
+      'comment-on-pr': getInput('comment-on-pr') || undefined,
+      'create-check': getInput('create-check') || undefined,
+      'add-labels': getInput('add-labels') || undefined,
+      'fail-on-critical': getInput('fail-on-critical') || undefined,
+      'min-score': getInput('min-score') || undefined,
+      // Legacy inputs for backward compatibility
+      'visor-config-path': getInput('visor-config-path') || undefined,
+      'visor-checks': getInput('visor-checks') || undefined,
     };
 
     const eventName = process.env.GITHUB_EVENT_NAME;
@@ -41,8 +54,33 @@ export async function run(): Promise<void> {
     const cliBridge = new ActionCliBridge(token, context);
 
     // Check if we should use Visor CLI
+    console.log('Debug: inputs.debug =', inputs.debug);
+    console.log('Debug: inputs.checks =', inputs.checks);
+    console.log('Debug: inputs.config-path =', inputs['config-path']);
+    console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
+    console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
+
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
+
+      // ENHANCED FIX: For PR auto-reviews, detect PR context across all event types
+      const isAutoReview = inputs['auto-review'] === 'true';
+      if (isAutoReview) {
+        console.log(
+          '🔄 Auto-review enabled - attempting to detect PR context across all event types'
+        );
+
+        // Try to detect if we're in a PR context (works for push, pull_request, issue_comment, etc.)
+        const prDetected = await detectPRContext(inputs, context);
+        if (prDetected) {
+          console.log('✅ PR context detected - using GitHub API for PR analysis');
+          await handlePullRequestVisorMode(inputs, context);
+          return;
+        } else {
+          console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
+        }
+      }
+
       await handleVisorMode(cliBridge, inputs, context);
       return;
     }
@@ -63,21 +101,51 @@ async function handleVisorMode(
   _context: GitHubContext
 ): Promise<void> {
   try {
-    // Create temporary config if needed
-    const tempConfigPath = await cliBridge.createTempConfigFromInputs(inputs);
-    if (tempConfigPath) {
-      inputs['visor-config-path'] = tempConfigPath;
-    }
+    // Note: PR auto-review cases are now handled upstream in the main run() function
 
-    // Execute CLI
+    // Execute CLI with the provided config file (no temp config creation)
     const result = await cliBridge.executeCliWithContext(inputs);
 
     if (result.success) {
       console.log('✅ Visor CLI execution completed successfully');
-      console.log(result.output);
+
+      // Parse JSON output for PR comment creation
+      let cliOutput;
+      try {
+        // Extract JSON from CLI output
+        const outputLines = result.output?.split('\n') || [];
+        const jsonLine = outputLines.find(
+          line => line.trim().startsWith('{') && line.trim().endsWith('}')
+        );
+
+        if (jsonLine) {
+          cliOutput = JSON.parse(jsonLine);
+          console.log('📊 CLI Review Results:', cliOutput);
+
+          // Note: PR comment posting is now handled by handlePullRequestVisorMode for PR events
+          // CLI mode output is intended for non-PR scenarios
+        } else {
+          console.log('📄 CLI Output (non-JSON):', result.output);
+        }
+      } catch (parseError) {
+        console.log('⚠️ Could not parse CLI output as JSON:', parseError);
+        console.log('📄 Raw CLI Output:', result.output);
+      }
 
       // Set outputs based on CLI result
       const outputs = cliBridge.mergeActionAndCliOutputs(inputs, result);
+
+      // Add additional outputs from parsed JSON
+      if (cliOutput) {
+        outputs['overall-score'] = cliOutput.overallScore?.toString() || '0';
+        outputs['total-issues'] = cliOutput.totalIssues?.toString() || '0';
+        outputs['critical-issues'] = cliOutput.criticalIssues?.toString() || '0';
+        outputs['security-score'] = cliOutput.securityScore?.toString() || '100';
+        outputs['performance-score'] = cliOutput.performanceScore?.toString() || '100';
+        outputs['style-score'] = cliOutput.styleScore?.toString() || '100';
+        outputs['architecture-score'] = cliOutput.architectureScore?.toString() || '100';
+      }
+
       for (const [key, value] of Object.entries(outputs)) {
         setOutput(key, value);
       }
@@ -86,13 +154,201 @@ async function handleVisorMode(
       console.error(result.error || result.output);
       setFailed(result.error || 'CLI execution failed');
     }
-
-    // Cleanup temporary files
-    await cliBridge.cleanup();
   } catch (error) {
     console.error('❌ Visor mode error:', error);
     setFailed(error instanceof Error ? error.message : 'Visor mode failed');
   }
+}
+
+/**
+ * Post CLI review results as PR comment with robust PR detection
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs): Promise<void> {
+  try {
+    const token = inputs['github-token'];
+    const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+    const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+    if (!owner || !repo || !token) {
+      console.log('⚠️ Missing required parameters for PR comment creation');
+      return;
+    }
+
+    const octokit = new Octokit({ auth: token });
+    const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+
+    // Convert GitHub context to our format
+    const eventContext: GitHubEventContext = {
+      event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
+      repository: {
+        owner: { login: owner },
+        name: repo,
+      },
+      event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : undefined,
+      payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+    };
+
+    // Use robust PR detection
+    const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+
+    // Extract commit SHA for comment metadata
+    const commitSha =
+      eventContext.event?.pull_request?.head?.sha ||
+      eventContext.payload?.event?.pull_request?.head?.sha ||
+      process.env.GITHUB_SHA;
+
+    if (!prResult.prNumber) {
+      console.log(
+        `⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
+      );
+      if (inputs.debug === 'true') {
+        console.log('Available detection strategies:');
+        prDetector.getDetectionStrategies().forEach(strategy => console.log(`  ${strategy}`));
+      }
+      return;
+    }
+
+    console.log(
+      `✅ Found PR #${prResult.prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`
+    );
+    if (prResult.details) {
+      console.log(`   Details: ${prResult.details}`);
+    }
+
+    const commentManager = new CommentManager(octokit);
+
+    // Create Visor-formatted comment from CLI output
+    let comment = `# 🔍 Visor Code Review Results\n\n`;
+    comment += `## 📊 Summary\n`;
+    comment += `- **Overall Score**: ${cliOutput.overallScore || 0}/100\n`;
+    comment += `- **Issues Found**: ${cliOutput.totalIssues || 0} (${cliOutput.criticalIssues || 0} Critical)\n`;
+    comment += `- **Files Analyzed**: ${cliOutput.filesAnalyzed || 'N/A'}\n\n`;
+
+    // Add category scores if available
+    if (
+      cliOutput.securityScore ||
+      cliOutput.performanceScore ||
+      cliOutput.styleScore ||
+      cliOutput.architectureScore
+    ) {
+      comment += `## 📈 Category Scores\n`;
+      if (cliOutput.securityScore !== undefined)
+        comment += `- **Security**: ${cliOutput.securityScore}/100\n`;
+      if (cliOutput.performanceScore !== undefined)
+        comment += `- **Performance**: ${cliOutput.performanceScore}/100\n`;
+      if (cliOutput.styleScore !== undefined)
+        comment += `- **Style**: ${cliOutput.styleScore}/100\n`;
+      if (cliOutput.architectureScore !== undefined)
+        comment += `- **Architecture**: ${cliOutput.architectureScore}/100\n`;
+      comment += '\n';
+    }
+
+    // Add issues grouped by category
+    if (cliOutput.issues && cliOutput.issues.length > 0) {
+      const groupedIssues = groupIssuesByCategory(cliOutput.issues);
+
+      for (const [category, issues] of Object.entries(groupedIssues)) {
+        if (issues.length === 0) continue;
+
+        const emoji = getCategoryEmoji(category);
+        const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+
+        let sectionContent = '';
+        for (const issue of issues.slice(0, 5)) {
+          // Limit to 5 issues per category
+          sectionContent += `- **${issue.severity?.toUpperCase() || 'UNKNOWN'}**: ${issue.message}\n`;
+          sectionContent += `  - **File**: \`${issue.file}:${issue.line}\`\n\n`;
+        }
+
+        if (issues.length > 5) {
+          sectionContent += `*...and ${issues.length - 5} more issues in this category.*\n\n`;
+        }
+
+        comment += commentManager.createCollapsibleSection(title, sectionContent, true);
+        comment += '\n\n';
+      }
+    }
+
+    // Add suggestions if any
+    if (cliOutput.suggestions && cliOutput.suggestions.length > 0) {
+      const suggestionsContent =
+        cliOutput.suggestions.map((s: string) => `- ${s}`).join('\n') + '\n';
+      comment += commentManager.createCollapsibleSection(
+        '💡 Recommendations',
+        suggestionsContent,
+        true
+      );
+      comment += '\n\n';
+    }
+
+    // Add debug information if available
+    if (cliOutput.debug) {
+      const debugContent = formatDebugInfo(cliOutput.debug);
+      comment += commentManager.createCollapsibleSection(
+        '🐛 Debug Information',
+        debugContent,
+        false
+      );
+      comment += '\n\n';
+    }
+
+    // Use smart comment updating with unique ID
+    const commentId = `visor-cli-review-${prResult.prNumber}`;
+    await commentManager.updateOrCreateComment(owner, repo, prResult.prNumber, comment, {
+      commentId,
+      triggeredBy: 'visor-cli',
+      allowConcurrentUpdates: true,
+      commitSha: commitSha,
+    });
+
+    console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
+  } catch (error) {
+    console.error('❌ Failed to post CLI review comment:', error);
+  }
+}
+
+function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
+  const grouped: Record<string, any[]> = {
+    security: [],
+    performance: [],
+    style: [],
+    logic: [],
+    documentation: [],
+    architecture: [],
+  };
+
+  for (const issue of issues) {
+    const category = issue.category || 'logic';
+    if (!grouped[category]) grouped[category] = [];
+    grouped[category].push(issue);
+  }
+
+  return grouped;
+}
+
+function getCategoryEmoji(category: string): string {
+  const emojiMap: Record<string, string> = {
+    security: '🔒',
+    performance: '📈',
+    style: '🎨',
+    logic: '🧠',
+    documentation: '📚',
+    architecture: '🏗️',
+  };
+  return emojiMap[category] || '📝';
+}
+
+function formatDebugInfo(debug: any): string {
+  let content = '';
+  if (debug.provider) content += `**Provider:** ${debug.provider}\n`;
+  if (debug.model) content += `**Model:** ${debug.model}\n`;
+  if (debug.processingTime) content += `**Processing Time:** ${debug.processingTime}ms\n`;
+  if (debug.parallelExecution !== undefined)
+    content += `**Parallel Execution:** ${debug.parallelExecution ? '✅' : '❌'}\n`;
+  if (debug.checksExecuted) content += `**Checks Executed:** ${debug.checksExecuted.join(', ')}\n`;
+  content += '\n';
+  return content;
 }
 
 /**
@@ -120,7 +376,7 @@ async function handleLegacyMode(
       break;
     case 'pull_request':
       if (autoReview) {
-        await handlePullRequestEvent(octokit, owner, repo);
+        await handlePullRequestEvent(octokit, owner, repo, inputs);
       }
       break;
     default:
@@ -216,7 +472,8 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 async function handlePullRequestEvent(
   octokit: Octokit,
   owner: string,
-  repo: string
+  repo: string,
+  inputs?: GitHubActionInputs
 ): Promise<void> {
   const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
   const pullRequest = context.event?.pull_request;
@@ -274,9 +531,38 @@ async function handlePullRequestEvent(
     }
   }
 
-  // Perform the review
-  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo);
-  const reviewComment = reviewer['formatReviewComment'](review, {});
+  // Create review options, including debug if enabled
+  const reviewOptions = {
+    debug: inputs?.debug === 'true',
+  };
+
+  // Perform the review with debug options
+  const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+
+  // If debug mode is enabled, output debug information to console
+  if (reviewOptions.debug && review.debug) {
+    console.log('\n========================================');
+    console.log('🐛 DEBUG INFORMATION');
+    console.log('========================================');
+    console.log(`Provider: ${review.debug.provider}`);
+    console.log(`Model: ${review.debug.model}`);
+    console.log(`API Key Source: ${review.debug.apiKeySource}`);
+    console.log(`Processing Time: ${review.debug.processingTime}ms`);
+    console.log(`Prompt Length: ${review.debug.promptLength} characters`);
+    console.log(`Response Length: ${review.debug.responseLength} characters`);
+    console.log(`JSON Parse Success: ${review.debug.jsonParseSuccess ? '✅' : '❌'}`);
+    if (review.debug.errors && review.debug.errors.length > 0) {
+      console.log(`\n⚠️ Errors:`);
+      review.debug.errors.forEach(err => console.log(`  - ${err}`));
+    }
+    console.log('\n--- AI PROMPT ---');
+    console.log(review.debug.prompt.substring(0, 500) + '...');
+    console.log('\n--- RAW RESPONSE ---');
+    console.log(review.debug.rawResponse.substring(0, 500) + '...');
+    console.log('========================================\n');
+  }
+
+  const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one
@@ -285,6 +571,7 @@ async function handlePullRequestEvent(
       commentId,
       triggeredBy: action,
       allowConcurrentUpdates: true, // Allow updates even if comment was modified externally
+      commitSha: pullRequest.head?.sha,
     });
 
     console.log(
@@ -327,6 +614,208 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
   console.log(`Repository: ${repoData.full_name}`);
   console.log(`Description: ${repoData.description || 'No description'}`);
   console.log(`Stars: ${repoData.stargazers_count}`);
+}
+
+/**
+ * Handle PR review using Visor config but with proper GitHub API PR diff analysis
+ */
+async function handlePullRequestVisorMode(
+  inputs: GitHubActionInputs,
+  _context: GitHubContext
+): Promise<void> {
+  const token = inputs['github-token'];
+  const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+  const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+  if (!owner || !repo || !token) {
+    console.error('❌ Missing required GitHub parameters for PR analysis');
+    setFailed('Missing required GitHub parameters');
+    return;
+  }
+
+  const octokit = new Octokit({ auth: token });
+  const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+
+  // Convert GitHub context to our format
+  const eventContext: GitHubEventContext = {
+    event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
+    repository: {
+      owner: { login: owner },
+      name: repo,
+    },
+    event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : undefined,
+    payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+  };
+
+  // Use robust PR detection
+  const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+  const action = eventContext.event?.action;
+
+  // Extract commit SHA for comment metadata
+  const commitSha =
+    eventContext.event?.pull_request?.head?.sha ||
+    eventContext.payload?.event?.pull_request?.head?.sha ||
+    process.env.GITHUB_SHA;
+
+  if (!prResult.prNumber) {
+    console.error(
+      `❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
+    );
+    if (inputs.debug === 'true') {
+      console.error('Available detection strategies:');
+      prDetector.getDetectionStrategies().forEach(strategy => console.error(`  ${strategy}`));
+    }
+    setFailed('No PR number found');
+    return;
+  }
+
+  const prNumber = prResult.prNumber;
+  console.log(
+    `✅ Found PR #${prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`
+  );
+  if (prResult.details) {
+    console.log(`   Details: ${prResult.details}`);
+  }
+
+  console.log(`🔍 Analyzing PR #${prNumber} using Visor config (action: ${action})`);
+
+  try {
+    // Use the existing PR analysis infrastructure but with Visor config
+    const analyzer = new PRAnalyzer(octokit);
+    const reviewer = new PRReviewer(octokit);
+    const commentManager = new CommentManager(octokit);
+
+    // Load Visor config
+    const configManager = new ConfigManager();
+    let config;
+    const configPath = inputs['config-path'];
+    if (configPath) {
+      try {
+        config = await configManager.loadConfig(configPath);
+        console.log(`📋 Loaded Visor config from: ${configPath}`);
+      } catch (error) {
+        console.error(`⚠️ Could not load config from ${configPath}:`, error);
+        config = await configManager.getDefaultConfig();
+      }
+    } else {
+      config = await configManager.getDefaultConfig();
+    }
+
+    // Extract checks from config
+    const configChecks = Object.keys(config.checks || {});
+    const checksToRun =
+      configChecks.length > 0 ? configChecks : ['security', 'performance', 'style', 'architecture'];
+    console.log(`🔧 Running checks: ${checksToRun.join(', ')}`);
+
+    // Fetch PR diff using GitHub API
+    const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+    console.log(`📄 Found ${prInfo.files.length} changed files`);
+
+    if (prInfo.files.length === 0) {
+      console.log('⚠️ No files changed in this PR - skipping review');
+
+      // Set basic outputs
+      setOutput('auto-review-completed', 'true');
+      setOutput('review-score', '100');
+      setOutput('issues-found', '0');
+      setOutput('pr-action', action || 'unknown');
+      setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
+      return;
+    }
+
+    // Create a custom review options with Visor config
+    const reviewOptions = {
+      debug: inputs.debug === 'true',
+      config: config,
+      checks: checksToRun,
+      parallelExecution: true,
+    };
+
+    // Perform the review
+    console.log('🤖 Starting parallel AI review with Visor config...');
+    const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+
+    // Update the review summary to show correct checks executed
+    if (review.debug) {
+      (review.debug as any).checksExecuted = checksToRun;
+      (review.debug as any).parallelExecution = true;
+    }
+
+    // Post comment using existing comment manager
+    const commentId = `visor-config-review-${prNumber}`;
+    const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
+
+    // Add context based on action
+    let reviewContext = '';
+    if (action === 'opened') {
+      reviewContext =
+        '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
+    } else {
+      reviewContext =
+        '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
+    }
+
+    const fullComment = reviewContext + reviewComment;
+
+    await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+      commentId,
+      triggeredBy: `visor-config-${action}`,
+      allowConcurrentUpdates: true,
+      commitSha: commitSha,
+    });
+
+    console.log('✅ Posted Visor config-based review comment');
+
+    // Set outputs
+    setOutput('auto-review-completed', 'true');
+    setOutput('review-score', calculateOverallScore(review.issues).toString());
+    setOutput('issues-found', calculateTotalIssues(review.issues).toString());
+    setOutput('pr-action', action || 'unknown');
+    setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
+    setOutput('visor-config-used', 'true');
+    setOutput('checks-executed', checksToRun.join(','));
+  } catch (error) {
+    console.error('❌ Error in Visor PR analysis:', error);
+    setFailed(error instanceof Error ? error.message : 'Visor PR analysis failed');
+  }
+}
+
+/**
+ * Detect if we're in a PR context for any GitHub event type
+ */
+async function detectPRContext(
+  inputs: GitHubActionInputs,
+  context: GitHubContext
+): Promise<boolean> {
+  try {
+    const token = inputs['github-token'];
+    const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+    const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+    if (!owner || !repo || !token) {
+      return false;
+    }
+
+    const octokit = new Octokit({ auth: token });
+    const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+
+    // Convert GitHub context to our format
+    const eventContext: GitHubEventContext = {
+      event_name: context.event_name,
+      repository: {
+        owner: { login: owner },
+        name: repo,
+      },
+      event: context.event as GitHubEventContext['event'],
+      payload: context.payload || {},
+    };
+
+    const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+    return prResult.prNumber !== null;
+  } catch (error) {
+    console.error('Error detecting PR context:', error);
+    return false;
+  }
 }
 
 if (require.main === module) {

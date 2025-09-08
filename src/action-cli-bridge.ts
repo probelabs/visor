@@ -9,6 +9,16 @@ export interface GitHubActionInputs {
   owner?: string;
   repo?: string;
   'auto-review'?: string;
+  checks?: string;
+  'output-format'?: string;
+  'config-path'?: string;
+  'comment-on-pr'?: string;
+  'create-check'?: string;
+  'add-labels'?: string;
+  'fail-on-critical'?: string;
+  'min-score'?: string;
+  debug?: string;
+  // Legacy inputs for backward compatibility
   'visor-config-path'?: string;
   'visor-checks'?: string;
 }
@@ -56,7 +66,12 @@ export class ActionCliBridge {
    * Determine if Visor CLI should be used based on inputs
    */
   public shouldUseVisor(inputs: GitHubActionInputs): boolean {
-    return !!(inputs['visor-config-path'] || inputs['visor-checks']);
+    return !!(
+      inputs['config-path'] ||
+      inputs['visor-config-path'] ||
+      inputs.checks ||
+      inputs['visor-checks']
+    );
   }
 
   /**
@@ -65,25 +80,44 @@ export class ActionCliBridge {
   public parseGitHubInputsToCliArgs(inputs: GitHubActionInputs): string[] {
     const args: string[] = [];
 
-    // Add config path if specified
-    if (inputs['visor-config-path']) {
-      args.push('--config', inputs['visor-config-path']);
+    // Add config path if specified (prefer new input name over legacy)
+    const configPath = inputs['config-path'] || inputs['visor-config-path'];
+    if (configPath && configPath.trim() !== '') {
+      args.push('--config', configPath);
     }
 
-    // Add checks if specified
-    if (inputs['visor-checks']) {
-      const checks = inputs['visor-checks']
+    // Add checks if specified (prefer new input name over legacy)
+    const checksInput = inputs.checks || inputs['visor-checks'];
+    if (checksInput) {
+      const checks = checksInput
         .split(',')
         .map(check => check.trim())
         .filter(check => this.isValidCheck(check));
 
-      for (const check of checks) {
-        args.push('--check', check);
+      // CRITICAL FIX: When "all" is specified, don't add any --check arguments
+      // This allows CLI to extract all checks from the config file
+      if (checks.length > 0 && !checks.includes('all')) {
+        // Only add specific checks if "all" is not in the list
+        for (const check of checks) {
+          args.push('--check', check);
+        }
       }
+      // When checks includes 'all', we intentionally don't add any --check arguments
+      // The CLI will then use all checks defined in .visor.yaml
     }
 
-    // Always use JSON output for programmatic processing
-    args.push('--output', 'json');
+    // Add output format if specified
+    if (inputs['output-format']) {
+      args.push('--output', inputs['output-format']);
+    } else {
+      // Always use JSON output for programmatic processing
+      args.push('--output', 'json');
+    }
+
+    // Add debug flag if enabled
+    if (inputs.debug === 'true') {
+      args.push('--debug');
+    }
 
     return args;
   }

@@ -204,7 +204,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         console.log(`  Testing config merge with nullish values ${i + 1}...`);
 
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const merged = configManager.mergeWithCliOptions(baseConfig, {
             ...cliOptions,
             checks: cliOptions.checks || [],
@@ -285,9 +284,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           largePRData.number,
           prInfo
         );
-        console.log(
-          `    Review completed: issues=${review.issues.length}`
-        );
+        console.log(`    Review completed: issues=${review.issues.length}`);
 
         // Should handle large data without crashing
         expect(prInfo).toBeDefined();
@@ -733,11 +730,11 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
       // Test config loading with various path formats
       const configPathTests = [
-        './visor.config.yaml',
-        '.\\visor.config.yaml',
-        'visor.config.yaml',
-        path.join(os.tmpdir(), 'visor.config.yaml'),
-        path.resolve('visor.config.yaml'),
+        './.visor.yaml',
+        '.\\.visor.yaml',
+        '.visor.yaml',
+        path.join(os.tmpdir(), '.visor.yaml'),
+        path.resolve('.visor.yaml'),
       ];
 
       for (const configPath of configPathTests) {

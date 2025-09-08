@@ -16,6 +16,23 @@ export interface AnalysisResult {
   executionTime: number;
   timestamp: string;
   checksExecuted: string[];
+  debug?: DebugInfo; // Optional debug information when debug mode is enabled
+}
+
+export interface DebugInfo {
+  provider?: string;
+  model?: string;
+  processingTime?: number;
+  parallelExecution?: boolean;
+  checksExecuted?: string[];
+  totalApiCalls?: number;
+  apiCallDetails?: Array<{
+    checkName: string;
+    provider: string;
+    model: string;
+    processingTime: number;
+    success: boolean;
+  }>;
 }
 
 export interface OutputFormatterOptions {
@@ -257,6 +274,7 @@ export class OutputFormatters {
         : issues,
       suggestions: result.reviewSummary.suggestions,
       files: options.includeFiles ? result.repositoryInfo.files : undefined,
+      debug: result.debug, // Include debug information when available
     };
 
     return JSON.stringify(jsonResult, null, 2);

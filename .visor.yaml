@@ -1,0 +1,59 @@
+version: "1.0"
+
+checks:
+  security:
+    type: ai
+    prompt: |
+      Perform comprehensive security analysis focusing on:
+      - SQL injection vulnerabilities
+      - XSS attack vectors  
+      - Authentication/authorization issues
+      - Sensitive data exposure
+      - Input validation and sanitization
+      - Unsafe eval() usage
+      - Environment variable security
+    on: [pr_opened, pr_updated]
+
+  performance:
+    type: ai
+    prompt: |
+      Review for performance issues:
+      - N+1 database queries
+      - Memory leaks and excessive allocations
+      - Inefficient algorithms and data structures
+      - Missing caching opportunities
+      - Unnecessary async operations
+      - Large file processing without streaming
+      - Blocking operations in event loops
+    on: [pr_opened, pr_updated]
+
+  style:
+    type: ai
+    prompt: |
+      Check for style and consistency issues:
+      - Naming conventions adherence
+      - Code formatting consistency
+      - Comment quality and documentation
+      - Import organization
+      - Consistent error handling patterns
+      - TypeScript best practices
+    on: [pr_opened]
+
+  architecture:
+    type: ai
+    prompt: |
+      Analyze architectural aspects:
+      - SOLID principles adherence
+      - Design pattern usage appropriateness
+      - Circular dependencies
+      - Module coupling and cohesion
+      - Error handling architecture
+      - Separation of concerns
+      - Code reusability and maintainability
+    on: [pr_opened, pr_updated]
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false

@@ -43,7 +43,7 @@ output:
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(validConfig);
 
-      const config = await configManager.loadConfig('/path/to/visor.config.yaml');
+      const config = await configManager.loadConfig('/path/to/.visor.yaml');
 
       expect(config.version).toBe('1.0');
       expect(config.checks).toHaveProperty('performance');
@@ -239,7 +239,7 @@ checks:
   });
 
   describe('Configuration File Discovery', () => {
-    it('should find visor.config.yaml in current directory', async () => {
+    it('should find .visor.yaml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -253,17 +253,17 @@ checks:
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
 
       mockFs.existsSync.mockImplementation((filePath: any) => {
-        return filePath === path.join(testConfigDir, 'visor.config.yaml');
+        return filePath === path.join(testConfigDir, '.visor.yaml');
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 
       const config = await configManager.findAndLoadConfig();
 
-      expect(mockFs.existsSync).toHaveBeenCalledWith(path.join(testConfigDir, 'visor.config.yaml'));
+      expect(mockFs.existsSync).toHaveBeenCalledWith(path.join(testConfigDir, '.visor.yaml'));
       expect(config.version).toBe('1.0');
     });
 
-    it('should find visor.config.yml in current directory', async () => {
+    it('should find .visor.yml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -277,7 +277,7 @@ checks:
 
       mockFs.existsSync.mockImplementation((filePath: any) => {
         // First check for .yaml fails, second check for .yml succeeds
-        return filePath === path.join(testConfigDir, 'visor.config.yml');
+        return filePath === path.join(testConfigDir, '.visor.yml');
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 

@@ -44,7 +44,7 @@ describe('Visor Integration E2E Tests', () => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const configPath = path.join(tempDir, 'visor.config.yaml');
+    const configPath = path.join(tempDir, '.visor.yaml');
     fs.writeFileSync(configPath, yaml.dump(testConfig));
 
     mockGithub = new MockGithub({
@@ -61,7 +61,7 @@ describe('Visor Integration E2E Tests', () => {
             },
             {
               src: configPath,
-              dest: 'visor.config.yaml',
+              dest: '.visor.yaml',
             },
             {
               src: path.resolve(__dirname, '..', 'fixtures', 'sample-pr.ts'),
@@ -103,7 +103,7 @@ describe('Visor Integration E2E Tests', () => {
     test('should detect Visor config and use CLI mode', async () => {
       const mockActionInputs = {
         'github-token': 'test-token',
-        'visor-config-path': './visor.config.yaml',
+        'visor-config-path': './.visor.yaml',
         owner: 'test-owner',
         repo: 'visor-test',
       };
@@ -483,7 +483,7 @@ describe('Visor Integration E2E Tests', () => {
     test('should handle authentication flow', async () => {
       const mockInputs = {
         'github-token': 'test-secret-token',
-        'visor-config-path': './visor.config.yaml',
+        'visor-config-path': './.visor.yaml',
       };
 
       const mockContext = {
@@ -504,7 +504,7 @@ describe('Visor Integration E2E Tests', () => {
       // but we're testing the setup and configuration here
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockInputs);
       expect(cliArgs).toContain('--config');
-      expect(cliArgs).toContain('./visor.config.yaml');
+      expect(cliArgs).toContain('./.visor.yaml');
     });
   });
 
@@ -576,7 +576,7 @@ describe('Visor Integration E2E Tests', () => {
       try {
         if (act && testRepoPath) {
           // Set up environment for Visor mode
-          process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, 'visor.config.yaml');
+          process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, '.visor.yaml');
 
           // This would trigger the actual GitHub Action
           // const result = await act.runEvent('pull_request', {
@@ -585,7 +585,7 @@ describe('Visor Integration E2E Tests', () => {
           // });
 
           // For now, we validate the setup
-          expect(fs.existsSync(path.join(testRepoPath, 'visor.config.yaml'))).toBe(true);
+          expect(fs.existsSync(path.join(testRepoPath, '.visor.yaml'))).toBe(true);
           expect(fs.existsSync(path.join(testRepoPath, 'action.yml'))).toBe(true);
         }
 
@@ -594,6 +594,394 @@ describe('Visor Integration E2E Tests', () => {
         console.log('E2E test completed with validation:', error);
         expect(true).toBe(true);
       }
+    });
+  });
+
+  describe('PR Detection Integration Tests', () => {
+    let mockOctokit: any;
+    let prDetector: any;
+
+    beforeEach(() => {
+      // Mock Octokit for PR detection tests
+      mockOctokit = {
+        rest: {
+          pulls: {
+            list: jest.fn(),
+            listCommits: jest.fn(),
+          },
+          search: {
+            issuesAndPullRequests: jest.fn(),
+          },
+        },
+      };
+
+      // Create PRDetector instance
+      const { PRDetector } = require('../../src/pr-detector');
+      prDetector = new PRDetector(mockOctokit, true);
+    });
+
+    test('should detect PR from pull_request events across different actions', async () => {
+      const testCases = [
+        { action: 'opened', expectedConfidence: 'high' },
+        { action: 'synchronize', expectedConfidence: 'high' },
+        { action: 'edited', expectedConfidence: 'high' },
+        { action: 'closed', expectedConfidence: 'high' },
+        { action: 'reopened', expectedConfidence: 'high' },
+        { action: 'ready_for_review', expectedConfidence: 'high' },
+      ];
+
+      for (const testCase of testCases) {
+        const context = {
+          event_name: 'pull_request',
+          repository: {
+            owner: { login: 'test-owner' },
+            name: 'visor-test',
+          },
+          event: {
+            action: testCase.action,
+            pull_request: { number: 123 },
+          },
+        };
+
+        const result = await prDetector.detectPRNumber(context, 'test-owner', 'visor-test');
+
+        expect(result.prNumber).toBe(123);
+        expect(result.confidence).toBe(testCase.expectedConfidence);
+        expect(result.source).toBe('direct');
+        expect(result.details).toContain(`Direct PR event: pull_request`);
+
+        // Should not make any API calls for direct detection
+        expect(mockOctokit.rest.pulls.list).not.toHaveBeenCalled();
+      }
+    });
+
+    test('should detect PR from push events using branch-based discovery', async () => {
+      const pushContext = {
+        event_name: 'push',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          ref: 'refs/heads/feature-branch',
+          commits: [{ id: 'abc123' }],
+          head_commit: { id: 'abc123' },
+        },
+      };
+
+      // Mock successful branch-based PR discovery
+      mockOctokit.rest.pulls.list.mockResolvedValueOnce({
+        data: [{ number: 456, head: { ref: 'feature-branch' } }],
+      });
+
+      const result = await prDetector.detectPRNumber(pushContext, 'test-owner', 'visor-test');
+
+      expect(result.prNumber).toBe(456);
+      expect(result.confidence).toBe('high');
+      expect(result.source).toBe('api_query');
+      expect(result.details).toContain('Found open PR for branch feature-branch');
+
+      expect(mockOctokit.rest.pulls.list).toHaveBeenCalledWith({
+        owner: 'test-owner',
+        repo: 'visor-test',
+        head: 'test-owner:feature-branch',
+        state: 'open',
+      });
+    });
+
+    test('should detect PR from issue_comment events on PRs', async () => {
+      const commentContext = {
+        event_name: 'issue_comment',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          action: 'created',
+          issue: {
+            number: 789,
+            pull_request: {}, // Indicates this is a PR
+          },
+          comment: {
+            body: '/review --focus=security',
+          },
+        },
+      };
+
+      const result = await prDetector.detectPRNumber(commentContext, 'test-owner', 'visor-test');
+
+      expect(result.prNumber).toBe(789);
+      expect(result.confidence).toBe('high');
+      expect(result.source).toBe('comment');
+      expect(result.details).toBe('Issue comment on PR');
+
+      // Should not make API calls for direct comment detection
+      expect(mockOctokit.rest.pulls.list).not.toHaveBeenCalled();
+    });
+
+    test('should handle fallback to commit search when branch search fails', async () => {
+      const pushContext = {
+        event_name: 'push',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          ref: 'refs/heads/feature-branch',
+          commits: [{ id: 'def456' }],
+          head_commit: { id: 'def456' },
+        },
+      };
+
+      // Mock branch search failure
+      mockOctokit.rest.pulls.list.mockResolvedValueOnce({ data: [] });
+
+      // Mock commit search success
+      mockOctokit.rest.search.issuesAndPullRequests.mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              number: 999,
+              pull_request: {},
+            },
+          ],
+        },
+      });
+
+      const result = await prDetector.detectPRNumber(pushContext, 'test-owner', 'visor-test');
+
+      expect(result.prNumber).toBe(999);
+      expect(result.confidence).toBe('medium');
+      expect(result.source).toBe('api_query');
+      expect(result.details).toContain('Found PR containing head commit def456');
+
+      expect(mockOctokit.rest.search.issuesAndPullRequests).toHaveBeenCalledWith({
+        q: 'repo:test-owner/visor-test type:pr def456',
+        sort: 'updated',
+        order: 'desc',
+        per_page: 10,
+      });
+    });
+
+    test('should handle environment variable-based detection', async () => {
+      // Set up environment variables
+      const originalEnv = { ...process.env };
+      process.env.GITHUB_HEAD_REF = 'env-feature-branch';
+      process.env.GITHUB_SHA = 'env-commit-abc123';
+
+      try {
+        const unknownContext = {
+          event_name: 'workflow_dispatch',
+          repository: {
+            owner: { login: 'test-owner' },
+            name: 'visor-test',
+          },
+          event: {},
+        };
+
+        // Mock branch search success
+        mockOctokit.rest.pulls.list.mockResolvedValueOnce({
+          data: [{ number: 555, head: { ref: 'env-feature-branch' } }],
+        });
+
+        const result = await prDetector.detectPRNumber(unknownContext, 'test-owner', 'visor-test');
+
+        expect(result.prNumber).toBe(555);
+        expect(result.confidence).toBe('medium');
+        expect(result.source).toBe('branch_search');
+        expect(result.details).toContain('Found open PR from branch env-feature-branch');
+
+        expect(mockOctokit.rest.pulls.list).toHaveBeenCalledWith({
+          owner: 'test-owner',
+          repo: 'visor-test',
+          head: 'test-owner:env-feature-branch',
+          state: 'open',
+        });
+      } finally {
+        // Restore environment
+        process.env = originalEnv;
+      }
+    });
+
+    test('should handle multiple PRs for the same branch', async () => {
+      const pushContext = {
+        event_name: 'push',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          ref: 'refs/heads/hotfix-branch',
+          commits: [{ id: 'ghi789' }],
+        },
+      };
+
+      // Mock multiple PRs for the same branch
+      mockOctokit.rest.pulls.list.mockResolvedValueOnce({
+        data: [
+          { number: 100, head: { ref: 'hotfix-branch' }, created_at: '2023-01-01T00:00:00Z' },
+          { number: 101, head: { ref: 'hotfix-branch' }, created_at: '2023-01-02T00:00:00Z' },
+        ],
+      });
+
+      const result = await prDetector.detectPRNumber(pushContext, 'test-owner', 'visor-test');
+
+      // Should return the first PR in the list (most recent or prioritized)
+      expect(result.prNumber).toBe(100);
+      expect(result.confidence).toBe('high');
+      expect(result.source).toBe('api_query');
+    });
+
+    test('should handle API errors gracefully', async () => {
+      const pushContext = {
+        event_name: 'push',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          ref: 'refs/heads/error-branch',
+          commits: [{ id: 'error123' }],
+        },
+      };
+
+      // Mock API error
+      mockOctokit.rest.pulls.list.mockRejectedValueOnce(new Error('API Error'));
+
+      const result = await prDetector.detectPRNumber(pushContext, 'test-owner', 'visor-test');
+
+      expect(result.prNumber).toBeNull();
+      expect(result.confidence).toBe('low');
+      expect(result.details).toContain('No PR found for push event');
+    });
+
+    test('should handle rate limiting scenarios', async () => {
+      const pushContext = {
+        event_name: 'push',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          ref: 'refs/heads/rate-limit-branch',
+          commits: [{ id: 'rate123' }],
+        },
+      };
+
+      // Mock rate limit error
+      const rateLimitError = {
+        status: 403,
+        response: {
+          data: { message: 'API rate limit exceeded' },
+          headers: { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3600) },
+        },
+      };
+
+      mockOctokit.rest.pulls.list.mockRejectedValueOnce(rateLimitError);
+
+      const result = await prDetector.detectPRNumber(pushContext, 'test-owner', 'visor-test');
+
+      expect(result.prNumber).toBeNull();
+      expect(result.confidence).toBe('low');
+      expect(result.details).toContain('No PR found for push event');
+    });
+
+    test('should work with ActionCliBridge PR context detection', async () => {
+      const { ActionCliBridge } = require('../../src/action-cli-bridge');
+
+      const mockActionInputs = {
+        'github-token': 'test-token',
+        'auto-review': 'true',
+        'visor-config-path': './.visor.yaml',
+        owner: 'test-owner',
+        repo: 'visor-test',
+      };
+
+      const mockContext = {
+        event_name: 'pull_request',
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'visor-test',
+        },
+        event: {
+          action: 'opened',
+          pull_request: { number: 123 },
+        },
+      };
+
+      const bridge = new ActionCliBridge('test-token', mockContext);
+
+      // Should detect Visor mode
+      expect(bridge.shouldUseVisor(mockActionInputs)).toBe(true);
+
+      // Should parse CLI args correctly
+      const cliArgs = bridge.parseGitHubInputsToCliArgs(mockActionInputs);
+      expect(cliArgs).toContain('--config');
+      expect(cliArgs).toContain('./.visor.yaml');
+      expect(cliArgs).toContain('--output');
+      expect(cliArgs).toContain('json');
+    });
+
+    test('should validate detection strategy priority', async () => {
+      // Test that direct PR events take priority over environment-based detection
+      const originalEnv = { ...process.env };
+      process.env.GITHUB_HEAD_REF = 'env-branch';
+      process.env.GITHUB_SHA = 'env-commit';
+
+      try {
+        const prContext = {
+          event_name: 'pull_request',
+          repository: {
+            owner: { login: 'test-owner' },
+            name: 'visor-test',
+          },
+          event: {
+            action: 'opened',
+            pull_request: { number: 777 },
+          },
+        };
+
+        const result = await prDetector.detectPRNumber(prContext, 'test-owner', 'visor-test');
+
+        // Should use direct PR detection, not environment variables
+        expect(result.prNumber).toBe(777);
+        expect(result.confidence).toBe('high');
+        expect(result.source).toBe('direct');
+
+        // Should not make any API calls
+        expect(mockOctokit.rest.pulls.list).not.toHaveBeenCalled();
+        expect(mockOctokit.rest.search.issuesAndPullRequests).not.toHaveBeenCalled();
+      } finally {
+        process.env = originalEnv;
+      }
+    });
+
+    test('should provide comprehensive detection strategy information', () => {
+      const strategies = prDetector.getDetectionStrategies();
+
+      expect(strategies).toHaveLength(5);
+      expect(strategies[0]).toContain('Direct PR event detection (pull_request events)');
+      expect(strategies[1]).toContain('Issue comment PR detection (issue_comment events on PRs)');
+      expect(strategies[2]).toContain('Push event PR detection (API queries for branch PRs)');
+      expect(strategies[3]).toContain('Branch-based PR search (current branch PRs)');
+      expect(strategies[4]).toContain('Commit-based PR search (PRs containing specific commits)');
+    });
+
+    test('should handle missing repository information gracefully', async () => {
+      const invalidContext = {
+        event_name: 'push',
+        // Missing repository information
+        event: {
+          ref: 'refs/heads/test-branch',
+        },
+      };
+
+      const result = await prDetector.detectPRNumber(invalidContext);
+
+      expect(result.prNumber).toBeNull();
+      expect(result.confidence).toBe('low');
+      expect(result.source).toBe('direct');
+      expect(result.details).toBe('Missing repository owner or name');
     });
   });
 });

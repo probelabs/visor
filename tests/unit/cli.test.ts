@@ -32,8 +32,8 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should parse config file path argument', () => {
-      const result = cli.parseArgs(['--config', '/path/to/visor.config.yaml']);
-      expect(result.configPath).toBe('/path/to/visor.config.yaml');
+      const result = cli.parseArgs(['--config', '/path/to/.visor.yaml']);
+      expect(result.configPath).toBe('/path/to/.visor.yaml');
     });
 
     it('should parse timeout argument in milliseconds', () => {
@@ -168,7 +168,7 @@ describe('CLI Argument Parser', () => {
       const helpText = cli.getHelpText();
       expect(helpText).toContain('visor --check performance --output table');
       expect(helpText).toContain(
-        'visor --check performance --check security --config ./visor.config.yaml'
+        'visor --check performance --check security --config ./.visor.yaml'
       );
       expect(helpText).toContain('visor --check all --timeout 300000 --output json');
     });
@@ -201,8 +201,8 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should handle config file path with spaces', () => {
-      const result = cli.parseArgs(['--config', '/path/with spaces/visor.config.yaml']);
-      expect(result.configPath).toBe('/path/with spaces/visor.config.yaml');
+      const result = cli.parseArgs(['--config', '/path/with spaces/.visor.yaml']);
+      expect(result.configPath).toBe('/path/with spaces/.visor.yaml');
     });
   });
 
