@@ -83,7 +83,7 @@ export async function main(): Promise<void> {
     // If no checks specified, show help
     if (checksToRun.length === 0) {
       console.error(
-        '\n⚠️  No checks specified. Use --check <type> or configure checks in visor.config.yaml'
+        '\n⚠️  No checks specified. Use --check <type> or configure checks in .visor.yaml'
       );
       console.error('Available check types: performance, architecture, security, style, all');
       process.exit(1);

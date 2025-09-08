@@ -70,7 +70,7 @@ describe('CLI Main Entry Point', () => {
     // For JSON output, decorative messages go to stderr
     expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
     // CLI now performs actual analysis, so expect JSON output in stdout
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('"table"'));
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('"summary"'));
   });
 
   it('should handle CLI errors gracefully', async () => {

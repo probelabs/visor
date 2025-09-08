@@ -82,7 +82,7 @@ export class ActionCliBridge {
 
     // Add config path if specified (prefer new input name over legacy)
     const configPath = inputs['config-path'] || inputs['visor-config-path'];
-    if (configPath) {
+    if (configPath && configPath.trim() !== '') {
       args.push('--config', configPath);
     }
 

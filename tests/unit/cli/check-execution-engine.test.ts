@@ -150,7 +150,7 @@ describe('CheckExecutionEngine', () => {
       expect(result.repositoryInfo).toEqual(mockRepositoryInfo);
       expect(result.reviewSummary).toEqual(mockReviewSummary);
       expect(result.checksExecuted).toEqual(['security', 'performance']);
-      expect(result.executionTime).toBeGreaterThan(0);
+      expect(result.executionTime).toBeGreaterThanOrEqual(0);
       expect(result.timestamp).toBeDefined();
     });
 

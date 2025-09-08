@@ -1,4 +1,5 @@
-import { spawn } from 'child_process';
+// Import real spawn, not the mocked version
+const { spawn } = jest.requireActual('child_process');
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -55,15 +56,15 @@ describe('CLI Workflow Integration Tests', () => {
       let stdout = '';
       let stderr = '';
 
-      child.stdout?.on('data', data => {
+      child.stdout?.on('data', (data: any) => {
         stdout += data.toString();
       });
 
-      child.stderr?.on('data', data => {
+      child.stderr?.on('data', (data: any) => {
         stderr += data.toString();
       });
 
-      child.on('close', code => {
+      child.on('close', (code: any) => {
         resolve({
           stdout,
           stderr,
@@ -71,7 +72,7 @@ describe('CLI Workflow Integration Tests', () => {
         });
       });
 
-      child.on('error', error => {
+      child.on('error', (error: any) => {
         reject(error);
       });
 

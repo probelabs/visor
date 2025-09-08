@@ -29,7 +29,7 @@ inputs:
   config-path:
     description: 'Path to visor configuration file'
     required: false
-    default: 'visor.config.yaml'
+    default: ''
   
   comment-on-pr:
     description: 'Post review results as PR comment'

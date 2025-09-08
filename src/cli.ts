@@ -38,7 +38,8 @@ export class CLI {
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
-      .addHelpText('after', this.getExamplesText());
+      .addHelpText('after', this.getExamplesText())
+      .exitOverride(); // Prevent automatic process.exit for better error handling
 
     // Add validation for options
     this.program.hook('preAction', thisCommand => {
@@ -209,7 +210,7 @@ export class CLI {
     return `
 Examples:
   visor --check performance --output table
-  visor --check performance --check security --config ./visor.config.yaml
+  visor --check performance --check security --config ./.visor.yaml
   visor --check all --output json
   visor --check architecture --check security --output markdown
   visor --check security --output sarif > results.sarif

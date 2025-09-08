@@ -79,8 +79,8 @@ export class ConfigManager {
   public async findAndLoadConfig(): Promise<VisorConfig> {
     const currentDir = process.cwd();
     const possiblePaths = [
-      path.join(currentDir, 'visor.config.yaml'),
-      path.join(currentDir, 'visor.config.yml'),
+      path.join(currentDir, '.visor.yaml'),
+      path.join(currentDir, '.visor.yml'),
     ];
 
     for (const configPath of possiblePaths) {
