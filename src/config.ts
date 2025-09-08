@@ -1,6 +1,7 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import simpleGit from 'simple-git';
 import {
   VisorConfig,
   CheckConfig,
@@ -77,20 +78,42 @@ export class ConfigManager {
    * Find and load configuration from default locations
    */
   public async findAndLoadConfig(): Promise<VisorConfig> {
-    const currentDir = process.cwd();
-    const possiblePaths = [
-      path.join(currentDir, '.visor.yaml'),
-      path.join(currentDir, '.visor.yml'),
-    ];
+    // Try to find the git repository root first, fall back to current directory
+    const gitRoot = await this.findGitRepositoryRoot();
+    const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
 
-    for (const configPath of possiblePaths) {
-      if (fs.existsSync(configPath)) {
-        return this.loadConfig(configPath);
+    for (const baseDir of searchDirs) {
+      const possiblePaths = [path.join(baseDir, '.visor.yaml'), path.join(baseDir, '.visor.yml')];
+
+      for (const configPath of possiblePaths) {
+        if (fs.existsSync(configPath)) {
+          return this.loadConfig(configPath);
+        }
       }
     }
 
     // Return default config if no file found
     return this.getDefaultConfig();
+  }
+
+  /**
+   * Find the git repository root directory
+   */
+  private async findGitRepositoryRoot(): Promise<string | null> {
+    try {
+      const git = simpleGit();
+      const isRepo = await git.checkIsRepo();
+      if (!isRepo) {
+        return null;
+      }
+
+      // Get the repository root directory
+      const rootDir = await git.revparse(['--show-toplevel']);
+      return rootDir.trim();
+    } catch {
+      // Not in a git repository or git not available
+      return null;
+    }
   }
 
   /**
