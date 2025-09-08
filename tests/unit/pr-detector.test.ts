@@ -140,7 +140,7 @@ describe('PRDetector', () => {
 
       expect(result.prNumber).toBeNull();
       expect(result.confidence).toBe('low');
-      expect(result.details).toContain('API Error');
+      expect(result.details).toContain('No PR found for push event');
     });
 
     test('should search by commit SHA when available', async () => {
