@@ -103,7 +103,7 @@ export class ActionCliBridge {
         }
       }
       // When checks includes 'all', we intentionally don't add any --check arguments
-      // The CLI will then use all checks defined in visor.config.yaml
+      // The CLI will then use all checks defined in .visor.yaml
     }
 
     // Add output format if specified

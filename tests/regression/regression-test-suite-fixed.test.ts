@@ -177,7 +177,7 @@ describe('Visor Regression Test Suite', () => {
       const configManager = new ConfigManager();
 
       // Create test configs in the temp directory
-      const configs = ['visor.config.yaml', 'visor.config.json', '.visor.yaml', '.visorrc'];
+      const configs = ['.visor.yaml', '.visor.yml'];
 
       configs.forEach(configName => {
         const configPath = path.join(tempConfigDir, configName);

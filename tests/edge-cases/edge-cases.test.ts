@@ -730,11 +730,11 @@ describe('Edge Cases & Boundary Condition Tests', () => {
 
       // Test config loading with various path formats
       const configPathTests = [
-        './visor.config.yaml',
-        '.\\visor.config.yaml',
-        'visor.config.yaml',
-        path.join(os.tmpdir(), 'visor.config.yaml'),
-        path.resolve('visor.config.yaml'),
+        './.visor.yaml',
+        '.\\.visor.yaml',
+        '.visor.yaml',
+        path.join(os.tmpdir(), '.visor.yaml'),
+        path.resolve('.visor.yaml'),
       ];
 
       for (const configPath of configPathTests) {

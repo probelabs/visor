@@ -44,7 +44,7 @@ describe('Visor Integration E2E Tests', () => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const configPath = path.join(tempDir, 'visor.config.yaml');
+    const configPath = path.join(tempDir, '.visor.yaml');
     fs.writeFileSync(configPath, yaml.dump(testConfig));
 
     mockGithub = new MockGithub({
@@ -61,7 +61,7 @@ describe('Visor Integration E2E Tests', () => {
             },
             {
               src: configPath,
-              dest: 'visor.config.yaml',
+              dest: '.visor.yaml',
             },
             {
               src: path.resolve(__dirname, '..', 'fixtures', 'sample-pr.ts'),
@@ -103,7 +103,7 @@ describe('Visor Integration E2E Tests', () => {
     test('should detect Visor config and use CLI mode', async () => {
       const mockActionInputs = {
         'github-token': 'test-token',
-        'visor-config-path': './visor.config.yaml',
+        'visor-config-path': './.visor.yaml',
         owner: 'test-owner',
         repo: 'visor-test',
       };
@@ -483,7 +483,7 @@ describe('Visor Integration E2E Tests', () => {
     test('should handle authentication flow', async () => {
       const mockInputs = {
         'github-token': 'test-secret-token',
-        'visor-config-path': './visor.config.yaml',
+        'visor-config-path': './.visor.yaml',
       };
 
       const mockContext = {
@@ -504,7 +504,7 @@ describe('Visor Integration E2E Tests', () => {
       // but we're testing the setup and configuration here
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockInputs);
       expect(cliArgs).toContain('--config');
-      expect(cliArgs).toContain('./visor.config.yaml');
+      expect(cliArgs).toContain('./.visor.yaml');
     });
   });
 
@@ -576,7 +576,7 @@ describe('Visor Integration E2E Tests', () => {
       try {
         if (act && testRepoPath) {
           // Set up environment for Visor mode
-          process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, 'visor.config.yaml');
+          process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, '.visor.yaml');
 
           // This would trigger the actual GitHub Action
           // const result = await act.runEvent('pull_request', {
@@ -585,7 +585,7 @@ describe('Visor Integration E2E Tests', () => {
           // });
 
           // For now, we validate the setup
-          expect(fs.existsSync(path.join(testRepoPath, 'visor.config.yaml'))).toBe(true);
+          expect(fs.existsSync(path.join(testRepoPath, '.visor.yaml'))).toBe(true);
           expect(fs.existsSync(path.join(testRepoPath, 'action.yml'))).toBe(true);
         }
 
