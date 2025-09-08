@@ -44,6 +44,16 @@ export interface AIDebugInfo {
   jsonParseSuccess: boolean;
   /** Timestamp when request was made */
   timestamp: string;
+  /** Total API calls made */
+  totalApiCalls?: number;
+  /** Details about API calls made */
+  apiCallDetails?: Array<{
+    checkName: string;
+    provider: string;
+    model: string;
+    processingTime: number;
+    success: boolean;
+  }>;
 }
 
 export type ReviewFocus = 'security' | 'performance' | 'style' | 'all';

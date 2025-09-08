@@ -69,7 +69,7 @@ export async function run(): Promise<void> {
         console.log(
           '🔄 Auto-review enabled - attempting to detect PR context across all event types'
         );
-        
+
         // Try to detect if we're in a PR context (works for push, pull_request, issue_comment, etc.)
         const prDetected = await detectPRContext(inputs, context);
         if (prDetected) {
@@ -192,8 +192,16 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
     // Use robust PR detection
     const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
 
+    // Extract commit SHA for comment metadata
+    const commitSha =
+      eventContext.event?.pull_request?.head?.sha ||
+      eventContext.payload?.event?.pull_request?.head?.sha ||
+      process.env.GITHUB_SHA;
+
     if (!prResult.prNumber) {
-      console.log(`⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`);
+      console.log(
+        `⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
+      );
       if (inputs.debug === 'true') {
         console.log('Available detection strategies:');
         prDetector.getDetectionStrategies().forEach(strategy => console.log(`  ${strategy}`));
@@ -201,7 +209,9 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       return;
     }
 
-    console.log(`✅ Found PR #${prResult.prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`);
+    console.log(
+      `✅ Found PR #${prResult.prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`
+    );
     if (prResult.details) {
       console.log(`   Details: ${prResult.details}`);
     }
@@ -289,6 +299,7 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       commentId,
       triggeredBy: 'visor-cli',
       allowConcurrentUpdates: true,
+      commitSha: commitSha,
     });
 
     console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
@@ -560,6 +571,7 @@ async function handlePullRequestEvent(
       commentId,
       triggeredBy: action,
       allowConcurrentUpdates: true, // Allow updates even if comment was modified externally
+      commitSha: pullRequest.head?.sha,
     });
 
     console.log(
@@ -639,8 +651,16 @@ async function handlePullRequestVisorMode(
   const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
   const action = eventContext.event?.action;
 
+  // Extract commit SHA for comment metadata
+  const commitSha =
+    eventContext.event?.pull_request?.head?.sha ||
+    eventContext.payload?.event?.pull_request?.head?.sha ||
+    process.env.GITHUB_SHA;
+
   if (!prResult.prNumber) {
-    console.error(`❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`);
+    console.error(
+      `❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
+    );
     if (inputs.debug === 'true') {
       console.error('Available detection strategies:');
       prDetector.getDetectionStrategies().forEach(strategy => console.error(`  ${strategy}`));
@@ -650,7 +670,9 @@ async function handlePullRequestVisorMode(
   }
 
   const prNumber = prResult.prNumber;
-  console.log(`✅ Found PR #${prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`);
+  console.log(
+    `✅ Found PR #${prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`
+  );
   if (prResult.details) {
     console.log(`   Details: ${prResult.details}`);
   }
@@ -739,6 +761,7 @@ async function handlePullRequestVisorMode(
       commentId,
       triggeredBy: `visor-config-${action}`,
       allowConcurrentUpdates: true,
+      commitSha: commitSha,
     });
 
     console.log('✅ Posted Visor config-based review comment');

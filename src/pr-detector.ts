@@ -14,7 +14,7 @@ export interface GitHubEventContext {
     name: string;
   };
   event?: {
-    pull_request?: { number: number };
+    pull_request?: { number: number; head?: { sha: string } };
     issue?: { number: number; pull_request?: any };
     comment?: any;
     action?: string;
@@ -356,9 +356,9 @@ export class PRDetector {
     try {
       // GitHub's search API can find PRs containing specific commits
       const searchQuery = `repo:${owner}/${repo} type:pr ${commitSha}`;
-      
+
       this.log(`Searching with query: ${searchQuery}`);
-      
+
       const searchResults = await this.octokit.rest.search.issuesAndPullRequests({
         q: searchQuery,
         sort: 'updated',

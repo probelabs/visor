@@ -22,6 +22,7 @@ export interface CommentMetadata {
   commentId: string;
   lastUpdated: string;
   triggeredBy: string;
+  commitSha?: string;
 }
 
 interface GitHubApiError {
@@ -101,12 +102,14 @@ export class CommentManager {
       commentId?: string;
       triggeredBy?: string;
       allowConcurrentUpdates?: boolean;
+      commitSha?: string;
     } = {}
   ): Promise<Comment> {
     const {
       commentId = this.generateCommentId(),
       triggeredBy = 'unknown',
       allowConcurrentUpdates = false,
+      commitSha,
     } = options;
 
     return this.withRetry(async () => {
@@ -115,6 +118,7 @@ export class CommentManager {
         commentId,
         lastUpdated: new Date().toISOString(),
         triggeredBy,
+        commitSha,
       });
 
       if (existingComment) {
@@ -158,13 +162,15 @@ export class CommentManager {
    * Format comment content with metadata markers
    */
   public formatCommentWithMetadata(content: string, metadata: CommentMetadata): string {
-    const { commentId, lastUpdated, triggeredBy } = metadata;
+    const { commentId, lastUpdated, triggeredBy, commitSha } = metadata;
+
+    const commitInfo = commitSha ? ` | Commit: ${commitSha.substring(0, 7)}` : '';
 
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
 ---
-*Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}*
+*Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
 <!-- /visor-comment-id:${commentId} -->`;
   }
 

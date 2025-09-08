@@ -40,6 +40,7 @@ export interface CheckExecutionOptions {
   timeout?: number;
   outputFormat?: string;
   config?: import('./types/config').VisorConfig;
+  debug?: boolean; // Enable debug mode to collect AI execution details
 }
 
 export class CheckExecutionEngine {
@@ -96,10 +97,25 @@ export class CheckExecutionEngine {
         options.checks,
         options.timeout,
         options.config,
-        options.outputFormat
+        options.outputFormat,
+        options.debug
       );
 
       const executionTime = Date.now() - startTime;
+
+      // Collect debug information when debug mode is enabled
+      let debugInfo: import('./output-formatters').DebugInfo | undefined;
+      if (options.debug && reviewSummary.debug) {
+        debugInfo = {
+          provider: reviewSummary.debug.provider,
+          model: reviewSummary.debug.model,
+          processingTime: reviewSummary.debug.processingTime,
+          parallelExecution: options.checks.length > 1,
+          checksExecuted: options.checks,
+          totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
+          apiCallDetails: reviewSummary.debug.apiCallDetails,
+        };
+      }
 
       return {
         repositoryInfo,
@@ -107,6 +123,7 @@ export class CheckExecutionEngine {
         executionTime,
         timestamp,
         checksExecuted: options.checks,
+        debug: debugInfo,
       };
     } catch (error) {
       console.error('Error executing checks:', error);
@@ -142,7 +159,8 @@ export class CheckExecutionEngine {
     checks: string[],
     timeout?: number,
     config?: import('./types/config').VisorConfig,
-    outputFormat?: string
+    outputFormat?: string,
+    debug?: boolean
   ): Promise<ReviewSummary> {
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
@@ -153,7 +171,7 @@ export class CheckExecutionEngine {
     // If we have a config with individual check definitions, use parallel execution
     if (config?.checks && checks.length > 1) {
       logFn(`🔧 Debug: Using parallel execution for ${checks.length} checks`);
-      return await this.executeParallelChecks(prInfo, checks, timeout, config, logFn);
+      return await this.executeParallelChecks(prInfo, checks, timeout, config, logFn, debug);
     }
 
     // Single check execution (existing logic)
@@ -231,7 +249,8 @@ export class CheckExecutionEngine {
     checks: string[],
     timeout?: number,
     config?: import('./types/config').VisorConfig,
-    logFn?: (message: string) => void
+    logFn?: (message: string) => void,
+    debug?: boolean
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
     log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
@@ -297,7 +316,7 @@ export class CheckExecutionEngine {
     const results = await Promise.allSettled(checkTasks);
 
     // Aggregate results from all checks
-    return this.aggregateParallelResults(results, checks);
+    return this.aggregateParallelResults(results, checks, debug);
   }
 
   /**
@@ -353,7 +372,8 @@ export class CheckExecutionEngine {
       error: string | null;
       result: ReviewSummary | null;
     }>[],
-    checkNames: string[]
+    checkNames: string[],
+    debug?: boolean
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const aggregatedSuggestions: string[] = [];
@@ -441,9 +461,109 @@ export class CheckExecutionEngine {
       `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
     );
 
+    // Collect debug information when debug mode is enabled
+    let aggregatedDebug: import('./ai-review-service').AIDebugInfo | undefined;
+    if (debug) {
+      // Find the first successful result with debug information to use as template
+      const debugResults = results
+        .map((result, index) => ({
+          result,
+          checkName: checkNames[index],
+        }))
+        .filter(({ result }) => result.status === 'fulfilled' && result.value?.result?.debug);
+
+      if (debugResults.length > 0) {
+        const firstResult = debugResults[0].result;
+        if (firstResult.status === 'fulfilled') {
+          const firstDebug = firstResult.value!.result!.debug!;
+          const totalProcessingTime = debugResults.reduce((sum, { result }) => {
+            if (result.status === 'fulfilled') {
+              return sum + (result.value!.result!.debug!.processingTime || 0);
+            }
+            return sum;
+          }, 0);
+
+          aggregatedDebug = {
+            // Use first result as template for provider/model info
+            provider: firstDebug.provider,
+            model: firstDebug.model,
+            apiKeySource: firstDebug.apiKeySource,
+            // Aggregate processing time from all checks
+            processingTime: totalProcessingTime,
+            // Combine prompts with check names
+            prompt: debugResults
+              .map(({ checkName, result }) => {
+                if (result.status === 'fulfilled') {
+                  return `[${checkName}] ${result.value!.result!.debug!.prompt.substring(0, 200)}...`;
+                }
+                return `[${checkName}] Error: Promise was rejected`;
+              })
+              .join('\n\n'),
+            // Combine responses
+            rawResponse: debugResults
+              .map(({ checkName, result }) => {
+                if (result.status === 'fulfilled') {
+                  return `[${checkName}] ${result.value!.result!.debug!.rawResponse.substring(0, 500)}...`;
+                }
+                return `[${checkName}] Error: Promise was rejected`;
+              })
+              .join('\n\n'),
+            promptLength: debugResults.reduce((sum, { result }) => {
+              if (result.status === 'fulfilled') {
+                return sum + (result.value!.result!.debug!.promptLength || 0);
+              }
+              return sum;
+            }, 0),
+            responseLength: debugResults.reduce((sum, { result }) => {
+              if (result.status === 'fulfilled') {
+                return sum + (result.value!.result!.debug!.responseLength || 0);
+              }
+              return sum;
+            }, 0),
+            jsonParseSuccess: debugResults.every(({ result }) => {
+              if (result.status === 'fulfilled') {
+                return result.value!.result!.debug!.jsonParseSuccess;
+              }
+              return false;
+            }),
+            errors: debugResults.flatMap(({ result, checkName }) => {
+              if (result.status === 'fulfilled') {
+                return (result.value!.result!.debug!.errors || []).map(
+                  (error: string) => `[${checkName}] ${error}`
+                );
+              }
+              return [`[${checkName}] Promise was rejected`];
+            }),
+            timestamp: new Date().toISOString(),
+            // Add additional debug information for parallel execution
+            totalApiCalls: debugResults.length,
+            apiCallDetails: debugResults.map(({ checkName, result }) => {
+              if (result.status === 'fulfilled') {
+                return {
+                  checkName,
+                  provider: result.value!.result!.debug!.provider,
+                  model: result.value!.result!.debug!.model,
+                  processingTime: result.value!.result!.debug!.processingTime,
+                  success: result.value!.result!.debug!.jsonParseSuccess,
+                };
+              }
+              return {
+                checkName,
+                provider: 'unknown',
+                model: 'unknown',
+                processingTime: 0,
+                success: false,
+              };
+            }),
+          };
+        }
+      }
+    }
+
     return {
       issues: aggregatedIssues,
       suggestions: aggregatedSuggestions,
+      debug: aggregatedDebug,
     };
   }
 
