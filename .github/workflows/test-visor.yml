@@ -92,11 +92,11 @@ jobs:
       
       - name: ✅ Verify Configuration
         run: |
-          echo "Verifying visor.config.yaml..."
-          if [ -f "visor.config.yaml" ]; then
+          echo "Verifying .visor.yaml..."
+          if [ -f ".visor.yaml" ]; then
             echo "✅ Configuration file found"
             # Basic YAML syntax check
-            python3 -c "import yaml; yaml.safe_load(open('visor.config.yaml'))" && echo "✅ YAML syntax valid"
+            python3 -c "import yaml; yaml.safe_load(open('.visor.yaml'))" && echo "✅ YAML syntax valid"
           else
             echo "❌ Configuration file missing"
             exit 1
