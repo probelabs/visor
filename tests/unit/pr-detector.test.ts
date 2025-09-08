@@ -168,7 +168,7 @@ describe('PRDetector', () => {
       const result = await prDetector.detectPRNumber(commitContext, 'testowner', 'testrepo');
 
       expect(result.prNumber).toBe(999);
-      expect(result.source).toBe('commit_search');
+      expect(result.source).toBe('api_query');
       expect(mockSearchIssuesAndPullRequests).toHaveBeenCalledWith({
         q: 'repo:testowner/testrepo type:pr commit123',
         sort: 'updated',
