@@ -6,6 +6,7 @@ import { PRReviewer, calculateOverallScore, calculateTotalIssues } from './revie
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
+import { PRDetector, GitHubEventContext } from './pr-detector';
 
 export async function run(): Promise<void> {
   try {
@@ -62,14 +63,22 @@ export async function run(): Promise<void> {
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
 
-      // CRITICAL FIX: For PR auto-reviews, use GitHub API instead of CLI for accurate diff analysis
-      const isAutoPRReview = inputs['auto-review'] === 'true' && eventName === 'pull_request';
-      if (isAutoPRReview) {
+      // ENHANCED FIX: For PR auto-reviews, detect PR context across all event types
+      const isAutoReview = inputs['auto-review'] === 'true';
+      if (isAutoReview) {
         console.log(
-          '🔄 PR Auto-review detected - using GitHub API instead of CLI for accurate diff analysis'
+          '🔄 Auto-review enabled - attempting to detect PR context across all event types'
         );
-        await handlePullRequestVisorMode(inputs, context);
-        return;
+        
+        // Try to detect if we're in a PR context (works for push, pull_request, issue_comment, etc.)
+        const prDetected = await detectPRContext(inputs, context);
+        if (prDetected) {
+          console.log('✅ PR context detected - using GitHub API for PR analysis');
+          await handlePullRequestVisorMode(inputs, context);
+          return;
+        } else {
+          console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
+        }
       }
 
       await handleVisorMode(cliBridge, inputs, context);
@@ -152,7 +161,7 @@ async function handleVisorMode(
 }
 
 /**
- * Post CLI review results as PR comment
+ * Post CLI review results as PR comment with robust PR detection
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs): Promise<void> {
@@ -166,16 +175,37 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       return;
     }
 
-    // Get PR number from GitHub context
-    const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
-    const prNumber = context.event?.pull_request?.number;
+    const octokit = new Octokit({ auth: token });
+    const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 
-    if (!prNumber) {
-      console.log('⚠️ No PR number found in GitHub context');
+    // Convert GitHub context to our format
+    const eventContext: GitHubEventContext = {
+      event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
+      repository: {
+        owner: { login: owner },
+        name: repo,
+      },
+      event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : undefined,
+      payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+    };
+
+    // Use robust PR detection
+    const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+
+    if (!prResult.prNumber) {
+      console.log(`⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`);
+      if (inputs.debug === 'true') {
+        console.log('Available detection strategies:');
+        prDetector.getDetectionStrategies().forEach(strategy => console.log(`  ${strategy}`));
+      }
       return;
     }
 
-    const octokit = new Octokit({ auth: token });
+    console.log(`✅ Found PR #${prResult.prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`);
+    if (prResult.details) {
+      console.log(`   Details: ${prResult.details}`);
+    }
+
     const commentManager = new CommentManager(octokit);
 
     // Create Visor-formatted comment from CLI output
@@ -254,14 +284,14 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
     }
 
     // Use smart comment updating with unique ID
-    const commentId = `visor-cli-review-${prNumber}`;
-    await commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+    const commentId = `visor-cli-review-${prResult.prNumber}`;
+    await commentManager.updateOrCreateComment(owner, repo, prResult.prNumber, comment, {
       commentId,
       triggeredBy: 'visor-cli',
       allowConcurrentUpdates: true,
     });
 
-    console.log('✅ Posted CLI review comment to PR');
+    console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
   } catch (error) {
     console.error('❌ Failed to post CLI review comment:', error);
   }
@@ -592,16 +622,37 @@ async function handlePullRequestVisorMode(
   }
 
   const octokit = new Octokit({ auth: token });
+  const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 
-  // Get PR number from GitHub context
-  const gitHubContext = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
-  const prNumber = gitHubContext.event?.pull_request?.number;
-  const action = gitHubContext.event?.action;
+  // Convert GitHub context to our format
+  const eventContext: GitHubEventContext = {
+    event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
+    repository: {
+      owner: { login: owner },
+      name: repo,
+    },
+    event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : undefined,
+    payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+  };
 
-  if (!prNumber) {
-    console.error('❌ No PR number found in GitHub context');
+  // Use robust PR detection
+  const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+  const action = eventContext.event?.action;
+
+  if (!prResult.prNumber) {
+    console.error(`❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`);
+    if (inputs.debug === 'true') {
+      console.error('Available detection strategies:');
+      prDetector.getDetectionStrategies().forEach(strategy => console.error(`  ${strategy}`));
+    }
     setFailed('No PR number found');
     return;
+  }
+
+  const prNumber = prResult.prNumber;
+  console.log(`✅ Found PR #${prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`);
+  if (prResult.details) {
+    console.log(`   Details: ${prResult.details}`);
   }
 
   console.log(`🔍 Analyzing PR #${prNumber} using Visor config (action: ${action})`);
@@ -703,6 +754,44 @@ async function handlePullRequestVisorMode(
   } catch (error) {
     console.error('❌ Error in Visor PR analysis:', error);
     setFailed(error instanceof Error ? error.message : 'Visor PR analysis failed');
+  }
+}
+
+/**
+ * Detect if we're in a PR context for any GitHub event type
+ */
+async function detectPRContext(
+  inputs: GitHubActionInputs,
+  context: GitHubContext
+): Promise<boolean> {
+  try {
+    const token = inputs['github-token'];
+    const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
+    const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+    if (!owner || !repo || !token) {
+      return false;
+    }
+
+    const octokit = new Octokit({ auth: token });
+    const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+
+    // Convert GitHub context to our format
+    const eventContext: GitHubEventContext = {
+      event_name: context.event_name,
+      repository: {
+        owner: { login: owner },
+        name: repo,
+      },
+      event: context.event as GitHubEventContext['event'],
+      payload: context.payload || {},
+    };
+
+    const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
+    return prResult.prNumber !== null;
+  } catch (error) {
+    console.error('Error detecting PR context:', error);
+    return false;
   }
 }
 
