@@ -31,7 +31,7 @@ import {
 } from '../fixtures/github-events';
 
 describe('PR Detection E2E Tests', () => {
-  let mockOctokit: jest.Mocked<Octokit>;
+  let mockOctokit: any;
   let prDetector: PRDetector;
   let originalEnv: NodeJS.ProcessEnv;
 
