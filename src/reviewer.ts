@@ -27,6 +27,8 @@ export interface ReviewComment {
   message: string;
   severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+  suggestion?: string;
+  replacement?: string;
 }
 
 export interface ReviewSummary {
@@ -62,6 +64,8 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
     message: issue.message,
     severity: issue.severity,
     category: issue.category,
+    suggestion: issue.suggestion,
+    replacement: issue.replacement,
   }));
 }
 
@@ -321,7 +325,18 @@ export class PRReviewer {
       const categoryEmoji = this.getCategoryEmoji(comment.category);
       const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
       
-      content += `| ${severityEmoji} ${severityText} | ${categoryEmoji} ${comment.category} | \`${comment.file}\` | ${comment.line} | ${comment.message} |\n`;
+      // Build the issue description with suggestion/replacement if available
+      let issueDescription = comment.message;
+      
+      if (comment.suggestion) {
+        issueDescription += `<br/><details><summary>💡 <strong>Suggestion</strong></summary><br/>${comment.suggestion}</details>`;
+      }
+      
+      if (comment.replacement) {
+        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><br/>\`\`\`\n${comment.replacement}\n\`\`\`</details>`;
+      }
+      
+      content += `| ${severityEmoji} ${severityText} | ${categoryEmoji} ${comment.category} | \`${comment.file}\` | ${comment.line} | ${issueDescription} |\n`;
     }
 
     return content;
