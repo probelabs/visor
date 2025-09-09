@@ -265,10 +265,15 @@ describe('PRReviewer', () => {
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
       expect(callArgs.body).toContain('## 🔍 Code Analysis Results');
-      expect(callArgs.body).toContain('| Severity | Category | File | Line | Issue |');
+      expect(callArgs.body).toContain('<table>');
+      expect(callArgs.body).toContain('<th>Severity</th>');
+      expect(callArgs.body).toContain('<th>Category</th>');
+      expect(callArgs.body).toContain('<th>File</th>');
+      expect(callArgs.body).toContain('<th>Line</th>');
+      expect(callArgs.body).toContain('<th>Issue</th>');
       expect(callArgs.body).toContain('Add unit tests');
-      expect(callArgs.body).toContain('`src/test.ts`');
-      expect(callArgs.body).toContain('| 10 |');
+      expect(callArgs.body).toContain('<code>src/test.ts</code>');
+      expect(callArgs.body).toContain('<td>10</td>');
     });
 
     test('should format comment with different severity levels', async () => {
@@ -323,6 +328,8 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('🔒 security');
       expect(callArgs.body).toContain('📈 performance');
       expect(callArgs.body).toContain('🎨 style');
+      expect(callArgs.body).toContain('<table>');
+      expect(callArgs.body).toContain('</table>');
     });
 
     test('should include debug information when debug data is provided', async () => {

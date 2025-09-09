@@ -307,8 +307,19 @@ export class PRReviewer {
 
   private formatIssuesTable(comments: ReviewComment[]): string {
     let content = `## 🔍 Code Analysis Results\n\n`;
-    content += `| Severity | Category | File | Line | Issue |\n`;
-    content += `|:--------:|:--------:|:-----|:----:|-------|\n`;
+    
+    // Start HTML table
+    content += `<table>\n`;
+    content += `  <thead>\n`;
+    content += `    <tr>\n`;
+    content += `      <th>Severity</th>\n`;
+    content += `      <th>Category</th>\n`;
+    content += `      <th>File</th>\n`;
+    content += `      <th>Line</th>\n`;
+    content += `      <th>Issue</th>\n`;
+    content += `    </tr>\n`;
+    content += `  </thead>\n`;
+    content += `  <tbody>\n`;
 
     // Sort by severity first (critical > error > warning > info), then by file
     const sortedComments = comments.sort((a, b) => {
@@ -329,17 +340,25 @@ export class PRReviewer {
       let issueDescription = comment.message;
       
       if (comment.suggestion) {
-        issueDescription += `<br/><details><summary>💡 <strong>Suggestion</strong></summary><br/>${comment.suggestion}</details>`;
+        issueDescription += `<br/><details><summary>💡 <strong>Suggestion</strong></summary>${comment.suggestion}</details>`;
       }
       
       if (comment.replacement) {
-        // Use <code> blocks instead of ``` to avoid markdown table issues
-        const codeBlock = `<pre><code>${comment.replacement}</code></pre>`;
-        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><br/>${codeBlock}</details>`;
+        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>${comment.replacement}</code></pre></details>`;
       }
       
-      content += `| ${severityEmoji} ${severityText} | ${categoryEmoji} ${comment.category} | \`${comment.file}\` | ${comment.line} | ${issueDescription} |\n`;
+      content += `    <tr>\n`;
+      content += `      <td>${severityEmoji} ${severityText}</td>\n`;
+      content += `      <td>${categoryEmoji} ${comment.category}</td>\n`;
+      content += `      <td><code>${comment.file}</code></td>\n`;
+      content += `      <td>${comment.line}</td>\n`;
+      content += `      <td>${issueDescription}</td>\n`;
+      content += `    </tr>\n`;
     }
+
+    // Close HTML table
+    content += `  </tbody>\n`;
+    content += `</table>\n`;
 
     return content;
   }
