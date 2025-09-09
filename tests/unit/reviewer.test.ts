@@ -260,14 +260,15 @@ describe('PRReviewer', () => {
         owner: 'owner',
         repo: 'repo',
         issue_number: 1,
-        body: expect.stringContaining('Style Analysis'),
+        body: expect.stringContaining('Code Analysis Results'),
       });
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('🎨 Style Analysis');
-      expect(callArgs.body).toContain('1 informational item noted');
+      expect(callArgs.body).toContain('## 🔍 Code Analysis Results');
+      expect(callArgs.body).toContain('| Severity | Category | File | Line | Issue |');
       expect(callArgs.body).toContain('Add unit tests');
-      expect(callArgs.body).toContain('src/test.ts:10');
+      expect(callArgs.body).toContain('`src/test.ts`');
+      expect(callArgs.body).toContain('| 10 |');
     });
 
     test('should format comment with different severity levels', async () => {
@@ -319,9 +320,9 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('Critical security issue');
       expect(callArgs.body).toContain('Potential performance issue');
       expect(callArgs.body).toContain('Style improvement');
-      expect(callArgs.body).toContain('🔒 Security Analysis');
-      expect(callArgs.body).toContain('📈 Performance Analysis');
-      expect(callArgs.body).toContain('🎨 Style Analysis');
+      expect(callArgs.body).toContain('🔒 security');
+      expect(callArgs.body).toContain('📈 performance');
+      expect(callArgs.body).toContain('🎨 style');
     });
 
     test('should include debug information when debug data is provided', async () => {

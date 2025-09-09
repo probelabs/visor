@@ -159,13 +159,13 @@ export class PRReviewer {
       comment += `## ✅ All Checks Passed\n\n`;
       comment += `**No issues found – changes LGTM.**\n\n`;
     } else {
-      // Create a universal snapshot table for all categories
-      for (const [category, categoryComments] of Object.entries(groupedComments)) {
-        if (categoryComments.length === 0) continue;
-
-        comment += this.formatUniversalCategoryTable(category, categoryComments);
-        comment += '\n\n';
-      }
+      // Create main issues table with each row being an issue
+      comment += this.formatIssuesTable(comments);
+      comment += '\n\n';
+      
+      // Add summary and recommendations
+      comment += this.formatSummaryAndRecommendations(comments);
+      comment += '\n\n';
     }
 
     // Add suggestions if any
@@ -301,110 +301,77 @@ export class PRReviewer {
     );
   }
 
-  private formatUniversalCategoryTable(category: string, comments: ReviewComment[]): string {
-    const criticalCount = comments.filter(c => c.severity === 'error').length;
-    const warningCount = comments.filter(c => c.severity === 'warning').length;
-    const infoCount = comments.filter(c => c.severity === 'info').length;
+  private formatIssuesTable(comments: ReviewComment[]): string {
+    let content = `## 🔍 Code Analysis Results\n\n`;
+    content += `| Severity | Category | File | Line | Issue |\n`;
+    content += `|:--------:|:--------:|:-----|:----:|-------|\n`;
 
-    // Determine overall status
-    const status = criticalCount > 0 ? '🔴' : warningCount > 0 ? '🟡' : '🟢';
+    // Sort by severity first (critical > error > warning > info), then by file
+    const sortedComments = comments.sort((a, b) => {
+      const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
+      const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
+      if (severityDiff !== 0) return severityDiff;
+      return a.file.localeCompare(b.file);
+    });
 
-    // Get category emoji
-    const categoryEmoji = this.getCategoryEmoji(category);
-    const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
-
-    // Generate a concise summary
-    const summary = this.generateCategorySummary(comments);
-
-    // Build the table
-    let content = `### ${categoryEmoji} ${categoryTitle} Analysis\n`;
-    content += `| Status | Critical | Warnings | Info | Total | Summary |\n`;
-    content += `|:------:|:--------:|:--------:|:----:|:-----:|---------|\n`;
-    content += `| ${status} | ${criticalCount} | ${warningCount} | ${infoCount} | ${comments.length} | ${summary} |\n\n`;
-
-    // Add collapsible details sections
-    if (comments.length > 0) {
-      // Impact Analysis section
-      content += `<details>\n<summary><strong>Impact Analysis</strong></summary>\n\n`;
-      content += this.formatIssuesList(comments);
-      content += `\n</details>\n`;
-
-      // Critical Issues section (only if there are critical issues)
-      const criticalIssues = comments.filter(c => c.severity === 'error');
-      if (criticalIssues.length > 0) {
-        content += `\n<details>\n<summary><strong>Critical Issues</strong></summary>\n\n`;
-        content += this.formatIssuesList(criticalIssues);
-        content += `\n</details>\n`;
-      }
-
-      // Recommendations section
-      content += `\n<details>\n<summary><strong>Recommendations</strong></summary>\n\n`;
-      content += this.generateCategoryRecommendations(comments);
-      content += `\n</details>\n`;
+    for (const comment of sortedComments) {
+      const severityEmoji = comment.severity === 'critical' ? '🔴' :
+                           comment.severity === 'error' ? '🔴' : 
+                           comment.severity === 'warning' ? '🟡' : '🟢';
+      const categoryEmoji = this.getCategoryEmoji(comment.category);
+      const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
+      
+      content += `| ${severityEmoji} ${severityText} | ${categoryEmoji} ${comment.category} | \`${comment.file}\` | ${comment.line} | ${comment.message} |\n`;
     }
 
     return content;
   }
 
-  private formatIssuesList(comments: ReviewComment[]): string {
-    let content = '';
-    for (const comment of comments) {
-      const emoji =
-        comment.severity === 'error' ? '❌' : comment.severity === 'warning' ? '⚠️' : 'ℹ️';
-      content += `${emoji} **${comment.file}:${comment.line}**\n`;
-      content += `   ${comment.message}\n\n`;
-    }
-    return content;
-  }
-
-  private generateCategorySummary(comments: ReviewComment[]): string {
-    if (comments.length === 0) {
-      return 'No issues detected';
-    }
-
-    const critical = comments.filter(c => c.severity === 'error').length;
+  private formatSummaryAndRecommendations(comments: ReviewComment[]): string {
+    const critical = comments.filter(c => c.severity === 'critical' || c.severity === 'error').length;
     const warnings = comments.filter(c => c.severity === 'warning').length;
+    const info = comments.filter(c => c.severity === 'info').length;
+    const total = comments.length;
 
+    let content = `<details>\n<summary><strong>📊 Summary</strong></summary>\n\n`;
+    content += `**Total Issues Found:** ${total}\n\n`;
+    content += `- 🔴 **Critical:** ${critical} issue${critical !== 1 ? 's' : ''}\n`;
+    content += `- 🟡 **Warnings:** ${warnings} issue${warnings !== 1 ? 's' : ''}\n`;
+    content += `- 🟢 **Info:** ${info} item${info !== 1 ? 's' : ''}\n\n`;
+
+    // Group by category for summary
+    const groupedComments = this.groupCommentsByCategory(comments);
+    content += `**By Category:**\n`;
+    for (const [category, categoryComments] of Object.entries(groupedComments)) {
+      if (categoryComments.length > 0) {
+        const emoji = this.getCategoryEmoji(category);
+        content += `- ${emoji} **${category.charAt(0).toUpperCase() + category.slice(1)}:** ${categoryComments.length} issue${categoryComments.length !== 1 ? 's' : ''}\n`;
+      }
+    }
+
+    content += `\n</details>\n\n`;
+
+    // Add recommendations
+    content += `<details>\n<summary><strong>💡 Recommendations</strong></summary>\n\n`;
+    
     if (critical > 0) {
-      return `${critical} critical issue${critical > 1 ? 's' : ''} requiring immediate attention`;
+      content += `🚨 **Immediate Action Required:** ${critical} critical issue${critical !== 1 ? 's' : ''} must be addressed before merging.\n\n`;
     }
-
+    
     if (warnings > 0) {
-      return `${warnings} warning${warnings > 1 ? 's' : ''} to review`;
+      content += `⚠️  **Review Needed:** ${warnings} warning${warnings !== 1 ? 's' : ''} should be reviewed and potentially fixed.\n\n`;
+    }
+    
+    if (info > 0) {
+      content += `ℹ️  **Consider:** ${info} informational suggestion${info !== 1 ? 's' : ''} for code quality improvement.\n\n`;
     }
 
-    return `${comments.length} informational item${comments.length > 1 ? 's' : ''} noted`;
-  }
-
-  private generateCategoryRecommendations(comments: ReviewComment[]): string {
-    if (comments.length === 0) {
-      return '**No suggestions to provide – changes LGTM.**\n';
+    if (critical === 0 && warnings === 0) {
+      content += `✅ **Great Job!** Only informational items found. Consider addressing them for optimal code quality.\n\n`;
     }
 
-    const critical = comments.filter(c => c.severity === 'error');
-    const warnings = comments.filter(c => c.severity === 'warning');
-    const info = comments.filter(c => c.severity === 'info');
+    content += `</details>`;
 
-    let recommendations = '';
-
-    // Priority-based recommendations
-    if (critical.length > 0) {
-      recommendations += `- **Priority 1:** Address ${critical.length} critical issue${critical.length > 1 ? 's' : ''} before merging\n`;
-    }
-
-    if (warnings.length > 0) {
-      recommendations += `- **Priority 2:** Review ${warnings.length} warning${warnings.length > 1 ? 's' : ''} and consider fixes\n`;
-    }
-
-    if (info.length > 0) {
-      recommendations += `- **Priority 3:** Consider ${info.length} informational suggestion${info.length > 1 ? 's' : ''} for code improvement\n`;
-    }
-
-    // Add generic best practice
-    if (critical.length === 0 && warnings.length === 0) {
-      recommendations += '- All issues are informational - consider addressing for code quality\n';
-    }
-
-    return recommendations || '**No suggestions to provide – changes LGTM.**\n';
+    return content;
   }
 }
