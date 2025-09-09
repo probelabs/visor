@@ -334,27 +334,13 @@ export class PRReviewer {
 
       // Create debug file with timestamp
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `visor-debug-${timestamp}.json`;
+      const filename = `visor-debug-${timestamp}.md`;
       const filePath = path.join(debugDir, filename);
 
-      // Save complete debug information as JSON
-      const debugData = {
-        metadata: {
-          provider: debug.provider,
-          model: debug.model,
-          apiKeySource: debug.apiKeySource,
-          processingTime: debug.processingTime,
-          timestamp: debug.timestamp,
-          promptLength: debug.promptLength,
-          responseLength: debug.responseLength,
-          jsonParseSuccess: debug.jsonParseSuccess,
-          errors: debug.errors || []
-        },
-        prompt: debug.prompt,
-        rawResponse: debug.rawResponse
-      };
+      // Parse the combined prompts and responses to extract individual checks
+      const markdownContent = this.formatDebugAsMarkdown(debug);
 
-      fs.writeFileSync(filePath, JSON.stringify(debugData, null, 2));
+      fs.writeFileSync(filePath, markdownContent);
       
       console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
       return filename;
@@ -362,6 +348,90 @@ export class PRReviewer {
       console.error(`❌ Failed to save debug artifact: ${error}`);
       return null;
     }
+  }
+
+  private formatDebugAsMarkdown(debug: AIDebugInfo): string {
+    const lines = [
+      '# Visor AI Debug Information',
+      '',
+      `**Generated:** ${debug.timestamp}`,
+      `**Provider:** ${debug.provider}`,
+      `**Model:** ${debug.model}`,
+      `**API Key Source:** ${debug.apiKeySource}`,
+      `**Total Processing Time:** ${debug.processingTime}ms`,
+      `**Total Prompt Length:** ${debug.promptLength} characters`,
+      `**Total Response Length:** ${debug.responseLength} characters`,
+      `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+      '',
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      lines.push('## ❌ Errors');
+      debug.errors.forEach(error => {
+        lines.push(`- ${error}`);
+      });
+      lines.push('');
+    }
+
+    // Parse combined prompt and response to extract individual checks
+    const promptSections = this.parseCheckSections(debug.prompt);
+    const responseSections = this.parseCheckSections(debug.rawResponse);
+
+    lines.push('## 📊 Check Results Summary');
+    lines.push('');
+    promptSections.forEach(section => {
+      const responseSection = responseSections.find(r => r.checkName === section.checkName);
+      lines.push(`- **${section.checkName}**: ${responseSection ? 'Success' : 'Failed'}`);
+    });
+    lines.push('');
+
+    // Add detailed information for each check
+    promptSections.forEach((promptSection, index) => {
+      const responseSection = responseSections.find(r => r.checkName === promptSection.checkName);
+      
+      lines.push(`## ${index + 1}. ${promptSection.checkName.toUpperCase()} Check`);
+      lines.push('');
+      
+      lines.push('### 📝 AI Prompt');
+      lines.push('');
+      lines.push('```');
+      lines.push(promptSection.content);
+      lines.push('```');
+      lines.push('');
+      
+      lines.push('### 🤖 AI Response');
+      lines.push('');
+      if (responseSection) {
+        lines.push('```json');
+        lines.push(responseSection.content);
+        lines.push('```');
+      } else {
+        lines.push('❌ No response available for this check');
+      }
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    });
+
+    return lines.join('\n');
+  }
+
+  private parseCheckSections(combinedText: string): Array<{checkName: string, content: string}> {
+    const sections: Array<{checkName: string, content: string}> = [];
+    
+    // Split by check sections like [security], [performance], etc.
+    const parts = combinedText.split(/\[(\w+)\]\s*\n/);
+    
+    for (let i = 1; i < parts.length; i += 2) {
+      const checkName = parts[i];
+      const content = parts[i + 1]?.trim() || '';
+      
+      if (checkName && content) {
+        sections.push({ checkName, content });
+      }
+    }
+    
+    return sections;
   }
 
   private formatIssuesTable(comments: ReviewComment[]): string {
