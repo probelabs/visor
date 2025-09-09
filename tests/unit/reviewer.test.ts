@@ -422,7 +422,7 @@ describe('PRReviewer', () => {
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
       expect(callArgs.body).toContain('## 🔍 Code Analysis Results');
-      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
+      expect(callArgs.body).toContain('### Style Issues (1)');
       expect(callArgs.body).toContain('<table>');
       expect(callArgs.body).toContain('<th>Severity</th>');
       expect(callArgs.body).toContain('<th>File</th>');
@@ -485,9 +485,9 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('Critical security issue');
       expect(callArgs.body).toContain('Potential performance issue');
       expect(callArgs.body).toContain('Style improvement');
-      expect(callArgs.body).toContain('### 🔒 Security Issues (1)');
-      expect(callArgs.body).toContain('### 📈 Performance Issues (1)');
-      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
+      expect(callArgs.body).toContain('### Security Issues (1)');
+      expect(callArgs.body).toContain('### Performance Issues (1)');
+      expect(callArgs.body).toContain('### Style Issues (1)');
       // Should have multiple tables, one for each category
       const tableMatches = callArgs.body.match(/<table>/g);
       expect(tableMatches).toBeTruthy();
@@ -728,9 +728,9 @@ describe('PRReviewer', () => {
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
       // Check that we have category-specific headers
-      expect(callArgs.body).toContain('### 🔒 Security Issues (2)');
-      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
-      expect(callArgs.body).toContain('### 📈 Performance Issues (1)');
+      expect(callArgs.body).toContain('### Security Issues (2)');
+      expect(callArgs.body).toContain('### Style Issues (1)');
+      expect(callArgs.body).toContain('### Performance Issues (1)');
 
       // Check that we have exactly 3 tables (one per category)
       const tableMatches = callArgs.body.match(/<table>/g);
@@ -738,9 +738,7 @@ describe('PRReviewer', () => {
       expect(tableMatches.length).toBe(3);
 
       // Verify that security issues are in the security table section
-      const securitySection = callArgs.body.match(
-        /### 🔒 Security Issues[\s\S]*?(?=###|<details>|$)/
-      );
+      const securitySection = callArgs.body.match(/### Security Issues[\s\S]*?(?=###|<details>|$)/);
       expect(securitySection).toBeTruthy();
       if (securitySection) {
         expect(securitySection[0]).toContain('Authentication bypass detected');
@@ -749,7 +747,7 @@ describe('PRReviewer', () => {
       }
 
       // Verify that style issues are in the style table section
-      const styleSection = callArgs.body.match(/### 🎨 Style Issues[\s\S]*?(?=###|<details>|$)/);
+      const styleSection = callArgs.body.match(/### Style Issues[\s\S]*?(?=###|<details>|$)/);
       expect(styleSection).toBeTruthy();
       if (styleSection) {
         expect(styleSection[0]).toContain('Inconsistent formatting');
@@ -804,14 +802,10 @@ describe('PRReviewer', () => {
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
-      // Check for category-specific recommendations
-      expect(callArgs.body).toContain(
-        '> 🚨 **Critical:** 1 security issue must be fixed before merging'
-      );
-      expect(callArgs.body).toContain('> ⚡ **Performance:** 1 issue may impact application speed');
-      expect(callArgs.body).toContain(
-        '> 💅 **Style:** Consider addressing 1 formatting suggestion for consistency'
-      );
+      // Check for category headings (no hardcoded recommendations anymore)
+      expect(callArgs.body).toContain('### Security Issues (1)');
+      expect(callArgs.body).toContain('### Performance Issues (1)');
+      expect(callArgs.body).toContain('### Style Issues (1)');
 
       // Should not contain the old summary/recommendations sections
       expect(callArgs.body).not.toContain('📊 Summary');

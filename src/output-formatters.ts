@@ -73,7 +73,7 @@ export class OutputFormatters {
       ['Checks Executed', result.checksExecuted.join(', ')]
     );
 
-    output += '📊 Analysis Summary\n';
+    output += 'Analysis Summary\n';
     output += summaryTable.toString() + '\n';
 
     output += '\n';
@@ -146,7 +146,7 @@ export class OutputFormatters {
           },
         });
 
-        output += '🔍 All Issues\n';
+        output += 'All Issues\n';
 
         for (const issue of issues.slice(0, showDetails ? undefined : 10)) {
           let messageContent = this.wrapText(issue.message, 45);
@@ -178,7 +178,7 @@ export class OutputFormatters {
         output += issuesTable.toString() + '\n\n';
       }
     } else {
-      output += '✅ No issues found!\n\n';
+      output += 'No issues found!\n\n';
     }
 
     // Suggestions table
@@ -212,7 +212,7 @@ export class OutputFormatters {
         },
       });
 
-      output += '📁 Files Changed\n';
+      output += 'Files Changed\n';
 
       for (const file of result.repositoryInfo.files) {
         const statusEmoji = this.getFileStatusEmoji(file.status);
@@ -420,8 +420,8 @@ export class OutputFormatters {
     const criticalIssues = calculateCriticalIssues(issues);
 
     // Header with summary
-    output += `# 🔍 Visor Analysis Results\n\n`;
-    output += `## 📊 Summary\n\n`;
+    output += `# Visor Analysis Results\n\n`;
+    output += `## Summary\n\n`;
     output += `| Metric | Value |\n`;
     output += `|--------|-------|\n`;
     output += `| Total Issues | ${totalIssues} |\n`;
@@ -431,7 +431,7 @@ export class OutputFormatters {
     output += `| Checks Executed | ${result.checksExecuted.join(', ')} |\n\n`;
 
     // Repository info
-    output += `## 📁 Repository Information\n\n`;
+    output += `## Repository Information\n\n`;
     output += `- **Title**: ${result.repositoryInfo.title}\n`;
     output += `- **Author**: ${result.repositoryInfo.author}\n`;
     output += `- **Branch**: ${result.repositoryInfo.head} ← ${result.repositoryInfo.base}\n`;
@@ -595,7 +595,7 @@ export class OutputFormatters {
         }
       }
     } else {
-      output += `## ✅ No Issues Found\n\n`;
+      output += `## No Issues Found\n\n`;
       output += `Great job! No issues were detected in the analyzed code.\n\n`;
     }
 
@@ -611,7 +611,7 @@ export class OutputFormatters {
 
     // Files (if requested)
     if (options.includeFiles && result.repositoryInfo.files.length > 0) {
-      output += `## 📁 Files Changed\n\n`;
+      output += `## Files Changed\n\n`;
       output += `| File | Status | Changes |\n`;
       output += `|------|--------|---------|\n`;
 

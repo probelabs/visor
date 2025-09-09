@@ -84,7 +84,7 @@ describe('OutputFormatters', () => {
     it('should format analysis results as a table', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult);
 
-      expect(result).toContain('📊 Analysis Summary');
+      expect(result).toContain('Analysis Summary');
       expect(result).toContain('Total Issues');
       expect(result).toContain('3');
       expect(result).toContain('Critical Issues');
@@ -119,24 +119,24 @@ describe('OutputFormatters', () => {
     it('should include suggestions table', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult);
 
-      expect(result).toContain('💡 Suggestions');
+      expect(result).toContain('Suggestions');
       expect(result).toContain('Consider adding input validation');
       expect(result).toContain('Add error handling for edge cases');
     });
 
-    it('should include issue suggestions with 💡 emoji', () => {
+    it('should include issue suggestions without emoji', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult, { showDetails: true });
 
-      expect(result).toContain('💡 Use parameterized queries to prevent SQL injection');
+      expect(result).toContain('Suggestion: Use parameterized queries');
       // The other suggestions might not appear depending on table pagination or truncation
-      // Let's just check that suggestions are formatted with the emoji
-      expect(result).toContain('💡');
+      // Let's just check that suggestions are formatted without emoji
+      expect(result).not.toContain('💡');
     });
 
-    it('should include code replacements with 📝 prefix', () => {
+    it('should include code replacements with Code fix prefix', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult, { showDetails: true });
 
-      expect(result).toContain('📝 Code fix:');
+      expect(result).toContain('Code fix:');
       expect(result).toContain('const query = "SELECT * FROM users WHERE id = ?";');
       expect(result).toContain('const data = await fetchData();');
       expect(result).toContain('const cache = new Map();');
@@ -147,11 +147,11 @@ describe('OutputFormatters', () => {
         includeFiles: true,
       });
 
-      expect(result).toContain('📁 Files Changed');
+      expect(result).toContain('Files Changed');
       expect(result).toContain('src/test.ts');
       expect(result).toContain('src/utils.js');
-      expect(result).toContain('📝 modifi'); // Truncated in table
-      expect(result).toContain('✅ added');
+      expect(result).toContain('M'); // File status without emoji
+      expect(result).toContain('A'); // File status without emoji
       expect(result).toContain('+10');
       expect(result).toContain('-5');
       expect(result).toContain('+20');
@@ -176,7 +176,7 @@ describe('OutputFormatters', () => {
 
       const result = OutputFormatters.formatAsTable(noIssuesResult);
 
-      expect(result).toContain('✅ No issues found!');
+      expect(result).toContain('No issues found!');
       expect(result).not.toContain('SECURITY Issues');
     });
   });
@@ -251,7 +251,6 @@ describe('OutputFormatters', () => {
 
       // Should not contain console decorative messages
       expect(result).not.toContain('Analysis Summary');
-      expect(result).not.toContain('📊');
       expect(result).not.toContain('Generated at');
     });
   });
@@ -260,13 +259,13 @@ describe('OutputFormatters', () => {
     it('should format analysis results as markdown', () => {
       const result = OutputFormatters.formatAsMarkdown(mockAnalysisResult);
 
-      expect(result).toContain('# 🔍 Visor Analysis Results');
-      expect(result).toContain('## 📊 Summary');
+      expect(result).toContain('# Visor Analysis Results');
+      expect(result).toContain('## Summary');
       expect(result).toContain('| Total Issues | 3 |');
       expect(result).toContain('| Critical Issues | 0 |');
       expect(result).toContain('| Execution Time | 1500ms |');
 
-      expect(result).toContain('## 📁 Repository Information');
+      expect(result).toContain('## Repository Information');
       expect(result).toContain('**Title**: Test PR');
       expect(result).toContain('**Author**: test-author');
       expect(result).toContain('**Branch**: feature-branch ← main');
@@ -277,15 +276,15 @@ describe('OutputFormatters', () => {
         groupByCategory: true,
       });
 
-      expect(result).toContain('## 🔒 Security Issues');
-      expect(result).toContain('## 📈 Performance Issues');
-      expect(result).toContain('## 🎨 Style Issues');
+      expect(result).toContain('## Security Issues');
+      expect(result).toContain('## Performance Issues');
+      expect(result).toContain('## Style Issues');
 
-      expect(result).toContain('### 🚨 `src/test.ts:10`');
+      expect(result).toContain('### `src/test.ts:10`');
       expect(result).toContain('**Severity**: ERROR');
       expect(result).toContain('**Message**: Potential SQL injection vulnerability');
 
-      expect(result).toContain('### ⚠️ `src/test.ts:15`');
+      expect(result).toContain('### `src/test.ts:15`');
       expect(result).toContain('**Severity**: WARNING');
     });
 
@@ -295,19 +294,19 @@ describe('OutputFormatters', () => {
         showDetails: true,
       });
 
-      // Check for suggestions with 💡 emoji
+      // Check for suggestions without emoji
       expect(result).toContain(
-        '**💡 Suggestion**: Use parameterized queries to prevent SQL injection'
+        '**Suggestion**: Use parameterized queries to prevent SQL injection'
       );
       expect(result).toContain(
-        '**💡 Suggestion**: Replace promises with async/await for better readability'
+        '**Suggestion**: Replace promises with async/await for better readability'
       );
       expect(result).toContain(
-        '**💡 Suggestion**: Add caching to avoid repeated expensive computations'
+        '**Suggestion**: Add caching to avoid repeated expensive computations'
       );
 
       // Check for code replacements with proper markdown code blocks
-      expect(result).toContain('**📝 Suggested Fix**:');
+      expect(result).toContain('**Suggested Fix**:');
       expect(result).toContain('```typescript'); // Language detection from .ts extension
       expect(result).toContain('```javascript'); // Language detection from .js extension
       expect(result).toContain('const query = "SELECT * FROM users WHERE id = ?";');
@@ -348,7 +347,7 @@ describe('OutputFormatters', () => {
     it('should include recommendations section', () => {
       const result = OutputFormatters.formatAsMarkdown(mockAnalysisResult);
 
-      expect(result).toContain('## 💡 Recommendations');
+      expect(result).toContain('## Recommendations');
       expect(result).toContain('1. Consider adding input validation');
       expect(result).toContain('2. Add error handling for edge cases');
     });
@@ -358,10 +357,10 @@ describe('OutputFormatters', () => {
         includeFiles: true,
       });
 
-      expect(result).toContain('## 📁 Files Changed');
+      expect(result).toContain('## Files Changed');
       expect(result).toContain('| File | Status | Changes |');
-      expect(result).toContain('| `src/test.ts` | 📝 modified | +10/-5 |');
-      expect(result).toContain('| `src/utils.js` | ✅ added | +20/-0 |');
+      expect(result).toContain('| `src/test.ts` | M modified | +10/-5 |');
+      expect(result).toContain('| `src/utils.js` | A added | +20/-0 |');
     });
 
     it('should include timestamp in footer when requested', () => {
@@ -384,7 +383,7 @@ describe('OutputFormatters', () => {
 
       const result = OutputFormatters.formatAsMarkdown(noIssuesResult);
 
-      expect(result).toContain('## ✅ No Issues Found');
+      expect(result).toContain('## No Issues Found');
       expect(result).toContain('Great job! No issues were detected');
       expect(result).not.toContain('## 🔒 Security Issues');
     });
@@ -491,7 +490,6 @@ describe('OutputFormatters', () => {
 
       // Should not contain console decorative messages
       expect(result).not.toContain('Analysis Summary');
-      expect(result).not.toContain('📊');
       expect(result).not.toContain('Generated at');
     });
   });
