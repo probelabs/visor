@@ -1,7 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
-import { AIReviewService, ReviewFocus, AIDebugInfo } from './ai-review-service';
+import { AIReviewService, AIDebugInfo } from './ai-review-service';
 
 export interface ReviewIssue {
   // Location
@@ -104,16 +104,11 @@ export class PRReviewer {
       return reviewSummary;
     }
 
-    // If debug is enabled, create a new AI service with debug enabled
-    if (debug) {
-      this.aiReviewService = new AIReviewService({ debug: true });
-    }
-
-    // Execute AI review (no fallback) - single check or legacy mode
-    const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
-
-    // Return all issues - no filtering needed
-    return aiReview;
+    // No config provided - require configuration
+    throw new Error(
+      'No configuration provided. Please create a .visor.yaml file with check definitions. ' +
+      'Built-in prompts have been removed - all checks must be explicitly configured.'
+    );
   }
 
   async postReviewComment(

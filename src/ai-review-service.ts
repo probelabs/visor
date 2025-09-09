@@ -56,7 +56,7 @@ export interface AIDebugInfo {
   }>;
 }
 
-export type ReviewFocus = 'security' | 'performance' | 'style' | 'all';
+// REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
   // Simplified format - only raw data
@@ -106,10 +106,12 @@ export class AIReviewService {
   /**
    * Execute AI review using probe-chat
    */
-  async executeReview(prInfo: PRInfo, focus: ReviewFocus, customPrompt?: string): Promise<ReviewSummary> {
+  async executeReview(prInfo: PRInfo, customPrompt: string): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    const prompt = customPrompt ? this.buildCustomPrompt(prInfo, customPrompt) : this.buildPrompt(prInfo, focus);
+    
+    // Build prompt from custom instructions
+    const prompt = this.buildCustomPrompt(prInfo, customPrompt);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
 
@@ -247,104 +249,9 @@ Please analyze the following code changes and provide feedback as a JSON object 
 ${prContext}`;
   }
 
-  /**
-   * Build the prompt for AI review with XML-formatted data
-   */
-  private buildPrompt(prInfo: PRInfo, focus: ReviewFocus): string {
-    const focusInstructions = this.getFocusInstructions(focus);
-    const prContext = this.formatPRContext(prInfo);
-    const analysisType = prInfo.commitDiff ? 'INCREMENTAL' : 'FULL';
+  // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
 
-    return `${focusInstructions}
-
-ANALYSIS TYPE: ${analysisType}
-${
-  analysisType === 'INCREMENTAL'
-    ? '- You are analyzing a new commit added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
-    : '- You are analyzing the complete PR. Review all changes in the <full_diff> section.'
-}
-
-CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object. If you cannot analyze the code, return an empty issues array, but always return valid JSON.
-
-Analyze the following structured pull request data:
-
-${prContext}
-
-Key instructions for XML data analysis:
-1. The PR metadata provides context (title, description, author, etc.)
-2. If <full_diff> is present: Review the entire PR changes
-3. If <commit_diff> is present: Focus on incremental changes from the latest commit
-4. Use <files_summary> for understanding the scope of changes
-5. Line numbers in your response should reference the diff context lines (starting with + or -)
-
-Required JSON response format:
-{
-  "issues": [{
-    "file": "<filename from the diff>",
-    "line": <line number in the file>,
-    "endLine": <optional end line for multi-line issues>,
-    "ruleId": "<category>/<specific-issue-type>",
-    "message": "<description of the issue>",
-    "severity": "<info|warning|error|critical>",
-    "category": "<security|performance|style|logic|documentation>",
-    "suggestion": "<clear actionable explanation of how to fix the issue>",
-    "replacement": "<complete working code that should replace the problematic lines>"
-  }],
-  "suggestions": ["<general suggestions not tied to specific lines>"]
-}
-
-Field Guidelines:
-- "suggestion": Provide a clear, concise explanation of HOW to fix the issue (e.g., "Use const instead of let for immutable values", "Add input validation before using user data")
-- "replacement": Provide the EXACT code that should replace the problematic lines. The code must be:
-  * Complete and syntactically correct
-  * Properly indented to match the surrounding code
-  * A working solution that can be directly copy-pasted
-  * Include minimal necessary context (usually just the fixed line(s))
-
-Code Replacement Examples:
-
-Example 1 - Variable declaration:
-  message: "Variable 'userName' is never reassigned"
-  suggestion: "Use const for variables that are never reassigned"
-  replacement: "const userName = getUserName();"
-
-Example 2 - SQL Injection:
-  message: "SQL query is vulnerable to injection attacks"
-  suggestion: "Use parameterized queries to prevent SQL injection"
-  replacement: "const query = 'SELECT * FROM users WHERE id = ?';\nconst result = await db.query(query, [userId]);"
-
-Example 3 - Missing error handling:
-  message: "Promise rejection is not handled"
-  suggestion: "Add try-catch block to handle potential errors"
-  replacement: "try {\n  const data = await fetchData();\n  return data;\n} catch (error) {\n  console.error('Failed to fetch data:', error);\n  throw error;\n}"
-
-Severity levels:
-- "info": Low priority informational issues (e.g., minor style suggestions, optional improvements)
-- "warning": Medium priority issues that should be addressed (e.g., code smells, minor bugs)
-- "error": High priority issues that need fixing (e.g., significant bugs, major design problems)
-- "critical": Critical issues that must be fixed immediately (e.g., security vulnerabilities, data loss risks)
-
-RuleId format: "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one", "style/naming-convention")
-
-IMPORTANT: Only analyze changes marked with + (additions) or context around - (deletions) in the diff. Ignore unchanged code unless it's relevant to understanding a new change.`;
-  }
-
-  /**
-   * Get focus-specific instructions
-   */
-  private getFocusInstructions(focus: ReviewFocus): string {
-    switch (focus) {
-      case 'security':
-        return 'Review this code for security issues like SQL injection, hardcoded secrets, authentication problems, and input validation flaws.';
-      case 'performance':
-        return 'Review this code for performance issues like inefficient algorithms, database query problems, and memory usage concerns.';
-      case 'style':
-        return 'Review this code for style and quality issues like naming conventions, formatting, consistency, and best practices.';
-      case 'all':
-      default:
-        return 'Review this code for security vulnerabilities, performance issues, style problems, logic errors, and documentation quality.';
-    }
-  }
+  // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
 
   /**
    * Format PR context for the AI using XML structure
