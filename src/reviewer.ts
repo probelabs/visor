@@ -147,23 +147,8 @@ export class PRReviewer {
       comment += `## ✅ All Checks Passed\n\n`;
       comment += `**No issues found – changes LGTM.**\n\n`;
     } else {
-      // Create main issues table with each row being an issue
+      // Create tables with issues grouped by category
       comment += this.formatIssuesTable(comments);
-      comment += '\n\n';
-
-      // Add summary and recommendations
-      comment += this.formatSummaryAndRecommendations(comments);
-      comment += '\n\n';
-    }
-
-    // Add suggestions if any
-    if (summary.suggestions.length > 0) {
-      comment += this.commentManager.createCollapsibleSection(
-        '💡 Recommendations',
-        summary.suggestions.map(s => `- ${s}`).join('\n') + '\n',
-        true
-      );
-      comment += '\n\n';
     }
 
     // Add debug section if debug information is available
@@ -292,143 +277,174 @@ export class PRReviewer {
   private formatIssuesTable(comments: ReviewComment[]): string {
     let content = `## 🔍 Code Analysis Results\n\n`;
 
-    // Start HTML table
-    content += `<table>\n`;
-    content += `  <thead>\n`;
-    content += `    <tr>\n`;
-    content += `      <th>Severity</th>\n`;
-    content += `      <th>Category</th>\n`;
-    content += `      <th>File</th>\n`;
-    content += `      <th>Line</th>\n`;
-    content += `      <th>Issue</th>\n`;
-    content += `    </tr>\n`;
-    content += `  </thead>\n`;
-    content += `  <tbody>\n`;
+    // Group comments by category
+    const groupedComments = this.groupCommentsByCategory(comments);
 
-    // Sort by severity first (critical > error > warning > info), then by file
-    const sortedComments = comments.sort((a, b) => {
-      const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
-      const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
-      if (severityDiff !== 0) return severityDiff;
-      return a.file.localeCompare(b.file);
-    });
+    // Create a table for each category that has issues
+    for (const [category, categoryComments] of Object.entries(groupedComments)) {
+      if (categoryComments.length === 0) continue;
 
-    for (const comment of sortedComments) {
-      const severityEmoji =
-        comment.severity === 'critical'
-          ? '🔴'
-          : comment.severity === 'error'
-            ? '🔴'
-            : comment.severity === 'warning'
-              ? '🟡'
-              : '🟢';
-      const categoryEmoji = this.getCategoryEmoji(comment.category);
-      const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
+      const categoryEmoji = this.getCategoryEmoji(category);
+      const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
 
-      // Build the issue description with suggestion/replacement if available
-      // Wrap content in a div for better table layout control
-      let issueContent = '';
+      // Category heading
+      content += `### ${categoryEmoji} ${categoryTitle} Issues (${categoryComments.length})\n\n`;
 
-      // Escape HTML in the main message to prevent HTML injection
-      const escapedMessage = comment.message
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;');
-
-      issueContent += escapedMessage;
-
-      if (comment.suggestion) {
-        // Escape HTML in the suggestion to prevent nested HTML rendering
-        const escapedSuggestion = comment.suggestion
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#x27;');
-        issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
-      }
-
-      if (comment.replacement) {
-        // Extract language hint from file extension
-        const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
-        const languageHint = this.getLanguageHint(fileExt);
-        // Escape HTML in the replacement code to prevent nested HTML rendering
-        const escapedReplacement = comment.replacement
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#x27;');
-        issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
-      }
-
-      // Wrap all content in a div for better table cell containment
-      const issueDescription = `<div>${issueContent}</div>`;
-
+      // Start HTML table for this category
+      content += `<table>\n`;
+      content += `  <thead>\n`;
       content += `    <tr>\n`;
-      content += `      <td>${severityEmoji} ${severityText}</td>\n`;
-      content += `      <td>${categoryEmoji} ${comment.category}</td>\n`;
-      content += `      <td><code>${comment.file}</code></td>\n`;
-      content += `      <td>${comment.line}</td>\n`;
-      content += `      <td>${issueDescription}</td>\n`;
+      content += `      <th>Severity</th>\n`;
+      content += `      <th>File</th>\n`;
+      content += `      <th>Line</th>\n`;
+      content += `      <th>Issue</th>\n`;
       content += `    </tr>\n`;
-    }
+      content += `  </thead>\n`;
+      content += `  <tbody>\n`;
 
-    // Close HTML table
-    content += `  </tbody>\n`;
-    content += `</table>\n`;
+      // Sort comments within category by severity, then by file
+      const sortedCategoryComments = categoryComments.sort((a, b) => {
+        const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
+        const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
+        if (severityDiff !== 0) return severityDiff;
+        return a.file.localeCompare(b.file);
+      });
+
+      for (const comment of sortedCategoryComments) {
+        const severityEmoji =
+          comment.severity === 'critical'
+            ? '🔴'
+            : comment.severity === 'error'
+              ? '🔴'
+              : comment.severity === 'warning'
+                ? '🟡'
+                : '🟢';
+        const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
+
+        // Build the issue description with suggestion/replacement if available
+        // Wrap content in a div for better table layout control
+        let issueContent = '';
+
+        // Escape HTML in the main message to prevent HTML injection
+        const escapedMessage = comment.message
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#x27;');
+
+        issueContent += escapedMessage;
+
+        if (comment.suggestion) {
+          // Escape HTML in the suggestion to prevent nested HTML rendering
+          const escapedSuggestion = comment.suggestion
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
+        }
+
+        if (comment.replacement) {
+          // Extract language hint from file extension
+          const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
+          const languageHint = this.getLanguageHint(fileExt);
+          // Escape HTML in the replacement code to prevent nested HTML rendering
+          const escapedReplacement = comment.replacement
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
+        }
+
+        // Wrap all content in a div for better table cell containment
+        const issueDescription = `<div>${issueContent}</div>`;
+
+        content += `    <tr>\n`;
+        content += `      <td>${severityEmoji} ${severityText}</td>\n`;
+        content += `      <td><code>${comment.file}</code></td>\n`;
+        content += `      <td>${comment.line}</td>\n`;
+        content += `      <td>${issueDescription}</td>\n`;
+        content += `    </tr>\n`;
+      }
+
+      // Close HTML table for this category
+      content += `  </tbody>\n`;
+      content += `</table>\n\n`;
+
+      // Add category-specific recommendations
+      content += this.formatCategoryRecommendations(category, sortedCategoryComments);
+      content += '\n';
+    }
 
     return content;
   }
 
-  private formatSummaryAndRecommendations(comments: ReviewComment[]): string {
+  private formatCategoryRecommendations(category: string, comments: ReviewComment[]): string {
     const critical = comments.filter(
       c => c.severity === 'critical' || c.severity === 'error'
     ).length;
     const warnings = comments.filter(c => c.severity === 'warning').length;
     const info = comments.filter(c => c.severity === 'info').length;
-    const total = comments.length;
 
-    let content = `<details>\n<summary><strong>📊 Summary</strong></summary>\n\n`;
-    content += `**Total Issues Found:** ${total}\n\n`;
-    content += `- 🔴 **Critical:** ${critical} issue${critical !== 1 ? 's' : ''}\n`;
-    content += `- 🟡 **Warnings:** ${warnings} issue${warnings !== 1 ? 's' : ''}\n`;
-    content += `- 🟢 **Info:** ${info} item${info !== 1 ? 's' : ''}\n\n`;
+    let content = '';
 
-    // Group by category for summary
-    const groupedComments = this.groupCommentsByCategory(comments);
-    content += `**By Category:**\n`;
-    for (const [category, categoryComments] of Object.entries(groupedComments)) {
-      if (categoryComments.length > 0) {
-        const emoji = this.getCategoryEmoji(category);
-        content += `- ${emoji} **${category.charAt(0).toUpperCase() + category.slice(1)}:** ${categoryComments.length} issue${categoryComments.length !== 1 ? 's' : ''}\n`;
+    // Add category-specific recommendations based on severity
+    if (critical > 0 || warnings > 0 || info > 0) {
+      const recommendationParts: string[] = [];
+
+      if (category === 'security' && critical > 0) {
+        recommendationParts.push(
+          `🚨 **Critical:** ${critical} security issue${critical !== 1 ? 's' : ''} must be fixed before merging`
+        );
+      } else if (category === 'security' && warnings > 0) {
+        recommendationParts.push(
+          `⚠️ **Important:** Review and address ${warnings} security warning${warnings !== 1 ? 's' : ''}`
+        );
+      } else if (category === 'performance' && (critical > 0 || warnings > 0)) {
+        const totalIssues = critical + warnings;
+        recommendationParts.push(
+          `⚡ **Performance:** ${totalIssues} issue${totalIssues !== 1 ? 's' : ''} may impact application speed`
+        );
+      } else if (category === 'style' && info > 0) {
+        recommendationParts.push(
+          `💅 **Style:** Consider addressing ${info} formatting suggestion${info !== 1 ? 's' : ''} for consistency`
+        );
+      } else if (category === 'logic' && (critical > 0 || warnings > 0)) {
+        const totalIssues = critical + warnings;
+        recommendationParts.push(
+          `🧩 **Logic:** ${totalIssues} issue${totalIssues !== 1 ? 's' : ''} may cause incorrect behavior`
+        );
+      } else if (category === 'documentation' && info > 0) {
+        recommendationParts.push(
+          `📝 **Docs:** ${info} documentation improvement${info !== 1 ? 's' : ''} suggested`
+        );
+      } else {
+        // Generic recommendation for other categories
+        if (critical > 0) {
+          recommendationParts.push(
+            `🔴 **Critical:** ${critical} issue${critical !== 1 ? 's' : ''} must be addressed`
+          );
+        }
+        if (warnings > 0) {
+          recommendationParts.push(
+            `🟡 **Warning:** ${warnings} issue${warnings !== 1 ? 's' : ''} should be reviewed`
+          );
+        }
+        if (info > 0) {
+          recommendationParts.push(
+            `🟢 **Info:** ${info} suggestion${info !== 1 ? 's' : ''} for improvement`
+          );
+        }
+      }
+
+      if (recommendationParts.length > 0) {
+        content += `> ${recommendationParts.join(' • ')}\n`;
       }
     }
-
-    content += `\n</details>\n\n`;
-
-    // Add recommendations
-    content += `<details>\n<summary><strong>💡 Recommendations</strong></summary>\n\n`;
-
-    if (critical > 0) {
-      content += `🚨 **Immediate Action Required:** ${critical} critical issue${critical !== 1 ? 's' : ''} must be addressed before merging.\n\n`;
-    }
-
-    if (warnings > 0) {
-      content += `⚠️  **Review Needed:** ${warnings} warning${warnings !== 1 ? 's' : ''} should be reviewed and potentially fixed.\n\n`;
-    }
-
-    if (info > 0) {
-      content += `ℹ️  **Consider:** ${info} informational suggestion${info !== 1 ? 's' : ''} for code quality improvement.\n\n`;
-    }
-
-    if (critical === 0 && warnings === 0) {
-      content += `✅ **Great Job!** Only informational items found. Consider addressing them for optimal code quality.\n\n`;
-    }
-
-    content += `</details>`;
 
     return content;
   }

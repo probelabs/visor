@@ -265,13 +265,16 @@ describe('PRReviewer', () => {
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
       expect(callArgs.body).toContain('## 🔍 Code Analysis Results');
+      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
       expect(callArgs.body).toContain('<table>');
       expect(callArgs.body).toContain('<th>Severity</th>');
-      expect(callArgs.body).toContain('<th>Category</th>');
       expect(callArgs.body).toContain('<th>File</th>');
       expect(callArgs.body).toContain('<th>Line</th>');
       expect(callArgs.body).toContain('<th>Issue</th>');
-      expect(callArgs.body).toContain('Add unit tests');
+      expect(callArgs.body).not.toContain('<th>Category</th>'); // Category column removed since we have separate tables
+      // Should not contain the old summary sections
+      expect(callArgs.body).not.toContain('📊 Summary');
+      expect(callArgs.body).not.toContain('**Total Issues Found:**');
       expect(callArgs.body).toContain('<code>src/test.ts</code>');
       expect(callArgs.body).toContain('<td>10</td>');
     });
@@ -325,11 +328,13 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('Critical security issue');
       expect(callArgs.body).toContain('Potential performance issue');
       expect(callArgs.body).toContain('Style improvement');
-      expect(callArgs.body).toContain('🔒 security');
-      expect(callArgs.body).toContain('📈 performance');
-      expect(callArgs.body).toContain('🎨 style');
-      expect(callArgs.body).toContain('<table>');
-      expect(callArgs.body).toContain('</table>');
+      expect(callArgs.body).toContain('### 🔒 Security Issues (1)');
+      expect(callArgs.body).toContain('### 📈 Performance Issues (1)');
+      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
+      // Should have multiple tables, one for each category
+      const tableMatches = callArgs.body.match(/<table>/g);
+      expect(tableMatches).toBeTruthy();
+      expect(tableMatches.length).toBe(3); // Three separate tables for three categories
     });
 
     test('should include debug information when debug data is provided', async () => {
@@ -508,6 +513,154 @@ describe('PRReviewer', () => {
         // Should contain newlines between details sections for proper spacing
         expect(issueCell[0]).toContain('</details>\n<details>');
       }
+    });
+
+    test('should create separate tables for each category', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 128,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const mockReview = {
+        issues: [
+          {
+            file: 'src/auth.ts',
+            line: 5,
+            ruleId: 'security/auth-vulnerability',
+            message: 'Authentication bypass detected',
+            severity: 'critical' as const,
+            category: 'security' as const,
+          },
+          {
+            file: 'src/login.ts',
+            line: 10,
+            ruleId: 'security/sql-injection',
+            message: 'SQL injection vulnerability',
+            severity: 'error' as const,
+            category: 'security' as const,
+          },
+          {
+            file: 'src/styles.css',
+            line: 20,
+            ruleId: 'style/formatting',
+            message: 'Inconsistent formatting',
+            severity: 'info' as const,
+            category: 'style' as const,
+          },
+          {
+            file: 'src/process.ts',
+            line: 100,
+            ruleId: 'performance/n-plus-one',
+            message: 'N+1 query detected',
+            severity: 'warning' as const,
+            category: 'performance' as const,
+          },
+        ],
+        suggestions: [],
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Check that we have category-specific headers
+      expect(callArgs.body).toContain('### 🔒 Security Issues (2)');
+      expect(callArgs.body).toContain('### 🎨 Style Issues (1)');
+      expect(callArgs.body).toContain('### 📈 Performance Issues (1)');
+
+      // Check that we have exactly 3 tables (one per category)
+      const tableMatches = callArgs.body.match(/<table>/g);
+      expect(tableMatches).toBeTruthy();
+      expect(tableMatches.length).toBe(3);
+
+      // Verify that security issues are in the security table section
+      const securitySection = callArgs.body.match(
+        /### 🔒 Security Issues[\s\S]*?(?=###|<details>|$)/
+      );
+      expect(securitySection).toBeTruthy();
+      if (securitySection) {
+        expect(securitySection[0]).toContain('Authentication bypass detected');
+        expect(securitySection[0]).toContain('SQL injection vulnerability');
+        expect(securitySection[0]).not.toContain('Inconsistent formatting'); // Style issue should not be here
+      }
+
+      // Verify that style issues are in the style table section
+      const styleSection = callArgs.body.match(/### 🎨 Style Issues[\s\S]*?(?=###|<details>|$)/);
+      expect(styleSection).toBeTruthy();
+      if (styleSection) {
+        expect(styleSection[0]).toContain('Inconsistent formatting');
+        expect(styleSection[0]).not.toContain('Authentication bypass'); // Security issue should not be here
+      }
+    });
+
+    test('should include category-specific recommendations', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 129,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const mockReview = {
+        issues: [
+          {
+            file: 'src/auth.ts',
+            line: 5,
+            ruleId: 'security/critical',
+            message: 'Critical security vulnerability',
+            severity: 'critical' as const,
+            category: 'security' as const,
+          },
+          {
+            file: 'src/perf.ts',
+            line: 10,
+            ruleId: 'performance/warning',
+            message: 'Performance issue detected',
+            severity: 'warning' as const,
+            category: 'performance' as const,
+          },
+          {
+            file: 'src/style.css',
+            line: 20,
+            ruleId: 'style/info',
+            message: 'Style improvement suggested',
+            severity: 'info' as const,
+            category: 'style' as const,
+          },
+        ],
+        suggestions: [],
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Check for category-specific recommendations
+      expect(callArgs.body).toContain(
+        '> 🚨 **Critical:** 1 security issue must be fixed before merging'
+      );
+      expect(callArgs.body).toContain('> ⚡ **Performance:** 1 issue may impact application speed');
+      expect(callArgs.body).toContain(
+        '> 💅 **Style:** Consider addressing 1 formatting suggestion for consistency'
+      );
+
+      // Should not contain the old summary/recommendations sections
+      expect(callArgs.body).not.toContain('📊 Summary');
+      expect(callArgs.body).not.toContain(
+        '<details>\n<summary><strong>💡 Recommendations</strong></summary>'
+      );
     });
   });
 });
