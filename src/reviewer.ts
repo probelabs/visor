@@ -98,7 +98,7 @@ export class PRReviewer {
       const engine = new CheckExecutionEngine();
 
       // Execute checks using the engine's parallel execution capability
-      const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config);
+      const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config, undefined, debug);
 
       // Return all issues - no filtering needed
       return reviewSummary;
