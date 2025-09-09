@@ -248,6 +248,18 @@ export class PRReviewer {
       `**Prompt Length:** ${debug.promptLength} characters`,
       `**Response Length:** ${debug.responseLength} characters`,
       `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      formattedContent.push('', '### Errors');
+      debug.errors.forEach(error => {
+        formattedContent.push(`- ${error}`);
+      });
+    }
+
+    // Check if debug content would be too large for GitHub comment
+    const fullDebugContent = [
+      ...formattedContent,
       '',
       '### AI Prompt',
       '```',
@@ -258,13 +270,48 @@ export class PRReviewer {
       '```json',
       debug.rawResponse,
       '```',
-    ];
+    ].join('\n');
 
-    if (debug.errors && debug.errors.length > 0) {
-      formattedContent.push('', '### Errors');
-      debug.errors.forEach(error => {
-        formattedContent.push(`- ${error}`);
-      });
+    // GitHub comment limit is 65536 characters, leave some buffer
+    if (fullDebugContent.length > 60000) {
+      // Save debug info to artifact and provide link
+      const artifactPath = this.saveDebugArtifact(debug);
+      
+      formattedContent.push('');
+      formattedContent.push('### Debug Details');
+      formattedContent.push('⚠️ Debug information is too large for GitHub comments.');
+      
+      if (artifactPath) {
+        formattedContent.push(`📁 **Full debug information saved to artifact:** \`${artifactPath}\``);
+        formattedContent.push('');
+        
+        // Try to get GitHub context for artifact link
+        const runId = process.env.GITHUB_RUN_ID;
+        const repoUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY 
+          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` 
+          : null;
+          
+        if (runId && repoUrl) {
+          formattedContent.push(`🔗 **Download Link:** [visor-debug-${process.env.GITHUB_RUN_NUMBER || runId}](${repoUrl}/actions/runs/${runId})`);
+        }
+        
+        formattedContent.push('💡 Go to the GitHub Action run above and download the debug artifact to view complete prompts and responses.');
+      } else {
+        formattedContent.push('📝 **Prompt preview:** ' + debug.prompt.substring(0, 500) + '...');
+        formattedContent.push('📝 **Response preview:** ' + debug.rawResponse.substring(0, 500) + '...');
+      }
+    } else {
+      // Include full debug content if it fits
+      formattedContent.push('');
+      formattedContent.push('### AI Prompt');
+      formattedContent.push('```');
+      formattedContent.push(debug.prompt);
+      formattedContent.push('```');
+      formattedContent.push('');
+      formattedContent.push('### Raw AI Response');
+      formattedContent.push('```json');
+      formattedContent.push(debug.rawResponse);
+      formattedContent.push('```');
     }
 
     return this.commentManager.createCollapsibleSection(
@@ -272,6 +319,49 @@ export class PRReviewer {
       formattedContent.join('\n'),
       false // Start collapsed
     );
+  }
+
+  private saveDebugArtifact(debug: AIDebugInfo): string | null {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Create debug directory if it doesn't exist
+      const debugDir = path.join(process.cwd(), 'debug-artifacts');
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+
+      // Create debug file with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `visor-debug-${timestamp}.json`;
+      const filePath = path.join(debugDir, filename);
+
+      // Save complete debug information as JSON
+      const debugData = {
+        metadata: {
+          provider: debug.provider,
+          model: debug.model,
+          apiKeySource: debug.apiKeySource,
+          processingTime: debug.processingTime,
+          timestamp: debug.timestamp,
+          promptLength: debug.promptLength,
+          responseLength: debug.responseLength,
+          jsonParseSuccess: debug.jsonParseSuccess,
+          errors: debug.errors || []
+        },
+        prompt: debug.prompt,
+        rawResponse: debug.rawResponse
+      };
+
+      fs.writeFileSync(filePath, JSON.stringify(debugData, null, 2));
+      
+      console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
+      return filename;
+    } catch (error) {
+      console.error(`❌ Failed to save debug artifact: ${error}`);
+      return null;
+    }
   }
 
   private formatIssuesTable(comments: ReviewComment[]): string {
