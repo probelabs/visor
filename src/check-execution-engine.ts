@@ -495,7 +495,7 @@ export class CheckExecutionEngine {
             prompt: debugResults
               .map(({ checkName, result }) => {
                 if (result.status === 'fulfilled') {
-                  return `[${checkName}] ${result.value!.result!.debug!.prompt.substring(0, 200)}...`;
+                  return `[${checkName}]\n${result.value!.result!.debug!.prompt}`;
                 }
                 return `[${checkName}] Error: Promise was rejected`;
               })
@@ -504,7 +504,7 @@ export class CheckExecutionEngine {
             rawResponse: debugResults
               .map(({ checkName, result }) => {
                 if (result.status === 'fulfilled') {
-                  return `[${checkName}] ${result.value!.result!.debug!.rawResponse.substring(0, 500)}...`;
+                  return `[${checkName}]\n${result.value!.result!.debug!.rawResponse}`;
                 }
                 return `[${checkName}] Error: Promise was rejected`;
               })
