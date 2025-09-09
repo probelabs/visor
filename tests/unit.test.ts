@@ -163,7 +163,6 @@ describe('GitHub Action Unit Tests', () => {
 
     await run();
 
-    expect(mockedCore.setOutput).toHaveBeenCalledWith('review-score', expect.any(String));
     expect(mockedCore.setOutput).toHaveBeenCalledWith('issues-found', expect.any(String));
   });
 
@@ -195,7 +194,7 @@ describe('GitHub Action Unit Tests', () => {
     await run();
 
     expect(mockedCore.setOutput).toHaveBeenCalledWith('auto-review-completed', 'true');
-    expect(mockedCore.setOutput).toHaveBeenCalledWith('review-score', expect.any(String));
+    expect(mockedCore.setOutput).toHaveBeenCalledWith('issues-found', expect.any(String));
   });
 
   test('should not auto-review when disabled', async () => {

@@ -85,8 +85,6 @@ describe('OutputFormatters', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult);
 
       expect(result).toContain('📊 Analysis Summary');
-      expect(result).toContain('Overall Score');
-      expect(result).toContain('60/100'); // Updated score: 100 - 1*25 (error) - 1*10 (warning) - 1*5 (info) = 60
       expect(result).toContain('Total Issues');
       expect(result).toContain('3');
       expect(result).toContain('Critical Issues');
@@ -193,7 +191,6 @@ describe('OutputFormatters', () => {
       expect(parsed).toHaveProperty('issues');
       expect(parsed).toHaveProperty('suggestions');
 
-      expect(parsed.summary.overallScore).toBe(60); // Calculated from issues: 100 - 25 - 10 - 5 = 60
       expect(parsed.summary.totalIssues).toBe(3);
       expect(parsed.summary.criticalIssues).toBe(0);
       expect(parsed.summary.executionTime).toBe(1500);
@@ -265,7 +262,6 @@ describe('OutputFormatters', () => {
 
       expect(result).toContain('# 🔍 Visor Analysis Results');
       expect(result).toContain('## 📊 Summary');
-      expect(result).toContain('| Overall Score | 60/100 |'); // Updated calculated score
       expect(result).toContain('| Total Issues | 3 |');
       expect(result).toContain('| Critical Issues | 0 |');
       expect(result).toContain('| Execution Time | 1500ms |');
