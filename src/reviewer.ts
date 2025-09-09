@@ -326,10 +326,7 @@ export class PRReviewer {
     if (comments.length > 0) {
       // Impact Analysis section
       content += `<details>\n<summary><strong>Impact Analysis</strong></summary>\n\n`;
-      content += this.formatIssuesList(comments.slice(0, 5));
-      if (comments.length > 5) {
-        content += `\n*...and ${comments.length - 5} more issues*\n`;
-      }
+      content += this.formatIssuesList(comments);
       content += `\n</details>\n`;
 
       // Critical Issues section (only if there are critical issues)
