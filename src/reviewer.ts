@@ -338,7 +338,10 @@ export class PRReviewer {
       }
       
       if (comment.replacement) {
-        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>${comment.replacement}</code></pre></details>`;
+        // Extract language hint from file extension
+        const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
+        const languageHint = this.getLanguageHint(fileExt);
+        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${comment.replacement}</code></pre></details>`;
       }
       
       content += `    <tr>\n`;
@@ -403,5 +406,43 @@ export class PRReviewer {
     content += `</details>`;
 
     return content;
+  }
+
+  private getLanguageHint(fileExtension: string): string {
+    const langMap: Record<string, string> = {
+      'ts': 'typescript',
+      'tsx': 'typescript',
+      'js': 'javascript', 
+      'jsx': 'javascript',
+      'py': 'python',
+      'java': 'java',
+      'kt': 'kotlin',
+      'swift': 'swift',
+      'go': 'go',
+      'rs': 'rust',
+      'cpp': 'cpp',
+      'c': 'c',
+      'cs': 'csharp',
+      'php': 'php',
+      'rb': 'ruby',
+      'scala': 'scala',
+      'sh': 'bash',
+      'bash': 'bash',
+      'zsh': 'bash',
+      'sql': 'sql',
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'xml': 'xml',
+      'html': 'html',
+      'css': 'css',
+      'scss': 'scss',
+      'sass': 'sass',
+      'md': 'markdown',
+      'dockerfile': 'dockerfile',
+      'tf': 'hcl',
+    };
+    
+    return langMap[fileExtension] || fileExtension;
   }
 }
