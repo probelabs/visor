@@ -695,10 +695,17 @@ async function handlePullRequestVisorMode(
         console.log(`📋 Loaded Visor config from: ${configPath}`);
       } catch (error) {
         console.error(`⚠️ Could not load config from ${configPath}:`, error);
-        config = await configManager.getDefaultConfig();
+        config = await configManager.findAndLoadConfig();
       }
     } else {
-      config = await configManager.getDefaultConfig();
+      // Try to find and load config from default locations (.visor.yaml)
+      config = await configManager.findAndLoadConfig();
+      const hasCustomConfig = config.checks && Object.keys(config.checks).length > 0;
+      if (hasCustomConfig) {
+        console.log(`📋 Loaded Visor config from default location (.visor.yaml)`);
+      } else {
+        console.log(`📋 Using default Visor configuration`);
+      }
     }
 
     // Extract checks from config
