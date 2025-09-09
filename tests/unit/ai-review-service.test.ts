@@ -201,7 +201,7 @@ describe('AIReviewService', () => {
       mockSpawn.mockReturnValue(mockChild);
 
       const service = new AIReviewService({ timeout: 100 }); // Very short timeout
-      const reviewPromise = service.executeReview(mockPRInfo, 'all');
+      const reviewPromise = service.executeReview(mockPRInfo, 'Review this code for all issues');
 
       // Don't emit any response, let it timeout
 
@@ -210,151 +210,8 @@ describe('AIReviewService', () => {
     });
   });
 
-  describe('Prompt Building', () => {
-    it('should build security-focused prompt', () => {
-      const service = new AIReviewService();
-      const prInfo: PRInfo = {
-        number: 1,
-        title: 'Add authentication',
-        body: 'Adds user login',
-        author: 'dev',
-        base: 'main',
-        head: 'auth',
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'security');
-
-      expect(prompt).toContain('security issues');
-      expect(prompt).toContain('Add authentication');
-      expect(prompt).toContain('JSON');
-    });
-
-    it('should build performance-focused prompt', () => {
-      const service = new AIReviewService();
-      const prInfo: PRInfo = {
-        number: 2,
-        title: 'Optimize queries',
-        body: '',
-        author: 'dev',
-        base: 'main',
-        head: 'perf',
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'performance');
-
-      expect(prompt).toContain('performance issues');
-      expect(prompt).toContain('Optimize queries');
-    });
-
-    it('should include suggestion and replacement field guidelines in prompt', () => {
-      const service = new AIReviewService();
-      const prInfo: PRInfo = {
-        number: 1,
-        title: 'Test PR',
-        body: 'Test description',
-        author: 'dev',
-        base: 'main',
-        head: 'feature',
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'all');
-
-      expect(prompt).toContain('suggestion');
-      expect(prompt).toContain('replacement');
-      expect(prompt).toContain('clear actionable explanation of how to fix');
-      expect(prompt).toContain('complete working code that should replace');
-    });
-
-    it('should include field examples in prompt', () => {
-      const service = new AIReviewService();
-      const prInfo: PRInfo = {
-        number: 1,
-        title: 'Test PR',
-        body: 'Test description',
-        author: 'dev',
-        base: 'main',
-        head: 'feature',
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'all');
-
-      // Check for example patterns
-      expect(prompt).toContain('Code Replacement Examples');
-      expect(prompt).toContain('Use const instead of let');
-      expect(prompt).toContain('Use parameterized queries');
-      expect(prompt).toContain('Add try-catch block');
-      expect(prompt).toContain('const userName = getUserName()');
-      expect(prompt).toContain("const query = 'SELECT * FROM users WHERE id = ?'");
-    });
-
-    it('should include enhanced field guidelines', () => {
-      const service = new AIReviewService();
-      const prInfo: PRInfo = {
-        number: 1,
-        title: 'Test PR',
-        body: 'Test description',
-        author: 'dev',
-        base: 'main',
-        head: 'feature',
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'all');
-
-      expect(prompt).toContain('Field Guidelines:');
-      expect(prompt).toContain('Complete and syntactically correct');
-      expect(prompt).toContain('Properly indented to match the surrounding code');
-      expect(prompt).toContain('working solution that can be directly copy-pasted');
-    });
-
-    it('should truncate large patches', () => {
-      const service = new AIReviewService();
-      const largePatch = Array(200).fill('line').join('\n');
-      const prInfo: PRInfo = {
-        number: 1,
-        title: 'Large change',
-        body: '',
-        author: 'dev',
-        base: 'main',
-        head: 'feature',
-        files: [
-          {
-            filename: 'large.js',
-            additions: 200,
-            deletions: 0,
-            changes: 200,
-            status: 'added',
-            patch: largePatch,
-          },
-        ],
-        totalAdditions: 200,
-        totalDeletions: 0,
-      };
-
-      const prompt = (service as any).buildPrompt(prInfo, 'all');
-
-      // Check for the enhanced prompt content
-      expect(prompt).toContain('Field Guidelines:');
-      expect(prompt).toContain('Code Replacement Examples:');
-      expect(prompt).toContain('Example 1 - Variable declaration:');
-      expect(prompt).toContain('Example 2 - SQL Injection:');
-      expect(prompt).toContain('Example 3 - Missing error handling:');
-    });
-  });
+  // NOTE: Prompt building tests were removed because built-in prompts were removed.
+  // All prompts now come from .visor.yaml configuration files.
 
   describe('Response Parsing', () => {
     it('should parse probe-chat JSON response', () => {
@@ -508,7 +365,7 @@ describe('AIReviewService', () => {
       const invalidResponse = 'Not a JSON response';
 
       const result = (service as any).parseAIResponse(invalidResponse);
-      
+
       // Should return a structured fallback instead of throwing
       expect(result).toHaveProperty('issues');
       expect(result).toHaveProperty('suggestions');

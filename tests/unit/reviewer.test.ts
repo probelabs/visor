@@ -2,17 +2,96 @@
 import { PRReviewer } from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
+// Mock CheckExecutionEngine
+jest.mock('../../src/check-execution-engine', () => {
+  return {
+    CheckExecutionEngine: jest.fn().mockImplementation(() => ({
+      executeReviewChecks: jest
+        .fn()
+        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
+          // Return mock results similar to AIReviewService mock
+          const issues: any[] = [];
+          const suggestions: string[] = [];
+
+          // Generate mock issues based on check names
+          if (_checks.includes('security-review') || _checks.includes('basic-review')) {
+            if (
+              _prInfo.files[0]?.patch?.includes('eval') ||
+              _prInfo.files[0]?.patch?.includes('innerHTML')
+            ) {
+              issues.push({
+                file: 'src/test.ts',
+                line: 5,
+                ruleId: 'security/dangerous-eval',
+                message: 'Dangerous eval usage detected',
+                severity: 'critical',
+                category: 'security',
+              });
+            }
+          }
+
+          // Large file detection
+          if (_prInfo.files.some((f: any) => f.additions > 100)) {
+            issues.push({
+              file: _prInfo.files.find((f: any) => f.additions > 100)?.filename || 'src/large.ts',
+              line: 1,
+              ruleId: 'style/large-change',
+              message: 'Large file change detected, consider breaking into smaller PRs',
+              severity: 'warning',
+              category: 'style',
+            });
+          }
+
+          // Test file suggestions
+          const hasTestFiles = _prInfo.files.some(
+            (f: any) => f.filename.includes('.test.') || f.filename.includes('.spec.')
+          );
+          const hasSourceFiles = _prInfo.files.some(
+            (f: any) =>
+              f.filename.includes('src/') &&
+              !f.filename.includes('.test.') &&
+              !f.filename.includes('.spec.')
+          );
+
+          if (hasSourceFiles && !hasTestFiles) {
+            suggestions.push('Consider adding unit tests for the new functionality');
+          } else if (hasTestFiles) {
+            suggestions.push('Great job including tests with your changes!');
+          }
+
+          // Default response if no specific conditions met
+          if (issues.length === 0) {
+            issues.push({
+              file: 'src/test.ts',
+              line: 10,
+              ruleId: 'style/naming-convention',
+              message: 'Consider using const instead of let',
+              severity: 'info',
+              category: 'style',
+            });
+          }
+
+          if (suggestions.length === 0) {
+            suggestions.push('Add unit tests', 'Consider performance optimization');
+          }
+
+          return { issues, suggestions };
+        }),
+    })),
+  };
+});
+
 // Mock AI service to avoid actual API calls
 jest.mock('../../src/ai-review-service', () => {
   return {
     AIReviewService: jest.fn().mockImplementation(() => ({
-      executeReview: jest.fn().mockImplementation((prInfo, focus) => {
+      executeReview: jest.fn().mockImplementation((prInfo, customPrompt) => {
         const issues: any[] = [];
         const suggestions: string[] = [];
 
-        // Dynamic responses based on test context
+        // Dynamic responses based on test context and custom prompt
         if (
-          focus === 'security' ||
+          customPrompt?.toLowerCase().includes('security') ||
           prInfo.files[0]?.patch?.includes('eval') ||
           prInfo.files[0]?.patch?.includes('innerHTML')
         ) {
@@ -136,7 +215,20 @@ describe('PRReviewer', () => {
 
   describe('reviewPR', () => {
     test('should generate basic review summary', async () => {
-      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
+      const mockConfig = {
+        checks: {
+          'basic-review': {
+            provider: 'ai',
+            prompt: 'Review this code for basic issues',
+          },
+        },
+      };
+
+      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
+        config: mockConfig as any,
+        checks: ['basic-review'],
+        parallelExecution: false,
+      });
 
       expect(review).toBeDefined();
       expect(Array.isArray(review.issues)).toBe(true);
@@ -148,8 +240,19 @@ describe('PRReviewer', () => {
     test('should focus on security when requested', async () => {
       mockPRInfo.files[0].patch = 'eval("dangerous code"); innerHTML = userInput;';
 
+      const mockConfig = {
+        checks: {
+          'security-review': {
+            provider: 'ai',
+            prompt: 'Review this code for security issues',
+          },
+        },
+      };
+
       const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
-        focus: 'security',
+        config: mockConfig as any,
+        checks: ['security-review'],
+        parallelExecution: false,
       });
 
       const securityIssues = review.issues.filter(issue => issue.category === 'security');
@@ -168,12 +271,27 @@ describe('PRReviewer', () => {
           status: 'modified' as const,
         }));
 
+      const mockConfig = {
+        checks: {
+          'detailed-review': {
+            provider: 'ai',
+            prompt: 'Review this code in detail',
+          },
+        },
+      };
+
       const summaryReview = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
         format: 'table',
+        config: mockConfig as any,
+        checks: ['detailed-review'],
+        parallelExecution: false,
       });
 
       const detailedReview = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
         format: 'markdown',
+        config: mockConfig as any,
+        checks: ['detailed-review'],
+        parallelExecution: false,
       });
 
       expect(detailedReview.issues.length).toBeGreaterThanOrEqual(summaryReview.issues.length);
@@ -182,7 +300,20 @@ describe('PRReviewer', () => {
     test('should detect large file changes', async () => {
       mockPRInfo.files[0].additions = 150;
 
-      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
+      const mockConfig = {
+        checks: {
+          'large-file-review': {
+            provider: 'ai',
+            prompt: 'Review this code for large file changes',
+          },
+        },
+      };
+
+      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
+        config: mockConfig as any,
+        checks: ['large-file-review'],
+        parallelExecution: false,
+      });
 
       const largeFileIssues = review.issues.filter(
         issue => issue.message.includes('Large file change') || issue.message.includes('large')
@@ -202,7 +333,20 @@ describe('PRReviewer', () => {
         },
       ];
 
-      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
+      const mockConfig = {
+        checks: {
+          'test-review': {
+            provider: 'ai',
+            prompt: 'Review this code and suggest testing improvements',
+          },
+        },
+      };
+
+      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
+        config: mockConfig as any,
+        checks: ['test-review'],
+        parallelExecution: false,
+      });
 
       const testSuggestion = review.suggestions.find(s => s.includes('unit tests'));
       expect(testSuggestion).toBeDefined();
@@ -218,7 +362,20 @@ describe('PRReviewer', () => {
         status: 'added',
       });
 
-      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo);
+      const mockConfig = {
+        checks: {
+          'test-feedback-review': {
+            provider: 'ai',
+            prompt: 'Review this code and provide feedback on testing',
+          },
+        },
+      };
+
+      const review = await reviewer.reviewPR('owner', 'repo', 1, mockPRInfo, {
+        config: mockConfig as any,
+        checks: ['test-feedback-review'],
+        parallelExecution: false,
+      });
 
       const testSuggestion = review.suggestions.find(s => s.includes('Great job including tests'));
       expect(testSuggestion).toBeDefined();

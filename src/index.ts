@@ -426,7 +426,31 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 
       console.log(`Starting PR review for #${prNumber}`);
       const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, { focus, format });
+
+      // Load config for the review
+      const configManager = new ConfigManager();
+      let config;
+      try {
+        config = await configManager.loadConfig('.visor.yaml');
+      } catch {
+        // Fall back to a basic configuration
+        config = {
+          checks: {
+            'legacy-review': {
+              provider: 'ai',
+              prompt: `Review this code focusing on ${focus || 'all aspects'}. Look for security issues, performance problems, code quality, and suggest improvements.`,
+            },
+          },
+        };
+      }
+
+      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
+        focus,
+        format,
+        config: config as any,
+        checks: ['legacy-review'],
+        parallelExecution: false,
+      });
 
       await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
 
@@ -525,9 +549,29 @@ async function handlePullRequestEvent(
     }
   }
 
+  // Load config for the review
+  const configManager = new ConfigManager();
+  let config;
+  try {
+    config = await configManager.loadConfig('.visor.yaml');
+  } catch {
+    // Fall back to a basic configuration for PR auto-review
+    config = {
+      checks: {
+        'auto-review': {
+          provider: 'ai',
+          prompt: `Review this pull request comprehensively. Look for security issues, performance problems, code quality, bugs, and suggest improvements. Action: ${action}`,
+        },
+      },
+    };
+  }
+
   // Create review options, including debug if enabled
   const reviewOptions = {
     debug: inputs?.debug === 'true',
+    config: config as any,
+    checks: ['auto-review'],
+    parallelExecution: false,
   };
 
   // Perform the review with debug options

@@ -85,20 +85,28 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { focus = 'all', debug = false, config, checks, parallelExecution } = options;
+    const { debug = false, config, checks, parallelExecution } = options;
 
-    // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
-    if (config && checks && checks.length > 1 && parallelExecution) {
+    // If we have a config and checks, use CheckExecutionEngine
+    if (config && checks && checks.length > 0) {
+      const executionMode = checks.length > 1 && parallelExecution ? 'parallel' : 'sequential';
       console.error(
-        `🔧 Debug: PRReviewer using CheckExecutionEngine for parallel execution of ${checks.length} checks`
+        `🔧 Debug: PRReviewer using CheckExecutionEngine for ${executionMode} execution of ${checks.length} check(s)`
       );
 
       // Import CheckExecutionEngine dynamically to avoid circular dependencies
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
 
-      // Execute checks using the engine's parallel execution capability
-      const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config, undefined, debug);
+      // Execute checks using the engine
+      const reviewSummary = await engine['executeReviewChecks'](
+        prInfo,
+        checks,
+        undefined,
+        config,
+        undefined,
+        debug
+      );
 
       // Return all issues - no filtering needed
       return reviewSummary;
@@ -107,7 +115,7 @@ export class PRReviewer {
     // No config provided - require configuration
     throw new Error(
       'No configuration provided. Please create a .visor.yaml file with check definitions. ' +
-      'Built-in prompts have been removed - all checks must be explicitly configured.'
+        'Built-in prompts have been removed - all checks must be explicitly configured.'
     );
   }
 
@@ -271,29 +279,38 @@ export class PRReviewer {
     if (fullDebugContent.length > 60000) {
       // Save debug info to artifact and provide link
       const artifactPath = this.saveDebugArtifact(debug);
-      
+
       formattedContent.push('');
       formattedContent.push('### Debug Details');
       formattedContent.push('⚠️ Debug information is too large for GitHub comments.');
-      
+
       if (artifactPath) {
-        formattedContent.push(`📁 **Full debug information saved to artifact:** \`${artifactPath}\``);
+        formattedContent.push(
+          `📁 **Full debug information saved to artifact:** \`${artifactPath}\``
+        );
         formattedContent.push('');
-        
+
         // Try to get GitHub context for artifact link
         const runId = process.env.GITHUB_RUN_ID;
-        const repoUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY 
-          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` 
-          : null;
-          
+        const repoUrl =
+          process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
+            ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
+            : null;
+
         if (runId && repoUrl) {
-          formattedContent.push(`🔗 **Download Link:** [visor-debug-${process.env.GITHUB_RUN_NUMBER || runId}](${repoUrl}/actions/runs/${runId})`);
+          formattedContent.push(
+            `🔗 **Download Link:** [visor-debug-${process.env.GITHUB_RUN_NUMBER || runId}](${repoUrl}/actions/runs/${runId})`
+          );
         }
-        
-        formattedContent.push('💡 Go to the GitHub Action run above and download the debug artifact to view complete prompts and responses.');
+
+        formattedContent.push(
+          '💡 Go to the GitHub Action run above and download the debug artifact to view complete prompts and responses.'
+        );
       } else {
         formattedContent.push('📝 **Prompt preview:** ' + debug.prompt.substring(0, 500) + '...');
-        formattedContent.push('📝 **Response preview:** ' + debug.rawResponse.substring(0, 500) + '...');
+        formattedContent.push(
+          '📝 **Response preview:** ' + debug.rawResponse.substring(0, 500) + '...'
+        );
       }
     } else {
       // Include full debug content if it fits
@@ -320,7 +337,7 @@ export class PRReviewer {
     try {
       const fs = require('fs');
       const path = require('path');
-      
+
       // Create debug directory if it doesn't exist
       const debugDir = path.join(process.cwd(), 'debug-artifacts');
       if (!fs.existsSync(debugDir)) {
@@ -336,7 +353,7 @@ export class PRReviewer {
       const markdownContent = this.formatDebugAsMarkdown(debug);
 
       fs.writeFileSync(filePath, markdownContent);
-      
+
       console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
       return filename;
     } catch (error) {
@@ -383,17 +400,17 @@ export class PRReviewer {
     // Add detailed information for each check
     promptSections.forEach((promptSection, index) => {
       const responseSection = responseSections.find(r => r.checkName === promptSection.checkName);
-      
+
       lines.push(`## ${index + 1}. ${promptSection.checkName.toUpperCase()} Check`);
       lines.push('');
-      
+
       lines.push('### 📝 AI Prompt');
       lines.push('');
       lines.push('```');
       lines.push(promptSection.content);
       lines.push('```');
       lines.push('');
-      
+
       lines.push('### 🤖 AI Response');
       lines.push('');
       if (responseSection) {
@@ -411,21 +428,21 @@ export class PRReviewer {
     return lines.join('\n');
   }
 
-  private parseCheckSections(combinedText: string): Array<{checkName: string, content: string}> {
-    const sections: Array<{checkName: string, content: string}> = [];
-    
+  private parseCheckSections(combinedText: string): Array<{ checkName: string; content: string }> {
+    const sections: Array<{ checkName: string; content: string }> = [];
+
     // Split by check sections like [security], [performance], etc.
     const parts = combinedText.split(/\[(\w+)\]\s*\n/);
-    
+
     for (let i = 1; i < parts.length; i += 2) {
       const checkName = parts[i];
       const content = parts[i + 1]?.trim() || '';
-      
+
       if (checkName && content) {
         sections.push({ checkName, content });
       }
     }
-    
+
     return sections;
   }
 
