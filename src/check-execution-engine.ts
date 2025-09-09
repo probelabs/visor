@@ -279,6 +279,7 @@ export class CheckExecutionEngine {
         );
 
         // Create provider config for this specific check
+        console.error(`🔧 Debug: CheckExecutionEngine debug param = ${debug}`);
         const providerConfig: CheckProviderConfig = {
           type: 'ai',
           prompt: checkConfig.prompt,
