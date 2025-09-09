@@ -107,11 +107,8 @@ export class PRReviewer {
       // Execute checks using the engine's parallel execution capability
       const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config);
 
-      // Apply format filtering
-      return {
-        ...reviewSummary,
-        issues: format === 'markdown' ? reviewSummary.issues : reviewSummary.issues.slice(0, 5),
-      };
+      // Return all issues - no filtering needed
+      return reviewSummary;
     }
 
     // If debug is enabled, create a new AI service with debug enabled
@@ -122,11 +119,8 @@ export class PRReviewer {
     // Execute AI review (no fallback) - single check or legacy mode
     const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
 
-    // Apply format filtering
-    return {
-      ...aiReview,
-      issues: format === 'markdown' ? aiReview.issues : aiReview.issues.slice(0, 5),
-    };
+    // Return all issues - no filtering needed
+    return aiReview;
   }
 
   async postReviewComment(
