@@ -59,14 +59,23 @@ export class AICheckProvider extends CheckProvider {
   }
 
   async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
-    // Extract AI configuration
+    // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
     if (config.ai) {
-      aiConfig.apiKey = config.ai.apiKey as string;
-      aiConfig.model = config.ai.model as string;
-      aiConfig.timeout = config.ai.timeout as number;
-      aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
+      // Only set properties that are actually defined to avoid overriding env vars
+      if (config.ai.apiKey !== undefined) {
+        aiConfig.apiKey = config.ai.apiKey as string;
+      }
+      if (config.ai.model !== undefined) {
+        aiConfig.model = config.ai.model as string;
+      }
+      if (config.ai.timeout !== undefined) {
+        aiConfig.timeout = config.ai.timeout as number;
+      }
+      if (config.ai.provider !== undefined) {
+        aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
+      }
     }
 
     // Determine focus from prompt or focus field
@@ -83,7 +92,7 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Create AI service with config
+    // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
 
     // Execute the review
