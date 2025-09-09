@@ -96,8 +96,7 @@ export class OutputFormatters {
             },
           });
 
-          const emoji = this.getCategoryEmoji(category);
-          output += `${emoji} ${category.toUpperCase()} Issues (${comments.length})\n`;
+          output += `${category.toUpperCase()} Issues (${comments.length})\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
@@ -107,13 +106,13 @@ export class OutputFormatters {
 
             // Add suggestion if available
             if (issue?.suggestion) {
-              messageContent += '\n💡 ' + this.wrapText(issue.suggestion, 53);
+              messageContent += '\nSuggestion: ' + this.wrapText(issue.suggestion, 53);
             }
 
             // Add replacement code if available
             if (issue?.replacement) {
               messageContent +=
-                '\n📝 Code fix:\n' +
+                '\nCode fix:\n' +
                 issue.replacement
                   .split('\n')
                   .map(line => '  ' + line)
@@ -154,13 +153,13 @@ export class OutputFormatters {
 
           // Add suggestion if available
           if (issue.suggestion) {
-            messageContent += '\n💡 ' + this.wrapText(issue.suggestion, 43);
+            messageContent += '\nSuggestion: ' + this.wrapText(issue.suggestion, 43);
           }
 
           // Add replacement code if available
           if (issue.replacement) {
             messageContent +=
-              '\n📝 Code fix:\n' +
+              '\nCode fix:\n' +
               issue.replacement
                 .split('\n')
                 .map(line => '  ' + line)
@@ -193,7 +192,7 @@ export class OutputFormatters {
         },
       });
 
-      output += '💡 Suggestions\n';
+      output += 'Suggestions\n';
 
       result.reviewSummary.suggestions.forEach((suggestion, index) => {
         suggestionsTable.push([(index + 1).toString(), this.wrapText(suggestion, 65)]);
@@ -447,22 +446,20 @@ export class OutputFormatters {
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
 
-          const emoji = this.getCategoryEmoji(category);
           const issueCount = comments.length;
-          output += `## ${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issueCount} found)\n\n`;
+          output += `## ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issueCount} found)\n\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
             const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
 
-            const severityEmoji = this.getSeverityEmoji(comment.severity);
-            output += `### ${severityEmoji} \`${comment.file}:${comment.line}\`\n`;
+            output += `### \`${comment.file}:${comment.line}\`\n`;
             output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
             output += `**Message**: ${comment.message}  \n`;
 
             // Add suggestion if available
             if (issue?.suggestion) {
-              output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+              output += `**Suggestion**: ${issue.suggestion}  \n`;
             }
 
             // Add replacement code if available
@@ -492,7 +489,7 @@ export class OutputFormatters {
               };
               const lang = langMap[ext] || '';
 
-              output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+              output += `\n**Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
             }
 
             output += '\n';
@@ -506,14 +503,13 @@ export class OutputFormatters {
               // Convert comment back to issue to access suggestion/replacement fields
               const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
 
-              const severityEmoji = this.getSeverityEmoji(comment.severity);
-              output += `### ${severityEmoji} \`${comment.file}:${comment.line}\`\n`;
+              output += `### \`${comment.file}:${comment.line}\`\n`;
               output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
               output += `**Message**: ${comment.message}  \n`;
 
               // Add suggestion if available
               if (issue?.suggestion) {
-                output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+                output += `**Suggestion**: ${issue.suggestion}  \n`;
               }
 
               // Add replacement code if available
@@ -543,7 +539,7 @@ export class OutputFormatters {
                 };
                 const lang = langMap[ext] || '';
 
-                output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+                output += `\n**Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
               }
 
               output += '\n';
@@ -553,17 +549,16 @@ export class OutputFormatters {
           }
         }
       } else {
-        output += `## 🔍 All Issues\n\n`;
+        output += `## All Issues\n\n`;
 
         for (const issue of issues) {
-          const severityEmoji = this.getSeverityEmoji(issue.severity);
-          output += `### ${severityEmoji} \`${issue.file}:${issue.line}\` (${issue.category})\n`;
+          output += `### \`${issue.file}:${issue.line}\` (${issue.category})\n`;
           output += `**Severity**: ${issue.severity.toUpperCase()}  \n`;
           output += `**Message**: ${issue.message}  \n`;
 
           // Add suggestion if available
           if (issue.suggestion) {
-            output += `**💡 Suggestion**: ${issue.suggestion}  \n`;
+            output += `**Suggestion**: ${issue.suggestion}  \n`;
           }
 
           // Add replacement code if available
@@ -593,7 +588,7 @@ export class OutputFormatters {
             };
             const lang = langMap[ext] || '';
 
-            output += `\n**📝 Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
+            output += `\n**Suggested Fix**:\n\`\`\`${lang}\n${issue.replacement}\n\`\`\`\n`;
           }
 
           output += '\n';
@@ -606,7 +601,7 @@ export class OutputFormatters {
 
     // Suggestions
     if (result.reviewSummary.suggestions.length > 0) {
-      output += `## 💡 Recommendations\n\n`;
+      output += `## Recommendations\n\n`;
 
       result.reviewSummary.suggestions.forEach((suggestion, index) => {
         output += `${index + 1}. ${suggestion}\n`;
@@ -657,7 +652,6 @@ export class OutputFormatters {
     return grouped;
   }
 
-
   /**
    * Convert ReviewIssue to ReviewComment for backward compatibility
    */
@@ -700,27 +694,6 @@ export class OutputFormatters {
     return grouped;
   }
 
-  private static getCategoryEmoji(category: string): string {
-    const emojiMap: Record<string, string> = {
-      security: '🔒',
-      performance: '📈',
-      style: '🎨',
-      logic: '🧠',
-      documentation: '📚',
-    };
-    return emojiMap[category] || '📝';
-  }
-
-  private static getSeverityEmoji(severity: string): string {
-    const emojiMap: Record<string, string> = {
-      critical: '🔥',
-      error: '🚨',
-      warning: '⚠️',
-      info: 'ℹ️',
-    };
-    return emojiMap[severity] || '📝';
-  }
-
   private static formatSeverity(severity: string): string {
     const severityMap: Record<string, string> = {
       info: 'INFO',
@@ -732,13 +705,13 @@ export class OutputFormatters {
   }
 
   private static getFileStatusEmoji(status: string): string {
-    const emojiMap: Record<string, string> = {
-      added: '✅',
-      removed: '❌',
-      modified: '📝',
-      renamed: '🔄',
+    const statusMap: Record<string, string> = {
+      added: 'A',
+      removed: 'D',
+      modified: 'M',
+      renamed: 'R',
     };
-    return emojiMap[status] || '📄';
+    return statusMap[status] || 'U';
   }
 
   private static getSeverityColor(severity: string): string {

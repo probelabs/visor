@@ -357,6 +357,7 @@ describe('GitHub PR Workflow Integration', () => {
           number: 123,
           fullDiff: expect.stringContaining('JWT_SECRET'),
           commitDiff: expect.stringContaining('hardcoded-secret-123'),
+          isIncremental: true,
         })
       );
 
@@ -438,6 +439,7 @@ describe('GitHub PR Workflow Integration', () => {
         fullDiff:
           '--- src/test.ts\n@@ -1,3 +1,4 @@\n+console.log("test");\n function test() {\n   return true;\n }',
         commitDiff: '--- src/test.ts\n@@ -2,0 +2,1 @@\n+console.log("new change");',
+        isIncremental: true,
       };
 
       // Verify that PRInfo structure supports both full and incremental analysis
@@ -460,6 +462,7 @@ describe('GitHub PR Workflow Integration', () => {
         totalDeletions: 10,
         fullDiff:
           '--- src/app.ts\n+++ src/app.ts\n@@ -1,3 +1,5 @@\n+import express from "express";\n+const app = express();\n function main() {\n   console.log("Hello");\n }',
+        isIncremental: false,
       };
 
       // Verify that PRInfo structure supports full analysis without commit diff

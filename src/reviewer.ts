@@ -230,17 +230,6 @@ export class PRReviewer {
     return grouped;
   }
 
-  private getCategoryEmoji(category: string): string {
-    const emojiMap: Record<string, string> = {
-      security: '🔒',
-      performance: '📈',
-      style: '🎨',
-      logic: '🧠',
-      documentation: '📚',
-    };
-    return emojiMap[category] || '📝';
-  }
-
   private formatDebugSection(debug: AIDebugInfo): string {
     const formattedContent = [
       `**Provider:** ${debug.provider}`,
@@ -456,11 +445,10 @@ export class PRReviewer {
     for (const [category, categoryComments] of Object.entries(groupedComments)) {
       if (categoryComments.length === 0) continue;
 
-      const categoryEmoji = this.getCategoryEmoji(category);
       const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
 
       // Category heading
-      content += `### ${categoryEmoji} ${categoryTitle} Issues (${categoryComments.length})\n\n`;
+      content += `### ${categoryTitle} Issues (${categoryComments.length})\n\n`;
 
       // Start HTML table for this category
       content += `<table>\n`;
@@ -547,75 +535,7 @@ export class PRReviewer {
       content += `  </tbody>\n`;
       content += `</table>\n\n`;
 
-      // Add category-specific recommendations
-      content += this.formatCategoryRecommendations(category, sortedCategoryComments);
-      content += '\n';
-    }
-
-    return content;
-  }
-
-  private formatCategoryRecommendations(category: string, comments: ReviewComment[]): string {
-    const critical = comments.filter(
-      c => c.severity === 'critical' || c.severity === 'error'
-    ).length;
-    const warnings = comments.filter(c => c.severity === 'warning').length;
-    const info = comments.filter(c => c.severity === 'info').length;
-
-    let content = '';
-
-    // Add category-specific recommendations based on severity
-    if (critical > 0 || warnings > 0 || info > 0) {
-      const recommendationParts: string[] = [];
-
-      if (category === 'security' && critical > 0) {
-        recommendationParts.push(
-          `🚨 **Critical:** ${critical} security issue${critical !== 1 ? 's' : ''} must be fixed before merging`
-        );
-      } else if (category === 'security' && warnings > 0) {
-        recommendationParts.push(
-          `⚠️ **Important:** Review and address ${warnings} security warning${warnings !== 1 ? 's' : ''}`
-        );
-      } else if (category === 'performance' && (critical > 0 || warnings > 0)) {
-        const totalIssues = critical + warnings;
-        recommendationParts.push(
-          `⚡ **Performance:** ${totalIssues} issue${totalIssues !== 1 ? 's' : ''} may impact application speed`
-        );
-      } else if (category === 'style' && info > 0) {
-        recommendationParts.push(
-          `💅 **Style:** Consider addressing ${info} formatting suggestion${info !== 1 ? 's' : ''} for consistency`
-        );
-      } else if (category === 'logic' && (critical > 0 || warnings > 0)) {
-        const totalIssues = critical + warnings;
-        recommendationParts.push(
-          `🧩 **Logic:** ${totalIssues} issue${totalIssues !== 1 ? 's' : ''} may cause incorrect behavior`
-        );
-      } else if (category === 'documentation' && info > 0) {
-        recommendationParts.push(
-          `📝 **Docs:** ${info} documentation improvement${info !== 1 ? 's' : ''} suggested`
-        );
-      } else {
-        // Generic recommendation for other categories
-        if (critical > 0) {
-          recommendationParts.push(
-            `🔴 **Critical:** ${critical} issue${critical !== 1 ? 's' : ''} must be addressed`
-          );
-        }
-        if (warnings > 0) {
-          recommendationParts.push(
-            `🟡 **Warning:** ${warnings} issue${warnings !== 1 ? 's' : ''} should be reviewed`
-          );
-        }
-        if (info > 0) {
-          recommendationParts.push(
-            `🟢 **Info:** ${info} suggestion${info !== 1 ? 's' : ''} for improvement`
-          );
-        }
-      }
-
-      if (recommendationParts.length > 0) {
-        content += `> ${recommendationParts.join(' • ')}\n`;
-      }
+      // No hardcoded recommendations - all guidance comes from .visor.yaml prompts
     }
 
     return content;

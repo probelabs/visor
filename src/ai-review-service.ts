@@ -109,7 +109,7 @@ export class AIReviewService {
   async executeReview(prInfo: PRInfo, customPrompt: string): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    
+
     // Build prompt from custom instructions
     const prompt = this.buildCustomPrompt(prInfo, customPrompt);
 
@@ -216,7 +216,7 @@ export class AIReviewService {
    */
   private buildCustomPrompt(prInfo: PRInfo, customInstructions: string): string {
     const prContext = this.formatPRContext(prInfo);
-    const analysisType = prInfo.commitDiff ? 'INCREMENTAL' : 'FULL';
+    const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
     return `You are a senior code reviewer. 
 
@@ -329,11 +329,19 @@ ${this.escapeXml(prInfo.fullDiff)}
     }
 
     // Add incremental commit diff if available (for new commit analysis)
-    if (prInfo.commitDiff) {
-      context += `
+    if (prInfo.isIncremental) {
+      if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
+        context += `
   <commit_diff>
 ${this.escapeXml(prInfo.commitDiff)}
   </commit_diff>`;
+      } else {
+        context += `
+  <commit_diff>
+<!-- Commit diff could not be retrieved - falling back to full diff analysis -->
+${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
+  </commit_diff>`;
+      }
     }
 
     // Add file summary for context
@@ -767,7 +775,6 @@ ${this.escapeXml(prInfo.commitDiff)}
     }
     return 'logic';
   }
-
 
   /**
    * Generate mock response for testing

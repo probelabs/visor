@@ -108,6 +108,7 @@ describe('PRAnalyzer', () => {
         totalAdditions: 75,
         totalDeletions: 10,
         fullDiff: expect.stringContaining('--- src/test.ts'),
+        isIncremental: false,
       });
 
       expect(mockOctokit.rest.pulls.get).toHaveBeenCalledWith({
@@ -356,6 +357,7 @@ describe('PRAnalyzer', () => {
           title: 'Test PR',
           fullDiff: expect.stringContaining('--- src/test.ts'),
           commitDiff: expect.stringContaining('--- src/test.ts'),
+          isIncremental: true,
         })
       );
 
@@ -391,6 +393,7 @@ describe('PRAnalyzer', () => {
           number: 1,
           title: 'Test PR',
           fullDiff: '',
+          isIncremental: false,
         })
       );
 

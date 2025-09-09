@@ -246,8 +246,7 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       for (const [category, issues] of Object.entries(groupedIssues)) {
         if (issues.length === 0) continue;
 
-        const emoji = getCategoryEmoji(category);
-        const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+        const title = `${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
 
         let sectionContent = '';
         for (const issue of issues.slice(0, 5)) {
@@ -320,18 +319,6 @@ function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
   }
 
   return grouped;
-}
-
-function getCategoryEmoji(category: string): string {
-  const emojiMap: Record<string, string> = {
-    security: '🔒',
-    performance: '📈',
-    style: '🎨',
-    logic: '🧠',
-    documentation: '📚',
-    architecture: '🏗️',
-  };
-  return emojiMap[category] || '📝';
 }
 
 function formatDebugInfo(debug: any): string {
