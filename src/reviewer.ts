@@ -85,14 +85,7 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const {
-      focus = 'all',
-      format = 'table',
-      debug = false,
-      config,
-      checks,
-      parallelExecution,
-    } = options;
+    const { focus = 'all', debug = false, config, checks, parallelExecution } = options;
 
     // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
     if (config && checks && checks.length > 1 && parallelExecution) {
@@ -147,9 +140,6 @@ export class PRReviewer {
     const totalIssues = calculateTotalIssues(summary.issues);
     const comments = convertIssuesToComments(summary.issues);
 
-    // Group comments by category for universal formatting
-    const groupedComments = this.groupCommentsByCategory(comments);
-
     let comment = '';
 
     // If no issues, show success message
@@ -160,7 +150,7 @@ export class PRReviewer {
       // Create main issues table with each row being an issue
       comment += this.formatIssuesTable(comments);
       comment += '\n\n';
-      
+
       // Add summary and recommendations
       comment += this.formatSummaryAndRecommendations(comments);
       comment += '\n\n';
@@ -301,7 +291,7 @@ export class PRReviewer {
 
   private formatIssuesTable(comments: ReviewComment[]): string {
     let content = `## 🔍 Code Analysis Results\n\n`;
-    
+
     // Start HTML table
     content += `<table>\n`;
     content += `  <thead>\n`;
@@ -324,26 +314,59 @@ export class PRReviewer {
     });
 
     for (const comment of sortedComments) {
-      const severityEmoji = comment.severity === 'critical' ? '🔴' :
-                           comment.severity === 'error' ? '🔴' : 
-                           comment.severity === 'warning' ? '🟡' : '🟢';
+      const severityEmoji =
+        comment.severity === 'critical'
+          ? '🔴'
+          : comment.severity === 'error'
+            ? '🔴'
+            : comment.severity === 'warning'
+              ? '🟡'
+              : '🟢';
       const categoryEmoji = this.getCategoryEmoji(comment.category);
       const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
-      
+
       // Build the issue description with suggestion/replacement if available
-      let issueDescription = comment.message;
-      
+      // Wrap content in a div for better table layout control
+      let issueContent = '';
+
+      // Escape HTML in the main message to prevent HTML injection
+      const escapedMessage = comment.message
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;');
+
+      issueContent += escapedMessage;
+
       if (comment.suggestion) {
-        issueDescription += `<br/><details><summary>💡 <strong>Suggestion</strong></summary>${comment.suggestion}</details>`;
+        // Escape HTML in the suggestion to prevent nested HTML rendering
+        const escapedSuggestion = comment.suggestion
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#x27;');
+        issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
       }
-      
+
       if (comment.replacement) {
         // Extract language hint from file extension
         const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
         const languageHint = this.getLanguageHint(fileExt);
-        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${comment.replacement}</code></pre></details>`;
+        // Escape HTML in the replacement code to prevent nested HTML rendering
+        const escapedReplacement = comment.replacement
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#x27;');
+        issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
       }
-      
+
+      // Wrap all content in a div for better table cell containment
+      const issueDescription = `<div>${issueContent}</div>`;
+
       content += `    <tr>\n`;
       content += `      <td>${severityEmoji} ${severityText}</td>\n`;
       content += `      <td>${categoryEmoji} ${comment.category}</td>\n`;
@@ -361,7 +384,9 @@ export class PRReviewer {
   }
 
   private formatSummaryAndRecommendations(comments: ReviewComment[]): string {
-    const critical = comments.filter(c => c.severity === 'critical' || c.severity === 'error').length;
+    const critical = comments.filter(
+      c => c.severity === 'critical' || c.severity === 'error'
+    ).length;
     const warnings = comments.filter(c => c.severity === 'warning').length;
     const info = comments.filter(c => c.severity === 'info').length;
     const total = comments.length;
@@ -386,15 +411,15 @@ export class PRReviewer {
 
     // Add recommendations
     content += `<details>\n<summary><strong>💡 Recommendations</strong></summary>\n\n`;
-    
+
     if (critical > 0) {
       content += `🚨 **Immediate Action Required:** ${critical} critical issue${critical !== 1 ? 's' : ''} must be addressed before merging.\n\n`;
     }
-    
+
     if (warnings > 0) {
       content += `⚠️  **Review Needed:** ${warnings} warning${warnings !== 1 ? 's' : ''} should be reviewed and potentially fixed.\n\n`;
     }
-    
+
     if (info > 0) {
       content += `ℹ️  **Consider:** ${info} informational suggestion${info !== 1 ? 's' : ''} for code quality improvement.\n\n`;
     }
@@ -410,39 +435,39 @@ export class PRReviewer {
 
   private getLanguageHint(fileExtension: string): string {
     const langMap: Record<string, string> = {
-      'ts': 'typescript',
-      'tsx': 'typescript',
-      'js': 'javascript', 
-      'jsx': 'javascript',
-      'py': 'python',
-      'java': 'java',
-      'kt': 'kotlin',
-      'swift': 'swift',
-      'go': 'go',
-      'rs': 'rust',
-      'cpp': 'cpp',
-      'c': 'c',
-      'cs': 'csharp',
-      'php': 'php',
-      'rb': 'ruby',
-      'scala': 'scala',
-      'sh': 'bash',
-      'bash': 'bash',
-      'zsh': 'bash',
-      'sql': 'sql',
-      'json': 'json',
-      'yaml': 'yaml',
-      'yml': 'yaml',
-      'xml': 'xml',
-      'html': 'html',
-      'css': 'css',
-      'scss': 'scss',
-      'sass': 'sass',
-      'md': 'markdown',
-      'dockerfile': 'dockerfile',
-      'tf': 'hcl',
+      ts: 'typescript',
+      tsx: 'typescript',
+      js: 'javascript',
+      jsx: 'javascript',
+      py: 'python',
+      java: 'java',
+      kt: 'kotlin',
+      swift: 'swift',
+      go: 'go',
+      rs: 'rust',
+      cpp: 'cpp',
+      c: 'c',
+      cs: 'csharp',
+      php: 'php',
+      rb: 'ruby',
+      scala: 'scala',
+      sh: 'bash',
+      bash: 'bash',
+      zsh: 'bash',
+      sql: 'sql',
+      json: 'json',
+      yaml: 'yaml',
+      yml: 'yaml',
+      xml: 'xml',
+      html: 'html',
+      css: 'css',
+      scss: 'scss',
+      sass: 'sass',
+      md: 'markdown',
+      dockerfile: 'dockerfile',
+      tf: 'hcl',
     };
-    
+
     return langMap[fileExtension] || fileExtension;
   }
 }

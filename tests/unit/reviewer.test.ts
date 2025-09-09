@@ -426,5 +426,88 @@ describe('PRReviewer', () => {
       expect(callArgs.body).not.toContain('**Provider:**');
       expect(callArgs.body).not.toContain('### AI Prompt');
     });
+
+    test('should escape HTML in suggestions and replacements to prevent nested tables', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 127,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const mockReview = {
+        issues: [
+          {
+            file: 'src/table.ts',
+            line: 10,
+            ruleId: 'style/html-structure',
+            message: 'HTML table structure needs improvement',
+            severity: 'warning' as const,
+            category: 'style' as const,
+            suggestion: 'Use proper <table> tags with <thead> and <tbody>',
+            replacement: `<table>
+  <thead>
+    <tr>
+      <th>Column 1</th>
+      <th>Column 2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Data 1</td>
+      <td>Data 2</td>
+    </tr>
+  </tbody>
+</table>`,
+          },
+        ],
+        suggestions: ['Consider using semantic HTML'],
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Check that HTML is properly escaped in suggestions
+      expect(callArgs.body).toContain('&lt;table&gt;');
+      expect(callArgs.body).toContain('&lt;thead&gt;');
+      expect(callArgs.body).toContain('&lt;tbody&gt;');
+      expect(callArgs.body).toContain('&lt;tr&gt;');
+      expect(callArgs.body).toContain('&lt;th&gt;');
+      expect(callArgs.body).toContain('&lt;td&gt;');
+
+      // Check that content is wrapped in a div for better table layout
+      expect(callArgs.body).toContain('<td><div>');
+      expect(callArgs.body).toContain('</div></td>');
+
+      // The HTML inside the code suggestions should be escaped
+      // This prevents the nested table issue where HTML code appears as actual HTML
+      const codeBlockMatch = callArgs.body.match(/<pre><code[^>]*>([\s\S]*?)<\/code><\/pre>/);
+      expect(codeBlockMatch).toBeTruthy();
+      if (codeBlockMatch) {
+        const codeContent = codeBlockMatch[1];
+        // Inside the code block, HTML should be escaped
+        expect(codeContent).toContain('&lt;table&gt;');
+        expect(codeContent).toContain('&lt;thead&gt;');
+        // Should not contain unescaped HTML tags within the code block
+        expect(codeContent).not.toContain('<table>');
+        expect(codeContent).not.toContain('<thead>');
+      }
+
+      // Check that <br/> tags have been replaced with newlines in structured content
+      const issueCell = callArgs.body.match(/<td><div>[\s\S]*?<\/div><\/td>/);
+      expect(issueCell).toBeTruthy();
+      if (issueCell) {
+        // Should not contain <br/> tags between details sections
+        expect(issueCell[0]).not.toContain('</details><br/><details>');
+        // Should contain newlines between details sections for proper spacing
+        expect(issueCell[0]).toContain('</details>\n<details>');
+      }
+    });
   });
 });
