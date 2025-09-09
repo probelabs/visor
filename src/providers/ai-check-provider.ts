@@ -96,6 +96,7 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
+    console.error(`🔧 Debug: AICheckProvider creating service with debug: ${aiConfig.debug}`);
     const service = new AIReviewService(aiConfig);
 
     // Execute the review
