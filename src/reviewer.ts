@@ -333,7 +333,9 @@ export class PRReviewer {
       }
       
       if (comment.replacement) {
-        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><br/>\`\`\`\n${comment.replacement}\n\`\`\`</details>`;
+        // Use <code> blocks instead of ``` to avoid markdown table issues
+        const codeBlock = `<pre><code>${comment.replacement}</code></pre>`;
+        issueDescription += `<br/><details><summary>🔧 <strong>Suggested Fix</strong></summary><br/>${codeBlock}</details>`;
       }
       
       content += `| ${severityEmoji} ${severityText} | ${categoryEmoji} ${comment.category} | \`${comment.file}\` | ${comment.line} | ${issueDescription} |\n`;
