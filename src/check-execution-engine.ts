@@ -285,6 +285,7 @@ export class CheckExecutionEngine {
           focus: this.mapCheckNameToFocus(checkName),
           ai: {
             timeout: timeout || 600000,
+            debug: debug, // Pass debug flag to AI provider
             ...(checkConfig.ai || {}),
           },
         };

@@ -76,6 +76,9 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.provider !== undefined) {
         aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
       }
+      if (config.ai.debug !== undefined) {
+        aiConfig.debug = config.ai.debug as boolean;
+      }
     }
 
     // Determine focus from prompt or focus field
