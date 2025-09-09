@@ -81,25 +81,40 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Determine focus from prompt or focus field
+    // Get custom prompt from config
+    const customPrompt = config.prompt;
+    
+    // Determine focus from prompt content or focus field for fallback
     let focus: ReviewFocus = 'all';
-    const prompt = config.prompt || config.focus;
-
-    if (typeof prompt === 'string') {
-      if (prompt === 'security' || prompt.includes('security')) {
+    if (typeof customPrompt === 'string') {
+      if (customPrompt.includes('security') || customPrompt.includes('Security')) {
         focus = 'security';
-      } else if (prompt === 'performance' || prompt.includes('performance')) {
+      } else if (customPrompt.includes('performance') || customPrompt.includes('Performance')) {
         focus = 'performance';
-      } else if (prompt === 'style' || prompt.includes('style')) {
+      } else if (customPrompt.includes('style') || customPrompt.includes('Style')) {
         focus = 'style';
+      } else if (customPrompt.includes('architecture') || customPrompt.includes('Architecture')) {
+        focus = 'all'; // architecture maps to 'all'
+      }
+    } else if (config.focus) {
+      // Fallback to focus field if prompt is not a string
+      const focusField = config.focus as string;
+      if (focusField === 'security' || focusField === 'performance' || focusField === 'style') {
+        focus = focusField as ReviewFocus;
       }
     }
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
 
-    // Execute the review
-    return await service.executeReview(prInfo, focus);
+    // Execute the review with custom prompt if available, otherwise use focus-based prompt
+    const usingCustomPrompt = typeof customPrompt === 'string';
+    console.error(`🔧 Debug: AICheckProvider using ${usingCustomPrompt ? 'CUSTOM' : 'built-in'} prompt for focus: ${focus}`);
+    if (usingCustomPrompt) {
+      console.error(`🔧 Debug: Custom prompt preview: ${customPrompt.substring(0, 100)}...`);
+    }
+    
+    return await service.executeReview(prInfo, focus, usingCustomPrompt ? customPrompt : undefined);
   }
 
   getSupportedConfigKeys(): string[] {

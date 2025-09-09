@@ -106,10 +106,10 @@ export class AIReviewService {
   /**
    * Execute AI review using probe-chat
    */
-  async executeReview(prInfo: PRInfo, focus: ReviewFocus): Promise<ReviewSummary> {
+  async executeReview(prInfo: PRInfo, focus: ReviewFocus, customPrompt?: string): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    const prompt = this.buildPrompt(prInfo, focus);
+    const prompt = customPrompt ? this.buildCustomPrompt(prInfo, customPrompt) : this.buildPrompt(prInfo, focus);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
 
@@ -207,6 +207,44 @@ export class AIReviewService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Build a custom prompt for AI review with XML-formatted data
+   */
+  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string): string {
+    const prContext = this.formatPRContext(prInfo);
+    const analysisType = prInfo.commitDiff ? 'INCREMENTAL' : 'FULL';
+
+    return `You are a senior code reviewer. ${analysisType} CODE REVIEW REQUEST:
+
+${customInstructions}
+
+Please analyze the following code changes and provide feedback as a JSON object with this exact structure:
+
+\`\`\`json
+{
+  "issues": [
+    {
+      "file": "path/to/file.ext",
+      "line": 10,
+      "endLine": 12,
+      "ruleId": "custom-rule-id",
+      "message": "Clear description of the issue",
+      "severity": "info|warning|error|critical",
+      "category": "security|performance|style|logic|documentation",
+      "suggestion": "Optional: How to fix this issue",
+      "replacement": "Optional: Exact code replacement if applicable"
+    }
+  ],
+  "suggestions": [
+    "Overall suggestion 1",
+    "Overall suggestion 2"
+  ]
+}
+\`\`\`
+
+${prContext}`;
   }
 
   /**
