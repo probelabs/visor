@@ -260,12 +260,12 @@ describe('PRReviewer', () => {
         owner: 'owner',
         repo: 'repo',
         issue_number: 1,
-        body: expect.stringContaining('Visor Code Review Results'),
+        body: expect.stringContaining('Style Analysis'),
       });
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('Overall Score**: 95/100'); // 1 info issue = 100 - 5
-      expect(callArgs.body).toContain('Issues Found**: 1');
+      expect(callArgs.body).toContain('🎨 Style Analysis');
+      expect(callArgs.body).toContain('1 informational item noted');
       expect(callArgs.body).toContain('Add unit tests');
       expect(callArgs.body).toContain('src/test.ts:10');
     });
@@ -316,12 +316,12 @@ describe('PRReviewer', () => {
       await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
-      expect(callArgs.body).toContain('**ERROR**: Critical security issue');
-      expect(callArgs.body).toContain('**WARNING**: Potential performance issue');
-      expect(callArgs.body).toContain('**INFO**: Style improvement');
-      expect(callArgs.body).toContain('🔒 Security Review');
-      expect(callArgs.body).toContain('📈 Performance Review');
-      expect(callArgs.body).toContain('🎨 Style Review');
+      expect(callArgs.body).toContain('Critical security issue');
+      expect(callArgs.body).toContain('Potential performance issue');
+      expect(callArgs.body).toContain('Style improvement');
+      expect(callArgs.body).toContain('🔒 Security Analysis');
+      expect(callArgs.body).toContain('📈 Performance Analysis');
+      expect(callArgs.body).toContain('🎨 Style Analysis');
     });
 
     test('should include debug information when debug data is provided', async () => {

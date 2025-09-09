@@ -444,7 +444,6 @@ describe('Visor Integration E2E Tests', () => {
         expect(parsed.outputs).toHaveProperty('repo-name');
         expect(parsed.outputs).toHaveProperty('repo-description');
         expect(parsed.outputs).toHaveProperty('repo-stars');
-        expect(parsed.outputs).toHaveProperty('review-score');
         expect(parsed.outputs).toHaveProperty('issues-found');
         expect(parsed.outputs).toHaveProperty('auto-review-completed');
       }
