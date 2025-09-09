@@ -218,12 +218,21 @@ export class AIReviewService {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.commitDiff ? 'INCREMENTAL' : 'FULL';
 
-    return `You are a senior code reviewer. ${analysisType} CODE REVIEW REQUEST:
+    return `You are a senior code reviewer. 
 
+ANALYSIS TYPE: ${analysisType}
+${
+  analysisType === 'INCREMENTAL'
+    ? '- You are analyzing a NEW COMMIT added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
+    : '- You are analyzing the COMPLETE PR. Review all changes in the <full_diff> section.'
+}
+
+REVIEW INSTRUCTIONS:
 ${customInstructions}
 
-Please analyze the following code changes and provide feedback as a JSON object with this exact structure:
+CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object. If you cannot analyze the code, return an empty issues array, but always return valid JSON.
 
+Required JSON response format:
 \`\`\`json
 {
   "issues": [
@@ -231,7 +240,7 @@ Please analyze the following code changes and provide feedback as a JSON object 
       "file": "path/to/file.ext",
       "line": 10,
       "endLine": 12,
-      "ruleId": "custom-rule-id",
+      "ruleId": "category/specific-issue-type",
       "message": "Clear description of the issue",
       "severity": "info|warning|error|critical",
       "category": "security|performance|style|logic|documentation",
@@ -246,7 +255,41 @@ Please analyze the following code changes and provide feedback as a JSON object 
 }
 \`\`\`
 
-${prContext}`;
+Field Guidelines:
+- "file": The exact filename from the diff
+- "line": Line number where the issue starts (from the file, not the diff)
+- "endLine": Optional end line for multi-line issues
+- "ruleId": Format as "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one")
+- "message": Clear, specific description of the issue
+- "severity": 
+  * "info": Low priority informational issues
+  * "warning": Medium priority issues that should be addressed
+  * "error": High priority issues that need fixing
+  * "critical": Critical issues that must be fixed immediately
+- "category": One of: security, performance, style, logic, documentation
+- "suggestion": Clear, actionable explanation of HOW to fix the issue
+- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)
+
+Analyze the following structured pull request data:
+
+${prContext}
+
+XML Data Structure Guide:
+- <pull_request>: Root element containing all PR information
+- <metadata>: PR metadata (number, title, author, branches, statistics)
+- <description>: PR description text if provided
+- <full_diff>: Complete unified diff of all changes (for FULL analysis)
+- <commit_diff>: Diff of only the latest commit (for INCREMENTAL analysis)
+- <files_summary>: List of all files changed with statistics
+
+IMPORTANT RULES:
+1. Only analyze code that appears with + (additions) or - (deletions) in the diff
+2. Ignore unchanged code unless it's directly relevant to understanding a change
+3. Line numbers in your response should match the actual file line numbers
+4. Focus on real issues, not nitpicks
+5. Provide actionable, specific feedback
+6. For INCREMENTAL analysis, ONLY review changes in <commit_diff>
+7. For FULL analysis, review all changes in <full_diff>`;
   }
 
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
