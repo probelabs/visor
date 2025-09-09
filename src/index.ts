@@ -2,7 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
-import { PRReviewer, calculateOverallScore, calculateTotalIssues } from './reviewer';
+import { PRReviewer, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
@@ -137,13 +137,8 @@ async function handleVisorMode(
 
       // Add additional outputs from parsed JSON
       if (cliOutput) {
-        outputs['overall-score'] = cliOutput.overallScore?.toString() || '0';
         outputs['total-issues'] = cliOutput.totalIssues?.toString() || '0';
         outputs['critical-issues'] = cliOutput.criticalIssues?.toString() || '0';
-        outputs['security-score'] = cliOutput.securityScore?.toString() || '100';
-        outputs['performance-score'] = cliOutput.performanceScore?.toString() || '100';
-        outputs['style-score'] = cliOutput.styleScore?.toString() || '100';
-        outputs['architecture-score'] = cliOutput.architectureScore?.toString() || '100';
       }
 
       for (const [key, value] of Object.entries(outputs)) {
@@ -435,7 +430,6 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 
       await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
 
-      setOutput('review-score', calculateOverallScore(review.issues).toString());
       setOutput('issues-found', calculateTotalIssues(review.issues).toString());
       break;
 
@@ -595,7 +589,6 @@ async function handlePullRequestEvent(
 
   // Set outputs
   setOutput('auto-review-completed', 'true');
-  setOutput('review-score', calculateOverallScore(review.issues).toString());
   setOutput('issues-found', calculateTotalIssues(review.issues).toString());
   setOutput('pr-action', action);
   setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
@@ -723,7 +716,6 @@ async function handlePullRequestVisorMode(
 
       // Set basic outputs
       setOutput('auto-review-completed', 'true');
-      setOutput('review-score', '100');
       setOutput('issues-found', '0');
       setOutput('pr-action', action || 'unknown');
       setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
@@ -775,7 +767,6 @@ async function handlePullRequestVisorMode(
 
     // Set outputs
     setOutput('auto-review-completed', 'true');
-    setOutput('review-score', calculateOverallScore(review.issues).toString());
     setOutput('issues-found', calculateTotalIssues(review.issues).toString());
     setOutput('pr-action', action || 'unknown');
     setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');

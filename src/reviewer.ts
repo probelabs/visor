@@ -47,20 +47,6 @@ export interface ReviewOptions {
 }
 
 // Helper functions for calculating metrics from issues
-export function calculateOverallScore(issues: ReviewIssue[]): number {
-  if (issues.length === 0) return 100;
-
-  const criticalCount = issues.filter(i => i.severity === 'critical').length;
-  const errorCount = issues.filter(i => i.severity === 'error').length;
-  const warningCount = issues.filter(i => i.severity === 'warning').length;
-  const infoCount = issues.filter(i => i.severity === 'info').length;
-
-  return Math.max(
-    0,
-    100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-  );
-}
-
 export function calculateTotalIssues(issues: ReviewIssue[]): number {
   return issues.length;
 }
@@ -162,7 +148,6 @@ export class PRReviewer {
     const { format = 'table' } = options;
 
     // Calculate metrics from issues
-    const overallScore = calculateOverallScore(summary.issues);
     const totalIssues = calculateTotalIssues(summary.issues);
     const criticalIssues = calculateCriticalIssues(summary.issues);
     const comments = convertIssuesToComments(summary.issues);
@@ -170,7 +155,6 @@ export class PRReviewer {
     // Create main summary section
     let comment = `# 🔍 Visor Code Review Results\n\n`;
     comment += `## 📊 Summary\n`;
-    comment += `- **Overall Score**: ${overallScore}/100\n`;
     comment += `- **Issues Found**: ${totalIssues} (${criticalIssues} Critical, ${totalIssues - criticalIssues} Other)\n`;
     comment += `- **Files Analyzed**: ${new Set(comments.map(c => c.file)).size}\n\n`;
 
@@ -178,11 +162,10 @@ export class PRReviewer {
     const groupedComments = this.groupCommentsByCategory(comments);
 
     for (const [category, comments] of Object.entries(groupedComments)) {
-      const categoryScore = this.calculateCategoryScore(comments);
       const emoji = this.getCategoryEmoji(category);
       const issuesCount = comments.length;
 
-      const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Review (Score: ${categoryScore}/100)`;
+      const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Review (${issuesCount} issue${issuesCount !== 1 ? 's' : ''})`;
 
       let sectionContent = '';
       if (comments.length > 0) {
@@ -233,18 +216,11 @@ export class PRReviewer {
     const { format = 'table' } = options;
 
     // Calculate metrics from issues
-    const overallScore = calculateOverallScore(summary.issues);
     const totalIssues = calculateTotalIssues(summary.issues);
     const criticalIssues = calculateCriticalIssues(summary.issues);
     const comments = convertIssuesToComments(summary.issues);
 
     let comment = `## 🤖 AI Code Review\n\n`;
-    comment += `**Overall Score:** ${overallScore}/100 `;
-
-    if (overallScore >= 80) comment += '✅\n';
-    else if (overallScore >= 60) comment += '⚠️\n';
-    else comment += '❌\n';
-
     comment += `**Issues Found:** ${totalIssues} (${criticalIssues} critical)\n\n`;
 
     if (summary.suggestions.length > 0) {
@@ -303,15 +279,6 @@ export class PRReviewer {
     return grouped;
   }
 
-  private calculateCategoryScore(comments: ReviewComment[]): number {
-    if (comments.length === 0) return 100;
-
-    const errorCount = comments.filter(c => c.severity === 'error').length;
-    const warningCount = comments.filter(c => c.severity === 'warning').length;
-    const infoCount = comments.filter(c => c.severity === 'info').length;
-
-    return Math.max(0, 100 - errorCount * 25 - warningCount * 10 - infoCount * 5);
-  }
 
   private getCategoryEmoji(category: string): string {
     const emojiMap: Record<string, string> = {

@@ -3,7 +3,6 @@ import {
   ReviewSummary,
   ReviewComment,
   ReviewIssue,
-  calculateOverallScore,
   calculateTotalIssues,
   calculateCriticalIssues,
   convertIssuesToComments,
@@ -54,8 +53,6 @@ export class OutputFormatters {
     const issues = result.reviewSummary.issues || [];
     const totalIssues = issues.length;
     const criticalIssues = issues.filter(i => i.severity === 'critical').length;
-    const overallScore = calculateOverallScore(issues);
-
     // Summary table
     const summaryTable = new CliTable3({
       head: ['Metric', 'Value'],
@@ -67,7 +64,6 @@ export class OutputFormatters {
     });
 
     summaryTable.push(
-      ['Overall Score', `${overallScore}/100`],
       ['Total Issues', totalIssues.toString()],
       ['Critical Issues', criticalIssues.toString()],
       ['Files Analyzed', result.repositoryInfo.files.length.toString()],
@@ -245,13 +241,11 @@ export class OutputFormatters {
   static formatAsJSON(result: AnalysisResult, options: OutputFormatterOptions = {}): string {
     // Calculate metrics from issues
     const issues = result.reviewSummary.issues;
-    const overallScore = calculateOverallScore(issues);
     const totalIssues = calculateTotalIssues(issues);
     const criticalIssues = calculateCriticalIssues(issues);
 
     const jsonResult = {
       summary: {
-        overallScore,
         totalIssues,
         criticalIssues,
         executionTime: result.executionTime,
@@ -423,7 +417,6 @@ export class OutputFormatters {
 
     // Calculate metrics from issues
     const issues = result.reviewSummary.issues;
-    const overallScore = calculateOverallScore(issues);
     const totalIssues = calculateTotalIssues(issues);
     const criticalIssues = calculateCriticalIssues(issues);
 
@@ -432,7 +425,6 @@ export class OutputFormatters {
     output += `## 📊 Summary\n\n`;
     output += `| Metric | Value |\n`;
     output += `|--------|-------|\n`;
-    output += `| Overall Score | ${overallScore}/100 |\n`;
     output += `| Total Issues | ${totalIssues} |\n`;
     output += `| Critical Issues | ${criticalIssues} |\n`;
     output += `| Files Analyzed | ${result.repositoryInfo.files.length} |\n`;
@@ -456,8 +448,8 @@ export class OutputFormatters {
           if (comments.length === 0) continue;
 
           const emoji = this.getCategoryEmoji(category);
-          const score = this.calculateCategoryScore(comments);
-          output += `## ${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (Score: ${score}/100)\n\n`;
+          const issueCount = comments.length;
+          output += `## ${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issueCount} found)\n\n`;
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
@@ -665,36 +657,6 @@ export class OutputFormatters {
     return grouped;
   }
 
-  private static calculateCategoryScore(comments: ReviewComment[]): number {
-    if (comments.length === 0) return 100;
-
-    const criticalCount = comments.filter(c => c.severity === 'critical').length;
-    const errorCount = comments.filter(c => c.severity === 'error').length;
-    const warningCount = comments.filter(c => c.severity === 'warning').length;
-    const infoCount = comments.filter(c => c.severity === 'info').length;
-
-    return Math.max(
-      0,
-      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-    );
-  }
-
-  /**
-   * Calculate overall score from issues
-   */
-  private static calculateOverallScore(issues: (ReviewIssue | ReviewComment)[]): number {
-    if (issues.length === 0) return 100;
-
-    const criticalCount = issues.filter(i => i.severity === 'critical').length;
-    const errorCount = issues.filter(i => i.severity === 'error').length;
-    const warningCount = issues.filter(i => i.severity === 'warning').length;
-    const infoCount = issues.filter(i => i.severity === 'info').length;
-
-    return Math.max(
-      0,
-      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-    );
-  }
 
   /**
    * Convert ReviewIssue to ReviewComment for backward compatibility

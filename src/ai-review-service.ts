@@ -780,24 +780,6 @@ ${this.escapeXml(prInfo.commitDiff)}
     return 'logic';
   }
 
-  /**
-   * Calculate a simple score based on issue severity
-   */
-  private calculateScore(issues: ReviewIssue[]): number {
-    if (issues.length === 0) return 100;
-
-    const criticalCount = issues.filter(i => i.severity === 'critical').length;
-    const errorCount = issues.filter(i => i.severity === 'error').length;
-    const warningCount = issues.filter(i => i.severity === 'warning').length;
-    const infoCount = issues.filter(i => i.severity === 'info').length;
-
-    // Deduct points based on severity
-    const score = Math.max(
-      0,
-      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-    );
-    return score;
-  }
 
   /**
    * Generate mock response for testing
@@ -843,7 +825,6 @@ ${this.escapeXml(prInfo.commitDiff)}
         summary: {
           totalIssues: 3,
           criticalIssues: 1,
-          overallScore: 75,
         },
       }),
     };
