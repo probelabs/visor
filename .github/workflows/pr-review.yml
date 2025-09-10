@@ -38,7 +38,9 @@ jobs:
         id: visor_review
         uses: ./
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          installation-id: ${{ secrets.APP_INSTALLATION_ID }}
           auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
           debug: 'true'
         env:
