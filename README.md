@@ -18,6 +18,7 @@
 
 Create `.github/workflows/code-review.yml`:
 
+#### Option 1: Using GitHub Token (Default)
 ```yaml
 name: Code Review
 on: pull_request
@@ -36,6 +37,42 @@ jobs:
           # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
+
+#### Option 2: Using GitHub App Authentication (Recommended for Production)
+For better security and to have comments appear from your custom GitHub App:
+
+```yaml
+name: Code Review with GitHub App
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./  # or: gates-ai/visor-action@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # installation-id: ${{ secrets.APP_INSTALLATION_ID }}  # Optional, auto-detected
+        env:
+          # Choose one AI provider (see AI Configuration below)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+**Setting up GitHub App:**
+1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) with these permissions:
+   - **Pull requests**: Read & Write
+   - **Issues**: Write  
+   - **Metadata**: Read
+2. Generate and download a private key for your app
+3. Install the app on your repository
+4. Add these secrets to your repository:
+   - `APP_ID`: Your GitHub App's ID
+   - `APP_PRIVATE_KEY`: The private key you downloaded (entire contents)
+   - `APP_INSTALLATION_ID`: (Optional) The installation ID for this repository
 
 That's it! Visor will automatically review your PRs with AI-powered analysis.
 

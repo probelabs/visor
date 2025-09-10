@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
@@ -8,10 +9,99 @@ import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
 
+/**
+ * Create an authenticated Octokit instance using either GitHub App or token authentication
+ */
+async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authType: string }> {
+  const token = getInput('github-token');
+  const appId = getInput('app-id');
+  const privateKey = getInput('private-key');
+  const installationId = getInput('installation-id');
+
+  // Prefer GitHub App authentication if app credentials are provided
+  if (appId && privateKey) {
+    console.log('🔐 Using GitHub App authentication');
+
+    try {
+      // Note: createAppAuth is used in the Octokit constructor below
+
+      // If no installation ID provided, try to get it for the current repository
+      let finalInstallationId: number | undefined;
+      
+      // Validate and parse the installation ID if provided
+      if (installationId) {
+        finalInstallationId = parseInt(installationId, 10);
+        if (isNaN(finalInstallationId) || finalInstallationId <= 0) {
+          throw new Error('Invalid installation-id provided. It must be a positive integer.');
+        }
+      }
+
+      if (!finalInstallationId) {
+        const owner = getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER;
+        const repo = getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+        if (owner && repo) {
+          // Create a temporary JWT-authenticated client to find the installation
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: {
+              appId,
+              privateKey,
+            },
+          });
+
+          try {
+            const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+              owner,
+              repo,
+            });
+            finalInstallationId = installation.id;
+            console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
+          } catch (error) {
+            console.warn('⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.');
+            throw new Error(
+              'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository or provide the `installation-id` manually.'
+            );
+          }
+        }
+      }
+
+      // Create the authenticated Octokit instance
+      const octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: {
+          appId,
+          privateKey,
+          installationId: finalInstallationId,
+        },
+      });
+
+      return { octokit, authType: 'github-app' };
+    } catch (error) {
+      console.error('❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.');
+      throw new Error(`GitHub App authentication failed`, { cause: error });
+    }
+  }
+
+  // Fall back to token authentication
+  if (token) {
+    console.log('🔑 Using GitHub token authentication');
+    return {
+      octokit: new Octokit({ auth: token }),
+      authType: 'token',
+    };
+  }
+
+  throw new Error('Either github-token or app-id/private-key must be provided for authentication');
+}
+
 export async function run(): Promise<void> {
   try {
-    const token = getInput('github-token', { required: true });
-    const octokit = new Octokit({ auth: token });
+    const { octokit, authType } = await createAuthenticatedOctokit();
+    console.log(`✅ Authenticated successfully using ${authType}`);
+
+    // Get token for passing to CLI bridge (might be undefined if using App auth)
+    const token = getInput('github-token') || '';
 
     // Collect all GitHub Action inputs
     const inputs: GitHubActionInputs = {
@@ -71,17 +161,17 @@ export async function run(): Promise<void> {
         );
 
         // Try to detect if we're in a PR context (works for push, pull_request, issue_comment, etc.)
-        const prDetected = await detectPRContext(inputs, context);
+        const prDetected = await detectPRContext(inputs, context, octokit);
         if (prDetected) {
           console.log('✅ PR context detected - using GitHub API for PR analysis');
-          await handlePullRequestVisorMode(inputs, context);
+          await handlePullRequestVisorMode(inputs, context, octokit);
           return;
         } else {
           console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
         }
       }
 
-      await handleVisorMode(cliBridge, inputs, context);
+      await handleVisorMode(cliBridge, inputs, context, octokit);
       return;
     }
 
@@ -98,7 +188,8 @@ export async function run(): Promise<void> {
 async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
-  _context: GitHubContext
+  _context: GitHubContext,
+  octokit: Octokit
 ): Promise<void> {
   try {
     // Note: PR auto-review cases are now handled upstream in the main run() function
@@ -159,18 +250,17 @@ async function handleVisorMode(
  * Post CLI review results as PR comment with robust PR detection
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs): Promise<void> {
+async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs, octokit: Octokit): Promise<void> {
   try {
-    const token = inputs['github-token'];
     const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
     const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
 
-    if (!owner || !repo || !token) {
+    if (!owner || !repo) {
       console.log('⚠️ Missing required parameters for PR comment creation');
       return;
     }
 
-    const octokit = new Octokit({ auth: token });
+    // Use the provided authenticated Octokit instance
     const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 
     // Convert GitHub context to our format
@@ -645,19 +735,19 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
  */
 async function handlePullRequestVisorMode(
   inputs: GitHubActionInputs,
-  _context: GitHubContext
+  _context: GitHubContext,
+  octokit: Octokit
 ): Promise<void> {
-  const token = inputs['github-token'];
   const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
   const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
 
-  if (!owner || !repo || !token) {
+  if (!owner || !repo) {
     console.error('❌ Missing required GitHub parameters for PR analysis');
     setFailed('Missing required GitHub parameters');
     return;
   }
 
-  const octokit = new Octokit({ auth: token });
+  // Use the provided authenticated Octokit instance
   const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 
   // Convert GitHub context to our format
@@ -814,18 +904,18 @@ async function handlePullRequestVisorMode(
  */
 async function detectPRContext(
   inputs: GitHubActionInputs,
-  context: GitHubContext
+  context: GitHubContext,
+  octokit: Octokit
 ): Promise<boolean> {
   try {
-    const token = inputs['github-token'];
     const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
     const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
 
-    if (!owner || !repo || !token) {
+    if (!owner || !repo) {
       return false;
     }
 
-    const octokit = new Octokit({ auth: token });
+    // Use the provided authenticated Octokit instance
     const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 
     // Convert GitHub context to our format
