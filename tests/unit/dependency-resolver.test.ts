@@ -1,4 +1,4 @@
-import { DependencyResolver, DependencyGraph } from '../../src/dependency-resolver';
+import { DependencyResolver } from '../../src/dependency-resolver';
 
 describe('DependencyResolver', () => {
   describe('buildDependencyGraph', () => {
@@ -155,7 +155,9 @@ describe('DependencyResolver', () => {
       const result = DependencyResolver.validateDependencies(checkIds, dependencies);
 
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Check "performance" depends on "style" which is not available');
+      expect(result.errors).toContain(
+        'Check "performance" depends on "style" which is not available'
+      );
     });
   });
 
@@ -211,13 +213,11 @@ describe('DependencyResolver', () => {
 
       // Level 0: base
       expect(graph.executionOrder[0].parallel).toEqual(['base']);
-      
+
       // Level 1: left, right (both depend on base)
-      expect(graph.executionOrder[1].parallel).toEqual(
-        expect.arrayContaining(['left', 'right'])
-      );
+      expect(graph.executionOrder[1].parallel).toEqual(expect.arrayContaining(['left', 'right']));
       expect(graph.executionOrder[1].parallel).toHaveLength(2);
-      
+
       // Level 2: top (depends on both left and right)
       expect(graph.executionOrder[2].parallel).toEqual(['top']);
     });
@@ -244,12 +244,12 @@ describe('DependencyResolver', () => {
       expect(graph.executionOrder[0].parallel).toEqual(
         expect.arrayContaining(['chainA1', 'chainB1', 'independent'])
       );
-      
+
       // Level 1: chainA2, chainB2
       expect(graph.executionOrder[1].parallel).toEqual(
         expect.arrayContaining(['chainA2', 'chainB2'])
       );
-      
+
       // Level 2: chainA3
       expect(graph.executionOrder[2].parallel).toEqual(['chainA3']);
     });

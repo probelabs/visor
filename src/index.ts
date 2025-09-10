@@ -9,6 +9,41 @@ import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
 
+// Type definitions for CLI output
+interface CliReviewOutput {
+  overallScore?: number;
+  totalIssues?: number;
+  criticalIssues?: number;
+  filesAnalyzed?: number | string;
+  securityScore?: number;
+  performanceScore?: number;
+  styleScore?: number;
+  architectureScore?: number;
+  issues?: CliReviewIssue[];
+  suggestions?: string[];
+  debug?: DebugInfo;
+}
+
+interface CliReviewIssue {
+  category: string;
+  severity?: string;
+  message: string;
+  file: string;
+  line: number;
+}
+
+interface DebugInfo {
+  provider?: string;
+  model?: string;
+  tokensUsed?: number;
+  prompt?: string;
+  response?: string;
+  processingTime?: number;
+  parallelExecution?: boolean;
+  checksExecuted?: string[];
+  [key: string]: unknown;
+}
+
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
  */
@@ -259,7 +294,7 @@ async function handleVisorMode(
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function postCliReviewComment(
-  cliOutput: any,
+  cliOutput: CliReviewOutput,
   inputs: GitHubActionInputs,
   octokit: Octokit
 ): Promise<void> {
@@ -404,8 +439,8 @@ async function postCliReviewComment(
   }
 }
 
-function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
-  const grouped: Record<string, any[]> = {
+function groupIssuesByCategory(issues: CliReviewIssue[]): Record<string, CliReviewIssue[]> {
+  const grouped: Record<string, CliReviewIssue[]> = {
     security: [],
     performance: [],
     style: [],
@@ -423,7 +458,7 @@ function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
   return grouped;
 }
 
-function formatDebugInfo(debug: any): string {
+function formatDebugInfo(debug: DebugInfo): string {
   let content = '';
   if (debug.provider) content += `**Provider:** ${debug.provider}\n`;
   if (debug.model) content += `**Model:** ${debug.model}\n`;
@@ -524,9 +559,12 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
       } catch {
         // Fall back to a basic configuration
         config = {
+          version: '1.0',
+          output: {},
           checks: {
             'legacy-review': {
-              provider: 'ai',
+              type: 'ai' as const,
+              on: ['pr_opened'],
               prompt: `Review this code focusing on ${focus || 'all aspects'}. Look for security issues, performance problems, code quality, and suggest improvements.`,
             },
           },
@@ -646,9 +684,12 @@ async function handlePullRequestEvent(
   } catch {
     // Fall back to a basic configuration for PR auto-review
     config = {
+      version: '1.0',
+      output: {},
       checks: {
         'auto-review': {
-          provider: 'ai',
+          type: 'ai' as const,
+          on: ['pr_opened', 'pr_updated'],
           prompt: `Review this pull request comprehensively. Look for security issues, performance problems, code quality, bugs, and suggest improvements. Action: ${action}`,
         },
       },
