@@ -38,11 +38,13 @@ checks:
       - Consistent error handling patterns
       - TypeScript best practices
     on: [pr_opened]
+    # Style check depends on security to ensure secure coding style
+    depends_on: [security]
 
   architecture:
     type: ai
     prompt: |
-      Analyze architectural aspects:
+      Analyze architectural aspects building on security and performance findings:
       - SOLID principles adherence
       - Design pattern usage appropriateness
       - Circular dependencies
@@ -50,7 +52,10 @@ checks:
       - Error handling architecture
       - Separation of concerns
       - Code reusability and maintainability
+      - Integration with security and performance requirements
     on: [pr_opened, pr_updated]
+    # Architecture check depends on both security and performance analysis
+    depends_on: [security, performance]
 
 output:
   pr_comment:

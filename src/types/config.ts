@@ -50,6 +50,8 @@ export interface CheckConfig {
   triggers?: string[];
   /** AI provider configuration (optional) */
   ai?: AIProviderConfig;
+  /** Check IDs that this check depends on (optional) */
+  depends_on?: string[];
 }
 
 /**

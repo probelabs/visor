@@ -4,6 +4,7 @@ import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
 import { CheckProviderRegistry } from './providers/check-provider-registry';
 import { CheckProviderConfig } from './providers/check-provider.interface';
+import { DependencyResolver, DependencyGraph, ExecutionGroup } from './dependency-resolver';
 
 export interface MockOctokit {
   rest: {
@@ -168,10 +169,10 @@ export class CheckExecutionEngine {
     logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
     logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
 
-    // If we have a config with individual check definitions, use parallel execution
+    // If we have a config with individual check definitions, use dependency-aware execution
     if (config?.checks && checks.length > 1) {
-      logFn(`🔧 Debug: Using parallel execution for ${checks.length} checks`);
-      return await this.executeParallelChecks(prInfo, checks, timeout, config, logFn, debug);
+      logFn(`🔧 Debug: Using dependency-aware execution for ${checks.length} checks`);
+      return await this.executeDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug);
     }
 
     // Single check execution (existing logic)
@@ -242,7 +243,152 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute multiple checks in parallel using Promise.allSettled
+   * Execute multiple checks with dependency awareness - intelligently parallel and sequential
+   */
+  private async executeDependencyAwareChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean
+  ): Promise<ReviewSummary> {
+    const log = logFn || console.error;
+    log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
+
+    if (!config?.checks) {
+      throw new Error('Config with check definitions required for dependency-aware execution');
+    }
+
+    // Build dependency graph
+    const dependencies: Record<string, string[]> = {};
+    for (const checkName of checks) {
+      const checkConfig = config.checks[checkName];
+      if (checkConfig) {
+        dependencies[checkName] = checkConfig.depends_on || [];
+      } else {
+        dependencies[checkName] = [];
+      }
+    }
+
+    // Validate dependencies
+    const validation = DependencyResolver.validateDependencies(checks, dependencies);
+    if (!validation.valid) {
+      throw new Error(`Dependency validation failed: ${validation.errors.join(', ')}`);
+    }
+
+    // Build dependency graph
+    const dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
+    
+    if (dependencyGraph.hasCycles) {
+      throw new Error(`Circular dependencies detected: ${dependencyGraph.cycleNodes?.join(' -> ')}`);
+    }
+
+    // Log execution plan
+    const stats = DependencyResolver.getExecutionStats(dependencyGraph);
+    log(`🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`);
+
+    // Execute checks level by level
+    const results = new Map<string, ReviewSummary>();
+    const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+    for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length; levelIndex++) {
+      const executionGroup = dependencyGraph.executionOrder[levelIndex];
+      log(`🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks in parallel`);
+
+      // Execute all checks in this level in parallel
+      const levelTasks = executionGroup.parallel.map(async checkName => {
+        const checkConfig = config.checks[checkName];
+        if (!checkConfig) {
+          return {
+            checkName,
+            error: `No configuration found for check: ${checkName}`,
+            result: null,
+          };
+        }
+
+        try {
+          log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
+
+          // Create provider config for this specific check
+          const providerConfig: CheckProviderConfig = {
+            type: 'ai',
+            prompt: checkConfig.prompt,
+            focus: this.mapCheckNameToFocus(checkName),
+            ai: {
+              timeout: timeout || 600000,
+              debug: debug,
+              ...(checkConfig.ai || {}),
+            },
+          };
+
+          // Pass results from dependencies if needed
+          const dependencyResults = new Map<string, ReviewSummary>();
+          for (const depId of checkConfig.depends_on || []) {
+            if (results.has(depId)) {
+              dependencyResults.set(depId, results.get(depId)!);
+            }
+          }
+
+          const result = await provider.execute(prInfo, providerConfig);
+          log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
+
+          return {
+            checkName,
+            error: null,
+            result,
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+
+          return {
+            checkName,
+            error: errorMessage,
+            result: null,
+          };
+        }
+      });
+
+      // Wait for all checks in this level to complete
+      const levelResults = await Promise.allSettled(levelTasks);
+
+      // Process results and store them for next level
+      for (let i = 0; i < levelResults.length; i++) {
+        const checkName = executionGroup.parallel[i];
+        const result = levelResults[i];
+
+        if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
+          results.set(checkName, result.value.result);
+        } else {
+          // Store error result for dependency tracking
+          const errorSummary: ReviewSummary = {
+            issues: [{
+              file: 'system',
+              line: 0,
+              endLine: undefined,
+              ruleId: `${checkName}/error`,
+              message: result.status === 'fulfilled' 
+                ? result.value.error || 'Unknown error'
+                : result.reason instanceof Error ? result.reason.message : String(result.reason),
+              severity: 'error',
+              category: 'logic',
+              suggestion: undefined,
+              replacement: undefined,
+            }],
+            suggestions: [],
+          };
+          results.set(checkName, errorSummary);
+        }
+      }
+    }
+
+    // Aggregate all results
+    return this.aggregateDependencyAwareResults(results, dependencyGraph, debug);
+  }
+
+  /**
+   * Execute multiple checks in parallel using Promise.allSettled (legacy method)
    */
   private async executeParallelChecks(
     prInfo: PRInfo,
@@ -365,7 +511,129 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Aggregate results from parallel check execution
+   * Aggregate results from dependency-aware check execution
+   */
+  private aggregateDependencyAwareResults(
+    results: Map<string, ReviewSummary>,
+    dependencyGraph: DependencyGraph,
+    debug?: boolean
+  ): ReviewSummary {
+    const aggregatedIssues: ReviewSummary['issues'] = [];
+    const aggregatedSuggestions: string[] = [];
+    const debugInfo: string[] = [];
+
+    let successfulChecks = 0;
+    let failedChecks = 0;
+
+    // Add execution plan info
+    const stats = DependencyResolver.getExecutionStats(dependencyGraph);
+    debugInfo.push(
+      `🔍 Dependency-aware execution completed:`,
+      `  - ${stats.totalChecks} checks in ${stats.parallelLevels} execution levels`,
+      `  - Maximum parallelism: ${stats.maxParallelism}`,
+      `  - Average parallelism: ${stats.averageParallelism.toFixed(1)}`,
+      `  - Checks with dependencies: ${stats.checksWithDependencies}`
+    );
+
+    // Process results in dependency order for better output organization
+    for (const executionGroup of dependencyGraph.executionOrder) {
+      for (const checkName of executionGroup.parallel) {
+        const result = results.get(checkName);
+        
+        if (!result) {
+          failedChecks++;
+          debugInfo.push(`❌ Check "${checkName}" had no result`);
+          continue;
+        }
+
+        // Check if this was a successful result
+        const hasErrors = result.issues.some(issue => 
+          issue.ruleId?.includes('/error') || issue.ruleId?.includes('/promise-error')
+        );
+
+        if (hasErrors) {
+          failedChecks++;
+          debugInfo.push(`❌ Check "${checkName}" failed with errors`);
+        } else {
+          successfulChecks++;
+          debugInfo.push(`✅ Check "${checkName}" completed: ${result.issues.length} issues found (level ${executionGroup.level})`);
+        }
+
+        // Prefix issues with check name and level for identification
+        const prefixedIssues = result.issues.map(issue => ({
+          ...issue,
+          ruleId: `${checkName}/${issue.ruleId}`,
+        }));
+
+        aggregatedIssues.push(...prefixedIssues);
+
+        // Add suggestions with check name prefix
+        const prefixedSuggestions = result.suggestions.map(
+          suggestion => `[${checkName}] ${suggestion}`
+        );
+        aggregatedSuggestions.push(...prefixedSuggestions);
+      }
+    }
+
+    // Add summary information
+    aggregatedSuggestions.unshift(...debugInfo);
+
+    console.error(
+      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
+    );
+
+    // Collect debug information when debug mode is enabled
+    let aggregatedDebug: import('./ai-review-service').AIDebugInfo | undefined;
+    if (debug) {
+      const debugResults = Array.from(results.entries()).filter(([_, result]) => result.debug);
+
+      if (debugResults.length > 0) {
+        const [firstCheckName, firstResult] = debugResults[0];
+        const firstDebug = firstResult.debug!;
+        
+        const totalProcessingTime = debugResults.reduce((sum, [_, result]) => {
+          return sum + (result.debug!.processingTime || 0);
+        }, 0);
+
+        aggregatedDebug = {
+          provider: firstDebug.provider,
+          model: firstDebug.model,
+          apiKeySource: firstDebug.apiKeySource,
+          processingTime: totalProcessingTime,
+          prompt: debugResults
+            .map(([checkName, result]) => `[${checkName}]\n${result.debug!.prompt}`)
+            .join('\n\n'),
+          rawResponse: debugResults
+            .map(([checkName, result]) => `[${checkName}]\n${result.debug!.rawResponse}`)
+            .join('\n\n'),
+          promptLength: debugResults.reduce((sum, [_, result]) => sum + (result.debug!.promptLength || 0), 0),
+          responseLength: debugResults.reduce((sum, [_, result]) => sum + (result.debug!.responseLength || 0), 0),
+          jsonParseSuccess: debugResults.every(([_, result]) => result.debug!.jsonParseSuccess),
+          errors: debugResults.flatMap(([checkName, result]) => 
+            (result.debug!.errors || []).map((error: string) => `[${checkName}] ${error}`)
+          ),
+          timestamp: new Date().toISOString(),
+          totalApiCalls: debugResults.length,
+          apiCallDetails: debugResults.map(([checkName, result]) => ({
+            checkName,
+            provider: result.debug!.provider,
+            model: result.debug!.model,
+            processingTime: result.debug!.processingTime,
+            success: result.debug!.jsonParseSuccess,
+          })),
+        };
+      }
+    }
+
+    return {
+      issues: aggregatedIssues,
+      suggestions: aggregatedSuggestions,
+      debug: aggregatedDebug,
+    };
+  }
+
+  /**
+   * Aggregate results from parallel check execution (legacy method)
    */
   private aggregateParallelResults(
     results: PromiseSettledResult<{
