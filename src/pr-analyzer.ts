@@ -21,6 +21,7 @@ export interface PRInfo {
   totalDeletions: number;
   fullDiff?: string;
   commitDiff?: string;
+  isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
 }
 
 interface NetworkError {
@@ -160,7 +161,18 @@ export class PRAnalyzer {
 
     // Add commit diff for incremental analysis
     if (commitSha) {
+      console.log(`🔧 Fetching incremental diff for commit: ${commitSha}`);
       prInfo.commitDiff = await this.fetchCommitDiff(owner, repo, commitSha);
+      prInfo.isIncremental = true;
+      if (!prInfo.commitDiff || prInfo.commitDiff.length === 0) {
+        console.warn(
+          `⚠️ No commit diff retrieved for ${commitSha}, will use full diff as fallback`
+        );
+      } else {
+        console.log(`✅ Incremental diff retrieved (${prInfo.commitDiff.length} chars)`);
+      }
+    } else {
+      prInfo.isIncremental = false;
     }
 
     return prInfo;

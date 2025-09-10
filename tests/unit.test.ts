@@ -3,6 +3,34 @@ import { run } from '../src/index';
 
 jest.mock('@actions/core');
 
+// Mock CheckExecutionEngine
+jest.mock('../src/check-execution-engine', () => {
+  return {
+    CheckExecutionEngine: jest.fn().mockImplementation(() => ({
+      executeReviewChecks: jest
+        .fn()
+        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
+          return {
+            issues: [
+              {
+                file: 'test.ts',
+                line: 10,
+                endLine: undefined,
+                ruleId: 'test/mock-issue',
+                message: 'Mock issue for testing',
+                severity: 'warning',
+                category: 'style',
+                suggestion: 'This is a mock suggestion',
+                replacement: 'mockFixedCode();',
+              },
+            ],
+            suggestions: ['Mock suggestion'],
+          };
+        }),
+    })),
+  };
+});
+
 // Mock AI review service to prevent API calls in tests
 jest.mock('../src/ai-review-service', () => ({
   AIReviewService: jest.fn().mockImplementation(() => ({
@@ -163,7 +191,6 @@ describe('GitHub Action Unit Tests', () => {
 
     await run();
 
-    expect(mockedCore.setOutput).toHaveBeenCalledWith('review-score', expect.any(String));
     expect(mockedCore.setOutput).toHaveBeenCalledWith('issues-found', expect.any(String));
   });
 
@@ -195,7 +222,7 @@ describe('GitHub Action Unit Tests', () => {
     await run();
 
     expect(mockedCore.setOutput).toHaveBeenCalledWith('auto-review-completed', 'true');
-    expect(mockedCore.setOutput).toHaveBeenCalledWith('review-score', expect.any(String));
+    expect(mockedCore.setOutput).toHaveBeenCalledWith('issues-found', expect.any(String));
   });
 
   test('should not auto-review when disabled', async () => {

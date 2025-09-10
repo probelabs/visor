@@ -1,7 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
-import { AIReviewService, ReviewFocus, AIDebugInfo } from './ai-review-service';
+import { AIReviewService, AIDebugInfo } from './ai-review-service';
 
 export interface ReviewIssue {
   // Location
@@ -27,6 +27,8 @@ export interface ReviewComment {
   message: string;
   severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+  suggestion?: string;
+  replacement?: string;
 }
 
 export interface ReviewSummary {
@@ -47,20 +49,6 @@ export interface ReviewOptions {
 }
 
 // Helper functions for calculating metrics from issues
-export function calculateOverallScore(issues: ReviewIssue[]): number {
-  if (issues.length === 0) return 100;
-
-  const criticalCount = issues.filter(i => i.severity === 'critical').length;
-  const errorCount = issues.filter(i => i.severity === 'error').length;
-  const warningCount = issues.filter(i => i.severity === 'warning').length;
-  const infoCount = issues.filter(i => i.severity === 'info').length;
-
-  return Math.max(
-    0,
-    100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-  );
-}
-
 export function calculateTotalIssues(issues: ReviewIssue[]): number {
   return issues.length;
 }
@@ -76,6 +64,8 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
     message: issue.message,
     severity: issue.severity,
     category: issue.category,
+    suggestion: issue.suggestion,
+    replacement: issue.replacement,
   }));
 }
 
@@ -95,48 +85,38 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const {
-      focus = 'all',
-      format = 'table',
-      debug = false,
-      config,
-      checks,
-      parallelExecution,
-    } = options;
+    const { debug = false, config, checks, parallelExecution } = options;
 
-    // If we have a config and multiple checks, use CheckExecutionEngine for parallel execution
-    if (config && checks && checks.length > 1 && parallelExecution) {
+    // If we have a config and checks, use CheckExecutionEngine
+    if (config && checks && checks.length > 0) {
+      const executionMode = checks.length > 1 && parallelExecution ? 'parallel' : 'sequential';
       console.error(
-        `🔧 Debug: PRReviewer using CheckExecutionEngine for parallel execution of ${checks.length} checks`
+        `🔧 Debug: PRReviewer using CheckExecutionEngine for ${executionMode} execution of ${checks.length} check(s)`
       );
 
       // Import CheckExecutionEngine dynamically to avoid circular dependencies
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
 
-      // Execute checks using the engine's parallel execution capability
-      const reviewSummary = await engine['executeReviewChecks'](prInfo, checks, undefined, config);
+      // Execute checks using the engine
+      const reviewSummary = await engine['executeReviewChecks'](
+        prInfo,
+        checks,
+        undefined,
+        config,
+        undefined,
+        debug
+      );
 
-      // Apply format filtering
-      return {
-        ...reviewSummary,
-        issues: format === 'markdown' ? reviewSummary.issues : reviewSummary.issues.slice(0, 5),
-      };
+      // Return all issues - no filtering needed
+      return reviewSummary;
     }
 
-    // If debug is enabled, create a new AI service with debug enabled
-    if (debug) {
-      this.aiReviewService = new AIReviewService({ debug: true });
-    }
-
-    // Execute AI review (no fallback) - single check or legacy mode
-    const aiReview = await this.aiReviewService.executeReview(prInfo, focus as ReviewFocus);
-
-    // Apply format filtering
-    return {
-      ...aiReview,
-      issues: format === 'markdown' ? aiReview.issues : aiReview.issues.slice(0, 5),
-    };
+    // No config provided - require configuration
+    throw new Error(
+      'No configuration provided. Please create a .visor.yaml file with check definitions. ' +
+        'Built-in prompts have been removed - all checks must be explicitly configured.'
+    );
   }
 
   async postReviewComment(
@@ -157,67 +137,21 @@ export class PRReviewer {
 
   private formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
-    options: ReviewOptions
+    _options: ReviewOptions
   ): string {
-    const { format = 'table' } = options;
-
     // Calculate metrics from issues
-    const overallScore = calculateOverallScore(summary.issues);
     const totalIssues = calculateTotalIssues(summary.issues);
-    const criticalIssues = calculateCriticalIssues(summary.issues);
     const comments = convertIssuesToComments(summary.issues);
 
-    // Create main summary section
-    let comment = `# 🔍 Visor Code Review Results\n\n`;
-    comment += `## 📊 Summary\n`;
-    comment += `- **Overall Score**: ${overallScore}/100\n`;
-    comment += `- **Issues Found**: ${totalIssues} (${criticalIssues} Critical, ${totalIssues - criticalIssues} Other)\n`;
-    comment += `- **Files Analyzed**: ${new Set(comments.map(c => c.file)).size}\n\n`;
+    let comment = '';
 
-    // Group comments by category for collapsible sections
-    const groupedComments = this.groupCommentsByCategory(comments);
-
-    for (const [category, comments] of Object.entries(groupedComments)) {
-      const categoryScore = this.calculateCategoryScore(comments);
-      const emoji = this.getCategoryEmoji(category);
-      const issuesCount = comments.length;
-
-      const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Review (Score: ${categoryScore}/100)`;
-
-      let sectionContent = '';
-      if (comments.length > 0) {
-        sectionContent += `### Issues Found:\n`;
-        for (const reviewComment of comments.slice(
-          0,
-          format === 'markdown' ? comments.length : 3
-        )) {
-          sectionContent += `- **${reviewComment.severity.toUpperCase()}**: ${reviewComment.message}\n`;
-          sectionContent += `  - **File**: \`${reviewComment.file}:${reviewComment.line}\`\n\n`;
-        }
-
-        if (format === 'table' && comments.length > 3) {
-          sectionContent += `*...and ${comments.length - 3} more issues. Use \`/review --format=markdown\` for complete analysis.*\n\n`;
-        }
-      } else {
-        sectionContent += `No issues found in this category. Great job! ✅\n\n`;
-      }
-
-      comment += this.commentManager.createCollapsibleSection(
-        title,
-        sectionContent,
-        issuesCount > 0
-      );
-      comment += '\n\n';
-    }
-
-    // Add suggestions if any
-    if (summary.suggestions.length > 0) {
-      comment += this.commentManager.createCollapsibleSection(
-        '💡 Recommendations',
-        summary.suggestions.map(s => `- ${s}`).join('\n') + '\n',
-        true
-      );
-      comment += '\n\n';
+    // If no issues, show success message
+    if (totalIssues === 0) {
+      comment += `## ✅ All Checks Passed\n\n`;
+      comment += `**No issues found – changes LGTM.**\n\n`;
+    } else {
+      // Create tables with issues grouped by category
+      comment += this.formatIssuesTable(comments);
     }
 
     // Add debug section if debug information is available
@@ -233,18 +167,11 @@ export class PRReviewer {
     const { format = 'table' } = options;
 
     // Calculate metrics from issues
-    const overallScore = calculateOverallScore(summary.issues);
     const totalIssues = calculateTotalIssues(summary.issues);
     const criticalIssues = calculateCriticalIssues(summary.issues);
     const comments = convertIssuesToComments(summary.issues);
 
     let comment = `## 🤖 AI Code Review\n\n`;
-    comment += `**Overall Score:** ${overallScore}/100 `;
-
-    if (overallScore >= 80) comment += '✅\n';
-    else if (overallScore >= 60) comment += '⚠️\n';
-    else comment += '❌\n';
-
     comment += `**Issues Found:** ${totalIssues} (${criticalIssues} critical)\n\n`;
 
     if (summary.suggestions.length > 0) {
@@ -303,27 +230,6 @@ export class PRReviewer {
     return grouped;
   }
 
-  private calculateCategoryScore(comments: ReviewComment[]): number {
-    if (comments.length === 0) return 100;
-
-    const errorCount = comments.filter(c => c.severity === 'error').length;
-    const warningCount = comments.filter(c => c.severity === 'warning').length;
-    const infoCount = comments.filter(c => c.severity === 'info').length;
-
-    return Math.max(0, 100 - errorCount * 25 - warningCount * 10 - infoCount * 5);
-  }
-
-  private getCategoryEmoji(category: string): string {
-    const emojiMap: Record<string, string> = {
-      security: '🔒',
-      performance: '📈',
-      style: '🎨',
-      logic: '🧠',
-      documentation: '📚',
-    };
-    return emojiMap[category] || '📝';
-  }
-
   private formatDebugSection(debug: AIDebugInfo): string {
     const formattedContent = [
       `**Provider:** ${debug.provider}`,
@@ -334,6 +240,18 @@ export class PRReviewer {
       `**Prompt Length:** ${debug.promptLength} characters`,
       `**Response Length:** ${debug.responseLength} characters`,
       `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      formattedContent.push('', '### Errors');
+      debug.errors.forEach(error => {
+        formattedContent.push(`- ${error}`);
+      });
+    }
+
+    // Check if debug content would be too large for GitHub comment
+    const fullDebugContent = [
+      ...formattedContent,
       '',
       '### AI Prompt',
       '```',
@@ -344,13 +262,57 @@ export class PRReviewer {
       '```json',
       debug.rawResponse,
       '```',
-    ];
+    ].join('\n');
 
-    if (debug.errors && debug.errors.length > 0) {
-      formattedContent.push('', '### Errors');
-      debug.errors.forEach(error => {
-        formattedContent.push(`- ${error}`);
-      });
+    // GitHub comment limit is 65536 characters, leave some buffer
+    if (fullDebugContent.length > 60000) {
+      // Save debug info to artifact and provide link
+      const artifactPath = this.saveDebugArtifact(debug);
+
+      formattedContent.push('');
+      formattedContent.push('### Debug Details');
+      formattedContent.push('⚠️ Debug information is too large for GitHub comments.');
+
+      if (artifactPath) {
+        formattedContent.push(
+          `📁 **Full debug information saved to artifact:** \`${artifactPath}\``
+        );
+        formattedContent.push('');
+
+        // Try to get GitHub context for artifact link
+        const runId = process.env.GITHUB_RUN_ID;
+        const repoUrl =
+          process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
+            ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
+            : null;
+
+        if (runId && repoUrl) {
+          formattedContent.push(
+            `🔗 **Download Link:** [visor-debug-${process.env.GITHUB_RUN_NUMBER || runId}](${repoUrl}/actions/runs/${runId})`
+          );
+        }
+
+        formattedContent.push(
+          '💡 Go to the GitHub Action run above and download the debug artifact to view complete prompts and responses.'
+        );
+      } else {
+        formattedContent.push('📝 **Prompt preview:** ' + debug.prompt.substring(0, 500) + '...');
+        formattedContent.push(
+          '📝 **Response preview:** ' + debug.rawResponse.substring(0, 500) + '...'
+        );
+      }
+    } else {
+      // Include full debug content if it fits
+      formattedContent.push('');
+      formattedContent.push('### AI Prompt');
+      formattedContent.push('```');
+      formattedContent.push(debug.prompt);
+      formattedContent.push('```');
+      formattedContent.push('');
+      formattedContent.push('### Raw AI Response');
+      formattedContent.push('```json');
+      formattedContent.push(debug.rawResponse);
+      formattedContent.push('```');
     }
 
     return this.commentManager.createCollapsibleSection(
@@ -358,5 +320,262 @@ export class PRReviewer {
       formattedContent.join('\n'),
       false // Start collapsed
     );
+  }
+
+  private saveDebugArtifact(debug: AIDebugInfo): string | null {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+
+      // Create debug directory if it doesn't exist
+      const debugDir = path.join(process.cwd(), 'debug-artifacts');
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+
+      // Create debug file with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `visor-debug-${timestamp}.md`;
+      const filePath = path.join(debugDir, filename);
+
+      // Parse the combined prompts and responses to extract individual checks
+      const markdownContent = this.formatDebugAsMarkdown(debug);
+
+      fs.writeFileSync(filePath, markdownContent);
+
+      console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
+      return filename;
+    } catch (error) {
+      console.error(`❌ Failed to save debug artifact: ${error}`);
+      return null;
+    }
+  }
+
+  private formatDebugAsMarkdown(debug: AIDebugInfo): string {
+    const lines = [
+      '# Visor AI Debug Information',
+      '',
+      `**Generated:** ${debug.timestamp}`,
+      `**Provider:** ${debug.provider}`,
+      `**Model:** ${debug.model}`,
+      `**API Key Source:** ${debug.apiKeySource}`,
+      `**Total Processing Time:** ${debug.processingTime}ms`,
+      `**Total Prompt Length:** ${debug.promptLength} characters`,
+      `**Total Response Length:** ${debug.responseLength} characters`,
+      `**JSON Parse Success:** ${debug.jsonParseSuccess ? '✅' : '❌'}`,
+      '',
+    ];
+
+    if (debug.errors && debug.errors.length > 0) {
+      lines.push('## ❌ Errors');
+      debug.errors.forEach(error => {
+        lines.push(`- ${error}`);
+      });
+      lines.push('');
+    }
+
+    // Parse combined prompt and response to extract individual checks
+    const promptSections = this.parseCheckSections(debug.prompt);
+    const responseSections = this.parseCheckSections(debug.rawResponse);
+
+    lines.push('## 📊 Check Results Summary');
+    lines.push('');
+    promptSections.forEach(section => {
+      const responseSection = responseSections.find(r => r.checkName === section.checkName);
+      lines.push(`- **${section.checkName}**: ${responseSection ? 'Success' : 'Failed'}`);
+    });
+    lines.push('');
+
+    // Add detailed information for each check
+    promptSections.forEach((promptSection, index) => {
+      const responseSection = responseSections.find(r => r.checkName === promptSection.checkName);
+
+      lines.push(`## ${index + 1}. ${promptSection.checkName.toUpperCase()} Check`);
+      lines.push('');
+
+      lines.push('### 📝 AI Prompt');
+      lines.push('');
+      lines.push('```');
+      lines.push(promptSection.content);
+      lines.push('```');
+      lines.push('');
+
+      lines.push('### 🤖 AI Response');
+      lines.push('');
+      if (responseSection) {
+        lines.push('```json');
+        lines.push(responseSection.content);
+        lines.push('```');
+      } else {
+        lines.push('❌ No response available for this check');
+      }
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    });
+
+    return lines.join('\n');
+  }
+
+  private parseCheckSections(combinedText: string): Array<{ checkName: string; content: string }> {
+    const sections: Array<{ checkName: string; content: string }> = [];
+
+    // Split by check sections like [security], [performance], etc.
+    const parts = combinedText.split(/\[(\w+)\]\s*\n/);
+
+    for (let i = 1; i < parts.length; i += 2) {
+      const checkName = parts[i];
+      const content = parts[i + 1]?.trim() || '';
+
+      if (checkName && content) {
+        sections.push({ checkName, content });
+      }
+    }
+
+    return sections;
+  }
+
+  private formatIssuesTable(comments: ReviewComment[]): string {
+    let content = `## 🔍 Code Analysis Results\n\n`;
+
+    // Group comments by category
+    const groupedComments = this.groupCommentsByCategory(comments);
+
+    // Create a table for each category that has issues
+    for (const [category, categoryComments] of Object.entries(groupedComments)) {
+      if (categoryComments.length === 0) continue;
+
+      const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
+
+      // Category heading
+      content += `### ${categoryTitle} Issues (${categoryComments.length})\n\n`;
+
+      // Start HTML table for this category
+      content += `<table>\n`;
+      content += `  <thead>\n`;
+      content += `    <tr>\n`;
+      content += `      <th>Severity</th>\n`;
+      content += `      <th>File</th>\n`;
+      content += `      <th>Line</th>\n`;
+      content += `      <th>Issue</th>\n`;
+      content += `    </tr>\n`;
+      content += `  </thead>\n`;
+      content += `  <tbody>\n`;
+
+      // Sort comments within category by severity, then by file
+      const sortedCategoryComments = categoryComments.sort((a, b) => {
+        const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
+        const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
+        if (severityDiff !== 0) return severityDiff;
+        return a.file.localeCompare(b.file);
+      });
+
+      for (const comment of sortedCategoryComments) {
+        const severityEmoji =
+          comment.severity === 'critical'
+            ? '🔴'
+            : comment.severity === 'error'
+              ? '🔴'
+              : comment.severity === 'warning'
+                ? '🟡'
+                : '🟢';
+        const severityText = comment.severity.charAt(0).toUpperCase() + comment.severity.slice(1);
+
+        // Build the issue description with suggestion/replacement if available
+        // Wrap content in a div for better table layout control
+        let issueContent = '';
+
+        // Escape HTML in the main message to prevent HTML injection
+        const escapedMessage = comment.message
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#x27;');
+
+        issueContent += escapedMessage;
+
+        if (comment.suggestion) {
+          // Escape HTML in the suggestion to prevent nested HTML rendering
+          const escapedSuggestion = comment.suggestion
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
+        }
+
+        if (comment.replacement) {
+          // Extract language hint from file extension
+          const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
+          const languageHint = this.getLanguageHint(fileExt);
+          // Escape HTML in the replacement code to prevent nested HTML rendering
+          const escapedReplacement = comment.replacement
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
+        }
+
+        // Wrap all content in a div for better table cell containment
+        const issueDescription = `<div>${issueContent}</div>`;
+
+        content += `    <tr>\n`;
+        content += `      <td>${severityEmoji} ${severityText}</td>\n`;
+        content += `      <td><code>${comment.file}</code></td>\n`;
+        content += `      <td>${comment.line}</td>\n`;
+        content += `      <td>${issueDescription}</td>\n`;
+        content += `    </tr>\n`;
+      }
+
+      // Close HTML table for this category
+      content += `  </tbody>\n`;
+      content += `</table>\n\n`;
+
+      // No hardcoded recommendations - all guidance comes from .visor.yaml prompts
+    }
+
+    return content;
+  }
+
+  private getLanguageHint(fileExtension: string): string {
+    const langMap: Record<string, string> = {
+      ts: 'typescript',
+      tsx: 'typescript',
+      js: 'javascript',
+      jsx: 'javascript',
+      py: 'python',
+      java: 'java',
+      kt: 'kotlin',
+      swift: 'swift',
+      go: 'go',
+      rs: 'rust',
+      cpp: 'cpp',
+      c: 'c',
+      cs: 'csharp',
+      php: 'php',
+      rb: 'ruby',
+      scala: 'scala',
+      sh: 'bash',
+      bash: 'bash',
+      zsh: 'bash',
+      sql: 'sql',
+      json: 'json',
+      yaml: 'yaml',
+      yml: 'yaml',
+      xml: 'xml',
+      html: 'html',
+      css: 'css',
+      scss: 'scss',
+      sass: 'sass',
+      md: 'markdown',
+      dockerfile: 'dockerfile',
+      tf: 'hcl',
+    };
+
+    return langMap[fileExtension] || fileExtension;
   }
 }

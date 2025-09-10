@@ -4,6 +4,43 @@ import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
 import { AIReviewService } from '../../src/ai-review-service';
 
+// Mock CheckExecutionEngine
+jest.mock('../../src/check-execution-engine', () => {
+  return {
+    CheckExecutionEngine: jest.fn().mockImplementation(() => ({
+      executeReviewChecks: jest
+        .fn()
+        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
+          return {
+            issues: [
+              {
+                file: 'src/test.ts',
+                line: 10,
+                ruleId: 'security/hardcoded-secret',
+                message: 'Potential hardcoded API key detected',
+                severity: 'critical',
+                category: 'security',
+                suggestion: 'Use environment variables for API keys',
+              },
+              {
+                file: 'src/test.ts',
+                line: 25,
+                ruleId: 'performance/inefficient-loop',
+                message: 'Consider using a more efficient data structure',
+                severity: 'warning',
+                category: 'performance',
+              },
+            ],
+            suggestions: [
+              'Consider adding input validation',
+              'Add unit tests for new functionality',
+            ],
+          };
+        }),
+    })),
+  };
+});
+
 // Mock environment variables
 const originalEnv = process.env;
 
@@ -177,7 +214,20 @@ describe('GitHub PR Workflow Integration', () => {
       );
 
       // Perform review
-      const review = await reviewer.reviewPR('owner', 'repo', 123, prInfo);
+      const mockConfig = {
+        checks: {
+          'security-review': {
+            provider: 'ai',
+            prompt: 'Review this code for security issues',
+          },
+        },
+      };
+
+      const review = await reviewer.reviewPR('owner', 'repo', 123, prInfo, {
+        config: mockConfig as any,
+        checks: ['security-review'],
+        parallelExecution: false,
+      });
 
       // Verify review structure
       expect(review).toEqual(
@@ -307,6 +357,7 @@ describe('GitHub PR Workflow Integration', () => {
           number: 123,
           fullDiff: expect.stringContaining('JWT_SECRET'),
           commitDiff: expect.stringContaining('hardcoded-secret-123'),
+          isIncremental: true,
         })
       );
 
@@ -314,7 +365,20 @@ describe('GitHub PR Workflow Integration', () => {
       expect(prInfo.commitDiff).toContain('AuthService');
 
       // Perform review with incremental data
-      await reviewer.reviewPR('owner', 'repo', 123, prInfo);
+      const mockConfig = {
+        checks: {
+          'incremental-review': {
+            provider: 'ai',
+            prompt: 'Review this incremental code change',
+          },
+        },
+      };
+
+      await reviewer.reviewPR('owner', 'repo', 123, prInfo, {
+        config: mockConfig as any,
+        checks: ['incremental-review'],
+        parallelExecution: false,
+      });
 
       // Update existing comment
       const commentId = 'pr-review-123';
@@ -375,6 +439,7 @@ describe('GitHub PR Workflow Integration', () => {
         fullDiff:
           '--- src/test.ts\n@@ -1,3 +1,4 @@\n+console.log("test");\n function test() {\n   return true;\n }',
         commitDiff: '--- src/test.ts\n@@ -2,0 +2,1 @@\n+console.log("new change");',
+        isIncremental: true,
       };
 
       // Verify that PRInfo structure supports both full and incremental analysis
@@ -397,6 +462,7 @@ describe('GitHub PR Workflow Integration', () => {
         totalDeletions: 10,
         fullDiff:
           '--- src/app.ts\n+++ src/app.ts\n@@ -1,3 +1,5 @@\n+import express from "express";\n+const app = express();\n function main() {\n   console.log("Hello");\n }',
+        isIncremental: false,
       };
 
       // Verify that PRInfo structure supports full analysis without commit diff

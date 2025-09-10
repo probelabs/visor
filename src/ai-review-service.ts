@@ -56,7 +56,7 @@ export interface AIDebugInfo {
   }>;
 }
 
-export type ReviewFocus = 'security' | 'performance' | 'style' | 'all';
+// REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
   // Simplified format - only raw data
@@ -106,10 +106,12 @@ export class AIReviewService {
   /**
    * Execute AI review using probe-chat
    */
-  async executeReview(prInfo: PRInfo, focus: ReviewFocus): Promise<ReviewSummary> {
+  async executeReview(prInfo: PRInfo, customPrompt: string): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    const prompt = this.buildPrompt(prInfo, focus);
+
+    // Build prompt from custom instructions
+    const prompt = this.buildCustomPrompt(prInfo, customPrompt);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
 
@@ -210,103 +212,89 @@ export class AIReviewService {
   }
 
   /**
-   * Build the prompt for AI review with XML-formatted data
+   * Build a custom prompt for AI review with XML-formatted data
    */
-  private buildPrompt(prInfo: PRInfo, focus: ReviewFocus): string {
-    const focusInstructions = this.getFocusInstructions(focus);
+  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string): string {
     const prContext = this.formatPRContext(prInfo);
-    const analysisType = prInfo.commitDiff ? 'INCREMENTAL' : 'FULL';
+    const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
-    return `${focusInstructions}
+    return `You are a senior code reviewer. 
 
 ANALYSIS TYPE: ${analysisType}
 ${
   analysisType === 'INCREMENTAL'
-    ? '- You are analyzing a new commit added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
-    : '- You are analyzing the complete PR. Review all changes in the <full_diff> section.'
+    ? '- You are analyzing a NEW COMMIT added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
+    : '- You are analyzing the COMPLETE PR. Review all changes in the <full_diff> section.'
 }
 
+REVIEW INSTRUCTIONS:
+${customInstructions}
+
 CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object. If you cannot analyze the code, return an empty issues array, but always return valid JSON.
+
+Required JSON response format:
+\`\`\`json
+{
+  "issues": [
+    {
+      "file": "path/to/file.ext",
+      "line": 10,
+      "endLine": 12,
+      "ruleId": "category/specific-issue-type",
+      "message": "Clear description of the issue",
+      "severity": "info|warning|error|critical",
+      "category": "security|performance|style|logic|documentation",
+      "suggestion": "Optional: How to fix this issue",
+      "replacement": "Optional: Exact code replacement if applicable"
+    }
+  ],
+  "suggestions": [
+    "Overall suggestion 1",
+    "Overall suggestion 2"
+  ]
+}
+\`\`\`
+
+Field Guidelines:
+- "file": The exact filename from the diff
+- "line": Line number where the issue starts (from the file, not the diff)
+- "endLine": Optional end line for multi-line issues
+- "ruleId": Format as "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one")
+- "message": Clear, specific description of the issue
+- "severity": 
+  * "info": Low priority informational issues
+  * "warning": Medium priority issues that should be addressed
+  * "error": High priority issues that need fixing
+  * "critical": Critical issues that must be fixed immediately
+- "category": One of: security, performance, style, logic, documentation
+- "suggestion": Clear, actionable explanation of HOW to fix the issue
+- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)
 
 Analyze the following structured pull request data:
 
 ${prContext}
 
-Key instructions for XML data analysis:
-1. The PR metadata provides context (title, description, author, etc.)
-2. If <full_diff> is present: Review the entire PR changes
-3. If <commit_diff> is present: Focus on incremental changes from the latest commit
-4. Use <files_summary> for understanding the scope of changes
-5. Line numbers in your response should reference the diff context lines (starting with + or -)
+XML Data Structure Guide:
+- <pull_request>: Root element containing all PR information
+- <metadata>: PR metadata (number, title, author, branches, statistics)
+- <description>: PR description text if provided
+- <full_diff>: Complete unified diff of all changes (for FULL analysis)
+- <commit_diff>: Diff of only the latest commit (for INCREMENTAL analysis)
+- <files_summary>: List of all files changed with statistics
 
-Required JSON response format:
-{
-  "issues": [{
-    "file": "<filename from the diff>",
-    "line": <line number in the file>,
-    "endLine": <optional end line for multi-line issues>,
-    "ruleId": "<category>/<specific-issue-type>",
-    "message": "<description of the issue>",
-    "severity": "<info|warning|error|critical>",
-    "category": "<security|performance|style|logic|documentation>",
-    "suggestion": "<clear actionable explanation of how to fix the issue>",
-    "replacement": "<complete working code that should replace the problematic lines>"
-  }],
-  "suggestions": ["<general suggestions not tied to specific lines>"]
-}
-
-Field Guidelines:
-- "suggestion": Provide a clear, concise explanation of HOW to fix the issue (e.g., "Use const instead of let for immutable values", "Add input validation before using user data")
-- "replacement": Provide the EXACT code that should replace the problematic lines. The code must be:
-  * Complete and syntactically correct
-  * Properly indented to match the surrounding code
-  * A working solution that can be directly copy-pasted
-  * Include minimal necessary context (usually just the fixed line(s))
-
-Code Replacement Examples:
-
-Example 1 - Variable declaration:
-  message: "Variable 'userName' is never reassigned"
-  suggestion: "Use const for variables that are never reassigned"
-  replacement: "const userName = getUserName();"
-
-Example 2 - SQL Injection:
-  message: "SQL query is vulnerable to injection attacks"
-  suggestion: "Use parameterized queries to prevent SQL injection"
-  replacement: "const query = 'SELECT * FROM users WHERE id = ?';\nconst result = await db.query(query, [userId]);"
-
-Example 3 - Missing error handling:
-  message: "Promise rejection is not handled"
-  suggestion: "Add try-catch block to handle potential errors"
-  replacement: "try {\n  const data = await fetchData();\n  return data;\n} catch (error) {\n  console.error('Failed to fetch data:', error);\n  throw error;\n}"
-
-Severity levels:
-- "info": Low priority informational issues (e.g., minor style suggestions, optional improvements)
-- "warning": Medium priority issues that should be addressed (e.g., code smells, minor bugs)
-- "error": High priority issues that need fixing (e.g., significant bugs, major design problems)
-- "critical": Critical issues that must be fixed immediately (e.g., security vulnerabilities, data loss risks)
-
-RuleId format: "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one", "style/naming-convention")
-
-IMPORTANT: Only analyze changes marked with + (additions) or context around - (deletions) in the diff. Ignore unchanged code unless it's relevant to understanding a new change.`;
+IMPORTANT RULES:
+1. Only analyze code that appears with + (additions) or - (deletions) in the diff
+2. Ignore unchanged code unless it's directly relevant to understanding a change
+3. Line numbers in your response should match the actual file line numbers
+4. Focus on real issues, not nitpicks
+5. Provide actionable, specific feedback
+6. For INCREMENTAL analysis, ONLY review changes in <commit_diff>
+7. For FULL analysis, review all changes in <full_diff>`;
   }
 
-  /**
-   * Get focus-specific instructions
-   */
-  private getFocusInstructions(focus: ReviewFocus): string {
-    switch (focus) {
-      case 'security':
-        return 'Review this code for security issues like SQL injection, hardcoded secrets, authentication problems, and input validation flaws.';
-      case 'performance':
-        return 'Review this code for performance issues like inefficient algorithms, database query problems, and memory usage concerns.';
-      case 'style':
-        return 'Review this code for style and quality issues like naming conventions, formatting, consistency, and best practices.';
-      case 'all':
-      default:
-        return 'Review this code for security vulnerabilities, performance issues, style problems, logic errors, and documentation quality.';
-    }
-  }
+  // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
+
+  // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
 
   /**
    * Format PR context for the AI using XML structure
@@ -341,11 +329,19 @@ ${this.escapeXml(prInfo.fullDiff)}
     }
 
     // Add incremental commit diff if available (for new commit analysis)
-    if (prInfo.commitDiff) {
-      context += `
+    if (prInfo.isIncremental) {
+      if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
+        context += `
   <commit_diff>
 ${this.escapeXml(prInfo.commitDiff)}
   </commit_diff>`;
+      } else {
+        context += `
+  <commit_diff>
+<!-- Commit diff could not be retrieved - falling back to full diff analysis -->
+${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
+  </commit_diff>`;
+      }
     }
 
     // Add file summary for context
@@ -781,25 +777,6 @@ ${this.escapeXml(prInfo.commitDiff)}
   }
 
   /**
-   * Calculate a simple score based on issue severity
-   */
-  private calculateScore(issues: ReviewIssue[]): number {
-    if (issues.length === 0) return 100;
-
-    const criticalCount = issues.filter(i => i.severity === 'critical').length;
-    const errorCount = issues.filter(i => i.severity === 'error').length;
-    const warningCount = issues.filter(i => i.severity === 'warning').length;
-    const infoCount = issues.filter(i => i.severity === 'info').length;
-
-    // Deduct points based on severity
-    const score = Math.max(
-      0,
-      100 - criticalCount * 40 - errorCount * 25 - warningCount * 10 - infoCount * 5
-    );
-    return score;
-  }
-
-  /**
    * Generate mock response for testing
    */
   private async generateMockResponse(_prompt: string): Promise<string> {
@@ -843,7 +820,6 @@ ${this.escapeXml(prInfo.commitDiff)}
         summary: {
           totalIssues: 3,
           criticalIssues: 1,
-          overallScore: 75,
         },
       }),
     };

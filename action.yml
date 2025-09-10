@@ -51,10 +51,6 @@ inputs:
     required: false
     default: 'false'
   
-  min-score:
-    description: 'Minimum score required to pass (0-100)'
-    required: false
-    default: '0'
   
   debug:
     description: 'Enable debug mode for detailed output in comments'
@@ -76,26 +72,11 @@ inputs:
     required: false
 
 outputs:
-  overall-score:
-    description: 'Overall code quality score (0-100)'
-  
   total-issues:
     description: 'Total number of issues found'
   
   critical-issues:
     description: 'Number of critical issues found'
-  
-  security-score:
-    description: 'Security analysis score'
-  
-  performance-score:
-    description: 'Performance analysis score'
-  
-  style-score:
-    description: 'Style analysis score'
-  
-  architecture-score:
-    description: 'Architecture analysis score'
   
   review-url:
     description: 'URL to the detailed review comment'
@@ -116,8 +97,6 @@ outputs:
     description: 'Description of the repository (legacy)'
   repo-stars:
     description: 'Number of stars on the repository (legacy)'
-  review-score:
-    description: 'Overall review score (legacy, use overall-score)'
   issues-found:
     description: 'Number of issues found (legacy, use total-issues)'
   auto-review-completed:

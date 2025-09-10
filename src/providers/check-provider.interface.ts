@@ -24,6 +24,7 @@ export interface CheckProviderConfig {
     model?: string;
     apiKey?: string;
     timeout?: number;
+    debug?: boolean;
   };
   [key: string]: unknown;
 }

@@ -2,7 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
-import { PRReviewer, calculateOverallScore, calculateTotalIssues } from './reviewer';
+import { PRReviewer, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
@@ -137,13 +137,8 @@ async function handleVisorMode(
 
       // Add additional outputs from parsed JSON
       if (cliOutput) {
-        outputs['overall-score'] = cliOutput.overallScore?.toString() || '0';
         outputs['total-issues'] = cliOutput.totalIssues?.toString() || '0';
         outputs['critical-issues'] = cliOutput.criticalIssues?.toString() || '0';
-        outputs['security-score'] = cliOutput.securityScore?.toString() || '100';
-        outputs['performance-score'] = cliOutput.performanceScore?.toString() || '100';
-        outputs['style-score'] = cliOutput.styleScore?.toString() || '100';
-        outputs['architecture-score'] = cliOutput.architectureScore?.toString() || '100';
       }
 
       for (const [key, value] of Object.entries(outputs)) {
@@ -251,8 +246,7 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       for (const [category, issues] of Object.entries(groupedIssues)) {
         if (issues.length === 0) continue;
 
-        const emoji = getCategoryEmoji(category);
-        const title = `${emoji} ${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+        const title = `${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
 
         let sectionContent = '';
         for (const issue of issues.slice(0, 5)) {
@@ -325,18 +319,6 @@ function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
   }
 
   return grouped;
-}
-
-function getCategoryEmoji(category: string): string {
-  const emojiMap: Record<string, string> = {
-    security: '🔒',
-    performance: '📈',
-    style: '🎨',
-    logic: '🧠',
-    documentation: '📚',
-    architecture: '🏗️',
-  };
-  return emojiMap[category] || '📝';
 }
 
 function formatDebugInfo(debug: any): string {
@@ -431,11 +413,34 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 
       console.log(`Starting PR review for #${prNumber}`);
       const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, { focus, format });
+
+      // Load config for the review
+      const configManager = new ConfigManager();
+      let config;
+      try {
+        config = await configManager.loadConfig('.visor.yaml');
+      } catch {
+        // Fall back to a basic configuration
+        config = {
+          checks: {
+            'legacy-review': {
+              provider: 'ai',
+              prompt: `Review this code focusing on ${focus || 'all aspects'}. Look for security issues, performance problems, code quality, and suggest improvements.`,
+            },
+          },
+        };
+      }
+
+      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
+        focus,
+        format,
+        config: config as any,
+        checks: ['legacy-review'],
+        parallelExecution: false,
+      });
 
       await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
 
-      setOutput('review-score', calculateOverallScore(review.issues).toString());
       setOutput('issues-found', calculateTotalIssues(review.issues).toString());
       break;
 
@@ -531,9 +536,29 @@ async function handlePullRequestEvent(
     }
   }
 
+  // Load config for the review
+  const configManager = new ConfigManager();
+  let config;
+  try {
+    config = await configManager.loadConfig('.visor.yaml');
+  } catch {
+    // Fall back to a basic configuration for PR auto-review
+    config = {
+      checks: {
+        'auto-review': {
+          provider: 'ai',
+          prompt: `Review this pull request comprehensively. Look for security issues, performance problems, code quality, bugs, and suggest improvements. Action: ${action}`,
+        },
+      },
+    };
+  }
+
   // Create review options, including debug if enabled
   const reviewOptions = {
     debug: inputs?.debug === 'true',
+    config: config as any,
+    checks: ['auto-review'],
+    parallelExecution: false,
   };
 
   // Perform the review with debug options
@@ -595,7 +620,6 @@ async function handlePullRequestEvent(
 
   // Set outputs
   setOutput('auto-review-completed', 'true');
-  setOutput('review-score', calculateOverallScore(review.issues).toString());
   setOutput('issues-found', calculateTotalIssues(review.issues).toString());
   setOutput('pr-action', action);
   setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
@@ -695,10 +719,17 @@ async function handlePullRequestVisorMode(
         console.log(`📋 Loaded Visor config from: ${configPath}`);
       } catch (error) {
         console.error(`⚠️ Could not load config from ${configPath}:`, error);
-        config = await configManager.getDefaultConfig();
+        config = await configManager.findAndLoadConfig();
       }
     } else {
-      config = await configManager.getDefaultConfig();
+      // Try to find and load config from default locations (.visor.yaml)
+      config = await configManager.findAndLoadConfig();
+      const hasCustomConfig = config.checks && Object.keys(config.checks).length > 0;
+      if (hasCustomConfig) {
+        console.log(`📋 Loaded Visor config from default location (.visor.yaml)`);
+      } else {
+        console.log(`📋 Using default Visor configuration`);
+      }
     }
 
     // Extract checks from config
@@ -716,7 +747,6 @@ async function handlePullRequestVisorMode(
 
       // Set basic outputs
       setOutput('auto-review-completed', 'true');
-      setOutput('review-score', '100');
       setOutput('issues-found', '0');
       setOutput('pr-action', action || 'unknown');
       setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
@@ -768,7 +798,6 @@ async function handlePullRequestVisorMode(
 
     // Set outputs
     setOutput('auto-review-completed', 'true');
-    setOutput('review-score', calculateOverallScore(review.issues).toString());
     setOutput('issues-found', calculateTotalIssues(review.issues).toString());
     setOutput('pr-action', action || 'unknown');
     setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');

@@ -1,7 +1,7 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
-import { AIReviewService, AIReviewConfig, ReviewFocus } from '../ai-review-service';
+import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 
 /**
  * AI-powered check provider using probe-chat
@@ -59,35 +59,42 @@ export class AICheckProvider extends CheckProvider {
   }
 
   async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
-    // Extract AI configuration
+    // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
     if (config.ai) {
-      aiConfig.apiKey = config.ai.apiKey as string;
-      aiConfig.model = config.ai.model as string;
-      aiConfig.timeout = config.ai.timeout as number;
-      aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
-    }
-
-    // Determine focus from prompt or focus field
-    let focus: ReviewFocus = 'all';
-    const prompt = config.prompt || config.focus;
-
-    if (typeof prompt === 'string') {
-      if (prompt === 'security' || prompt.includes('security')) {
-        focus = 'security';
-      } else if (prompt === 'performance' || prompt.includes('performance')) {
-        focus = 'performance';
-      } else if (prompt === 'style' || prompt.includes('style')) {
-        focus = 'style';
+      // Only set properties that are actually defined to avoid overriding env vars
+      if (config.ai.apiKey !== undefined) {
+        aiConfig.apiKey = config.ai.apiKey as string;
+      }
+      if (config.ai.model !== undefined) {
+        aiConfig.model = config.ai.model as string;
+      }
+      if (config.ai.timeout !== undefined) {
+        aiConfig.timeout = config.ai.timeout as number;
+      }
+      if (config.ai.provider !== undefined) {
+        aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
+      }
+      if (config.ai.debug !== undefined) {
+        aiConfig.debug = config.ai.debug as boolean;
       }
     }
 
-    // Create AI service with config
+    // Get custom prompt from config - REQUIRED, no fallbacks
+    const customPrompt = config.prompt;
+    
+    if (!customPrompt || typeof customPrompt !== 'string') {
+      throw new Error(`No prompt defined for check. All checks must have prompts defined in .visor.yaml configuration.`);
+    }
+
+    // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
 
-    // Execute the review
-    return await service.executeReview(prInfo, focus);
+    console.error(`🔧 Debug: AICheckProvider using custom prompt: ${customPrompt.substring(0, 100)}...`);
+    
+    // Always pass the custom prompt - no fallbacks
+    return await service.executeReview(prInfo, customPrompt);
   }
 
   getSupportedConfigKeys(): string[] {
