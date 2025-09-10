@@ -7,9 +7,21 @@ branding:
 
 inputs:
   github-token:
-    description: 'GitHub token for API access'
-    required: true
+    description: 'GitHub token for API access (use this OR app-id/private-key)'
+    required: false
     default: ${{ github.token }}
+  
+  app-id:
+    description: 'GitHub App ID for authentication (optional, use with private-key)'
+    required: false
+  
+  private-key:
+    description: 'GitHub App private key for authentication (optional, use with app-id)'
+    required: false
+  
+  installation-id:
+    description: 'GitHub App installation ID (optional, auto-detected if not provided)'
+    required: false
   
   auto-review:
     description: 'Enable automatic review on PR open/update'

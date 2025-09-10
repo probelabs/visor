@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
@@ -8,10 +9,93 @@ import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
 
+/**
+ * Create an authenticated Octokit instance using either GitHub App or token authentication
+ */
+async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authType: string }> {
+  const token = getInput('github-token');
+  const appId = getInput('app-id');
+  const privateKey = getInput('private-key');
+  const installationId = getInput('installation-id');
+
+  // Prefer GitHub App authentication if app credentials are provided
+  if (appId && privateKey) {
+    console.log('🔐 Using GitHub App authentication');
+
+    try {
+      // Note: createAppAuth is used in the Octokit constructor below
+
+      // If no installation ID provided, try to get it for the current repository
+      let finalInstallationId = installationId ? parseInt(installationId) : undefined;
+
+      if (!finalInstallationId) {
+        const owner = process.env.GITHUB_REPOSITORY_OWNER;
+        const repo = process.env.GITHUB_REPOSITORY?.split('/')[1];
+
+        if (owner && repo) {
+          // Create a temporary JWT-authenticated client to find the installation
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: {
+              appId,
+              privateKey,
+            },
+          });
+
+          try {
+            const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+              owner,
+              repo,
+            });
+            finalInstallationId = installation.id;
+            console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
+          } catch (error) {
+            console.warn('⚠️ Could not auto-detect installation ID:', error);
+            throw new Error(
+              'GitHub App installation ID is required but could not be auto-detected'
+            );
+          }
+        }
+      }
+
+      // Create the authenticated Octokit instance
+      const octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: {
+          appId,
+          privateKey,
+          installationId: finalInstallationId,
+        },
+      });
+
+      return { octokit, authType: 'github-app' };
+    } catch (error) {
+      console.error('❌ GitHub App authentication failed:', error);
+      throw new Error(
+        `GitHub App authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  // Fall back to token authentication
+  if (token) {
+    console.log('🔑 Using GitHub token authentication');
+    return {
+      octokit: new Octokit({ auth: token }),
+      authType: 'token',
+    };
+  }
+
+  throw new Error('Either github-token or app-id/private-key must be provided for authentication');
+}
+
 export async function run(): Promise<void> {
   try {
-    const token = getInput('github-token', { required: true });
-    const octokit = new Octokit({ auth: token });
+    const { octokit, authType } = await createAuthenticatedOctokit();
+    console.log(`✅ Authenticated successfully using ${authType}`);
+
+    // Get token for passing to CLI bridge (might be undefined if using App auth)
+    const token = getInput('github-token') || '';
 
     // Collect all GitHub Action inputs
     const inputs: GitHubActionInputs = {
@@ -74,14 +158,14 @@ export async function run(): Promise<void> {
         const prDetected = await detectPRContext(inputs, context);
         if (prDetected) {
           console.log('✅ PR context detected - using GitHub API for PR analysis');
-          await handlePullRequestVisorMode(inputs, context);
+          await handlePullRequestVisorMode(inputs, context, octokit);
           return;
         } else {
           console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
         }
       }
 
-      await handleVisorMode(cliBridge, inputs, context);
+      await handleVisorMode(cliBridge, inputs, context, octokit);
       return;
     }
 
@@ -98,7 +182,8 @@ export async function run(): Promise<void> {
 async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
-  _context: GitHubContext
+  _context: GitHubContext,
+  _octokit?: Octokit
 ): Promise<void> {
   try {
     // Note: PR auto-review cases are now handled upstream in the main run() function
@@ -170,8 +255,9 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       return;
     }
 
-    const octokit = new Octokit({ auth: token });
-    const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+    // Create new Octokit instance with token (this function doesn't receive octokit param)
+    const octokitInstance = new Octokit({ auth: token });
+    const prDetector = new PRDetector(octokitInstance, inputs.debug === 'true');
 
     // Convert GitHub context to our format
     const eventContext: GitHubEventContext = {
@@ -211,7 +297,7 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs):
       console.log(`   Details: ${prResult.details}`);
     }
 
-    const commentManager = new CommentManager(octokit);
+    const commentManager = new CommentManager(octokitInstance);
 
     // Create Visor-formatted comment from CLI output
     let comment = `# 🔍 Visor Code Review Results\n\n`;
@@ -645,7 +731,8 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
  */
 async function handlePullRequestVisorMode(
   inputs: GitHubActionInputs,
-  _context: GitHubContext
+  _context: GitHubContext,
+  providedOctokit?: Octokit
 ): Promise<void> {
   const token = inputs['github-token'];
   const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
@@ -657,8 +744,9 @@ async function handlePullRequestVisorMode(
     return;
   }
 
-  const octokit = new Octokit({ auth: token });
-  const prDetector = new PRDetector(octokit, inputs.debug === 'true');
+  // Use provided octokit or create new one with token
+  const octokitInstance = providedOctokit || new Octokit({ auth: token });
+  const prDetector = new PRDetector(octokitInstance, inputs.debug === 'true');
 
   // Convert GitHub context to our format
   const eventContext: GitHubEventContext = {
@@ -705,9 +793,9 @@ async function handlePullRequestVisorMode(
 
   try {
     // Use the existing PR analysis infrastructure but with Visor config
-    const analyzer = new PRAnalyzer(octokit);
-    const reviewer = new PRReviewer(octokit);
-    const commentManager = new CommentManager(octokit);
+    const analyzer = new PRAnalyzer(octokitInstance);
+    const reviewer = new PRReviewer(octokitInstance);
+    const commentManager = new CommentManager(octokitInstance);
 
     // Load Visor config
     const configManager = new ConfigManager();
@@ -825,6 +913,7 @@ async function detectPRContext(
       return false;
     }
 
+    // Create new Octokit for PR detection (this function doesn't receive octokit param)
     const octokit = new Octokit({ auth: token });
     const prDetector = new PRDetector(octokit, inputs.debug === 'true');
 

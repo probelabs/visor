@@ -10,6 +10,9 @@ module.exports = {
     'src/**/*.ts',
     '!src/**/*.d.ts',
   ],
+  moduleNameMapper: {
+    '^@octokit/auth-app$': '<rootDir>/__mocks__/@octokit/auth-app.ts',
+  },
   transformIgnorePatterns: [
     'node_modules/(?!(@octokit|@actions|@kie)/)',
   ],
