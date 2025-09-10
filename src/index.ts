@@ -18,15 +18,6 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
   const privateKey = getInput('private-key');
   const installationId = getInput('installation-id');
 
-  // Debug logging to verify what credentials are available
-  console.log('🔍 Authentication credentials check:');
-  console.log(`  - github-token: ${token ? 'present' : 'not provided'}`);
-  console.log(`  - app-id: ${appId ? 'present' : 'not provided'}`);
-  console.log(
-    `  - private-key: ${privateKey ? 'present (length: ' + privateKey.length + ')' : 'not provided'}`
-  );
-  console.log(`  - installation-id: ${installationId || 'not provided (will auto-detect)'}`);
-
   // Prefer GitHub App authentication if app credentials are provided
   if (appId && privateKey) {
     console.log('🔐 Using GitHub App authentication');
@@ -758,7 +749,7 @@ async function handlePullRequestVisorMode(
   inputs: GitHubActionInputs,
   _context: GitHubContext,
   octokit: Octokit,
-  authType?: string
+  _authType?: string
 ): Promise<void> {
   const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
   const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
@@ -814,7 +805,6 @@ async function handlePullRequestVisorMode(
   }
 
   console.log(`🔍 Analyzing PR #${prNumber} using Visor config (action: ${action})`);
-  console.log(`🔐 Authentication type for API calls: ${authType || 'unknown'}`);
 
   try {
     // Use the existing PR analysis infrastructure but with Visor config
