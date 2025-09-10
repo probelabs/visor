@@ -4,7 +4,7 @@ import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
 import { CheckProviderRegistry } from './providers/check-provider-registry';
 import { CheckProviderConfig } from './providers/check-provider.interface';
-import { DependencyResolver, DependencyGraph, ExecutionGroup } from './dependency-resolver';
+import { DependencyResolver, DependencyGraph } from './dependency-resolver';
 
 export interface MockOctokit {
   rest: {
@@ -170,8 +170,18 @@ export class CheckExecutionEngine {
     logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
 
     // If we have a config with individual check definitions, use dependency-aware execution
-    if (config?.checks && checks.length > 1) {
-      logFn(`🔧 Debug: Using dependency-aware execution for ${checks.length} checks`);
+    // Check if any of the checks have dependencies or if there are multiple checks
+    const hasDependencies =
+      config?.checks &&
+      checks.some(checkName => {
+        const checkConfig = config.checks[checkName];
+        return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
+      });
+
+    if (config?.checks && (checks.length > 1 || hasDependencies)) {
+      logFn(
+        `🔧 Debug: Using dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+      );
       return await this.executeDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug);
     }
 
@@ -274,19 +284,45 @@ export class CheckExecutionEngine {
     // Validate dependencies
     const validation = DependencyResolver.validateDependencies(checks, dependencies);
     if (!validation.valid) {
-      throw new Error(`Dependency validation failed: ${validation.errors.join(', ')}`);
+      return {
+        issues: [
+          {
+            severity: 'error' as const,
+            message: `Dependency validation failed: ${validation.errors.join(', ')}`,
+            file: '',
+            line: 0,
+            ruleId: 'dependency-validation-error',
+            category: 'logic' as const,
+          },
+        ],
+        suggestions: [],
+      };
     }
 
     // Build dependency graph
     const dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
-    
+
     if (dependencyGraph.hasCycles) {
-      throw new Error(`Circular dependencies detected: ${dependencyGraph.cycleNodes?.join(' -> ')}`);
+      return {
+        issues: [
+          {
+            severity: 'error' as const,
+            message: `Circular dependencies detected: ${dependencyGraph.cycleNodes?.join(' -> ')}`,
+            file: '',
+            line: 0,
+            ruleId: 'circular-dependency-error',
+            category: 'logic' as const,
+          },
+        ],
+        suggestions: [],
+      };
     }
 
     // Log execution plan
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
-    log(`🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`);
+    log(
+      `🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`
+    );
 
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
@@ -294,7 +330,9 @@ export class CheckExecutionEngine {
 
     for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length; levelIndex++) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
-      log(`🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks in parallel`);
+      log(
+        `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks in parallel`
+      );
 
       // Execute all checks in this level in parallel
       const levelTasks = executionGroup.parallel.map(async checkName => {
@@ -330,7 +368,7 @@ export class CheckExecutionEngine {
             }
           }
 
-          const result = await provider.execute(prInfo, providerConfig);
+          const result = await provider.execute(prInfo, providerConfig, dependencyResults);
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
           return {
@@ -363,19 +401,24 @@ export class CheckExecutionEngine {
         } else {
           // Store error result for dependency tracking
           const errorSummary: ReviewSummary = {
-            issues: [{
-              file: 'system',
-              line: 0,
-              endLine: undefined,
-              ruleId: `${checkName}/error`,
-              message: result.status === 'fulfilled' 
-                ? result.value.error || 'Unknown error'
-                : result.reason instanceof Error ? result.reason.message : String(result.reason),
-              severity: 'error',
-              category: 'logic',
-              suggestion: undefined,
-              replacement: undefined,
-            }],
+            issues: [
+              {
+                file: 'system',
+                line: 0,
+                endLine: undefined,
+                ruleId: `${checkName}/error`,
+                message:
+                  result.status === 'fulfilled'
+                    ? result.value.error || 'Unknown error'
+                    : result.reason instanceof Error
+                      ? result.reason.message
+                      : String(result.reason),
+                severity: 'error',
+                category: 'logic',
+                suggestion: undefined,
+                replacement: undefined,
+              },
+            ],
             suggestions: [],
           };
           results.set(checkName, errorSummary);
@@ -504,7 +547,7 @@ export class CheckExecutionEngine {
       security: 'security',
       performance: 'performance',
       style: 'style',
-      architecture: 'all', // architecture maps to 'all' focus
+      architecture: 'architecture', // architecture should map to 'architecture' focus
     };
 
     return focusMap[checkName] || 'all';
@@ -522,9 +565,6 @@ export class CheckExecutionEngine {
     const aggregatedSuggestions: string[] = [];
     const debugInfo: string[] = [];
 
-    let successfulChecks = 0;
-    let failedChecks = 0;
-
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
     debugInfo.push(
@@ -539,24 +579,23 @@ export class CheckExecutionEngine {
     for (const executionGroup of dependencyGraph.executionOrder) {
       for (const checkName of executionGroup.parallel) {
         const result = results.get(checkName);
-        
+
         if (!result) {
-          failedChecks++;
           debugInfo.push(`❌ Check "${checkName}" had no result`);
           continue;
         }
 
         // Check if this was a successful result
-        const hasErrors = result.issues.some(issue => 
-          issue.ruleId?.includes('/error') || issue.ruleId?.includes('/promise-error')
+        const hasErrors = result.issues.some(
+          issue => issue.ruleId?.includes('/error') || issue.ruleId?.includes('/promise-error')
         );
 
         if (hasErrors) {
-          failedChecks++;
           debugInfo.push(`❌ Check "${checkName}" failed with errors`);
         } else {
-          successfulChecks++;
-          debugInfo.push(`✅ Check "${checkName}" completed: ${result.issues.length} issues found (level ${executionGroup.level})`);
+          debugInfo.push(
+            `✅ Check "${checkName}" completed: ${result.issues.length} issues found (level ${executionGroup.level})`
+          );
         }
 
         // Prefix issues with check name and level for identification
@@ -588,9 +627,9 @@ export class CheckExecutionEngine {
       const debugResults = Array.from(results.entries()).filter(([_, result]) => result.debug);
 
       if (debugResults.length > 0) {
-        const [firstCheckName, firstResult] = debugResults[0];
+        const [, firstResult] = debugResults[0];
         const firstDebug = firstResult.debug!;
-        
+
         const totalProcessingTime = debugResults.reduce((sum, [_, result]) => {
           return sum + (result.debug!.processingTime || 0);
         }, 0);
@@ -606,10 +645,16 @@ export class CheckExecutionEngine {
           rawResponse: debugResults
             .map(([checkName, result]) => `[${checkName}]\n${result.debug!.rawResponse}`)
             .join('\n\n'),
-          promptLength: debugResults.reduce((sum, [_, result]) => sum + (result.debug!.promptLength || 0), 0),
-          responseLength: debugResults.reduce((sum, [_, result]) => sum + (result.debug!.responseLength || 0), 0),
+          promptLength: debugResults.reduce(
+            (sum, [_, result]) => sum + (result.debug!.promptLength || 0),
+            0
+          ),
+          responseLength: debugResults.reduce(
+            (sum, [_, result]) => sum + (result.debug!.responseLength || 0),
+            0
+          ),
           jsonParseSuccess: debugResults.every(([_, result]) => result.debug!.jsonParseSuccess),
-          errors: debugResults.flatMap(([checkName, result]) => 
+          errors: debugResults.flatMap(([checkName, result]) =>
             (result.debug!.errors || []).map((error: string) => `[${checkName}] ${error}`)
           ),
           timestamp: new Date().toISOString(),

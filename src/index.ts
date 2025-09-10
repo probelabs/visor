@@ -27,7 +27,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
       // If no installation ID provided, try to get it for the current repository
       let finalInstallationId: number | undefined;
-      
+
       // Validate and parse the installation ID if provided
       if (installationId) {
         finalInstallationId = parseInt(installationId, 10);
@@ -57,8 +57,10 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
             });
             finalInstallationId = installation.id;
             console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
-          } catch (error) {
-            console.warn('⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.');
+          } catch {
+            console.warn(
+              '⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.'
+            );
             throw new Error(
               'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository or provide the `installation-id` manually.'
             );
@@ -78,7 +80,9 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
       return { octokit, authType: 'github-app' };
     } catch (error) {
-      console.error('❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.');
+      console.error(
+        '❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.'
+      );
       throw new Error(`GitHub App authentication failed`, { cause: error });
     }
   }
@@ -110,6 +114,10 @@ export async function run(): Promise<void> {
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
       debug: getInput('debug'),
+      // GitHub App authentication inputs
+      'app-id': getInput('app-id') || undefined,
+      'private-key': getInput('private-key') || undefined,
+      'installation-id': getInput('installation-id') || undefined,
       // Only collect other inputs if they have values to avoid triggering CLI mode
       checks: getInput('checks') || undefined,
       'output-format': getInput('output-format') || undefined,
@@ -189,7 +197,7 @@ async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
   _context: GitHubContext,
-  octokit: Octokit
+  _octokit: Octokit
 ): Promise<void> {
   try {
     // Note: PR auto-review cases are now handled upstream in the main run() function
@@ -250,7 +258,11 @@ async function handleVisorMode(
  * Post CLI review results as PR comment with robust PR detection
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs, octokit: Octokit): Promise<void> {
+async function postCliReviewComment(
+  cliOutput: any,
+  inputs: GitHubActionInputs,
+  octokit: Octokit
+): Promise<void> {
   try {
     const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
     const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];

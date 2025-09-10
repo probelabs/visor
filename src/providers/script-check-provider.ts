@@ -36,7 +36,11 @@ export class ScriptCheckProvider extends CheckProvider {
     return true;
   }
 
-  async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+  async execute(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    _dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary> {
     const scriptPath = config.script as string;
     const interpreter = (config.interpreter as string) || 'bash';
 

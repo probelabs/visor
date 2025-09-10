@@ -1,7 +1,6 @@
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
 import { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
 import { VisorConfig } from '../../src/types/config';
-import { ReviewSummary } from '../../src/reviewer';
 
 // Mock the CheckProviderRegistry
 jest.mock('../../src/providers/check-provider-registry');
@@ -9,12 +8,12 @@ jest.mock('../../src/providers/check-provider-registry');
 describe('CheckExecutionEngine - Dependencies', () => {
   let engine: CheckExecutionEngine;
   let mockRegistry: jest.Mocked<CheckProviderRegistry>;
-  let mockProvider: any;
+  let mockProvider: jest.Mocked<{ execute: jest.Mock }>;
 
   beforeEach(() => {
     // Reset the mock
     jest.clearAllMocks();
-    
+
     // Create mock provider
     mockProvider = {
       execute: jest.fn().mockResolvedValue({
@@ -31,7 +30,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
       registerProvider: jest.fn(),
       getAvailableProviders: jest.fn().mockReturnValue(['ai']),
       listProviders: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<CheckProviderRegistry>;
 
     // Mock the singleton getInstance method
     (CheckProviderRegistry.getInstance as jest.Mock).mockReturnValue(mockRegistry);
@@ -112,15 +111,17 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       // Track execution order
       const executionOrder: string[] = [];
-      mockProvider.execute.mockImplementation((prInfo: any, providerConfig: any) => {
-        // Extract check name from the prompt or focus
-        const checkName = providerConfig.focus || 'unknown';
-        executionOrder.push(checkName);
-        return Promise.resolve({
-          issues: [],
-          suggestions: [`${checkName} completed`],
-        });
-      });
+      mockProvider.execute.mockImplementation(
+        (prInfo: unknown, providerConfig: { focus?: string }) => {
+          // Extract check name from the prompt or focus
+          const checkName = providerConfig.focus || 'unknown';
+          executionOrder.push(checkName);
+          return Promise.resolve({
+            issues: [],
+            suggestions: [`${checkName} completed`],
+          });
+        }
+      );
 
       const result = await engine.executeChecks({
         checks: ['security', 'performance', 'style'],
@@ -130,9 +131,11 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       expect(result.reviewSummary.issues).toBeDefined();
       expect(mockProvider.execute).toHaveBeenCalledTimes(3);
-      
+
       // Verify execution order respects dependencies
-      expect(executionOrder.indexOf('security')).toBeLessThan(executionOrder.indexOf('performance'));
+      expect(executionOrder.indexOf('security')).toBeLessThan(
+        executionOrder.indexOf('performance')
+      );
       expect(executionOrder.indexOf('performance')).toBeLessThan(executionOrder.indexOf('style'));
     });
 
@@ -172,33 +175,20 @@ describe('CheckExecutionEngine - Dependencies', () => {
         },
       };
 
-      const executionLevels: string[][] = [];
-      let currentLevel: string[] = [];
-      let lastExecutionTime = 0;
+      // Track execution order to verify dependency constraints
+      const executionOrder: string[] = [];
 
-      mockProvider.execute.mockImplementation(async (prInfo: any, providerConfig: any) => {
-        const now = Date.now();
-        
-        // If there's a gap in execution time, start a new level
-        if (now - lastExecutionTime > 10) {
-          if (currentLevel.length > 0) {
-            executionLevels.push([...currentLevel]);
-            currentLevel = [];
-          }
+      mockProvider.execute.mockImplementation(
+        async (prInfo: unknown, providerConfig: { focus?: string }) => {
+          const checkName = providerConfig.focus || 'unknown';
+          executionOrder.push(checkName);
+
+          return {
+            issues: [],
+            suggestions: [`${checkName} completed`],
+          };
         }
-        
-        const checkName = providerConfig.focus || 'unknown';
-        currentLevel.push(checkName);
-        lastExecutionTime = now;
-        
-        // Small delay to simulate execution
-        await new Promise(resolve => setTimeout(resolve, 5));
-        
-        return {
-          issues: [],
-          suggestions: [`${checkName} completed`],
-        };
-      });
+      );
 
       const result = await engine.executeChecks({
         checks: ['security', 'performance', 'style', 'architecture'],
@@ -206,13 +196,20 @@ describe('CheckExecutionEngine - Dependencies', () => {
         debug: true,
       });
 
-      // Add final level
-      if (currentLevel.length > 0) {
-        executionLevels.push(currentLevel);
-      }
-
       expect(result.reviewSummary.issues).toBeDefined();
       expect(mockProvider.execute).toHaveBeenCalledTimes(4);
+
+      // Verify execution order respects dependencies
+      // security and performance should execute before style (no specific order between them)
+      const securityIndex = executionOrder.indexOf('security');
+      const performanceIndex = executionOrder.indexOf('performance');
+      const styleIndex = executionOrder.indexOf('style');
+      const architectureIndex = executionOrder.indexOf('architecture');
+
+      expect(securityIndex).toBeGreaterThanOrEqual(0);
+      expect(performanceIndex).toBeGreaterThanOrEqual(0);
+      expect(styleIndex).toBeGreaterThan(Math.max(securityIndex, performanceIndex));
+      expect(architectureIndex).toBeGreaterThan(styleIndex);
     });
 
     it('should handle circular dependencies gracefully', async () => {
@@ -309,16 +306,18 @@ describe('CheckExecutionEngine - Dependencies', () => {
       };
 
       // Make security check fail
-      mockProvider.execute.mockImplementation((prInfo: any, providerConfig: any) => {
-        const checkName = providerConfig.focus || 'unknown';
-        if (checkName === 'security') {
-          throw new Error('Security check failed');
+      mockProvider.execute.mockImplementation(
+        (prInfo: unknown, providerConfig: { focus?: string }) => {
+          const checkName = providerConfig.focus || 'unknown';
+          if (checkName === 'security') {
+            throw new Error('Security check failed');
+          }
+          return Promise.resolve({
+            issues: [],
+            suggestions: [`${checkName} completed`],
+          });
         }
-        return Promise.resolve({
-          issues: [],
-          suggestions: [`${checkName} completed`],
-        });
-      });
+      );
 
       const result = await engine.executeChecks({
         checks: ['security', 'performance'],
@@ -328,9 +327,9 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       expect(result.reviewSummary.issues).toBeDefined();
       expect(mockProvider.execute).toHaveBeenCalledTimes(2);
-      
+
       // Should have error issues from failed security check
-      const errorIssues = result.reviewSummary.issues.filter(issue => 
+      const errorIssues = result.reviewSummary.issues.filter(issue =>
         issue.ruleId?.includes('error')
       );
       expect(errorIssues).toHaveLength(1);
@@ -368,17 +367,17 @@ describe('CheckExecutionEngine - Dependencies', () => {
         debug: true,
       });
 
-      const containsExecutionCompleted = result.reviewSummary.suggestions.some(suggestion => 
+      const containsExecutionCompleted = result.reviewSummary.suggestions.some(suggestion =>
         suggestion.includes('Dependency-aware execution completed')
       );
       expect(containsExecutionCompleted).toBe(true);
-      
-      const containsExecutionLevels = result.reviewSummary.suggestions.some(suggestion => 
+
+      const containsExecutionLevels = result.reviewSummary.suggestions.some(suggestion =>
         suggestion.includes('2 checks in 2 execution levels')
       );
       expect(containsExecutionLevels).toBe(true);
-      
-      const containsMaxParallelism = result.reviewSummary.suggestions.some(suggestion => 
+
+      const containsMaxParallelism = result.reviewSummary.suggestions.some(suggestion =>
         suggestion.includes('Maximum parallelism: 1')
       );
       expect(containsMaxParallelism).toBe(true);

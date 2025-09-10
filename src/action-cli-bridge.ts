@@ -9,6 +9,10 @@ export interface GitHubActionInputs {
   owner?: string;
   repo?: string;
   'auto-review'?: string;
+  // GitHub App authentication
+  'app-id'?: string;
+  'private-key'?: string;
+  'installation-id'?: string;
   checks?: string;
   'output-format'?: string;
   'config-path'?: string;
@@ -140,7 +144,6 @@ export class ActionCliBridge {
       // Set up environment variables for CLI
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
-        GITHUB_TOKEN: this.githubToken,
         GITHUB_EVENT_NAME: this.context.event_name,
         GITHUB_CONTEXT: JSON.stringify(this.context),
         GITHUB_REPOSITORY_OWNER: this.context.repository?.owner.login || inputs.owner || '',
@@ -148,6 +151,23 @@ export class ActionCliBridge {
           ? `${this.context.repository.owner.login}/${this.context.repository.name}`
           : `${inputs.owner || ''}/${inputs.repo || ''}`,
       };
+
+      // Pass GitHub App credentials if they exist in inputs
+      if (inputs['app-id']) {
+        env.INPUT_APP_ID = inputs['app-id'];
+      }
+      if (inputs['private-key']) {
+        env.INPUT_PRIVATE_KEY = inputs['private-key'];
+      }
+      if (inputs['installation-id']) {
+        env.INPUT_INSTALLATION_ID = inputs['installation-id'];
+      }
+
+      // Only set GITHUB_TOKEN if we're not using GitHub App authentication
+      const isUsingGitHubApp = inputs['app-id'] && inputs['private-key'];
+      if (this.githubToken && !isUsingGitHubApp) {
+        env.GITHUB_TOKEN = this.githubToken;
+      }
 
       console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);
 

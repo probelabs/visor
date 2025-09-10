@@ -58,7 +58,11 @@ export class AICheckProvider extends CheckProvider {
     return true;
   }
 
-  async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+  async execute(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    _dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
@@ -83,16 +87,20 @@ export class AICheckProvider extends CheckProvider {
 
     // Get custom prompt from config - REQUIRED, no fallbacks
     const customPrompt = config.prompt;
-    
+
     if (!customPrompt || typeof customPrompt !== 'string') {
-      throw new Error(`No prompt defined for check. All checks must have prompts defined in .visor.yaml configuration.`);
+      throw new Error(
+        `No prompt defined for check. All checks must have prompts defined in .visor.yaml configuration.`
+      );
     }
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
 
-    console.error(`🔧 Debug: AICheckProvider using custom prompt: ${customPrompt.substring(0, 100)}...`);
-    
+    console.error(
+      `🔧 Debug: AICheckProvider using custom prompt: ${customPrompt.substring(0, 100)}...`
+    );
+
     // Always pass the custom prompt - no fallbacks
     return await service.executeReview(prInfo, customPrompt);
   }
