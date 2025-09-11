@@ -896,12 +896,6 @@ async function handlePullRequestVisorMode(
   const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
   const action = eventContext.event?.action;
 
-  // Extract commit SHA for comment metadata
-  const commitSha =
-    eventContext.event?.pull_request?.head?.sha ||
-    eventContext.payload?.event?.pull_request?.head?.sha ||
-    process.env.GITHUB_SHA;
-
   if (!prResult.prNumber) {
     console.error(
       `❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
@@ -928,7 +922,6 @@ async function handlePullRequestVisorMode(
     // Use the existing PR analysis infrastructure but with Visor config
     const analyzer = new PRAnalyzer(octokit);
     const reviewer = new PRReviewer(octokit);
-    const commentManager = new CommentManager(octokit);
 
     // Load Visor config
     const configManager = new ConfigManager();
@@ -992,30 +985,12 @@ async function handlePullRequestVisorMode(
       (review.debug as any).parallelExecution = true;
     }
 
-    // Post comment using existing comment manager
+    // Post comment using group-based comment separation
     const commentId = `visor-config-review-${prNumber}`;
-    const reviewComment = await reviewer['formatReviewCommentWithVisorFormat'](
-      review,
-      reviewOptions
-    );
-
-    // Add context based on action
-    let reviewContext = '';
-    if (action === 'opened') {
-      reviewContext =
-        '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
-    } else {
-      reviewContext =
-        '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
-    }
-
-    const fullComment = reviewContext + reviewComment;
-
-    await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+    await reviewer.postReviewComment(owner, repo, prNumber, review, {
+      ...reviewOptions,
       commentId,
       triggeredBy: `visor-config-${action}`,
-      allowConcurrentUpdates: true,
-      commitSha: commitSha,
     });
 
     console.log('✅ Posted Visor config-based review comment');
