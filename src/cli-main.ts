@@ -62,8 +62,17 @@ export async function main(): Promise<void> {
     }
 
     // Determine which checks to run
-    const checksToRun =
-      mergedConfig.cliChecks.length > 0 ? mergedConfig.cliChecks : Object.keys(config.checks || {});
+    let checksToRun: string[];
+    let isUsingConfigChecks = false;
+
+    if (mergedConfig.cliChecks.length > 0) {
+      // CLI specified checks - need validation
+      checksToRun = mergedConfig.cliChecks;
+    } else {
+      // No CLI checks specified, use all checks from config
+      checksToRun = Object.keys(config.checks || {});
+      isUsingConfigChecks = true;
+    }
 
     // Log check extraction for debugging
     if (mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif') {
@@ -89,14 +98,16 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Validate check types
-    const { valid: validChecks, invalid: invalidChecks } =
-      CheckExecutionEngine.validateCheckTypes(checksToRun);
+    // Only validate check types if they came from CLI
+    // Config checks are already valid by definition
+    if (!isUsingConfigChecks) {
+      const { invalid: invalidChecks } = CheckExecutionEngine.validateCheckTypes(checksToRun);
 
-    if (invalidChecks.length > 0) {
-      console.error(`❌ Invalid check types: ${invalidChecks.join(', ')}`);
-      console.error('Available check types: performance, architecture, security, style, all');
-      process.exit(1);
+      if (invalidChecks.length > 0) {
+        console.error(`❌ Invalid check types: ${invalidChecks.join(', ')}`);
+        console.error('Available check types: performance, architecture, security, style, all');
+        process.exit(1);
+      }
     }
 
     // Initialize the check execution engine
@@ -125,7 +136,7 @@ export async function main(): Promise<void> {
     try {
       // Execute the checks
       const analysisResult = await executionEngine.executeChecks({
-        checks: validChecks,
+        checks: checksToRun,
         workingDirectory: process.cwd(),
         showDetails: cliOptions.output !== 'json', // Show details for non-JSON output
         timeout: cliOptions.timeout, // Pass timeout from CLI options
