@@ -59,8 +59,8 @@ export interface AIDebugInfo {
 // REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
-  // Simplified format - only raw data
-  issues: Array<{
+  // For code-review schema - array of issues
+  issues?: Array<{
     file: string;
     line: number;
     endLine?: number;
@@ -72,6 +72,9 @@ interface AIResponseFormat {
     replacement?: string;
   }>;
   suggestions?: string[];
+
+  // For text schema - just content field
+  content?: string;
 }
 
 export class AIReviewService {
@@ -106,12 +109,16 @@ export class AIReviewService {
   /**
    * Execute AI review using probe-chat
    */
-  async executeReview(prInfo: PRInfo, customPrompt: string): Promise<ReviewSummary> {
+  async executeReview(
+    prInfo: PRInfo,
+    customPrompt: string,
+    schema?: string
+  ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = this.buildCustomPrompt(prInfo, customPrompt);
+    const prompt = this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
 
@@ -179,7 +186,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo);
+      const result = this.parseAIResponse(response, debugInfo, schema);
 
       if (debugInfo) {
         result.debug = debugInfo;
@@ -214,7 +221,7 @@ export class AIReviewService {
   /**
    * Build a custom prompt for AI review with XML-formatted data
    */
-  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string): string {
+  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string, schema?: string): string {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
@@ -230,9 +237,23 @@ ${
 REVIEW INSTRUCTIONS:
 ${customInstructions}
 
-CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object. If you cannot analyze the code, return an empty issues array, but always return valid JSON.
+CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object.
 
-Required JSON response format:
+${
+  schema === 'text'
+    ? `Required JSON response format for text output:
+\`\`\`json
+{
+  "content": "Your complete text response here (can be markdown, plain text, or any format requested)"
+}
+\`\`\`
+
+IMPORTANT: The "content" field should contain your COMPLETE response as a single string, including:
+- All formatting requested (markdown headers, lists, tables, etc.)
+- Code blocks, diagrams, or any other elements
+- Proper line breaks (use \\n for newlines within the JSON string)
+- The exact format specified in the instructions above`
+    : `Required JSON response format for code review:
 \`\`\`json
 {
   "issues": [
@@ -268,7 +289,8 @@ Field Guidelines:
   * "critical": Critical issues that must be fixed immediately
 - "category": One of: security, performance, style, logic, documentation
 - "suggestion": Clear, actionable explanation of HOW to fix the issue
-- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)
+- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)`
+}
 
 Analyze the following structured pull request data:
 
@@ -510,7 +532,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   /**
    * Parse AI response JSON
    */
-  private parseAIResponse(response: string, debugInfo?: AIDebugInfo): ReviewSummary {
+  private parseAIResponse(
+    response: string,
+    debugInfo?: AIDebugInfo,
+    schema?: string
+  ): ReviewSummary {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
 
@@ -649,7 +675,38 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         throw new Error('Invalid probe-chat response format: no response field found');
       }
 
-      // Validate the parsed data
+      // Handle different schemas
+      if (schema === 'text') {
+        // For text schema, we expect a content field with text (usually markdown)
+        log('📝 Processing text schema response');
+
+        if (!reviewData.content) {
+          console.error('❌ Text schema response missing content field');
+          console.error('🔍 Available fields:', Object.keys(reviewData));
+          throw new Error('Invalid text response: missing content field');
+        }
+
+        // Return a single "issue" that contains the text content
+        // This will be rendered using the text template
+        const result: ReviewSummary = {
+          issues: [
+            {
+              file: 'PR',
+              line: 1,
+              ruleId: 'full-review/overview',
+              message: reviewData.content,
+              severity: 'info',
+              category: 'documentation',
+            },
+          ],
+          suggestions: [],
+        };
+
+        log('✅ Successfully created text ReviewSummary');
+        return result;
+      }
+
+      // Standard code-review schema processing
       log('🔍 Validating parsed review data...');
       log(`📊 Overall score: ${0}`);
       log(`📋 Total issues: ${reviewData.issues?.length || 0}`);

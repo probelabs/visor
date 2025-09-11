@@ -314,7 +314,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
     }, 45000);
 
     it('should output in markdown format', async () => {
-      const result = await runCLI(['--check', 'security', '--output', 'markdown'], {
+      const result = await runCLI(['--check', 'security', '--output', 'text'], {
         timeout: 45000,
       });
 
@@ -366,7 +366,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
         timeout: 45000,
       });
 
-      // Config file not found will fall back to default config, but will still fail 
+      // Config file not found will fall back to default config, but will still fail
       // due to authentication issues with mock API keys or timeouts
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('Warning:');

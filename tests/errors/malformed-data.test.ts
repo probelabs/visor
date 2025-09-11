@@ -447,7 +447,7 @@ describe('Malformed Data Handling Tests', () => {
           }
 
           if (options.output) {
-            expect(['table', 'json', 'markdown', 'sarif']).toContain(options.output);
+            expect(['table', 'json', 'text', 'sarif']).toContain(options.output);
           }
         } catch (error: any) {
           console.log(`    Expected error: ${error.message}`);
@@ -509,7 +509,7 @@ describe('Malformed Data Handling Tests', () => {
 
           if (options.output) {
             console.log(`    Output: ${options.output}`);
-            expect(['table', 'json', 'markdown', 'sarif']).toContain(options.output);
+            expect(['table', 'json', 'text', 'sarif']).toContain(options.output);
           }
         } catch (error: any) {
           console.log(`    Injection blocked: ${error.message}`);

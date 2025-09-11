@@ -33,13 +33,13 @@ describe('Schema-Template System', () => {
       expect(validate).toBeDefined();
     });
 
-    test('should load markdown schema correctly', async () => {
-      const schemaPath = path.join(__dirname, '../../output/markdown/schema.json');
+    test('should load text schema correctly', async () => {
+      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
 
       expect(schema).toHaveProperty('$schema');
-      expect(schema).toHaveProperty('$id', 'markdown');
+      expect(schema).toHaveProperty('$id', 'text');
       expect(schema).toHaveProperty('type', 'object');
       expect(schema.properties).toHaveProperty('content');
       expect(schema.properties.content).toHaveProperty('type', 'string');
@@ -95,7 +95,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should validate markdown data against schema', async () => {
-      const schemaPath = path.join(__dirname, '../../output/markdown/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
       const validate = ajv.compile(schema);
@@ -110,7 +110,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should reject invalid markdown data', async () => {
-      const schemaPath = path.join(__dirname, '../../output/markdown/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
       const validate = ajv.compile(schema);
@@ -175,8 +175,8 @@ describe('Schema-Template System', () => {
       expect(rendered).toContain('Use environment variables for API keys');
     });
 
-    test('should render markdown template correctly', async () => {
-      const templatePath = path.join(__dirname, '../../output/markdown/template.liquid');
+    test('should render text template correctly', async () => {
+      const templatePath = path.join(__dirname, '../../output/text/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
 
       const data = {
@@ -382,7 +382,7 @@ graph TD
           'full-review': {
             type: 'ai',
             group: 'pr-overview',
-            schema: 'markdown',
+            schema: 'text',
             prompt: 'PR overview prompt...',
             on: ['pr_opened', 'pr_updated'],
           },
@@ -404,7 +404,7 @@ graph TD
       expect(mockConfig.checks.security.group).toBe('code-review');
       expect(mockConfig.checks.security.schema).toBe('code-review');
       expect(mockConfig.checks['full-review'].group).toBe('pr-overview');
-      expect(mockConfig.checks['full-review'].schema).toBe('markdown');
+      expect(mockConfig.checks['full-review'].schema).toBe('text');
     });
 
     test('should support depends_on relationships', () => {
@@ -427,7 +427,7 @@ graph TD
           overview: {
             type: 'ai',
             group: 'summary',
-            schema: 'markdown',
+            schema: 'text',
             depends_on: ['security', 'architecture'],
             on: ['pr_opened'],
           },

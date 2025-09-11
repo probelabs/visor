@@ -74,7 +74,7 @@ import {
       for (let i = 0; i < totalOperations; i++) {
         // Vary the operations to simulate real usage
         const checkType = ['performance', 'security', 'style', 'architecture'][i % 4];
-        const outputFormat = ['table', 'json', 'markdown'][i % 3];
+        const outputFormat = ['table', 'json', 'text'][i % 3];
 
         try {
           // CLI parsing operations

@@ -140,14 +140,14 @@ graph TD
       expect(rendered).toContain('🔴'); // critical severity
     });
 
-    test('should execute check with markdown schema and render content template', async () => {
+    test('should execute check with text schema and render content template', async () => {
       const config = {
         version: '2.0',
         checks: {
           'full-review': {
             type: 'mock-ai',
             group: 'pr-overview',
-            schema: 'markdown',
+            schema: 'text',
             prompt: 'Create PR overview with mermaid diagram',
             on: ['pr_opened'],
           },
@@ -160,11 +160,11 @@ graph TD
         debug: false,
       });
 
-      // For markdown schema, the full-review should execute successfully
+      // For text schema, the full-review should execute successfully
       expect(results.checksExecuted).toContain('full-review');
 
-      // Load and validate markdown schema
-      const schemaPath = path.join(__dirname, '../../output/markdown/schema.json');
+      // Load and validate text schema
+      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
       const schema = JSON.parse(await fs.readFile(schemaPath, 'utf-8'));
       const validate = ajv.compile(schema);
 
@@ -189,8 +189,8 @@ graph TD
       const isValid = validate(mockResult);
       expect(isValid).toBe(true);
 
-      // Render using markdown template
-      const templatePath = path.join(__dirname, '../../output/markdown/template.liquid');
+      // Render using text template
+      const templatePath = path.join(__dirname, '../../output/text/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
       const rendered = await liquid.parseAndRender(templateContent, mockResult);
 
@@ -330,9 +330,9 @@ graph TD
       expect(validate.errors).toBeTruthy();
     });
 
-    test('should validate AI provider output against markdown schema', async () => {
+    test('should validate AI provider output against text schema', async () => {
       // Load schema
-      const schemaPath = path.join(__dirname, '../../output/markdown/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
       const schema = JSON.parse(await fs.readFile(schemaPath, 'utf-8'));
       const validate = ajv.compile(schema);
 
@@ -404,7 +404,7 @@ graph TD
         {
           id: 'overview',
           group: 'summary',
-          schema: 'markdown',
+          schema: 'text',
         },
       ];
 

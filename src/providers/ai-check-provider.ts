@@ -101,12 +101,23 @@ export class AICheckProvider extends CheckProvider {
       `🔧 Debug: AICheckProvider using custom prompt: ${customPrompt.substring(0, 100)}...`
     );
 
-    // Always pass the custom prompt - no fallbacks
-    return await service.executeReview(prInfo, customPrompt);
+    // Pass the custom prompt and schema - no fallbacks
+    const schema = config.schema as string | undefined;
+    return await service.executeReview(prInfo, customPrompt, schema);
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['type', 'prompt', 'focus', 'ai.provider', 'ai.model', 'ai.apiKey', 'ai.timeout'];
+    return [
+      'type',
+      'prompt',
+      'focus',
+      'schema',
+      'group',
+      'ai.provider',
+      'ai.model',
+      'ai.apiKey',
+      'ai.timeout',
+    ];
   }
 
   async isAvailable(): Promise<boolean> {

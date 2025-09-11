@@ -249,8 +249,8 @@ export class PRReviewer {
 
     let templateData: any;
 
-    if (schema === 'markdown') {
-      // For markdown schema, pass the message content directly
+    if (schema === 'text') {
+      // For text schema, pass the message content directly
       templateData = {
         content: issues.length > 0 ? issues[0].message : 'No content available',
         checkName: checkName,

@@ -131,7 +131,7 @@ describe('HTML Rendering Debug', () => {
           severity: 'info' as const,
           category: 'documentation' as const,
           group: 'pr-overview',
-          schema: 'markdown',
+          schema: 'text',
         },
       ],
       suggestions: [

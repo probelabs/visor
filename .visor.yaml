@@ -72,7 +72,7 @@ checks:
   full-review:
     type: ai
     group: pr-overview
-    schema: markdown
+    schema: text
     prompt: |
       Create a comprehensive pull request overview in markdown format with:
 
