@@ -1,7 +1,7 @@
 <div align="center">
   <img src="site/visor.png" alt="Visor Logo" width="200" />
   
-  # Visor - AI-Powered Code Review
+  # Visor - AI-Powered Code Review with Group-Based Comments
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)

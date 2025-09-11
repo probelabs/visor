@@ -137,9 +137,14 @@ export class PRReviewer {
   ): Promise<void> {
     // Group issues by their group property
     const issuesByGroup = this.groupIssuesByGroup(summary.issues);
+    console.error(
+      `🔧 Debug: Found ${Object.keys(issuesByGroup).length} groups:`,
+      Object.keys(issuesByGroup)
+    );
 
     // If no groups or only one group, use the original single comment approach
     if (Object.keys(issuesByGroup).length <= 1) {
+      console.error(`🔧 Debug: Using single comment approach`);
       const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -151,6 +156,9 @@ export class PRReviewer {
     }
 
     // Create separate comments for each group
+    console.error(
+      `🔧 Debug: Creating separate comments for ${Object.keys(issuesByGroup).length} groups`
+    );
     for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
       const groupSummary: ReviewSummary = {
         ...summary,
@@ -162,6 +170,9 @@ export class PRReviewer {
         ? `${options.commentId}-${groupName}`
         : `visor-${groupName}`;
 
+      console.error(
+        `🔧 Debug: Creating comment for group "${groupName}" with ID: ${groupCommentId}`
+      );
       const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
