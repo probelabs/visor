@@ -183,6 +183,115 @@ If no API key is configured, Visor will fall back to basic pattern-matching anal
 
 For best results, configure an AI provider for intelligent, context-aware code review.
 
+## 📊 Step Dependencies & Intelligent Execution
+
+### Dependency-Aware Check Execution
+
+Visor supports defining dependencies between checks using the `depends_on` field. This enables:
+
+- **Sequential Execution**: Dependent checks wait for their dependencies to complete
+- **Parallel Optimization**: Independent checks run simultaneously for faster execution
+- **Smart Scheduling**: Automatic topological sorting ensures correct execution order
+
+### Configuration Example
+
+```yaml
+checks:
+  security:
+    type: ai
+    prompt: "Comprehensive security analysis..."
+    on: [pr_opened, pr_updated]
+    # No dependencies - runs first
+
+  performance:
+    type: ai
+    prompt: "Performance analysis..."
+    on: [pr_opened, pr_updated]
+    # No dependencies - runs parallel with security
+
+  style:
+    type: ai
+    prompt: "Style analysis based on security findings..."
+    on: [pr_opened]
+    depends_on: [security]  # Waits for security to complete
+
+  architecture:
+    type: ai
+    prompt: "Architecture analysis building on previous checks..."
+    on: [pr_opened, pr_updated]
+    depends_on: [security, performance]  # Waits for both to complete
+```
+
+### Execution Flow
+
+With the above configuration:
+1. **Level 0**: `security` and `performance` run in parallel
+2. **Level 1**: `style` runs after `security` completes
+3. **Level 2**: `architecture` runs after both `security` and `performance` complete
+
+### Benefits
+
+- **Faster Execution**: Independent checks run in parallel
+- **Better Context**: Later checks can reference findings from dependencies
+- **Logical Flow**: Ensures foundational checks (like security) complete before specialized ones
+- **Error Handling**: Failed dependencies don't prevent other independent checks from running
+
+### Advanced Patterns
+
+#### Diamond Dependency
+```yaml
+checks:
+  foundation:
+    type: ai
+    prompt: "Base analysis"
+    
+  branch_a:
+    type: ai
+    depends_on: [foundation]
+    
+  branch_b:
+    type: ai
+    depends_on: [foundation]
+    
+  final:
+    type: ai
+    depends_on: [branch_a, branch_b]
+```
+
+#### Multiple Independent Chains
+```yaml
+checks:
+  # Security chain
+  security_basic:
+    type: ai
+    prompt: "Basic security scan"
+    
+  security_advanced:
+    type: ai
+    depends_on: [security_basic]
+    
+  # Performance chain  
+  performance_basic:
+    type: ai
+    prompt: "Basic performance scan"
+    
+  performance_advanced:
+    type: ai
+    depends_on: [performance_basic]
+    
+  # Final integration (waits for both chains)
+  integration:
+    type: ai
+    depends_on: [security_advanced, performance_advanced]
+```
+
+### Error Handling
+
+- **Cycle Detection**: Circular dependencies are detected and reported
+- **Missing Dependencies**: References to non-existent checks are validated
+- **Graceful Failures**: Failed checks don't prevent independent checks from running
+- **Dependency Results**: Results from dependency checks are available to dependent checks
+
 ## 🧠 Advanced AI Features
 
 ### XML-Formatted Analysis
@@ -299,6 +408,7 @@ checks:
       - complexity-analysis
       - memory-leaks
       - algorithm-efficiency
+    depends_on: [security]  # Run after security check completes
   
   style:
     enabled: true
@@ -307,6 +417,7 @@ checks:
     rules:
       - naming-conventions
       - formatting
+    depends_on: [security]  # Ensure secure coding style
   
   architecture:
     enabled: true
@@ -314,6 +425,7 @@ checks:
     rules:
       - circular-dependencies
       - design-patterns
+    depends_on: [security, performance]  # Build on foundational checks
 
 # Thresholds for pass/fail
 thresholds:

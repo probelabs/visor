@@ -160,6 +160,10 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
+    // Add footer
+    comment += `---\n`;
+    comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+
     return comment;
   }
 
@@ -206,7 +210,8 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
-    comment += `---\n*Review powered by Visor - Use \`/help\` for available commands*`;
+    comment += `---\n`;
+    comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
     return comment;
   }

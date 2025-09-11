@@ -31,7 +31,18 @@
       "Bash(node dist/src/cli-main.js --help)",
       "Bash(node dist/cli-main.js --help)",
       "Bash(node dist/cli-main.js --check performance --output summary)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(gh pr:*)",
+      "Bash(/usr/bin/npm run build)",
+      "Read(//usr/local/bin/**)",
+      "Bash(pacman:*)",
+      "Bash(git restore:*)",
+      "Bash(git config:*)",
+      "Bash(git push:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh api:*)",
+      "Bash(sed:*)"
     ]
   },
   "hooks": {

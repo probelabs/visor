@@ -399,14 +399,19 @@ describe('Visor Integration E2E Tests', () => {
     test('should preserve legacy comment commands', async () => {
       const { parseComment } = require('../../src/commands');
 
-      // Test all legacy commands still work
-      expect(parseComment('/review')).toEqual({ type: 'review', args: undefined });
-      expect(parseComment('/review --focus=security')).toEqual({
+      // Test built-in commands still work
+      expect(parseComment('/status')).toEqual({ type: 'status', args: undefined });
+      expect(parseComment('/help')).toEqual({ type: 'help', args: undefined });
+
+      // Test that review command works when configured
+      expect(parseComment('/review', ['review'])).toEqual({ type: 'review', args: undefined });
+      expect(parseComment('/review --focus=security', ['review'])).toEqual({
         type: 'review',
         args: ['--focus=security'],
       });
-      expect(parseComment('/status')).toEqual({ type: 'status', args: undefined });
-      expect(parseComment('/help')).toEqual({ type: 'help', args: undefined });
+
+      // Test that review command doesn't work without configuration
+      expect(parseComment('/review')).toBeNull();
     });
 
     test('should preserve legacy action inputs', async () => {

@@ -55,9 +55,14 @@ export abstract class CheckProvider {
    * Execute the check on the given PR information
    * @param prInfo Information about the pull request
    * @param config Provider-specific configuration
+   * @param dependencyResults Optional results from dependency checks that this check depends on
    * @returns Review summary with scores, issues, and comments
    */
-  abstract execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary>;
+  abstract execute(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary>;
 
   /**
    * Get the list of configuration keys this provider supports

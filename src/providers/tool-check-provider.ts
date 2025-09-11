@@ -35,7 +35,11 @@ export class ToolCheckProvider extends CheckProvider {
     return true;
   }
 
-  async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+  async execute(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    _dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary> {
     const command = config.command as string;
     const args = (config.args as string[]) || [];
     const files = prInfo.files.map(f => f.filename);

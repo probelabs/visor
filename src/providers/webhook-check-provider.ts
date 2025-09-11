@@ -40,7 +40,11 @@ export class WebhookCheckProvider extends CheckProvider {
     }
   }
 
-  async execute(prInfo: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+  async execute(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    _dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary> {
     const url = config.url as string;
     const method = (config.method as string) || 'POST';
     const headers = (config.headers as Record<string, string>) || {};

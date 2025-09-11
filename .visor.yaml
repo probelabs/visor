@@ -3,6 +3,7 @@ version: "1.0"
 checks:
   security:
     type: ai
+    command: security
     prompt: |
       Perform comprehensive security analysis focusing on:
       - SQL injection vulnerabilities
@@ -16,6 +17,7 @@ checks:
 
   performance:
     type: ai
+    command: performance
     prompt: |
       Review for performance issues:
       - N+1 database queries
@@ -29,6 +31,7 @@ checks:
 
   style:
     type: ai
+    command: style
     prompt: |
       Check for style and consistency issues:
       - Naming conventions adherence
@@ -38,11 +41,14 @@ checks:
       - Consistent error handling patterns
       - TypeScript best practices
     on: [pr_opened]
+    # Style check depends on security to ensure secure coding style
+    depends_on: [security]
 
   architecture:
     type: ai
+    command: architecture
     prompt: |
-      Analyze architectural aspects:
+      Analyze architectural aspects building on security and performance findings:
       - SOLID principles adherence
       - Design pattern usage appropriateness
       - Circular dependencies
@@ -50,7 +56,23 @@ checks:
       - Error handling architecture
       - Separation of concerns
       - Code reusability and maintainability
+      - Integration with security and performance requirements
     on: [pr_opened, pr_updated]
+    # Architecture check depends on both security and performance analysis
+    depends_on: [security, performance]
+
+  # Example of a combined review command that runs all checks
+  full-review:
+    type: ai
+    command: review
+    prompt: |
+      Perform a comprehensive code review including:
+      - Security vulnerabilities and risks
+      - Performance bottlenecks and optimizations
+      - Code style and best practices
+      - Architectural design and patterns
+    on: [pr_opened, pr_updated]
+    depends_on: [security, performance, style, architecture]
 
 output:
   pr_comment:

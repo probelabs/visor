@@ -1,13 +1,48 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
-import { parseComment, getHelpText } from './commands';
+import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
 import { PRReviewer, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
+
+// Type definitions for CLI output
+interface CliReviewOutput {
+  overallScore?: number;
+  totalIssues?: number;
+  criticalIssues?: number;
+  filesAnalyzed?: number | string;
+  securityScore?: number;
+  performanceScore?: number;
+  styleScore?: number;
+  architectureScore?: number;
+  issues?: CliReviewIssue[];
+  suggestions?: string[];
+  debug?: DebugInfo;
+}
+
+interface CliReviewIssue {
+  category: string;
+  severity?: string;
+  message: string;
+  file: string;
+  line: number;
+}
+
+interface DebugInfo {
+  provider?: string;
+  model?: string;
+  tokensUsed?: number;
+  prompt?: string;
+  response?: string;
+  processingTime?: number;
+  parallelExecution?: boolean;
+  checksExecuted?: string[];
+  [key: string]: unknown;
+}
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -27,7 +62,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
       // If no installation ID provided, try to get it for the current repository
       let finalInstallationId: number | undefined;
-      
+
       // Validate and parse the installation ID if provided
       if (installationId) {
         finalInstallationId = parseInt(installationId, 10);
@@ -57,8 +92,10 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
             });
             finalInstallationId = installation.id;
             console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
-          } catch (error) {
-            console.warn('⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.');
+          } catch {
+            console.warn(
+              '⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.'
+            );
             throw new Error(
               'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository or provide the `installation-id` manually.'
             );
@@ -78,7 +115,9 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
       return { octokit, authType: 'github-app' };
     } catch (error) {
-      console.error('❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.');
+      console.error(
+        '❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.'
+      );
       throw new Error(`GitHub App authentication failed`, { cause: error });
     }
   }
@@ -110,6 +149,10 @@ export async function run(): Promise<void> {
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       'auto-review': getInput('auto-review'),
       debug: getInput('debug'),
+      // GitHub App authentication inputs
+      'app-id': getInput('app-id') || undefined,
+      'private-key': getInput('private-key') || undefined,
+      'installation-id': getInput('installation-id') || undefined,
       // Only collect other inputs if they have values to avoid triggering CLI mode
       checks: getInput('checks') || undefined,
       'output-format': getInput('output-format') || undefined,
@@ -164,7 +207,7 @@ export async function run(): Promise<void> {
         const prDetected = await detectPRContext(inputs, context, octokit);
         if (prDetected) {
           console.log('✅ PR context detected - using GitHub API for PR analysis');
-          await handlePullRequestVisorMode(inputs, context, octokit);
+          await handlePullRequestVisorMode(inputs, context, octokit, authType);
           return;
         } else {
           console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
@@ -189,7 +232,7 @@ async function handleVisorMode(
   cliBridge: ActionCliBridge,
   inputs: GitHubActionInputs,
   _context: GitHubContext,
-  octokit: Octokit
+  _octokit: Octokit
 ): Promise<void> {
   try {
     // Note: PR auto-review cases are now handled upstream in the main run() function
@@ -250,7 +293,11 @@ async function handleVisorMode(
  * Post CLI review results as PR comment with robust PR detection
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs, octokit: Octokit): Promise<void> {
+async function postCliReviewComment(
+  cliOutput: CliReviewOutput,
+  inputs: GitHubActionInputs,
+  octokit: Octokit
+): Promise<void> {
   try {
     const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
     const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
@@ -392,8 +439,8 @@ async function postCliReviewComment(cliOutput: any, inputs: GitHubActionInputs, 
   }
 }
 
-function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
-  const grouped: Record<string, any[]> = {
+function groupIssuesByCategory(issues: CliReviewIssue[]): Record<string, CliReviewIssue[]> {
+  const grouped: Record<string, CliReviewIssue[]> = {
     security: [],
     performance: [],
     style: [],
@@ -411,7 +458,7 @@ function groupIssuesByCategory(issues: any[]): Record<string, any[]> {
   return grouped;
 }
 
-function formatDebugInfo(debug: any): string {
+function formatDebugInfo(debug: DebugInfo): string {
   let content = '';
   if (debug.provider) content += `**Provider:** ${debug.provider}\n`;
   if (debug.model) content += `**Model:** ${debug.model}\n`;
@@ -474,7 +521,32 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     return;
   }
 
-  const command = parseComment(comment.body);
+  // Load configuration to get available commands
+  const configManager = new ConfigManager();
+  let config;
+  const commandRegistry: CommandRegistry = {};
+
+  try {
+    config = await configManager.loadConfig('.visor.yaml');
+    // Build command registry from config
+    if (config.checks) {
+      for (const [checkId, checkConfig] of Object.entries(config.checks)) {
+        if (checkConfig.command) {
+          if (!commandRegistry[checkConfig.command]) {
+            commandRegistry[checkConfig.command] = [];
+          }
+          commandRegistry[checkConfig.command].push(checkId);
+        }
+      }
+    }
+  } catch {
+    console.log('Could not load config, using defaults');
+    config = null;
+  }
+
+  // Parse comment with available commands
+  const availableCommands = Object.keys(commandRegistry);
+  const command = parseComment(comment.body, availableCommands);
   if (!command) {
     console.log('No valid command found in comment');
     return;
@@ -487,53 +559,6 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
   const reviewer = new PRReviewer(octokit);
 
   switch (command.type) {
-    case 'review':
-      const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
-        | 'security'
-        | 'performance'
-        | 'style'
-        | 'all'
-        | undefined;
-      const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
-        | 'table'
-        | 'json'
-        | 'markdown'
-        | 'sarif'
-        | undefined;
-
-      console.log(`Starting PR review for #${prNumber}`);
-      const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-
-      // Load config for the review
-      const configManager = new ConfigManager();
-      let config;
-      try {
-        config = await configManager.loadConfig('.visor.yaml');
-      } catch {
-        // Fall back to a basic configuration
-        config = {
-          checks: {
-            'legacy-review': {
-              provider: 'ai',
-              prompt: `Review this code focusing on ${focus || 'all aspects'}. Look for security issues, performance problems, code quality, and suggest improvements.`,
-            },
-          },
-        };
-      }
-
-      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
-        focus,
-        format,
-        config: config as any,
-        checks: ['legacy-review'],
-        parallelExecution: false,
-      });
-
-      await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
-
-      setOutput('issues-found', calculateTotalIssues(review.issues).toString());
-      break;
-
     case 'status':
       const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
       const statusComment =
@@ -543,7 +568,9 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         `**Files Changed:** ${statusPrInfo.files.length}\n` +
         `**Additions:** +${statusPrInfo.totalAdditions}\n` +
         `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
-        `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}`;
+        `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
+        `---\n` +
+        `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
       await octokit.rest.issues.createComment({
         owner,
@@ -558,8 +585,52 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         owner,
         repo,
         issue_number: prNumber,
-        body: getHelpText(),
+        body: getHelpText(commandRegistry),
       });
+      break;
+
+    default:
+      // Handle custom commands from config
+      if (commandRegistry[command.type]) {
+        const checkIds = commandRegistry[command.type];
+        console.log(`Running checks for command /${command.type}: ${checkIds.join(', ')}`);
+
+        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+
+        // Extract common arguments
+        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
+          | 'security'
+          | 'performance'
+          | 'style'
+          | 'all'
+          | undefined;
+        const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
+          | 'table'
+          | 'json'
+          | 'markdown'
+          | 'sarif'
+          | undefined;
+
+        // If focus is specified, update the checks' focus
+        if (focus && config?.checks) {
+          for (const checkId of checkIds) {
+            if (config.checks[checkId]) {
+              config.checks[checkId].focus = focus;
+            }
+          }
+        }
+
+        const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
+          focus,
+          format,
+          config: config as any,
+          checks: checkIds,
+          parallelExecution: false,
+        });
+
+        await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
+        setOutput('issues-found', calculateTotalIssues(review.issues).toString());
+      }
       break;
   }
 }
@@ -634,9 +705,12 @@ async function handlePullRequestEvent(
   } catch {
     // Fall back to a basic configuration for PR auto-review
     config = {
+      version: '1.0',
+      output: {},
       checks: {
         'auto-review': {
-          provider: 'ai',
+          type: 'ai' as const,
+          on: ['pr_opened', 'pr_updated'],
           prompt: `Review this pull request comprehensively. Look for security issues, performance problems, code quality, bugs, and suggest improvements. Action: ${action}`,
         },
       },
@@ -736,7 +810,8 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
 async function handlePullRequestVisorMode(
   inputs: GitHubActionInputs,
   _context: GitHubContext,
-  octokit: Octokit
+  octokit: Octokit,
+  _authType?: string
 ): Promise<void> {
   const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
   const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
