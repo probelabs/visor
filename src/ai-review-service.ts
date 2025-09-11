@@ -732,8 +732,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
               endLine: issue.endLine,
               ruleId: issue.ruleId || `${issue.category || 'general'}/unknown`,
               message: issue.message || '',
-              severity: this.validateSeverity(issue.severity),
-              category: this.validateCategory(issue.category),
+              severity: issue.severity,
+              category: issue.category,
               suggestion: issue.suggestion,
               replacement: issue.replacement,
             } as ReviewIssue;
@@ -797,52 +797,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         `Invalid AI response format: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
-  }
-
-  /**
-   * Validate severity value
-   */
-  private validateSeverity(severity: string): 'info' | 'warning' | 'error' | 'critical' {
-    const valid = ['info', 'warning', 'error', 'critical'];
-    if (valid.includes(severity)) {
-      return severity as 'info' | 'warning' | 'error' | 'critical';
-    }
-    // Map common alternatives
-    if (severity === 'major' || severity === 'high') {
-      return 'error';
-    }
-    if (severity === 'medium') {
-      return 'warning';
-    }
-    if (severity === 'minor' || severity === 'low') {
-      return 'info';
-    }
-    return 'info';
-  }
-
-  /**
-   * Validate category value
-   */
-  private validateCategory(
-    category: string
-  ): 'security' | 'performance' | 'style' | 'logic' | 'documentation' {
-    const valid = ['security', 'performance', 'style', 'logic', 'documentation'];
-    if (valid.includes(category)) {
-      return category as 'security' | 'performance' | 'style' | 'logic' | 'documentation';
-    }
-    // Map common alternatives
-    if (category === 'bug' || category === 'error') {
-      return 'logic';
-    }
-    if (category === 'docs') {
-      return 'documentation';
-    }
-    if (category === 'architecture' || category === 'design') {
-      return 'style'; // Map architecture to style since we don't have a separate architecture category
-    }
-    // Keep logic as default for backward compatibility
-    // The actual check grouping will be based on the ruleId prefix
-    return 'logic';
   }
 
   /**
