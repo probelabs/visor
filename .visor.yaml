@@ -74,7 +74,7 @@ checks:
     group: pr-overview
     schema: text
     prompt: |
-      Create a comprehensive pull request overview in markdown format with:
+      Create a comprehensive pull request overview with the following sections:
 
       ## 📋 Pull Request Overview
       

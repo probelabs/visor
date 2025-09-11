@@ -121,6 +121,10 @@ export class AIReviewService {
     const prompt = this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
+    log(`Schema type: ${schema || 'default (code-review)'}`);
+    if (schema === 'text') {
+      log('Using text schema - expecting JSON with content field');
+    }
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -237,23 +241,30 @@ ${
 REVIEW INSTRUCTIONS:
 ${customInstructions}
 
-CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object.
-
 ${
   schema === 'text'
-    ? `Required JSON response format for text output:
+    ? `CRITICAL: You must respond with ONLY valid JSON. Your ENTIRE response must be a single JSON object.
+
+Required JSON response format:
 \`\`\`json
 {
-  "content": "Your complete text response here (can be markdown, plain text, or any format requested)"
+  "content": "Your complete response here with all markdown formatting"
 }
 \`\`\`
 
-IMPORTANT: The "content" field should contain your COMPLETE response as a single string, including:
-- All formatting requested (markdown headers, lists, tables, etc.)
-- Code blocks, diagrams, or any other elements
-- Proper line breaks (use \\n for newlines within the JSON string)
-- The exact format specified in the instructions above`
-    : `Required JSON response format for code review:
+IMPORTANT RULES:
+1. Your ENTIRE response must be valid JSON - nothing before or after the JSON object
+2. The "content" field must be a properly escaped JSON string
+3. Use \\n for line breaks within the content string
+4. Use \\" to escape quotes within the content
+5. Include ALL requested sections in the content field as a single string
+6. Example of correct format:
+   {"content": "## Title\\n\\nThis is a paragraph\\n\\n- List item 1\\n- List item 2"}
+
+DO NOT write markdown directly. Put ALL markdown inside the "content" field as a JSON string.`
+    : `CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object.
+
+Required JSON response format for code review:
 \`\`\`json
 {
   "issues": [
@@ -772,6 +783,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           const start = Math.max(0, position - 50);
           const end = Math.min(response.length, position + 50);
           console.error(`🔍 Context: "${response.substring(start, end)}"`);
+
+          // Show the first 100 characters to understand what format the AI returned
+          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
         }
 
         // Check if response contains common non-JSON patterns
