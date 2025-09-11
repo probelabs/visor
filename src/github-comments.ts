@@ -227,8 +227,11 @@ ${content}
    */
   private isVisorComment(body: string, commentId?: string): boolean {
     if (commentId) {
-      // Check for the new format first
-      if (body.includes(`visor-comment-id:${commentId}`)) {
+      // Check for the new format with exact matching - look for the exact ID followed by space or -->
+      if (
+        body.includes(`visor-comment-id:${commentId} `) ||
+        body.includes(`visor-comment-id:${commentId}-->`)
+      ) {
         return true;
       }
       // Check for legacy format (visor-review-* pattern) for backwards compatibility
