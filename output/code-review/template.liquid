@@ -1,0 +1,66 @@
+## 🔍 Code Analysis Results
+
+{% assign grouped_issues = issues | group_by: 'checkName' %}
+{% for group in grouped_issues %}
+### {{ group.name | capitalize }} Issues ({{ group.items.size }})
+
+<table>
+  <thead>
+    <tr>
+      <th>Severity</th>
+      <th>File</th>
+      <th>Line</th>
+      <th>Issue</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% assign sorted_issues = group.items | sort: 'severity' %}
+    {% for issue in sorted_issues %}
+    <tr>
+      <td>
+        {% case issue.severity %}
+          {% when 'critical' %}🔴 Critical
+          {% when 'error' %}🟠 Error
+          {% when 'warning' %}🟡 Warning
+          {% when 'info' %}🟢 Info
+          {% else %}📝 {{ issue.severity | capitalize }}
+        {% endcase %}
+      </td>
+      <td><code>{{ issue.file }}</code></td>
+      <td>{{ issue.line }}{% if issue.endLine %}-{{ issue.endLine }}{% endif %}</td>
+      <td>
+        <div>{{ issue.message }}
+        {% if issue.suggestion %}
+        <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion }}</details>
+        {% endif %}
+        {% if issue.replacement %}
+        <details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>{{ issue.replacement }}</code></pre></details>
+        {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endfor %}
+
+{% if suggestions.size > 0 %}
+## 💡 General Suggestions
+
+{% for suggestion in suggestions %}
+- {{ suggestion }}
+{% endfor %}
+{% endif %}
+
+{% if metrics %}
+## 📊 Analysis Metrics
+
+- **Files Analyzed**: {{ metrics.filesAnalyzed }}
+{% if metrics.linesAnalyzed %}
+- **Lines Analyzed**: {{ metrics.linesAnalyzed }}
+{% endif %}
+{% if metrics.executionTime %}
+- **Processing Time**: {{ metrics.executionTime }}ms
+{% endif %}
+{% endif %}
