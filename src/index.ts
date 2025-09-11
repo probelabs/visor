@@ -30,6 +30,7 @@ interface CliReviewIssue {
   message: string;
   file: string;
   line: number;
+  ruleId?: string;
 }
 
 interface DebugInfo {
@@ -376,14 +377,36 @@ async function postCliReviewComment(
       comment += '\n';
     }
 
-    // Add issues grouped by category
-    if (cliOutput.issues && cliOutput.issues.length > 0) {
-      const groupedIssues = groupIssuesByCategory(cliOutput.issues);
+    // Load config to determine grouping method
+    const { ConfigManager } = await import('./config');
+    const configManager = new ConfigManager();
+    const config = await configManager.findAndLoadConfig();
 
-      for (const [category, issues] of Object.entries(groupedIssues)) {
+    // Add issues grouped by check or category based on config
+    if (cliOutput.issues && cliOutput.issues.length > 0) {
+      // Use check-based grouping if configured, otherwise use category grouping
+      const groupedIssues =
+        config.output?.pr_comment?.group_by === 'check'
+          ? groupIssuesByCheck(cliOutput.issues)
+          : groupIssuesByCategory(cliOutput.issues);
+
+      // Filter out issues from unconfigured checks if using check-based grouping
+      const configuredChecks = config.checks ? Object.keys(config.checks) : [];
+
+      for (const [groupKey, issues] of Object.entries(groupedIssues)) {
         if (issues.length === 0) continue;
 
-        const title = `${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+        // Skip unconfigured checks when using check-based grouping
+        if (
+          config.output?.pr_comment?.group_by === 'check' &&
+          configuredChecks.length > 0 &&
+          !configuredChecks.includes(groupKey) &&
+          groupKey !== 'uncategorized'
+        ) {
+          continue;
+        }
+
+        const title = `${groupKey.charAt(0).toUpperCase() + groupKey.slice(1)} Issues (${issues.length})`;
 
         let sectionContent = '';
         for (const issue of issues.slice(0, 5)) {
@@ -453,6 +476,34 @@ function groupIssuesByCategory(issues: CliReviewIssue[]): Record<string, CliRevi
     const category = issue.category || 'logic';
     if (!grouped[category]) grouped[category] = [];
     grouped[category].push(issue);
+  }
+
+  return grouped;
+}
+
+/**
+ * Group issues by the check that found them (extracted from ruleId prefix)
+ */
+function groupIssuesByCheck(issues: CliReviewIssue[]): Record<string, CliReviewIssue[]> {
+  const grouped: Record<string, CliReviewIssue[]> = {};
+
+  for (const issue of issues) {
+    // Extract check name from ruleId if it contains a slash
+    // Format: "checkName/specific-rule" -> "checkName"
+    let checkName = 'uncategorized';
+
+    if (issue.ruleId && issue.ruleId.includes('/')) {
+      const parts = issue.ruleId.split('/');
+      checkName = parts[0];
+    } else if (issue.category) {
+      // Fallback to category if no check prefix in ruleId
+      checkName = issue.category;
+    }
+
+    if (!grouped[checkName]) {
+      grouped[checkName] = [];
+    }
+    grouped[checkName].push(issue);
   }
 
   return grouped;

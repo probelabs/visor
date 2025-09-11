@@ -773,6 +773,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     if (category === 'docs') {
       return 'documentation';
     }
+    if (category === 'architecture' || category === 'design') {
+      return 'style'; // Map architecture to style since we don't have a separate architecture category
+    }
+    // Keep logic as default for backward compatibility
+    // The actual check grouping will be based on the ruleId prefix
     return 'logic';
   }
 
