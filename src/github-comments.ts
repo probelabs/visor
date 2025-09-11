@@ -251,8 +251,10 @@ ${content}
       if (commentId.startsWith('pr-review-') && body.includes('visor-review-')) {
         return true;
       }
+      // If we have a specific commentId but no exact match, return false
+      return false;
     }
-    // General Visor comment detection
+    // General Visor comment detection (only when no specific commentId provided)
     return (
       (body.includes('visor-comment-id:') && body.includes('<!-- /visor-comment-id:')) ||
       body.includes('visor-review-')
