@@ -2,6 +2,9 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { Liquid } from 'liquidjs';
+import fs from 'fs/promises';
+import path from 'path';
 
 export interface ReviewIssue {
   // Location
@@ -128,7 +131,7 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string } = {}
   ): Promise<void> {
-    const comment = this.formatReviewCommentWithVisorFormat(summary, options);
+    const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
 
     await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
       commentId: options.commentId,
@@ -137,36 +140,73 @@ export class PRReviewer {
     });
   }
 
-  private formatReviewCommentWithVisorFormat(
+  private async formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
     _options: ReviewOptions
-  ): string {
-    // Calculate metrics from issues
+  ): Promise<string> {
     const totalIssues = calculateTotalIssues(summary.issues);
-    const comments = convertIssuesToComments(summary.issues);
 
     let comment = '';
 
-    // If no issues, show success message
+    // Simple header
     if (totalIssues === 0) {
-      comment += `## ✅ All Checks Passed\n\n`;
-      comment += `**No issues found – changes LGTM.**\n\n`;
+      comment += `## ✅ All Checks Passed\n\n**No issues found – changes LGTM.**\n\n`;
     } else {
-      // Create tables with issues grouped by category
-      comment += this.formatIssuesTable(comments);
+      // Use new schema-template system for content generation
+      const templateContent = await this.renderWithSchemaTemplate(summary);
+      comment += templateContent;
     }
 
-    // Add debug section if debug information is available
+    // Add debug section if available
     if (summary.debug) {
       comment += this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 
-    // Add footer
-    comment += `---\n`;
-    comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    // Simple footer
+    comment += `---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
     return comment;
+  }
+
+  private async renderWithSchemaTemplate(summary: ReviewSummary): Promise<string> {
+    try {
+      const liquid = new Liquid();
+
+      // Load the code-review template
+      const templatePath = path.join(__dirname, '../output/code-review/template.liquid');
+      const templateContent = await fs.readFile(templatePath, 'utf-8');
+
+      // Convert issues to the format expected by template
+      const issuesWithCheckName = summary.issues.map(issue => ({
+        ...issue,
+        checkName: this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized'),
+      }));
+
+      // Prepare data for template
+      const templateData = {
+        issues: issuesWithCheckName,
+      };
+
+      // Render with Liquid template
+      const rendered = await liquid.parseAndRender(templateContent, templateData);
+      return rendered;
+    } catch (error) {
+      console.warn(
+        'Failed to render with schema-template system, falling back to old system:',
+        error
+      );
+      // Fallback to old system if template fails
+      const comments = convertIssuesToComments(summary.issues);
+      return this.formatIssuesTable(comments);
+    }
+  }
+
+  private extractCheckNameFromRuleId(ruleId: string): string {
+    if (ruleId && ruleId.includes('/')) {
+      return ruleId.split('/')[0];
+    }
+    return 'uncategorized';
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {

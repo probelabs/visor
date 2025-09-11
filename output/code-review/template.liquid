@@ -28,16 +28,11 @@
       </td>
       <td><code>{{ issue.file }}</code></td>
       <td>{{ issue.line }}{% if issue.endLine %}-{{ issue.endLine }}{% endif %}</td>
-      <td>
-        <div>{{ issue.message }}
-        {% if issue.suggestion %}
-        <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion }}</details>
-        {% endif %}
-        {% if issue.replacement %}
-        <details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>{{ issue.replacement }}</code></pre></details>
-        {% endif %}
-        </div>
-      </td>
+      <td><div>{{ issue.message }}{% if issue.suggestion %}
+        <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion | escape }}</details>{% if issue.replacement %}
+        <details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>{{ issue.replacement | escape }}</code></pre></details>{% endif %}{% elsif issue.replacement %}
+        <details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>{{ issue.replacement | escape }}</code></pre></details>{% endif %}
+        </div></td>
     </tr>
     {% endfor %}
   </tbody>
