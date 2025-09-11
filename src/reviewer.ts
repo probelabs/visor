@@ -29,6 +29,7 @@ export interface ReviewComment {
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
   suggestion?: string;
   replacement?: string;
+  ruleId?: string; // Added to preserve check information
 }
 
 export interface ReviewSummary {
@@ -66,6 +67,7 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
     category: issue.category,
     suggestion: issue.suggestion,
     replacement: issue.replacement,
+    ruleId: issue.ruleId, // Preserve ruleId for check-based grouping
   }));
 }
 
@@ -230,6 +232,27 @@ export class PRReviewer {
         grouped[comment.category] = [];
       }
       grouped[comment.category].push(comment);
+    }
+
+    return grouped;
+  }
+
+  private groupCommentsByCheck(comments: ReviewComment[]): Record<string, ReviewComment[]> {
+    const grouped: Record<string, ReviewComment[]> = {};
+
+    for (const comment of comments) {
+      // Extract check name from ruleId prefix (e.g., "security/sql-injection" -> "security")
+      let checkName = 'uncategorized';
+
+      if (comment.ruleId && comment.ruleId.includes('/')) {
+        const parts = comment.ruleId.split('/');
+        checkName = parts[0];
+      }
+
+      if (!grouped[checkName]) {
+        grouped[checkName] = [];
+      }
+      grouped[checkName].push(comment);
     }
 
     return grouped;
@@ -443,17 +466,17 @@ export class PRReviewer {
   private formatIssuesTable(comments: ReviewComment[]): string {
     let content = `## 🔍 Code Analysis Results\n\n`;
 
-    // Group comments by category
-    const groupedComments = this.groupCommentsByCategory(comments);
+    // Group comments by check (extracted from ruleId prefix)
+    const groupedComments = this.groupCommentsByCheck(comments);
 
-    // Create a table for each category that has issues
-    for (const [category, categoryComments] of Object.entries(groupedComments)) {
-      if (categoryComments.length === 0) continue;
+    // Create a table for each check that has issues
+    for (const [checkName, checkComments] of Object.entries(groupedComments)) {
+      if (checkComments.length === 0) continue;
 
-      const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
+      const checkTitle = checkName.charAt(0).toUpperCase() + checkName.slice(1);
 
-      // Category heading
-      content += `### ${categoryTitle} Issues (${categoryComments.length})\n\n`;
+      // Check heading
+      content += `### ${checkTitle} Issues (${checkComments.length})\n\n`;
 
       // Start HTML table for this category
       content += `<table>\n`;
@@ -467,15 +490,15 @@ export class PRReviewer {
       content += `  </thead>\n`;
       content += `  <tbody>\n`;
 
-      // Sort comments within category by severity, then by file
-      const sortedCategoryComments = categoryComments.sort((a, b) => {
+      // Sort comments within check by severity, then by file
+      const sortedCheckComments = checkComments.sort((a, b) => {
         const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
         const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
         if (severityDiff !== 0) return severityDiff;
         return a.file.localeCompare(b.file);
       });
 
-      for (const comment of sortedCategoryComments) {
+      for (const comment of sortedCheckComments) {
         const severityEmoji =
           comment.severity === 'critical'
             ? '🔴'
