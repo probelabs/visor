@@ -202,7 +202,18 @@ export class CheckExecutionEngine {
           prompt: 'all',
           ai: timeout ? { timeout } : undefined,
         };
-        return await provider.execute(prInfo, providerConfig);
+        const result = await provider.execute(prInfo, providerConfig);
+
+        // Prefix issues with check name for consistent grouping
+        const prefixedIssues = result.issues.map(issue => ({
+          ...issue,
+          ruleId: `${checks[0]}/${issue.ruleId}`,
+        }));
+
+        return {
+          ...result,
+          issues: prefixedIssues,
+        };
       }
     }
 
@@ -212,7 +223,9 @@ export class CheckExecutionEngine {
       const provider = this.providerRegistry.getProviderOrThrow('ai');
 
       let focus = 'all';
+      let checkName = 'all';
       if (checks.length === 1) {
+        checkName = checks[0];
         if (checks[0] === 'security' || checks[0] === 'performance' || checks[0] === 'style') {
           focus = checks[0];
         }
@@ -228,7 +241,18 @@ export class CheckExecutionEngine {
         ai: timeout ? { timeout } : undefined,
       };
 
-      return await provider.execute(prInfo, providerConfig);
+      const result = await provider.execute(prInfo, providerConfig);
+
+      // Prefix issues with check name for consistent grouping
+      const prefixedIssues = result.issues.map(issue => ({
+        ...issue,
+        ruleId: `${checkName}/${issue.ruleId}`,
+      }));
+
+      return {
+        ...result,
+        issues: prefixedIssues,
+      };
     }
 
     // Fallback to existing PRReviewer for backward compatibility
@@ -536,7 +560,18 @@ export class CheckExecutionEngine {
       },
     };
 
-    return await provider.execute(prInfo, providerConfig);
+    const result = await provider.execute(prInfo, providerConfig);
+
+    // Prefix issues with check name for consistent grouping
+    const prefixedIssues = result.issues.map(issue => ({
+      ...issue,
+      ruleId: `${checkName}/${issue.ruleId}`,
+    }));
+
+    return {
+      ...result,
+      issues: prefixedIssues,
+    };
   }
 
   /**
