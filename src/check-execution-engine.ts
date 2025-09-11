@@ -352,7 +352,7 @@ export class CheckExecutionEngine {
           const providerConfig: CheckProviderConfig = {
             type: 'ai',
             prompt: checkConfig.prompt,
-            focus: this.mapCheckNameToFocus(checkName),
+            focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -471,7 +471,7 @@ export class CheckExecutionEngine {
         const providerConfig: CheckProviderConfig = {
           type: 'ai',
           prompt: checkConfig.prompt,
-          focus: this.mapCheckNameToFocus(checkName),
+          focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
           ai: {
             timeout: timeout || 600000,
             debug: debug, // Pass debug flag to AI provider
@@ -529,7 +529,7 @@ export class CheckExecutionEngine {
     const providerConfig: CheckProviderConfig = {
       type: 'ai',
       prompt: checkConfig.prompt,
-      focus: this.mapCheckNameToFocus(checkName),
+      focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       ai: {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),
@@ -541,13 +541,14 @@ export class CheckExecutionEngine {
 
   /**
    * Map check name to focus for AI provider
+   * This is a fallback when focus is not explicitly configured
    */
   private mapCheckNameToFocus(checkName: string): string {
     const focusMap: Record<string, string> = {
       security: 'security',
       performance: 'performance',
       style: 'style',
-      architecture: 'architecture', // architecture should map to 'architecture' focus
+      architecture: 'architecture',
     };
 
     return focusMap[checkName] || 'all';

@@ -44,6 +44,8 @@ export interface CheckConfig {
   type: ConfigCheckType;
   /** AI prompt for the check or focus type (security/performance/style/all) */
   prompt: string;
+  /** Focus area for the check (security/performance/style/architecture/all) - optional */
+  focus?: string;
   /** Events that trigger this check */
   on: EventTrigger[];
   /** File patterns that trigger this check (optional) */
