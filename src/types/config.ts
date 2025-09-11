@@ -56,6 +56,10 @@ export interface CheckConfig {
   ai?: AIProviderConfig;
   /** Check IDs that this check depends on (optional) */
   depends_on?: string[];
+  /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
+  group?: string;
+  /** Schema type for template rendering (e.g., "code-review", "markdown") - optional */
+  schema?: string;
 }
 
 /**

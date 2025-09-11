@@ -807,7 +807,7 @@ async function handlePullRequestEvent(
     console.log('========================================\n');
   }
 
-  const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
+  const reviewComment = await reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one
@@ -994,7 +994,10 @@ async function handlePullRequestVisorMode(
 
     // Post comment using existing comment manager
     const commentId = `visor-config-review-${prNumber}`;
-    const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
+    const reviewComment = await reviewer['formatReviewCommentWithVisorFormat'](
+      review,
+      reviewOptions
+    );
 
     // Add context based on action
     let reviewContext = '';

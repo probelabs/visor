@@ -18,6 +18,10 @@ export interface ReviewIssue {
   severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
 
+  // Group and schema for comment separation
+  group?: string;
+  schema?: string;
+
   // Optional enhancement
   suggestion?: string;
   replacement?: string;
@@ -131,13 +135,41 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string } = {}
   ): Promise<void> {
-    const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
+    // Group issues by their group property
+    const issuesByGroup = this.groupIssuesByGroup(summary.issues);
 
-    await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-      commentId: options.commentId,
-      triggeredBy: options.triggeredBy || 'unknown',
-      allowConcurrentUpdates: false,
-    });
+    // If no groups or only one group, use the original single comment approach
+    if (Object.keys(issuesByGroup).length <= 1) {
+      const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId: options.commentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+      });
+      return;
+    }
+
+    // Create separate comments for each group
+    for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
+      const groupSummary: ReviewSummary = {
+        ...summary,
+        issues: groupIssues,
+      };
+
+      // Use group name in comment ID to create separate comments
+      const groupCommentId = options.commentId
+        ? `${options.commentId}-${groupName}`
+        : `visor-${groupName}`;
+
+      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId: groupCommentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+      });
+    }
   }
 
   private async formatReviewCommentWithVisorFormat(
@@ -173,20 +205,36 @@ export class PRReviewer {
     try {
       const liquid = new Liquid();
 
-      // Load the code-review template
-      const templatePath = path.join(__dirname, '../output/code-review/template.liquid');
+      // Determine schema based on issues - use the first issue's schema or default to 'code-review'
+      const schema =
+        summary.issues.length > 0 && summary.issues[0].schema
+          ? summary.issues[0].schema
+          : 'code-review';
+
+      // Load the appropriate template based on schema
+      const templatePath = path.join(__dirname, `../output/${schema}/template.liquid`);
       const templateContent = await fs.readFile(templatePath, 'utf-8');
 
-      // Convert issues to the format expected by template
-      const issuesWithCheckName = summary.issues.map(issue => ({
-        ...issue,
-        checkName: this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized'),
-      }));
+      // Prepare template data based on schema
+      let templateData: any;
 
-      // Prepare data for template
-      const templateData = {
-        issues: issuesWithCheckName,
-      };
+      if (schema === 'markdown') {
+        // For markdown schema, pass the message content directly
+        templateData = {
+          content: summary.issues.length > 0 ? summary.issues[0].message : 'No content available',
+        };
+      } else {
+        // For code-review schema, format issues with check names
+        const issuesWithCheckName = summary.issues.map(issue => ({
+          ...issue,
+          checkName: this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized'),
+        }));
+
+        templateData = {
+          issues: issuesWithCheckName,
+          suggestions: summary.suggestions || [],
+        };
+      }
 
       // Render with Liquid template
       const rendered = await liquid.parseAndRender(templateContent, templateData);
@@ -207,6 +255,22 @@ export class PRReviewer {
       return ruleId.split('/')[0];
     }
     return 'uncategorized';
+  }
+
+  private groupIssuesByGroup(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+
+    for (const issue of issues) {
+      const groupName = issue.group || 'default';
+
+      if (!grouped[groupName]) {
+        grouped[groupName] = [];
+      }
+
+      grouped[groupName].push(issue);
+    }
+
+    return grouped;
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {

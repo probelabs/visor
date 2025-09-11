@@ -395,10 +395,23 @@ export class CheckExecutionEngine {
           const result = await provider.execute(prInfo, providerConfig, dependencyResults);
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
+          // Add group and schema info to issues from config
+          const enrichedIssues = result.issues.map(issue => ({
+            ...issue,
+            ruleId: `${checkName}/${issue.ruleId}`,
+            group: checkConfig.group,
+            schema: checkConfig.schema,
+          }));
+
+          const enrichedResult = {
+            ...result,
+            issues: enrichedIssues,
+          };
+
           return {
             checkName,
             error: null,
-            result,
+            result: enrichedResult,
           };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
@@ -508,10 +521,23 @@ export class CheckExecutionEngine {
           `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
         );
 
+        // Add group and schema info to issues from config
+        const enrichedIssues = result.issues.map(issue => ({
+          ...issue,
+          ruleId: `${checkName}/${issue.ruleId}`,
+          group: checkConfig.group,
+          schema: checkConfig.schema,
+        }));
+
+        const enrichedResult = {
+          ...result,
+          issues: enrichedIssues,
+        };
+
         return {
           checkName,
           error: null,
-          result,
+          result: enrichedResult,
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -562,10 +588,12 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
-    // Prefix issues with check name for consistent grouping
+    // Prefix issues with check name and add group/schema info from config
     const prefixedIssues = result.issues.map(issue => ({
       ...issue,
       ruleId: `${checkName}/${issue.ruleId}`,
+      group: checkConfig.group,
+      schema: checkConfig.schema,
     }));
 
     return {
@@ -634,13 +662,8 @@ export class CheckExecutionEngine {
           );
         }
 
-        // Prefix issues with check name and level for identification
-        const prefixedIssues = result.issues.map(issue => ({
-          ...issue,
-          ruleId: `${checkName}/${issue.ruleId}`,
-        }));
-
-        aggregatedIssues.push(...prefixedIssues);
+        // Issues are already prefixed and enriched with group/schema info
+        aggregatedIssues.push(...result.issues);
 
         // Add suggestions with check name prefix
         const prefixedSuggestions = result.suggestions.map(
@@ -765,13 +788,8 @@ export class CheckExecutionEngine {
             `✅ Check "${checkName}" completed: ${checkResult.result.issues.length} issues found`
           );
 
-          // Prefix issues with check name for identification
-          const prefixedIssues = checkResult.result.issues.map(issue => ({
-            ...issue,
-            ruleId: `${checkName}/${issue.ruleId}`,
-          }));
-
-          aggregatedIssues.push(...prefixedIssues);
+          // Issues are already prefixed and enriched with group/schema info
+          aggregatedIssues.push(...checkResult.result.issues);
 
           // Add suggestions with check name prefix
           const prefixedSuggestions = checkResult.result.suggestions.map(
