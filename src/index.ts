@@ -593,7 +593,9 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         `**Files Changed:** ${statusPrInfo.files.length}\n` +
         `**Additions:** +${statusPrInfo.totalAdditions}\n` +
         `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
-        `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}`;
+        `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
+        `---\n` +
+        `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
       await octokit.rest.issues.createComment({
         owner,

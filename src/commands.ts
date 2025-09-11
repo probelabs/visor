@@ -35,5 +35,8 @@ export function getHelpText(): string {
 - \`/status\` - Show current PR status and metrics
 - \`/help\` - Show this help message
 
-Commands are case-insensitive and can be used in PR comments.`;
+Commands are case-insensitive and can be used in PR comments.
+
+---
+*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 }
