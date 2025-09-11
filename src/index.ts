@@ -577,18 +577,27 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     config = await configManager.loadConfig('.visor.yaml');
     // Build command registry from config
     if (config.checks) {
+      // Add 'review' command that runs all checks
+      commandRegistry['review'] = Object.keys(config.checks);
+
+      // Also add individual check names as commands
       for (const [checkId, checkConfig] of Object.entries(config.checks)) {
+        // Legacy: check if it has old 'command' property
         if (checkConfig.command) {
           if (!commandRegistry[checkConfig.command]) {
             commandRegistry[checkConfig.command] = [];
           }
           commandRegistry[checkConfig.command].push(checkId);
         }
+        // New: add check name as command
+        commandRegistry[checkId] = [checkId];
       }
     }
   } catch {
     console.log('Could not load config, using defaults');
     config = null;
+    // Default commands when no config is available
+    commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
   }
 
   // Parse comment with available commands

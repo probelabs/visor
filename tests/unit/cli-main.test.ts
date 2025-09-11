@@ -56,7 +56,7 @@ describe('CLI Main Entry Point', () => {
 
     expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
     expect(mockConsoleLog).toHaveBeenCalledWith(
-      expect.stringContaining('Configuration version: 2.0')
+      expect.stringContaining('Configuration version: 1.0')
     );
     // CLI now shows repository status instead of config summary
     expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
@@ -92,7 +92,7 @@ describe('CLI Main Entry Point', () => {
 
     expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
     expect(mockConsoleLog).toHaveBeenCalledWith(
-      expect.stringContaining('Configuration version: 2.0')
+      expect.stringContaining('Configuration version: 1.0')
     );
   });
 });

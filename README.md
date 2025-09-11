@@ -196,27 +196,36 @@ Visor supports defining dependencies between checks using the `depends_on` field
 ### Configuration Example
 
 ```yaml
+version: "1.0"
 checks:
   security:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Comprehensive security analysis..."
     on: [pr_opened, pr_updated]
     # No dependencies - runs first
 
   performance:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Performance analysis..."
     on: [pr_opened, pr_updated]
     # No dependencies - runs parallel with security
 
   style:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Style analysis based on security findings..."
     on: [pr_opened]
     depends_on: [security]  # Waits for security to complete
 
   architecture:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Architecture analysis building on previous checks..."
     on: [pr_opened, pr_updated]
     depends_on: [security, performance]  # Waits for both to complete
@@ -240,48 +249,68 @@ With the above configuration:
 
 #### Diamond Dependency
 ```yaml
+version: "1.0"
 checks:
   foundation:
     type: ai
+    group: base
+    schema: code-review
     prompt: "Base analysis"
     
   branch_a:
     type: ai
+    group: code-review
+    schema: code-review
     depends_on: [foundation]
     
   branch_b:
     type: ai
+    group: code-review
+    schema: code-review
     depends_on: [foundation]
     
   final:
     type: ai
+    group: summary
+    schema: markdown
     depends_on: [branch_a, branch_b]
 ```
 
 #### Multiple Independent Chains
 ```yaml
+version: "1.0"
 checks:
   # Security chain
   security_basic:
     type: ai
+    group: security
+    schema: code-review
     prompt: "Basic security scan"
     
   security_advanced:
     type: ai
+    group: security
+    schema: code-review
     depends_on: [security_basic]
     
   # Performance chain  
   performance_basic:
     type: ai
+    group: performance
+    schema: code-review
     prompt: "Basic performance scan"
     
   performance_advanced:
     type: ai
+    group: performance
+    schema: code-review
     depends_on: [performance_basic]
     
   # Final integration (waits for both chains)
   integration:
     type: ai
+    group: summary
+    schema: markdown
     depends_on: [security_advanced, performance_advanced]
 ```
 
@@ -291,6 +320,137 @@ checks:
 - **Missing Dependencies**: References to non-existent checks are validated
 - **Graceful Failures**: Failed checks don't prevent independent checks from running
 - **Dependency Results**: Results from dependency checks are available to dependent checks
+
+## 📋 Schema-Template System
+
+Visor includes a flexible schema-template system that provides structured output validation and customizable rendering.
+
+### Overview
+
+The schema-template system separates data structure (schemas) from presentation (templates), enabling:
+
+- **JSON Schema Validation**: Runtime validation of check results using AJV
+- **Flexible Templates**: Liquid-based templates for custom output rendering  
+- **Multiple Output Formats**: Support for structured tables and free-form markdown
+- **Check-Based Grouping**: Group GitHub comments by check name instead of categories
+- **Extensible Design**: Easy to add new schemas and output formats
+
+### Configuration
+
+```yaml
+version: "1.0"
+
+checks:
+  security:
+    type: ai
+    group: code-review        # Groups this check with others for commenting
+    schema: code-review       # Uses built-in code-review schema
+    prompt: |
+      Perform comprehensive security analysis focusing on:
+      - SQL injection vulnerabilities
+      - XSS attack vectors  
+      - Authentication/authorization issues
+      
+      Return results in JSON format matching the code-review schema.
+    on: [pr_opened, pr_updated]
+
+  full-review:
+    type: ai
+    group: pr-overview       # Separate group = separate comment
+    schema: markdown         # Uses built-in markdown schema  
+    prompt: |
+      Create a comprehensive pull request overview in markdown format with:
+      
+      ## 📋 Pull Request Overview
+      1. **Summary**: Brief description of changes
+      2. **Files Changed**: Table of modified files
+      3. **Architecture Diagram**: Mermaid diagram showing relationships
+    on: [pr_opened]
+```
+
+### Built-in Schemas
+
+#### Code Review Schema (`code-review`)
+Structured format for code analysis results:
+```json
+{
+  "issues": [
+    {
+      "file": "src/auth.ts",
+      "line": 15,
+      "ruleId": "security/hardcoded-secret", 
+      "message": "Hardcoded API key detected",
+      "severity": "critical",
+      "category": "security",
+      "suggestion": "Use environment variables"
+    }
+  ]
+}
+```
+
+#### Markdown Schema (`markdown`)
+Free-form markdown content:
+```json
+{
+  "content": "# PR Overview\n\nThis PR adds authentication features..."
+}
+```
+
+### Output Templates
+
+#### Code Review Template
+Renders structured data as HTML tables with:
+- Grouping by check name
+- Severity indicators with emojis (🔴 🟠 🟡 🟢)
+- Collapsible suggestion details
+- File and line information
+
+#### Markdown Template  
+Renders markdown content as-is for:
+- PR overviews and summaries
+- Architecture diagrams
+- Custom formatted content
+
+### Comment Grouping
+
+The `group` property controls GitHub comment generation:
+
+```yaml
+checks:
+  security:
+    group: code-review    # \
+  performance:            #  } All grouped in one comment
+    group: code-review    # /
+    
+  overview:
+    group: summary        # Separate comment
+```
+
+### Custom Schemas and Templates
+
+Add custom schemas in your config:
+
+```yaml
+schemas:
+  custom-metrics:
+    file: "./schemas/metrics.json"     # Local file
+  compliance:  
+    url: "https://example.com/compliance.json"  # Remote URL
+
+checks:
+  metrics:
+    schema: custom-metrics    # References custom schema
+    group: analysis
+```
+
+### Benefits
+
+- ✅ **No more "logic" issues** appearing when no logic checks configured
+- ✅ **Type safety** with JSON Schema validation
+- ✅ **Flexible rendering** with Liquid templates  
+- ✅ **Multiple output formats** (tables vs markdown)
+- ✅ **Better separation of concerns** (data vs presentation)
+- ✅ **Extensible architecture** for custom output types
 
 ## 🧠 Advanced AI Features
 
