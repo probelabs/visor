@@ -180,6 +180,9 @@ export class PRReviewer {
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,
       });
+
+      // Add small delay to prevent potential race conditions with GitHub API
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
 
