@@ -127,11 +127,13 @@ describe('Schema-Template System', () => {
   });
 
   describe('Liquid Template Rendering', () => {
-    test('should render code-review template correctly', async () => {
+    test('should render code-review template correctly for single check', async () => {
       const templatePath = path.join(__dirname, '../../output/code-review/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
 
+      // Test with security check issues only (single check)
       const data = {
+        checkName: 'security',
         issues: [
           {
             file: 'src/auth.ts',
@@ -140,7 +142,6 @@ describe('Schema-Template System', () => {
             message: 'Hardcoded API key detected',
             severity: 'critical',
             category: 'security',
-            checkName: 'security',
             suggestion: 'Use environment variables for API keys',
           },
           {
@@ -150,16 +151,6 @@ describe('Schema-Template System', () => {
             message: 'Missing input validation',
             severity: 'warning',
             category: 'security',
-            checkName: 'security',
-          },
-          {
-            file: 'src/performance.ts',
-            line: 10,
-            ruleId: 'performance/n-plus-one',
-            message: 'Potential N+1 query detected',
-            severity: 'warning',
-            category: 'performance',
-            checkName: 'performance',
           },
         ],
       };
@@ -173,15 +164,15 @@ describe('Schema-Template System', () => {
       expect(rendered).toContain('<th>Issue</th>');
       expect(rendered).toContain('<th>Severity</th>');
 
-      // Check grouping by check
-      expect(rendered).toContain('Security');
-      expect(rendered).toContain('Performance');
+      // Check single check header
+      expect(rendered).toContain('Security Issues (2)');
 
       // Check data is present
       expect(rendered).toContain('src/auth.ts');
       expect(rendered).toContain('Hardcoded API key detected');
       expect(rendered).toContain('🔴'); // critical severity emoji
       expect(rendered).toContain('🟡'); // warning severity emoji
+      expect(rendered).toContain('Use environment variables for API keys');
     });
 
     test('should render markdown template correctly', async () => {
@@ -227,15 +218,17 @@ graph TD
       const templateContent = await fs.readFile(templatePath, 'utf-8');
 
       const data = {
+        checkName: 'security',
         issues: [],
       };
 
       const rendered = await liquid.parseAndRender(templateContent, data);
 
-      // Should render the header but no table for empty issues
-      expect(rendered).toContain('## 🔍 Code Analysis Results');
-      // Template should not render tables when no issues exist
-      expect(rendered).not.toContain('<table');
+      // Should render the header for the check but no table for empty issues
+      expect(rendered).toContain('Security Issues (0)');
+      // Template should still render table structure even with empty issues
+      expect(rendered).toContain('<table');
+      expect(rendered).toContain('<tbody>');
     });
 
     test('should handle template rendering errors gracefully', async () => {
@@ -243,6 +236,7 @@ graph TD
         '{% for issue in issues %}{{ issue.nonexistent.property }}{% endfor %}';
 
       const data = {
+        checkName: 'test',
         issues: [{ file: 'test.ts', line: 1 }],
       };
 

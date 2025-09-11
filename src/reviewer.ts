@@ -180,10 +180,11 @@ export class PRReviewer {
 
     let comment = '';
 
-    // Simple header
+    // Add main header
     if (totalIssues === 0) {
       comment += `## ✅ All Checks Passed\n\n**No issues found – changes LGTM.**\n\n`;
     } else {
+      comment += `## 🔍 Code Analysis Results\n\n`;
       // Use new schema-template system for content generation
       const templateContent = await this.renderWithSchemaTemplate(summary);
       comment += templateContent;
@@ -203,42 +204,27 @@ export class PRReviewer {
 
   private async renderWithSchemaTemplate(summary: ReviewSummary): Promise<string> {
     try {
-      const liquid = new Liquid();
+      // Group issues by check name and render each check separately
+      const issuesByCheck = this.groupIssuesByCheck(summary.issues);
 
-      // Determine schema based on issues - use the first issue's schema or default to 'code-review'
-      const schema =
-        summary.issues.length > 0 && summary.issues[0].schema
-          ? summary.issues[0].schema
-          : 'code-review';
-
-      // Load the appropriate template based on schema
-      const templatePath = path.join(__dirname, `../output/${schema}/template.liquid`);
-      const templateContent = await fs.readFile(templatePath, 'utf-8');
-
-      // Prepare template data based on schema
-      let templateData: any;
-
-      if (schema === 'markdown') {
-        // For markdown schema, pass the message content directly
-        templateData = {
-          content: summary.issues.length > 0 ? summary.issues[0].message : 'No content available',
-        };
-      } else {
-        // For code-review schema, format issues with check names
-        const issuesWithCheckName = summary.issues.map(issue => ({
-          ...issue,
-          checkName: this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized'),
-        }));
-
-        templateData = {
-          issues: issuesWithCheckName,
-          suggestions: summary.suggestions || [],
-        };
+      if (Object.keys(issuesByCheck).length === 0) {
+        return 'No issues found in this group.';
       }
 
-      // Render with Liquid template
-      const rendered = await liquid.parseAndRender(templateContent, templateData);
-      return rendered;
+      const renderedSections: string[] = [];
+
+      for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
+        const checkSchema = checkIssues[0]?.schema || 'code-review';
+        const renderedSection = await this.renderSingleCheckTemplate(
+          checkName,
+          checkIssues,
+          checkSchema
+        );
+        renderedSections.push(renderedSection);
+      }
+
+      // Combine all check sections with proper spacing
+      return renderedSections.join('\n\n');
     } catch (error) {
       console.warn(
         'Failed to render with schema-template system, falling back to old system:',
@@ -248,6 +234,53 @@ export class PRReviewer {
       const comments = convertIssuesToComments(summary.issues);
       return this.formatIssuesTable(comments);
     }
+  }
+
+  private async renderSingleCheckTemplate(
+    checkName: string,
+    issues: ReviewIssue[],
+    schema: string
+  ): Promise<string> {
+    const liquid = new Liquid();
+
+    // Load the appropriate template based on schema
+    const templatePath = path.join(__dirname, `../output/${schema}/template.liquid`);
+    const templateContent = await fs.readFile(templatePath, 'utf-8');
+
+    let templateData: any;
+
+    if (schema === 'markdown') {
+      // For markdown schema, pass the message content directly
+      templateData = {
+        content: issues.length > 0 ? issues[0].message : 'No content available',
+        checkName: checkName,
+      };
+    } else {
+      // For code-review schema, pass issues directly (no more checkName extraction needed)
+      templateData = {
+        issues: issues,
+        checkName: checkName,
+      };
+    }
+
+    // Render with Liquid template
+    return await liquid.parseAndRender(templateContent, templateData);
+  }
+
+  private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+
+    for (const issue of issues) {
+      const checkName = this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized');
+
+      if (!grouped[checkName]) {
+        grouped[checkName] = [];
+      }
+
+      grouped[checkName].push(issue);
+    }
+
+    return grouped;
   }
 
   private extractCheckNameFromRuleId(ruleId: string): string {

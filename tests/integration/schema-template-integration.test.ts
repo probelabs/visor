@@ -119,20 +119,20 @@ graph TD
       const schema = JSON.parse(await fs.readFile(schemaPath, 'utf-8'));
       const validate = ajv.compile(schema);
 
-      // Group results by check for rendering
-      // Add checkName field that template expects
-      const issuesWithCheckName = mockResults.issues.map(issue => ({
-        ...issue,
-        checkName: 'security',
-      }));
-      const groupedData = { issues: issuesWithCheckName };
-      const isValid = validate(groupedData);
+      // Validate data against schema (original format)
+      const isValid = validate(mockResults);
       expect(isValid).toBe(true);
+
+      // Prepare data for single-check template rendering
+      const templateData = {
+        checkName: 'security',
+        issues: mockResults.issues,
+      };
 
       // Render using template
       const templatePath = path.join(__dirname, '../../output/code-review/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
-      const rendered = await liquid.parseAndRender(templateContent, groupedData);
+      const rendered = await liquid.parseAndRender(templateContent, templateData);
 
       expect(rendered).toContain('<table');
       expect(rendered).toContain('Security');
@@ -201,8 +201,11 @@ graph TD
     });
 
     test('should handle multiple checks with same group', async () => {
-      // Simulate results from multiple checks in same group
-      const mockResults = {
+      // In the new architecture, each check gets its own template render
+      // Simulate individual check results that would be combined at the GitHub Actions level
+
+      // Security check results
+      const securityResults = {
         issues: [
           {
             file: 'src/test.ts',
@@ -211,8 +214,13 @@ graph TD
             message: 'Hardcoded secret',
             severity: 'critical',
             category: 'security',
-            checkName: 'security',
           },
+        ],
+      };
+
+      // Performance check results
+      const performanceResults = {
+        issues: [
           {
             file: 'src/test.ts',
             line: 25,
@@ -220,27 +228,35 @@ graph TD
             message: 'Inefficient loop detected',
             severity: 'warning',
             category: 'performance',
-            checkName: 'performance',
           },
         ],
       };
 
-      // Both checks should contribute to the same group
-      expect(mockResults.issues).toHaveLength(2);
-
-      // Group by check for rendering
-      const groupedData = { issues: mockResults.issues };
-
-      // Render combined results
+      // Render security check
       const templatePath = path.join(__dirname, '../../output/code-review/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
-      const rendered = await liquid.parseAndRender(templateContent, groupedData);
 
-      // Should contain both security and performance issues
-      expect(rendered).toContain('Security');
-      expect(rendered).toContain('Performance');
-      expect(rendered).toContain('Hardcoded secret');
-      expect(rendered).toContain('Inefficient loop detected');
+      const securityData = {
+        checkName: 'security',
+        issues: securityResults.issues,
+      };
+      const securityRendered = await liquid.parseAndRender(templateContent, securityData);
+
+      // Render performance check
+      const performanceData = {
+        checkName: 'performance',
+        issues: performanceResults.issues,
+      };
+      const performanceRendered = await liquid.parseAndRender(templateContent, performanceData);
+
+      // Each check should render its own section
+      expect(securityRendered).toContain('Security Issues (1)');
+      expect(securityRendered).toContain('Hardcoded secret');
+      expect(securityRendered).not.toContain('Performance');
+
+      expect(performanceRendered).toContain('Performance Issues (1)');
+      expect(performanceRendered).toContain('Inefficient loop detected');
+      expect(performanceRendered).not.toContain('Security');
     });
 
     test('should handle checks with dependencies', async () => {
