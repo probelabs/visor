@@ -240,10 +240,10 @@ ${content}
    */
   private isVisorComment(body: string, commentId?: string): boolean {
     if (commentId) {
-      // Check for the new format with exact matching - look for the exact ID followed by space or -->
+      // Check for the new format with exact matching - look for the exact ID followed by space or " -->"
       if (
         body.includes(`visor-comment-id:${commentId} `) ||
-        body.includes(`visor-comment-id:${commentId}-->`)
+        body.includes(`visor-comment-id:${commentId} -->`)
       ) {
         return true;
       }
