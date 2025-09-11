@@ -45,7 +45,8 @@
       "Bash(sed:*)",
       "Bash(mkdir:*)",
       "Bash(xargs sed:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(git pull:*)"
     ]
   },
   "hooks": {
