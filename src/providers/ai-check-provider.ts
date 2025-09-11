@@ -103,7 +103,6 @@ export class AICheckProvider extends CheckProvider {
 
     // Pass the custom prompt and schema - no fallbacks
     const schema = config.schema as string | undefined;
-    console.error(`🔧 Debug: AICheckProvider schema from config: ${schema}`);
     return await service.executeReview(prInfo, customPrompt, schema);
   }
 

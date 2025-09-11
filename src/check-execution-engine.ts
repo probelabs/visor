@@ -377,6 +377,8 @@ export class CheckExecutionEngine {
             type: 'ai',
             prompt: checkConfig.prompt,
             focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+            schema: checkConfig.schema,
+            group: checkConfig.group,
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -509,6 +511,8 @@ export class CheckExecutionEngine {
           type: 'ai',
           prompt: checkConfig.prompt,
           focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+          schema: checkConfig.schema,
+          group: checkConfig.group,
           ai: {
             timeout: timeout || 600000,
             debug: debug, // Pass debug flag to AI provider
@@ -580,6 +584,8 @@ export class CheckExecutionEngine {
       type: 'ai',
       prompt: checkConfig.prompt,
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+      schema: checkConfig.schema,
+      group: checkConfig.group,
       ai: {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),
