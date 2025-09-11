@@ -182,7 +182,6 @@ export class CommentManager {
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
----
 *Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
 <!-- /visor-comment-id:${commentId} -->`;
   }

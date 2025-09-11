@@ -342,7 +342,7 @@ The schema-template system separates data structure (schemas) from presentation 
 ### Configuration
 
 ```yaml
-version: "2.0"  # New version with schema-template support
+version: "1.0"
 
 checks:
   security:
@@ -470,39 +470,39 @@ checks:
 - ✅ **Type Safety**: Structured data validation prevents malformed output
 - ✅ **Extensible Design**: Easy to add custom schemas and templates
 
-### Migration from v1.0 to v2.0
+### Schema and Template Properties
 
-The schema-template system represents a major architectural improvement. Key changes:
+The schema-template system introduces two new configuration properties:
 
-#### Configuration Updates
+#### Group Property
+Controls GitHub comment organization:
 ```yaml
-# OLD v1.0 format
-version: "1.0"
 checks:
   security:
-    type: ai
-    prompt: "Security analysis"
-    
-# NEW v2.0 format  
-version: "2.0"
-checks:
-  security:
-    type: ai
-    group: code-review     # NEW: Controls comment grouping
-    schema: code-review    # NEW: Enforces structured output
-    prompt: "Security analysis returning JSON matching code-review schema"
+    group: code-review    # Groups with other code-review checks
+  performance:
+    group: code-review    # Same group = combined in one comment
+  overview:
+    group: pr-summary     # Different group = separate comment
 ```
 
-#### Output Changes
-- **Before**: Categories like "logic", "readability" appeared even when not configured
-- **After**: Only configured checks appear, grouped by actual check names
-- **Before**: Single monolithic comment with all results
-- **After**: Multiple organized comments based on `group` property
+#### Schema Property
+Enforces structured output format:
+```yaml
+checks:
+  security:
+    schema: code-review   # Structured table format
+    prompt: "Return JSON matching code-review schema"
+  overview:
+    schema: text          # Free-form markdown
+    prompt: "Return markdown content"
+```
 
-#### Breaking Changes
-- Configuration `version: "2.0"` required for new features
-- Prompts should specify JSON Schema format for structured output
-- AI responses validated against schemas (invalid responses logged but not failed)
+#### Benefits
+- **Check-Based Organization**: Only configured checks appear in results
+- **Multiple Comments**: Separate GitHub comments based on `group` property
+- **Structured Output**: JSON Schema validation ensures consistent data
+- **Flexible Rendering**: Different templates for different output types
 
 ## 🧠 Advanced AI Features
 
@@ -577,7 +577,7 @@ Create `visor.config.yaml` in your project root:
 
 ```yaml
 # .visor.yaml
-version: "2.0"
+version: "1.0"
 
 # Project metadata
 project:

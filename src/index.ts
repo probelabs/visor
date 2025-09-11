@@ -684,7 +684,10 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
           parallelExecution: false,
         });
 
-        await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
+        await reviewer.postReviewComment(owner, repo, prNumber, review, {
+          focus,
+          format,
+        });
         setOutput('issues-found', calculateTotalIssues(review.issues).toString());
       }
       break;
@@ -985,12 +988,20 @@ async function handlePullRequestVisorMode(
       (review.debug as any).parallelExecution = true;
     }
 
+    // Fetch PR info to get commit SHA for metadata
+    const { data: pullRequest } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber,
+    });
+
     // Post comment using group-based comment separation
     const commentId = `visor-config-review-${prNumber}`;
     await reviewer.postReviewComment(owner, repo, prNumber, review, {
       ...reviewOptions,
       commentId,
       triggeredBy: `visor-config-${action}`,
+      commitSha: pullRequest.head?.sha,
     });
 
     console.log('✅ Posted Visor config-based review comment');

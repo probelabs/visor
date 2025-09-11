@@ -133,7 +133,7 @@ export class PRReviewer {
     repo: string,
     prNumber: number,
     summary: ReviewSummary,
-    options: ReviewOptions & { commentId?: string; triggeredBy?: string } = {}
+    options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
     // Group issues by their group property
     const issuesByGroup = this.groupIssuesByGroup(summary.issues);
@@ -151,6 +151,7 @@ export class PRReviewer {
         commentId: options.commentId,
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
       });
       return;
     }
@@ -179,6 +180,7 @@ export class PRReviewer {
         commentId: groupCommentId,
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
       });
 
       // Add small delay to prevent potential race conditions with GitHub API
