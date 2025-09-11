@@ -120,7 +120,7 @@ export class AIReviewService {
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = this.buildCustomPrompt(prInfo, customPrompt, schema);
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`Schema type: ${schema || 'default (code-review)'}`);
@@ -227,13 +227,17 @@ export class AIReviewService {
   /**
    * Build a custom prompt for AI review with XML-formatted data
    */
-  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string, schema?: string): string {
+  private async buildCustomPrompt(
+    prInfo: PRInfo,
+    customInstructions: string,
+    schema?: string
+  ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
     // Load the appropriate schema
     const schemaName = schema || 'code-review';
-    const schemaDefinition = this.loadSchemaDefinition(schemaName);
+    const schemaDefinition = await this.loadSchemaDefinition(schemaName);
 
     return `You are a senior code reviewer. 
 
@@ -288,17 +292,22 @@ IMPORTANT RULES:
   /**
    * Load schema definition from file
    */
-  private loadSchemaDefinition(schemaName: string): Record<string, unknown> {
+  private async loadSchemaDefinition(schemaName: string): Promise<Record<string, unknown>> {
     try {
-      const schemaPath = path.join(__dirname, '..', 'output', schemaName, 'schema.json');
-      const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+      // Sanitize schema name to prevent path traversal attacks
+      const sanitizedSchemaName = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchemaName) {
+        throw new Error('Invalid schema name');
+      }
+      const schemaPath = path.join(__dirname, '..', 'output', sanitizedSchemaName, 'schema.json');
+      const schemaContent = await fs.promises.readFile(schemaPath, 'utf-8');
       return JSON.parse(schemaContent);
     } catch {
       log(`Warning: Could not load schema ${schemaName}, using default code-review schema`);
       // Return default code-review schema as fallback
       try {
         const defaultPath = path.join(__dirname, '..', 'output', 'code-review', 'schema.json');
-        const defaultContent = fs.readFileSync(defaultPath, 'utf-8');
+        const defaultContent = await fs.promises.readFile(defaultPath, 'utf-8');
         return JSON.parse(defaultContent);
       } catch {
         // Minimal fallback if even default schema can't be loaded

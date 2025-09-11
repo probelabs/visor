@@ -18,12 +18,12 @@
 {%- when 'error' -%}🟠 Error
 {%- when 'warning' -%}🟡 Warning
 {%- when 'info' -%}🟢 Info
-{%- else -%}📝 {{ issue.severity | capitalize }}
+{%- else -%}📝 {{ issue.severity | capitalize | escape }}
 {%- endcase -%}
       </td>
-      <td><code>{{ issue.file }}</code></td>
+      <td><code>{{ issue.file | escape }}</code></td>
       <td>{{ issue.line }}{% if issue.endLine %}-{{ issue.endLine }}{% endif %}</td>
-      <td><div>{{ issue.message }}
+      <td><div>{{ issue.message | escape }}
 {%- if issue.suggestion %}
         <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion | escape }}</details>
 {%- endif -%}

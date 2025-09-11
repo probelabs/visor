@@ -114,9 +114,6 @@ export class CommentManager {
 
     return this.withRetry(async () => {
       const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
-      console.error(
-        `🔧 CommentManager Debug: Looking for commentId "${commentId}", found existing: ${existingComment ? `ID ${existingComment.id}` : 'none'}`
-      );
 
       const formattedContent = this.formatCommentWithMetadata(content, {
         commentId,
@@ -126,9 +123,6 @@ export class CommentManager {
       });
 
       if (existingComment) {
-        console.error(
-          `🔧 CommentManager Debug: UPDATING existing comment ${existingComment.id} with commentId "${commentId}"`
-        );
         // Check for collision if not allowing concurrent updates
         if (!allowConcurrentUpdates) {
           const currentComment = await this.octokit.rest.issues.getComment({
@@ -153,9 +147,6 @@ export class CommentManager {
 
         return updatedComment.data as Comment;
       } else {
-        console.error(
-          `🔧 CommentManager Debug: CREATING new comment with commentId "${commentId}"`
-        );
         const newComment = await this.octokit.rest.issues.createComment({
           owner,
           repo,
@@ -163,9 +154,6 @@ export class CommentManager {
           body: formattedContent,
         });
 
-        console.error(
-          `🔧 CommentManager Debug: CREATED new comment ${newComment.data.id} with commentId "${commentId}"`
-        );
         return newComment.data as Comment;
       }
     });

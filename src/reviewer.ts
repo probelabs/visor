@@ -94,15 +94,10 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { debug = false, config, checks, parallelExecution } = options;
+    const { debug = false, config, checks } = options;
 
     // If we have a config and checks, use CheckExecutionEngine
     if (config && checks && checks.length > 0) {
-      const executionMode = checks.length > 1 && parallelExecution ? 'parallel' : 'sequential';
-      console.error(
-        `🔧 Debug: PRReviewer using CheckExecutionEngine for ${executionMode} execution of ${checks.length} check(s)`
-      );
-
       // Import CheckExecutionEngine dynamically to avoid circular dependencies
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
@@ -137,14 +132,9 @@ export class PRReviewer {
   ): Promise<void> {
     // Group issues by their group property
     const issuesByGroup = this.groupIssuesByGroup(summary.issues);
-    console.error(
-      `🔧 Debug: Found ${Object.keys(issuesByGroup).length} groups:`,
-      Object.keys(issuesByGroup)
-    );
 
     // If no groups or only one group, use the original single comment approach
     if (Object.keys(issuesByGroup).length <= 1) {
-      console.error(`🔧 Debug: Using single comment approach`);
       const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -157,9 +147,6 @@ export class PRReviewer {
     }
 
     // Create separate comments for each group
-    console.error(
-      `🔧 Debug: Creating separate comments for ${Object.keys(issuesByGroup).length} groups`
-    );
     for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
       const groupSummary: ReviewSummary = {
         ...summary,
@@ -171,9 +158,6 @@ export class PRReviewer {
         ? `${options.commentId}-${groupName}`
         : `visor-${groupName}`;
 
-      console.error(
-        `🔧 Debug: Creating comment for group "${groupName}" with ID: ${groupCommentId}`
-      );
       const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -182,9 +166,6 @@ export class PRReviewer {
         allowConcurrentUpdates: false,
         commitSha: options.commitSha,
       });
-
-      // Add small delay to prevent potential race conditions with GitHub API
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
 
@@ -259,11 +240,17 @@ export class PRReviewer {
   ): Promise<string> {
     const liquid = new Liquid();
 
+    // Sanitize schema name to prevent path traversal attacks
+    const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+    if (!sanitizedSchema) {
+      throw new Error('Invalid schema name');
+    }
+
     // Load the appropriate template based on schema
-    const templatePath = path.join(__dirname, `../output/${schema}/template.liquid`);
+    const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
     const templateContent = await fs.readFile(templatePath, 'utf-8');
 
-    let templateData: any;
+    let templateData: { content?: string; issues?: ReviewIssue[]; checkName: string };
 
     if (schema === 'text') {
       // For text schema, pass the message content directly
@@ -524,7 +511,6 @@ export class PRReviewer {
 
       fs.writeFileSync(filePath, markdownContent);
 
-      console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
       return filename;
     } catch (error) {
       console.error(`❌ Failed to save debug artifact: ${error}`);
