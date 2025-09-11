@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 
@@ -229,6 +231,10 @@ export class AIReviewService {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
+    // Load the appropriate schema
+    const schemaName = schema || 'code-review';
+    const schemaDefinition = this.loadSchemaDefinition(schemaName);
+
     return `You are a senior code reviewer. 
 
 ANALYSIS TYPE: ${analysisType}
@@ -241,67 +247,17 @@ ${
 REVIEW INSTRUCTIONS:
 ${customInstructions}
 
-${
-  schema === 'text'
-    ? `CRITICAL: You must respond with ONLY valid JSON. Your ENTIRE response must be a single JSON object.
+CRITICAL: You must respond with ONLY valid JSON that matches the following JSON schema EXACTLY.
 
-Required JSON response format:
+JSON Schema Definition:
 \`\`\`json
-{
-  "content": "Your complete response here with all markdown formatting"
-}
+${JSON.stringify(schemaDefinition, null, 2)}
 \`\`\`
 
-IMPORTANT RULES:
-1. Your ENTIRE response must be valid JSON - nothing before or after the JSON object
-2. The "content" field must be a properly escaped JSON string
-3. Use \\n for line breaks within the content string
-4. Use \\" to escape quotes within the content
-5. Include ALL requested sections in the content field as a single string
-6. Example of correct format:
-   {"content": "## Title\\n\\nThis is a paragraph\\n\\n- List item 1\\n- List item 2"}
-
-DO NOT write markdown directly. Put ALL markdown inside the "content" field as a JSON string.`
-    : `CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object.
-
-Required JSON response format for code review:
-\`\`\`json
-{
-  "issues": [
-    {
-      "file": "path/to/file.ext",
-      "line": 10,
-      "endLine": 12,
-      "ruleId": "category/specific-issue-type",
-      "message": "Clear description of the issue",
-      "severity": "info|warning|error|critical",
-      "category": "security|performance|style|logic|documentation",
-      "suggestion": "Optional: How to fix this issue",
-      "replacement": "Optional: Exact code replacement if applicable"
-    }
-  ],
-  "suggestions": [
-    "Overall suggestion 1",
-    "Overall suggestion 2"
-  ]
-}
-\`\`\`
-
-Field Guidelines:
-- "file": The exact filename from the diff
-- "line": Line number where the issue starts (from the file, not the diff)
-- "endLine": Optional end line for multi-line issues
-- "ruleId": Format as "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one")
-- "message": Clear, specific description of the issue
-- "severity": 
-  * "info": Low priority informational issues
-  * "warning": Medium priority issues that should be addressed
-  * "error": High priority issues that need fixing
-  * "critical": Critical issues that must be fixed immediately
-- "category": One of: security, performance, style, logic, documentation
-- "suggestion": Clear, actionable explanation of HOW to fix the issue
-- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)`
-}
+Your response MUST be valid JSON that conforms to the above schema.
+- Do not include any text before or after the JSON
+- Ensure all required fields are present
+- Follow the exact structure and types specified in the schema
 
 Analyze the following structured pull request data:
 
@@ -328,6 +284,34 @@ IMPORTANT RULES:
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
 
   // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
+
+  /**
+   * Load schema definition from file
+   */
+  private loadSchemaDefinition(schemaName: string): Record<string, unknown> {
+    try {
+      const schemaPath = path.join(__dirname, '..', 'output', schemaName, 'schema.json');
+      const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+      return JSON.parse(schemaContent);
+    } catch {
+      log(`Warning: Could not load schema ${schemaName}, using default code-review schema`);
+      // Return default code-review schema as fallback
+      try {
+        const defaultPath = path.join(__dirname, '..', 'output', 'code-review', 'schema.json');
+        const defaultContent = fs.readFileSync(defaultPath, 'utf-8');
+        return JSON.parse(defaultContent);
+      } catch {
+        // Minimal fallback if even default schema can't be loaded
+        return {
+          type: 'object',
+          properties: {
+            issues: { type: 'array' },
+            suggestions: { type: 'array' },
+          },
+        };
+      }
+    }
+  }
 
   /**
    * Format PR context for the AI using XML structure
