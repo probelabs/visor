@@ -316,7 +316,7 @@ describe('AIReviewService', () => {
       expect(styleIssue.replacement).toBe('const userName = getValue();');
     });
 
-    it('should validate and normalize severity levels', () => {
+    it('should preserve original severity levels', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
         response: JSON.stringify({
@@ -337,12 +337,12 @@ describe('AIReviewService', () => {
 
       const result = (service as any).parseAIResponse(response);
 
-      expect(result.issues[0].severity).toBe('critical'); // critical stays as critical
-      expect(result.issues[1].severity).toBe('error'); // major -> error
-      expect(result.issues[2].severity).toBe('info'); // minor -> info
+      expect(result.issues[0].severity).toBe('critical'); // critical preserved
+      expect(result.issues[1].severity).toBe('major'); // major preserved as-is
+      expect(result.issues[2].severity).toBe('minor'); // minor preserved as-is
     });
 
-    it('should validate and normalize categories', () => {
+    it('should preserve original categories', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
         response: JSON.stringify({
@@ -356,8 +356,8 @@ describe('AIReviewService', () => {
 
       const result = (service as any).parseAIResponse(response);
 
-      expect(result.issues[0].category).toBe('logic'); // bug -> logic
-      expect(result.issues[1].category).toBe('documentation'); // docs -> documentation
+      expect(result.issues[0].category).toBe('bug'); // bug preserved as-is
+      expect(result.issues[1].category).toBe('docs'); // docs preserved as-is
     });
 
     it('should handle invalid JSON gracefully', () => {

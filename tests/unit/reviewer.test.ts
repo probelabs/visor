@@ -667,8 +667,8 @@ describe('PRReviewer', () => {
       if (issueCell) {
         // Should not contain <br/> tags between details sections
         expect(issueCell[0]).not.toContain('</details><br/><details>');
-        // Should contain newlines between details sections for proper spacing
-        expect(issueCell[0]).toContain('</details>\n<details>');
+        // Should contain newlines between details sections for proper spacing (allow for indentation)
+        expect(issueCell[0]).toMatch(/<\/details>\s*\n\s*<details>/);
       }
     });
 

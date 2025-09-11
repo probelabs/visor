@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 
@@ -59,8 +61,8 @@ export interface AIDebugInfo {
 // REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
-  // Simplified format - only raw data
-  issues: Array<{
+  // For code-review schema - array of issues
+  issues?: Array<{
     file: string;
     line: number;
     endLine?: number;
@@ -72,6 +74,9 @@ interface AIResponseFormat {
     replacement?: string;
   }>;
   suggestions?: string[];
+
+  // For text schema - just content field
+  content?: string;
 }
 
 export class AIReviewService {
@@ -106,14 +111,22 @@ export class AIReviewService {
   /**
    * Execute AI review using probe-chat
    */
-  async executeReview(prInfo: PRInfo, customPrompt: string): Promise<ReviewSummary> {
+  async executeReview(
+    prInfo: PRInfo,
+    customPrompt: string,
+    schema?: string
+  ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = this.buildCustomPrompt(prInfo, customPrompt);
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
+    log(`Schema type: ${schema || 'default (code-review)'}`);
+    if (schema === 'text') {
+      log('Using text schema - expecting JSON with content field');
+    }
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -179,7 +192,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo);
+      const result = this.parseAIResponse(response, debugInfo, schema);
 
       if (debugInfo) {
         result.debug = debugInfo;
@@ -214,9 +227,17 @@ export class AIReviewService {
   /**
    * Build a custom prompt for AI review with XML-formatted data
    */
-  private buildCustomPrompt(prInfo: PRInfo, customInstructions: string): string {
+  private async buildCustomPrompt(
+    prInfo: PRInfo,
+    customInstructions: string,
+    schema?: string
+  ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
+
+    // Load the appropriate schema
+    const schemaName = schema || 'code-review';
+    const schemaDefinition = await this.loadSchemaDefinition(schemaName);
 
     return `You are a senior code reviewer. 
 
@@ -230,45 +251,17 @@ ${
 REVIEW INSTRUCTIONS:
 ${customInstructions}
 
-CRITICAL: You must respond with ONLY valid JSON. Do not include any explanations, markdown formatting, or text outside the JSON object. If you cannot analyze the code, return an empty issues array, but always return valid JSON.
+CRITICAL: You must respond with ONLY valid JSON that matches the following JSON schema EXACTLY.
 
-Required JSON response format:
+JSON Schema Definition:
 \`\`\`json
-{
-  "issues": [
-    {
-      "file": "path/to/file.ext",
-      "line": 10,
-      "endLine": 12,
-      "ruleId": "category/specific-issue-type",
-      "message": "Clear description of the issue",
-      "severity": "info|warning|error|critical",
-      "category": "security|performance|style|logic|documentation",
-      "suggestion": "Optional: How to fix this issue",
-      "replacement": "Optional: Exact code replacement if applicable"
-    }
-  ],
-  "suggestions": [
-    "Overall suggestion 1",
-    "Overall suggestion 2"
-  ]
-}
+${JSON.stringify(schemaDefinition, null, 2)}
 \`\`\`
 
-Field Guidelines:
-- "file": The exact filename from the diff
-- "line": Line number where the issue starts (from the file, not the diff)
-- "endLine": Optional end line for multi-line issues
-- "ruleId": Format as "category/specific-type" (e.g., "security/sql-injection", "performance/n-plus-one")
-- "message": Clear, specific description of the issue
-- "severity": 
-  * "info": Low priority informational issues
-  * "warning": Medium priority issues that should be addressed
-  * "error": High priority issues that need fixing
-  * "critical": Critical issues that must be fixed immediately
-- "category": One of: security, performance, style, logic, documentation
-- "suggestion": Clear, actionable explanation of HOW to fix the issue
-- "replacement": EXACT code that should replace the problematic lines (complete, syntactically correct, properly indented)
+Your response MUST be valid JSON that conforms to the above schema.
+- Do not include any text before or after the JSON
+- Ensure all required fields are present
+- Follow the exact structure and types specified in the schema
 
 Analyze the following structured pull request data:
 
@@ -295,6 +288,39 @@ IMPORTANT RULES:
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
 
   // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
+
+  /**
+   * Load schema definition from file
+   */
+  private async loadSchemaDefinition(schemaName: string): Promise<Record<string, unknown>> {
+    try {
+      // Sanitize schema name to prevent path traversal attacks
+      const sanitizedSchemaName = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchemaName) {
+        throw new Error('Invalid schema name');
+      }
+      const schemaPath = path.join(__dirname, '..', 'output', sanitizedSchemaName, 'schema.json');
+      const schemaContent = await fs.promises.readFile(schemaPath, 'utf-8');
+      return JSON.parse(schemaContent);
+    } catch {
+      log(`Warning: Could not load schema ${schemaName}, using default code-review schema`);
+      // Return default code-review schema as fallback
+      try {
+        const defaultPath = path.join(__dirname, '..', 'output', 'code-review', 'schema.json');
+        const defaultContent = await fs.promises.readFile(defaultPath, 'utf-8');
+        return JSON.parse(defaultContent);
+      } catch {
+        // Minimal fallback if even default schema can't be loaded
+        return {
+          type: 'object',
+          properties: {
+            issues: { type: 'array' },
+            suggestions: { type: 'array' },
+          },
+        };
+      }
+    }
+  }
 
   /**
    * Format PR context for the AI using XML structure
@@ -510,7 +536,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   /**
    * Parse AI response JSON
    */
-  private parseAIResponse(response: string, debugInfo?: AIDebugInfo): ReviewSummary {
+  private parseAIResponse(
+    response: string,
+    debugInfo?: AIDebugInfo,
+    schema?: string
+  ): ReviewSummary {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
 
@@ -649,7 +679,38 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         throw new Error('Invalid probe-chat response format: no response field found');
       }
 
-      // Validate the parsed data
+      // Handle different schemas
+      if (schema === 'text') {
+        // For text schema, we expect a content field with text (usually markdown)
+        log('📝 Processing text schema response');
+
+        if (!reviewData.content) {
+          console.error('❌ Text schema response missing content field');
+          console.error('🔍 Available fields:', Object.keys(reviewData));
+          throw new Error('Invalid text response: missing content field');
+        }
+
+        // Return a single "issue" that contains the text content
+        // This will be rendered using the text template
+        const result: ReviewSummary = {
+          issues: [
+            {
+              file: 'PR',
+              line: 1,
+              ruleId: 'full-review/overview',
+              message: reviewData.content,
+              severity: 'info',
+              category: 'documentation',
+            },
+          ],
+          suggestions: [],
+        };
+
+        log('✅ Successfully created text ReviewSummary');
+        return result;
+      }
+
+      // Standard code-review schema processing
       log('🔍 Validating parsed review data...');
       log(`📊 Overall score: ${0}`);
       log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
@@ -671,8 +732,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
               endLine: issue.endLine,
               ruleId: issue.ruleId || `${issue.category || 'general'}/unknown`,
               message: issue.message || '',
-              severity: this.validateSeverity(issue.severity),
-              category: this.validateCategory(issue.category),
+              severity: issue.severity,
+              category: issue.category,
               suggestion: issue.suggestion,
               replacement: issue.replacement,
             } as ReviewIssue;
@@ -715,6 +776,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           const start = Math.max(0, position - 50);
           const end = Math.min(response.length, position + 50);
           console.error(`🔍 Context: "${response.substring(start, end)}"`);
+
+          // Show the first 100 characters to understand what format the AI returned
+          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
         }
 
         // Check if response contains common non-JSON patterns
@@ -733,47 +797,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         `Invalid AI response format: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
-  }
-
-  /**
-   * Validate severity value
-   */
-  private validateSeverity(severity: string): 'info' | 'warning' | 'error' | 'critical' {
-    const valid = ['info', 'warning', 'error', 'critical'];
-    if (valid.includes(severity)) {
-      return severity as 'info' | 'warning' | 'error' | 'critical';
-    }
-    // Map common alternatives
-    if (severity === 'major' || severity === 'high') {
-      return 'error';
-    }
-    if (severity === 'medium') {
-      return 'warning';
-    }
-    if (severity === 'minor' || severity === 'low') {
-      return 'info';
-    }
-    return 'info';
-  }
-
-  /**
-   * Validate category value
-   */
-  private validateCategory(
-    category: string
-  ): 'security' | 'performance' | 'style' | 'logic' | 'documentation' {
-    const valid = ['security', 'performance', 'style', 'logic', 'documentation'];
-    if (valid.includes(category)) {
-      return category as 'security' | 'performance' | 'style' | 'logic' | 'documentation';
-    }
-    // Map common alternatives
-    if (category === 'bug' || category === 'error') {
-      return 'logic';
-    }
-    if (category === 'docs') {
-      return 'documentation';
-    }
-    return 'logic';
   }
 
   /**

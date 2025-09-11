@@ -42,7 +42,11 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(gh api:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(mkdir:*)",
+      "Bash(xargs sed:*)",
+      "Bash(xargs:*)",
+      "Bash(git pull:*)"
     ]
   },
   "hooks": {

@@ -202,7 +202,18 @@ export class CheckExecutionEngine {
           prompt: 'all',
           ai: timeout ? { timeout } : undefined,
         };
-        return await provider.execute(prInfo, providerConfig);
+        const result = await provider.execute(prInfo, providerConfig);
+
+        // Prefix issues with check name for consistent grouping
+        const prefixedIssues = result.issues.map(issue => ({
+          ...issue,
+          ruleId: `${checks[0]}/${issue.ruleId}`,
+        }));
+
+        return {
+          ...result,
+          issues: prefixedIssues,
+        };
       }
     }
 
@@ -212,7 +223,9 @@ export class CheckExecutionEngine {
       const provider = this.providerRegistry.getProviderOrThrow('ai');
 
       let focus = 'all';
+      let checkName = 'all';
       if (checks.length === 1) {
+        checkName = checks[0];
         if (checks[0] === 'security' || checks[0] === 'performance' || checks[0] === 'style') {
           focus = checks[0];
         }
@@ -228,7 +241,18 @@ export class CheckExecutionEngine {
         ai: timeout ? { timeout } : undefined,
       };
 
-      return await provider.execute(prInfo, providerConfig);
+      const result = await provider.execute(prInfo, providerConfig);
+
+      // Prefix issues with check name for consistent grouping
+      const prefixedIssues = result.issues.map(issue => ({
+        ...issue,
+        ruleId: `${checkName}/${issue.ruleId}`,
+      }));
+
+      return {
+        ...result,
+        issues: prefixedIssues,
+      };
     }
 
     // Fallback to existing PRReviewer for backward compatibility
@@ -353,6 +377,8 @@ export class CheckExecutionEngine {
             type: 'ai',
             prompt: checkConfig.prompt,
             focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+            schema: checkConfig.schema,
+            group: checkConfig.group,
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -371,10 +397,23 @@ export class CheckExecutionEngine {
           const result = await provider.execute(prInfo, providerConfig, dependencyResults);
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
+          // Add group and schema info to issues from config
+          const enrichedIssues = result.issues.map(issue => ({
+            ...issue,
+            ruleId: `${checkName}/${issue.ruleId}`,
+            group: checkConfig.group,
+            schema: checkConfig.schema,
+          }));
+
+          const enrichedResult = {
+            ...result,
+            issues: enrichedIssues,
+          };
+
           return {
             checkName,
             error: null,
-            result,
+            result: enrichedResult,
           };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
@@ -472,6 +511,8 @@ export class CheckExecutionEngine {
           type: 'ai',
           prompt: checkConfig.prompt,
           focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+          schema: checkConfig.schema,
+          group: checkConfig.group,
           ai: {
             timeout: timeout || 600000,
             debug: debug, // Pass debug flag to AI provider
@@ -484,10 +525,23 @@ export class CheckExecutionEngine {
           `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
         );
 
+        // Add group and schema info to issues from config
+        const enrichedIssues = result.issues.map(issue => ({
+          ...issue,
+          ruleId: `${checkName}/${issue.ruleId}`,
+          group: checkConfig.group,
+          schema: checkConfig.schema,
+        }));
+
+        const enrichedResult = {
+          ...result,
+          issues: enrichedIssues,
+        };
+
         return {
           checkName,
           error: null,
-          result,
+          result: enrichedResult,
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -530,13 +584,28 @@ export class CheckExecutionEngine {
       type: 'ai',
       prompt: checkConfig.prompt,
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+      schema: checkConfig.schema,
+      group: checkConfig.group,
       ai: {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),
       },
     };
 
-    return await provider.execute(prInfo, providerConfig);
+    const result = await provider.execute(prInfo, providerConfig);
+
+    // Prefix issues with check name and add group/schema info from config
+    const prefixedIssues = result.issues.map(issue => ({
+      ...issue,
+      ruleId: `${checkName}/${issue.ruleId}`,
+      group: checkConfig.group,
+      schema: checkConfig.schema,
+    }));
+
+    return {
+      ...result,
+      issues: prefixedIssues,
+    };
   }
 
   /**
@@ -599,13 +668,8 @@ export class CheckExecutionEngine {
           );
         }
 
-        // Prefix issues with check name and level for identification
-        const prefixedIssues = result.issues.map(issue => ({
-          ...issue,
-          ruleId: `${checkName}/${issue.ruleId}`,
-        }));
-
-        aggregatedIssues.push(...prefixedIssues);
+        // Issues are already prefixed and enriched with group/schema info
+        aggregatedIssues.push(...result.issues);
 
         // Add suggestions with check name prefix
         const prefixedSuggestions = result.suggestions.map(
@@ -730,13 +794,8 @@ export class CheckExecutionEngine {
             `✅ Check "${checkName}" completed: ${checkResult.result.issues.length} issues found`
           );
 
-          // Prefix issues with check name for identification
-          const prefixedIssues = checkResult.result.issues.map(issue => ({
-            ...issue,
-            ruleId: `${checkName}/${issue.ruleId}`,
-          }));
-
-          aggregatedIssues.push(...prefixedIssues);
+          // Issues are already prefixed and enriched with group/schema info
+          aggregatedIssues.push(...checkResult.result.issues);
 
           // Add suggestions with check name prefix
           const prefixedSuggestions = checkResult.result.suggestions.map(

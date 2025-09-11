@@ -2,6 +2,8 @@ version: "1.0"
 checks:
   performance:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: |
       Review for performance issues:
       - N+1 queries
@@ -12,6 +14,8 @@ checks:
   
   security:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: |
       Check for security vulnerabilities:
       - SQL injection
@@ -19,9 +23,3 @@ checks:
       - Authentication issues
       - Input validation
     on: [pr_opened]
-
-output:
-  pr_comment:
-    format: table
-    group_by: check
-    collapse: true

@@ -2,6 +2,9 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { Liquid } from 'liquidjs';
+import fs from 'fs/promises';
+import path from 'path';
 
 export interface ReviewIssue {
   // Location
@@ -14,6 +17,10 @@ export interface ReviewIssue {
   message: string;
   severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+
+  // Group and schema for comment separation
+  group?: string;
+  schema?: string;
 
   // Optional enhancement
   suggestion?: string;
@@ -29,6 +36,7 @@ export interface ReviewComment {
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
   suggestion?: string;
   replacement?: string;
+  ruleId?: string; // Added to preserve check information
 }
 
 export interface ReviewSummary {
@@ -66,6 +74,7 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
     category: issue.category,
     suggestion: issue.suggestion,
     replacement: issue.replacement,
+    ruleId: issue.ruleId, // Preserve ruleId for check-based grouping
   }));
 }
 
@@ -85,15 +94,10 @@ export class PRReviewer {
     prInfo: PRInfo,
     options: ReviewOptions = {}
   ): Promise<ReviewSummary> {
-    const { debug = false, config, checks, parallelExecution } = options;
+    const { debug = false, config, checks } = options;
 
     // If we have a config and checks, use CheckExecutionEngine
     if (config && checks && checks.length > 0) {
-      const executionMode = checks.length > 1 && parallelExecution ? 'parallel' : 'sequential';
-      console.error(
-        `🔧 Debug: PRReviewer using CheckExecutionEngine for ${executionMode} execution of ${checks.length} check(s)`
-      );
-
       // Import CheckExecutionEngine dynamically to avoid circular dependencies
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
@@ -124,47 +128,185 @@ export class PRReviewer {
     repo: string,
     prNumber: number,
     summary: ReviewSummary,
-    options: ReviewOptions & { commentId?: string; triggeredBy?: string } = {}
+    options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
-    const comment = this.formatReviewCommentWithVisorFormat(summary, options);
+    // Group issues by their group property
+    const issuesByGroup = this.groupIssuesByGroup(summary.issues);
 
-    await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-      commentId: options.commentId,
-      triggeredBy: options.triggeredBy || 'unknown',
-      allowConcurrentUpdates: false,
-    });
+    // If no groups or only one group, use the original single comment approach
+    if (Object.keys(issuesByGroup).length <= 1) {
+      const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId: options.commentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
+      });
+      return;
+    }
+
+    // Create separate comments for each group
+    for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
+      const groupSummary: ReviewSummary = {
+        ...summary,
+        issues: groupIssues,
+      };
+
+      // Use group name in comment ID to create separate comments
+      const groupCommentId = options.commentId
+        ? `${options.commentId}-${groupName}`
+        : `visor-${groupName}`;
+
+      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId: groupCommentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
+      });
+    }
   }
 
-  private formatReviewCommentWithVisorFormat(
+  private async formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
     _options: ReviewOptions
-  ): string {
-    // Calculate metrics from issues
+  ): Promise<string> {
     const totalIssues = calculateTotalIssues(summary.issues);
-    const comments = convertIssuesToComments(summary.issues);
 
     let comment = '';
 
-    // If no issues, show success message
+    // Add main header
     if (totalIssues === 0) {
-      comment += `## ✅ All Checks Passed\n\n`;
-      comment += `**No issues found – changes LGTM.**\n\n`;
+      comment += `## ✅ All Checks Passed\n\n**No issues found – changes LGTM.**\n\n`;
     } else {
-      // Create tables with issues grouped by category
-      comment += this.formatIssuesTable(comments);
+      comment += `## 🔍 Code Analysis Results\n\n`;
+      // Use new schema-template system for content generation
+      const templateContent = await this.renderWithSchemaTemplate(summary);
+      comment += templateContent;
     }
 
-    // Add debug section if debug information is available
+    // Add debug section if available
     if (summary.debug) {
       comment += this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 
-    // Add footer
-    comment += `---\n`;
-    comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    // Simple footer
+    comment += `---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
     return comment;
+  }
+
+  private async renderWithSchemaTemplate(summary: ReviewSummary): Promise<string> {
+    try {
+      // Group issues by check name and render each check separately
+      const issuesByCheck = this.groupIssuesByCheck(summary.issues);
+
+      if (Object.keys(issuesByCheck).length === 0) {
+        return 'No issues found in this group.';
+      }
+
+      const renderedSections: string[] = [];
+
+      for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
+        const checkSchema = checkIssues[0]?.schema || 'code-review';
+        const renderedSection = await this.renderSingleCheckTemplate(
+          checkName,
+          checkIssues,
+          checkSchema
+        );
+        renderedSections.push(renderedSection);
+      }
+
+      // Combine all check sections with proper spacing
+      return renderedSections.join('\n\n');
+    } catch (error) {
+      console.warn(
+        'Failed to render with schema-template system, falling back to old system:',
+        error
+      );
+      // Fallback to old system if template fails
+      const comments = convertIssuesToComments(summary.issues);
+      return this.formatIssuesTable(comments);
+    }
+  }
+
+  private async renderSingleCheckTemplate(
+    checkName: string,
+    issues: ReviewIssue[],
+    schema: string
+  ): Promise<string> {
+    const liquid = new Liquid();
+
+    // Sanitize schema name to prevent path traversal attacks
+    const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+    if (!sanitizedSchema) {
+      throw new Error('Invalid schema name');
+    }
+
+    // Load the appropriate template based on schema
+    const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+    const templateContent = await fs.readFile(templatePath, 'utf-8');
+
+    let templateData: { content?: string; issues?: ReviewIssue[]; checkName: string };
+
+    if (schema === 'text') {
+      // For text schema, pass the message content directly
+      templateData = {
+        content: issues.length > 0 ? issues[0].message : 'No content available',
+        checkName: checkName,
+      };
+    } else {
+      // For code-review schema, pass issues directly (no more checkName extraction needed)
+      templateData = {
+        issues: issues,
+        checkName: checkName,
+      };
+    }
+
+    // Render with Liquid template
+    return await liquid.parseAndRender(templateContent, templateData);
+  }
+
+  private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+
+    for (const issue of issues) {
+      const checkName = this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized');
+
+      if (!grouped[checkName]) {
+        grouped[checkName] = [];
+      }
+
+      grouped[checkName].push(issue);
+    }
+
+    return grouped;
+  }
+
+  private extractCheckNameFromRuleId(ruleId: string): string {
+    if (ruleId && ruleId.includes('/')) {
+      return ruleId.split('/')[0];
+    }
+    return 'uncategorized';
+  }
+
+  private groupIssuesByGroup(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+
+    for (const issue of issues) {
+      const groupName = issue.group || 'default';
+
+      if (!grouped[groupName]) {
+        grouped[groupName] = [];
+      }
+
+      grouped[groupName].push(issue);
+    }
+
+    return grouped;
   }
 
   private formatReviewComment(summary: ReviewSummary, options: ReviewOptions): string {
@@ -230,6 +372,27 @@ export class PRReviewer {
         grouped[comment.category] = [];
       }
       grouped[comment.category].push(comment);
+    }
+
+    return grouped;
+  }
+
+  private groupCommentsByCheck(comments: ReviewComment[]): Record<string, ReviewComment[]> {
+    const grouped: Record<string, ReviewComment[]> = {};
+
+    for (const comment of comments) {
+      // Extract check name from ruleId prefix (e.g., "security/sql-injection" -> "security")
+      let checkName = 'uncategorized';
+
+      if (comment.ruleId && comment.ruleId.includes('/')) {
+        const parts = comment.ruleId.split('/');
+        checkName = parts[0];
+      }
+
+      if (!grouped[checkName]) {
+        grouped[checkName] = [];
+      }
+      grouped[checkName].push(comment);
     }
 
     return grouped;
@@ -348,7 +511,6 @@ export class PRReviewer {
 
       fs.writeFileSync(filePath, markdownContent);
 
-      console.log(`🔧 Debug: Saved debug artifact to ${filePath}`);
       return filename;
     } catch (error) {
       console.error(`❌ Failed to save debug artifact: ${error}`);
@@ -443,17 +605,17 @@ export class PRReviewer {
   private formatIssuesTable(comments: ReviewComment[]): string {
     let content = `## 🔍 Code Analysis Results\n\n`;
 
-    // Group comments by category
-    const groupedComments = this.groupCommentsByCategory(comments);
+    // Group comments by check (extracted from ruleId prefix)
+    const groupedComments = this.groupCommentsByCheck(comments);
 
-    // Create a table for each category that has issues
-    for (const [category, categoryComments] of Object.entries(groupedComments)) {
-      if (categoryComments.length === 0) continue;
+    // Create a table for each check that has issues
+    for (const [checkName, checkComments] of Object.entries(groupedComments)) {
+      if (checkComments.length === 0) continue;
 
-      const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
+      const checkTitle = checkName.charAt(0).toUpperCase() + checkName.slice(1);
 
-      // Category heading
-      content += `### ${categoryTitle} Issues (${categoryComments.length})\n\n`;
+      // Check heading
+      content += `### ${checkTitle} Issues (${checkComments.length})\n\n`;
 
       // Start HTML table for this category
       content += `<table>\n`;
@@ -467,15 +629,15 @@ export class PRReviewer {
       content += `  </thead>\n`;
       content += `  <tbody>\n`;
 
-      // Sort comments within category by severity, then by file
-      const sortedCategoryComments = categoryComments.sort((a, b) => {
+      // Sort comments within check by severity, then by file
+      const sortedCheckComments = checkComments.sort((a, b) => {
         const severityOrder = { critical: 0, error: 1, warning: 2, info: 3 };
         const severityDiff = (severityOrder[a.severity] || 4) - (severityOrder[b.severity] || 4);
         if (severityDiff !== 0) return severityDiff;
         return a.file.localeCompare(b.file);
       });
 
-      for (const comment of sortedCategoryComments) {
+      for (const comment of sortedCheckComments) {
         const severityEmoji =
           comment.severity === 'critical'
             ? '🔴'

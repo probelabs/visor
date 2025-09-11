@@ -1,10 +1,10 @@
-version: "1.0"
+version: "2.0"
 
 checks:
   security:
     type: ai
-    group: code-review
-    schema: code-review
+    group: code-review  # Groups with other code-review checks
+    schema: code-review # Uses built-in code-review schema
     prompt: |
       Perform comprehensive security analysis focusing on:
       - SQL injection vulnerabilities
@@ -20,7 +20,7 @@ checks:
 
   performance:
     type: ai
-    group: code-review
+    group: code-review  # Same group - will be in same comment
     schema: code-review
     prompt: |
       Review for performance issues:
@@ -50,13 +50,14 @@ checks:
       
       Return results in JSON format matching the code-review schema.
     on: [pr_opened]
+    depends_on: [security]
 
   architecture:
     type: ai
     group: code-review
     schema: code-review
     prompt: |
-      Analyze architectural aspects:
+      Analyze architectural aspects building on security and performance findings:
       - SOLID principles adherence
       - Design pattern usage appropriateness
       - Circular dependencies
@@ -67,45 +68,57 @@ checks:
       
       Return results in JSON format matching the code-review schema.
     on: [pr_opened, pr_updated]
+    depends_on: [security, performance]
 
-  # PR overview with file changes and mermaid diagram
-  full-review:
+  # This check uses different group - will be separate comment
+  overview:
     type: ai
-    group: pr-overview
-    schema: text
+    group: summary  # Different group = separate comment
+    schema: markdown # Uses markdown schema for free-form output
     prompt: |
-      Create a comprehensive pull request overview with the following sections:
+      Provide a high-level overview of this pull request in markdown format:
+      
+      ## 📋 Pull Request Summary
+      
+      Analyze the changes and provide:
+      1. **What Changed**: Brief summary of modified files and their purpose
+      2. **Why**: The apparent goal/reason for these changes
+      3. **Impact**: What parts of the system are affected
+      4. **Risks**: Any potential issues to watch out for
+      
+      Keep it concise but informative. Use proper markdown formatting.
+    on: [pr_opened, pr_updated]
+    depends_on: [security, performance, style, architecture]
 
-      ## 📋 Pull Request Overview
+  # Another separate group for architecture diagrams
+  architecture-diagram:
+    type: ai
+    group: diagrams
+    schema: markdown
+    prompt: |
+      Create an architecture overview with mermaid diagram showing the relationships 
+      between components affected by this PR.
       
-      1. **Summary**: Brief description of what this PR does based on the changes
-      2. **Files Changed**: Create a table showing modified files with their purpose
-      3. **Architecture Impact**: How these changes affect the system architecture
+      Format as markdown with:
+      1. Brief explanation of architectural changes
+      2. Mermaid diagram in code block showing component relationships
       
-      ## 📊 Files Changed
-      
-      Create a markdown table with columns:
-      | File | Lines Changed | Purpose/Component |
-      |------|---------------|------------------|
-      | path/to/file | +10/-5 | Brief description of what this file does |
-      
-      ## 🏗️ Architecture Diagram
-      
-      Generate a mermaid diagram showing the relationships between the modified components:
-      
+      Example:
       ```mermaid
       graph TD
         A[Component A] --> B[Component B]
         B --> C[Database]
-        C --> D[API Endpoints]
       ```
       
-      Focus on:
-      - Components that were modified
-      - How they interact with each other
-      - Data flow between components
-      - Any new relationships introduced
-      
-      Keep the diagram clean and focused on the architectural changes.
-    on: [pr_opened, pr_updated]
+      Focus on structural relationships, not implementation details.
+    on: [pr_opened]
+    enabled: false  # Can be enabled when needed
 
+# Schema references - can be built-in names, file paths, or URLs
+schemas:
+  # Built-in schemas are automatically available
+  # Custom schemas can be defined here or referenced
+  custom-metrics:
+    file: "./custom-schemas/metrics.json"
+  external-schema:
+    url: "https://myorg.com/schemas/compliance.json"

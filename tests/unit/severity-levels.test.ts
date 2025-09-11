@@ -1,31 +1,6 @@
 import { AIReviewService } from '../../src/ai-review-service';
 
 describe('Severity Levels', () => {
-  describe('validateSeverity', () => {
-    it('should support all four severity levels', () => {
-      const service = new AIReviewService({ apiKey: 'test' });
-
-      // Access the private method for testing
-      const validateSeverity = (service as any).validateSeverity.bind(service);
-
-      // Test direct mappings
-      expect(validateSeverity('info')).toBe('info');
-      expect(validateSeverity('warning')).toBe('warning');
-      expect(validateSeverity('error')).toBe('error');
-      expect(validateSeverity('critical')).toBe('critical');
-
-      // Test alternative mappings
-      expect(validateSeverity('low')).toBe('info');
-      expect(validateSeverity('minor')).toBe('info');
-      expect(validateSeverity('medium')).toBe('warning');
-      expect(validateSeverity('high')).toBe('error');
-      expect(validateSeverity('major')).toBe('error');
-
-      // Test default fallback
-      expect(validateSeverity('unknown')).toBe('info');
-    });
-  });
-
   describe('Critical Issues Count', () => {
     it('should count only critical severity as critical issues', () => {
       const service = new AIReviewService({ apiKey: 'test' });

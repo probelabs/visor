@@ -1,7 +1,7 @@
 <div align="center">
   <img src="site/visor.png" alt="Visor Logo" width="200" />
   
-  # Visor - AI-Powered Code Review
+  # Visor - AI-Powered Code Review with Schema-Template System
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
@@ -96,8 +96,11 @@ npm run build
 ## ✨ Features
 
 - **Automated PR Reviews** - Analyzes code changes and posts review comments
+- **Schema-Template System** - Flexible data validation with JSON Schema and Liquid templating
+- **Group-Based Comments** - Multiple GitHub comments organized by check groups
 - **Multiple Check Types** - Security, performance, style, and architecture analysis
 - **Flexible Output** - Table, JSON, Markdown, or SARIF format
+- **Step Dependencies** - Define execution order with `depends_on` relationships
 - **PR Commands** - Trigger reviews with `/review` comments
 - **GitHub Integration** - Creates check runs, adds labels, posts comments
 
@@ -196,27 +199,36 @@ Visor supports defining dependencies between checks using the `depends_on` field
 ### Configuration Example
 
 ```yaml
+version: "1.0"
 checks:
   security:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Comprehensive security analysis..."
     on: [pr_opened, pr_updated]
     # No dependencies - runs first
 
   performance:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Performance analysis..."
     on: [pr_opened, pr_updated]
     # No dependencies - runs parallel with security
 
   style:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Style analysis based on security findings..."
     on: [pr_opened]
     depends_on: [security]  # Waits for security to complete
 
   architecture:
     type: ai
+    group: code-review
+    schema: code-review
     prompt: "Architecture analysis building on previous checks..."
     on: [pr_opened, pr_updated]
     depends_on: [security, performance]  # Waits for both to complete
@@ -240,48 +252,68 @@ With the above configuration:
 
 #### Diamond Dependency
 ```yaml
+version: "1.0"
 checks:
   foundation:
     type: ai
+    group: base
+    schema: code-review
     prompt: "Base analysis"
     
   branch_a:
     type: ai
+    group: code-review
+    schema: code-review
     depends_on: [foundation]
     
   branch_b:
     type: ai
+    group: code-review
+    schema: code-review
     depends_on: [foundation]
     
   final:
     type: ai
+    group: summary
+    schema: markdown
     depends_on: [branch_a, branch_b]
 ```
 
 #### Multiple Independent Chains
 ```yaml
+version: "1.0"
 checks:
   # Security chain
   security_basic:
     type: ai
+    group: security
+    schema: code-review
     prompt: "Basic security scan"
     
   security_advanced:
     type: ai
+    group: security
+    schema: code-review
     depends_on: [security_basic]
     
   # Performance chain  
   performance_basic:
     type: ai
+    group: performance
+    schema: code-review
     prompt: "Basic performance scan"
     
   performance_advanced:
     type: ai
+    group: performance
+    schema: code-review
     depends_on: [performance_basic]
     
   # Final integration (waits for both chains)
   integration:
     type: ai
+    group: summary
+    schema: markdown
     depends_on: [security_advanced, performance_advanced]
 ```
 
@@ -291,6 +323,186 @@ checks:
 - **Missing Dependencies**: References to non-existent checks are validated
 - **Graceful Failures**: Failed checks don't prevent independent checks from running
 - **Dependency Results**: Results from dependency checks are available to dependent checks
+
+## 📋 Schema-Template System
+
+Visor's new schema-template system provides structured output validation and customizable rendering, replacing the previous category-based approach with a more flexible, configuration-driven system.
+
+### Overview
+
+The schema-template system separates data structure (schemas) from presentation (templates), enabling:
+
+- **JSON Schema Validation**: Runtime validation of check results using AJV
+- **Liquid Templates**: Dynamic content rendering with conditional logic and loops
+- **Multiple Output Formats**: Support for structured tables, free-form markdown, and custom formats
+- **Group-Based Comments**: Create separate GitHub comments based on `group` configuration
+- **Check-Focused Organization**: Group issues by check name rather than artificial categories
+- **Extensible Design**: Easy to add new schemas and output formats
+
+### Configuration
+
+```yaml
+version: "1.0"
+
+checks:
+  security:
+    type: ai
+    group: code-review        # Groups this check with others for commenting
+    schema: code-review       # Uses built-in code-review schema
+    prompt: |
+      Perform comprehensive security analysis focusing on:
+      - SQL injection vulnerabilities
+      - XSS attack vectors  
+      - Authentication/authorization issues
+      
+      Return results in JSON format matching the code-review schema.
+    on: [pr_opened, pr_updated]
+
+  performance:
+    type: ai
+    group: code-review        # Same group = combined in one comment
+    schema: code-review       # Same schema = same table format
+    prompt: |
+      Analyze performance issues including:
+      - Algorithm complexity
+      - Memory usage patterns
+      - Database query optimization
+    on: [pr_opened, pr_updated]
+
+  full-review:
+    type: ai
+    group: pr-overview       # Different group = separate comment
+    schema: text             # Uses built-in text schema for markdown
+    prompt: |
+      Create a comprehensive pull request overview in markdown format with:
+      
+      ## 📋 Pull Request Overview
+      1. **Summary**: Brief description of changes
+      2. **Files Changed**: Table of modified files
+      3. **Architecture Impact**: Key architectural considerations
+    on: [pr_opened]
+```
+
+### Built-in Schemas
+
+#### Code Review Schema (`code-review`)
+Structured format for code analysis results:
+```json
+{
+  "issues": [
+    {
+      "file": "src/auth.ts",
+      "line": 15,
+      "ruleId": "security/hardcoded-secret", 
+      "message": "Hardcoded API key detected",
+      "severity": "critical",
+      "category": "security",
+      "suggestion": "Use environment variables"
+    }
+  ]
+}
+```
+
+#### Text Schema (`text`)
+Free-form text/markdown content:
+```json
+{
+  "content": "# PR Overview\n\nThis PR adds authentication features..."
+}
+```
+
+### Output Templates
+
+#### Code Review Template
+Renders structured data as HTML tables with:
+- Grouping by check name
+- Severity indicators with emojis (🔴 🟠 🟡 🟢)
+- Collapsible suggestion details
+- File and line information
+
+#### Text Template  
+Renders text/markdown content as-is for:
+- PR overviews and summaries
+- Architecture diagrams
+- Custom formatted content
+
+### Comment Grouping
+
+The `group` property controls GitHub comment generation:
+
+```yaml
+checks:
+  security:
+    group: code-review    # \
+  performance:            #  } All grouped in one comment
+    group: code-review    # /
+    
+  overview:
+    group: summary        # Separate comment
+```
+
+### Custom Schemas and Templates
+
+Add custom schemas in your config:
+
+```yaml
+schemas:
+  custom-metrics:
+    file: "./schemas/metrics.json"     # Local file
+  compliance:  
+    url: "https://example.com/compliance.json"  # Remote URL
+
+checks:
+  metrics:
+    schema: custom-metrics    # References custom schema
+    group: metrics           # Separate comment group
+```
+
+### Key Features Implemented
+
+- ✅ **Check-Based Organization**: Issues grouped by check name, not artificial categories
+- ✅ **Group-Based Comments**: Multiple GitHub comments based on `group` property
+- ✅ **JSON Schema Validation**: Runtime validation with AJV library
+- ✅ **Liquid Templates**: Dynamic rendering with conditional logic
+- ✅ **Multiple Output Formats**: Structured tables vs free-form markdown
+- ✅ **Backwards Compatibility**: Existing configurations continue to work
+- ✅ **No False Categories**: Eliminates "logic" issues when no logic checks configured
+- ✅ **Type Safety**: Structured data validation prevents malformed output
+- ✅ **Extensible Design**: Easy to add custom schemas and templates
+
+### Schema and Template Properties
+
+The schema-template system introduces two new configuration properties:
+
+#### Group Property
+Controls GitHub comment organization:
+```yaml
+checks:
+  security:
+    group: code-review    # Groups with other code-review checks
+  performance:
+    group: code-review    # Same group = combined in one comment
+  overview:
+    group: pr-summary     # Different group = separate comment
+```
+
+#### Schema Property
+Enforces structured output format:
+```yaml
+checks:
+  security:
+    schema: code-review   # Structured table format
+    prompt: "Return JSON matching code-review schema"
+  overview:
+    schema: text          # Free-form markdown
+    prompt: "Return markdown content"
+```
+
+#### Benefits
+- **Check-Based Organization**: Only configured checks appear in results
+- **Multiple Comments**: Separate GitHub comments based on `group` property
+- **Structured Output**: JSON Schema validation ensures consistent data
+- **Flexible Rendering**: Different templates for different output types
 
 ## 🧠 Advanced AI Features
 
@@ -364,8 +576,8 @@ CheckProviderRegistry.getInstance().registerProvider(new CustomCheckProvider());
 Create `visor.config.yaml` in your project root:
 
 ```yaml
-# visor.config.yaml
-version: 1.0
+# .visor.yaml
+version: "1.0"
 
 # Project metadata
 project:

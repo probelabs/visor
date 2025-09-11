@@ -30,6 +30,7 @@ interface CliReviewIssue {
   message: string;
   file: string;
   line: number;
+  ruleId?: string;
 }
 
 interface DebugInfo {
@@ -376,14 +377,34 @@ async function postCliReviewComment(
       comment += '\n';
     }
 
-    // Add issues grouped by category
-    if (cliOutput.issues && cliOutput.issues.length > 0) {
-      const groupedIssues = groupIssuesByCategory(cliOutput.issues);
+    // Load config to determine grouping method
+    const { ConfigManager } = await import('./config');
+    const configManager = new ConfigManager();
+    const config = await configManager.findAndLoadConfig();
 
-      for (const [category, issues] of Object.entries(groupedIssues)) {
+    // Add issues grouped by check or category based on config
+    if (cliOutput.issues && cliOutput.issues.length > 0) {
+      // Always use check-based grouping when configured
+      const useCheckGrouping = config.output?.pr_comment?.group_by === 'check';
+      const groupedIssues = useCheckGrouping
+        ? groupIssuesByCheck(cliOutput.issues)
+        : groupIssuesByCategory(cliOutput.issues);
+
+      // Get configured checks for filtering
+      const configuredChecks = config.checks ? Object.keys(config.checks) : [];
+
+      for (const [groupKey, issues] of Object.entries(groupedIssues)) {
         if (issues.length === 0) continue;
 
-        const title = `${category.charAt(0).toUpperCase() + category.slice(1)} Issues (${issues.length})`;
+        // When using check-based grouping, only show configured checks
+        if (useCheckGrouping && configuredChecks.length > 0) {
+          // Skip if not a configured check (unless it's uncategorized)
+          if (!configuredChecks.includes(groupKey) && groupKey !== 'uncategorized') {
+            continue;
+          }
+        }
+
+        const title = `${groupKey.charAt(0).toUpperCase() + groupKey.slice(1)} Issues (${issues.length})`;
 
         let sectionContent = '';
         for (const issue of issues.slice(0, 5)) {
@@ -453,6 +474,32 @@ function groupIssuesByCategory(issues: CliReviewIssue[]): Record<string, CliRevi
     const category = issue.category || 'logic';
     if (!grouped[category]) grouped[category] = [];
     grouped[category].push(issue);
+  }
+
+  return grouped;
+}
+
+/**
+ * Group issues by the check that found them (extracted from ruleId prefix)
+ */
+function groupIssuesByCheck(issues: CliReviewIssue[]): Record<string, CliReviewIssue[]> {
+  const grouped: Record<string, CliReviewIssue[]> = {};
+
+  for (const issue of issues) {
+    // Extract check name from ruleId prefix
+    // Format: "checkName/specific-rule" -> "checkName"
+    let checkName = 'uncategorized';
+
+    if (issue.ruleId && issue.ruleId.includes('/')) {
+      const parts = issue.ruleId.split('/');
+      checkName = parts[0];
+    }
+    // No fallback to category - only use ruleId prefix
+
+    if (!grouped[checkName]) {
+      grouped[checkName] = [];
+    }
+    grouped[checkName].push(issue);
   }
 
   return grouped;
@@ -530,18 +577,27 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     config = await configManager.loadConfig('.visor.yaml');
     // Build command registry from config
     if (config.checks) {
+      // Add 'review' command that runs all checks
+      commandRegistry['review'] = Object.keys(config.checks);
+
+      // Also add individual check names as commands
       for (const [checkId, checkConfig] of Object.entries(config.checks)) {
+        // Legacy: check if it has old 'command' property
         if (checkConfig.command) {
           if (!commandRegistry[checkConfig.command]) {
             commandRegistry[checkConfig.command] = [];
           }
           commandRegistry[checkConfig.command].push(checkId);
         }
+        // New: add check name as command
+        commandRegistry[checkId] = [checkId];
       }
     }
   } catch {
     console.log('Could not load config, using defaults');
     config = null;
+    // Default commands when no config is available
+    commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
   }
 
   // Parse comment with available commands
@@ -628,7 +684,10 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
           parallelExecution: false,
         });
 
-        await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
+        await reviewer.postReviewComment(owner, repo, prNumber, review, {
+          focus,
+          format,
+        });
         setOutput('issues-found', calculateTotalIssues(review.issues).toString());
       }
       break;
@@ -751,7 +810,7 @@ async function handlePullRequestEvent(
     console.log('========================================\n');
   }
 
-  const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
+  const reviewComment = await reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
   const fullComment = reviewContext + reviewComment;
 
   // Use smart comment updating - will update existing comment or create new one
@@ -840,12 +899,6 @@ async function handlePullRequestVisorMode(
   const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
   const action = eventContext.event?.action;
 
-  // Extract commit SHA for comment metadata
-  const commitSha =
-    eventContext.event?.pull_request?.head?.sha ||
-    eventContext.payload?.event?.pull_request?.head?.sha ||
-    process.env.GITHUB_SHA;
-
   if (!prResult.prNumber) {
     console.error(
       `❌ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
@@ -872,7 +925,6 @@ async function handlePullRequestVisorMode(
     // Use the existing PR analysis infrastructure but with Visor config
     const analyzer = new PRAnalyzer(octokit);
     const reviewer = new PRReviewer(octokit);
-    const commentManager = new CommentManager(octokit);
 
     // Load Visor config
     const configManager = new ConfigManager();
@@ -936,27 +988,20 @@ async function handlePullRequestVisorMode(
       (review.debug as any).parallelExecution = true;
     }
 
-    // Post comment using existing comment manager
+    // Fetch PR info to get commit SHA for metadata
+    const { data: pullRequest } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber,
+    });
+
+    // Post comment using group-based comment separation
     const commentId = `visor-config-review-${prNumber}`;
-    const reviewComment = reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
-
-    // Add context based on action
-    let reviewContext = '';
-    if (action === 'opened') {
-      reviewContext =
-        '## 🚀 Visor Config-Based PR Review!\n\nThis PR has been analyzed using multiple specialized AI checks.\n\n';
-    } else {
-      reviewContext =
-        '## 🔄 Updated Visor Review\n\nThis review has been updated based on PR changes.\n\n';
-    }
-
-    const fullComment = reviewContext + reviewComment;
-
-    await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+    await reviewer.postReviewComment(owner, repo, prNumber, review, {
+      ...reviewOptions,
       commentId,
       triggeredBy: `visor-config-${action}`,
-      allowConcurrentUpdates: true,
-      commitSha: commitSha,
+      commitSha: pullRequest.head?.sha,
     });
 
     console.log('✅ Posted Visor config-based review comment');
