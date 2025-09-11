@@ -3,7 +3,11 @@ export interface Command {
   args?: string[];
 }
 
-export function parseComment(body: string): Command | null {
+export interface CommandRegistry {
+  [command: string]: string[]; // command -> check IDs that respond to it
+}
+
+export function parseComment(body: string, supportedCommands?: string[]): Command | null {
   const trimmed = body.trim();
 
   if (!trimmed.startsWith('/')) {
@@ -14,9 +18,13 @@ export function parseComment(body: string): Command | null {
   const command = parts[0].substring(1).toLowerCase();
   const args = parts.slice(1);
 
-  const supportedCommands = ['review', 'help', 'status'];
+  // Default built-in commands
+  const builtInCommands = ['help', 'status'];
+  const allCommands = supportedCommands
+    ? [...builtInCommands, ...supportedCommands]
+    : builtInCommands;
 
-  if (!supportedCommands.includes(command)) {
+  if (!allCommands.includes(command)) {
     return null;
   }
 
@@ -26,15 +34,32 @@ export function parseComment(body: string): Command | null {
   };
 }
 
-export function getHelpText(): string {
+export function getHelpText(customCommands?: CommandRegistry): string {
+  let commandList = '';
+  let hasCustomCommands = false;
+
+  // Add custom commands from config
+  if (customCommands && Object.keys(customCommands).length > 0) {
+    hasCustomCommands = true;
+    for (const [command, checkIds] of Object.entries(customCommands)) {
+      commandList += `- \`/${command}\` - Run checks: ${checkIds.join(', ')}\n`;
+    }
+  }
+
+  // Add built-in commands
+  commandList += `- \`/status\` - Show current PR status and metrics\n`;
+  commandList += `- \`/help\` - Show this help message\n`;
+
+  // Add note if no custom commands are configured
+  if (!hasCustomCommands) {
+    commandList =
+      `*No custom review commands configured. Configure checks with the \`command\` property in your .visor.yaml file.*\n\n` +
+      commandList;
+  }
+
   return `## Available Commands
 
-- \`/review\` - Perform a code review of the current PR
-- \`/review --focus=security\` - Focus review on security issues  
-- \`/review --format=detailed\` - Provide detailed review comments
-- \`/status\` - Show current PR status and metrics
-- \`/help\` - Show this help message
-
+${commandList}
 Commands are case-insensitive and can be used in PR comments.
 
 ---

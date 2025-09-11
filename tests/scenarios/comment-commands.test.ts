@@ -112,7 +112,6 @@ describe('Act Scenarios - Comment Commands', () => {
 
     const helpText = getHelpText();
     expect(helpText).toContain('Available Commands');
-    expect(helpText).toContain('/review');
     expect(helpText).toContain('/status');
   });
 });

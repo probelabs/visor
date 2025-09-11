@@ -1,7 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
-import { parseComment, getHelpText } from './commands';
+import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
 import { PRReviewer, calculateTotalIssues } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
@@ -521,7 +521,32 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     return;
   }
 
-  const command = parseComment(comment.body);
+  // Load configuration to get available commands
+  const configManager = new ConfigManager();
+  let config;
+  const commandRegistry: CommandRegistry = {};
+
+  try {
+    config = await configManager.loadConfig('.visor.yaml');
+    // Build command registry from config
+    if (config.checks) {
+      for (const [checkId, checkConfig] of Object.entries(config.checks)) {
+        if (checkConfig.command) {
+          if (!commandRegistry[checkConfig.command]) {
+            commandRegistry[checkConfig.command] = [];
+          }
+          commandRegistry[checkConfig.command].push(checkId);
+        }
+      }
+    }
+  } catch {
+    console.log('Could not load config, using defaults');
+    config = null;
+  }
+
+  // Parse comment with available commands
+  const availableCommands = Object.keys(commandRegistry);
+  const command = parseComment(comment.body, availableCommands);
   if (!command) {
     console.log('No valid command found in comment');
     return;
@@ -534,56 +559,6 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
   const reviewer = new PRReviewer(octokit);
 
   switch (command.type) {
-    case 'review':
-      const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
-        | 'security'
-        | 'performance'
-        | 'style'
-        | 'all'
-        | undefined;
-      const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
-        | 'table'
-        | 'json'
-        | 'markdown'
-        | 'sarif'
-        | undefined;
-
-      console.log(`Starting PR review for #${prNumber}`);
-      const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-
-      // Load config for the review
-      const configManager = new ConfigManager();
-      let config;
-      try {
-        config = await configManager.loadConfig('.visor.yaml');
-      } catch {
-        // Fall back to a basic configuration
-        config = {
-          version: '1.0',
-          output: {},
-          checks: {
-            'legacy-review': {
-              type: 'ai' as const,
-              on: ['pr_opened'],
-              prompt: `Review this code focusing on ${focus || 'all aspects'}. Look for security issues, performance problems, code quality, and suggest improvements.`,
-            },
-          },
-        };
-      }
-
-      const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
-        focus,
-        format,
-        config: config as any,
-        checks: ['legacy-review'],
-        parallelExecution: false,
-      });
-
-      await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
-
-      setOutput('issues-found', calculateTotalIssues(review.issues).toString());
-      break;
-
     case 'status':
       const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
       const statusComment =
@@ -610,8 +585,52 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         owner,
         repo,
         issue_number: prNumber,
-        body: getHelpText(),
+        body: getHelpText(commandRegistry),
       });
+      break;
+
+    default:
+      // Handle custom commands from config
+      if (commandRegistry[command.type]) {
+        const checkIds = commandRegistry[command.type];
+        console.log(`Running checks for command /${command.type}: ${checkIds.join(', ')}`);
+
+        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+
+        // Extract common arguments
+        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
+          | 'security'
+          | 'performance'
+          | 'style'
+          | 'all'
+          | undefined;
+        const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
+          | 'table'
+          | 'json'
+          | 'markdown'
+          | 'sarif'
+          | undefined;
+
+        // If focus is specified, update the checks' focus
+        if (focus && config?.checks) {
+          for (const checkId of checkIds) {
+            if (config.checks[checkId]) {
+              config.checks[checkId].focus = focus;
+            }
+          }
+        }
+
+        const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
+          focus,
+          format,
+          config: config as any,
+          checks: checkIds,
+          parallelExecution: false,
+        });
+
+        await reviewer.postReviewComment(owner, repo, prNumber, review, { focus, format });
+        setOutput('issues-found', calculateTotalIssues(review.issues).toString());
+      }
       break;
   }
 }

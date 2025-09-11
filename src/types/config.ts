@@ -46,6 +46,8 @@ export interface CheckConfig {
   prompt: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
   focus?: string;
+  /** Command that triggers this check (e.g., "review", "security-scan") - optional */
+  command?: string;
   /** Events that trigger this check */
   on: EventTrigger[];
   /** File patterns that trigger this check (optional) */
