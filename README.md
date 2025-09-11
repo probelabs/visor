@@ -1,7 +1,7 @@
 <div align="center">
   <img src="site/visor.png" alt="Visor Logo" width="200" />
   
-  # Visor - AI-Powered Code Review with Group-Based Comments
+  # Visor - AI-Powered Code Review with Schema-Template System
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
@@ -96,8 +96,11 @@ npm run build
 ## ✨ Features
 
 - **Automated PR Reviews** - Analyzes code changes and posts review comments
+- **Schema-Template System** - Flexible data validation with JSON Schema and Liquid templating
+- **Group-Based Comments** - Multiple GitHub comments organized by check groups
 - **Multiple Check Types** - Security, performance, style, and architecture analysis
 - **Flexible Output** - Table, JSON, Markdown, or SARIF format
+- **Step Dependencies** - Define execution order with `depends_on` relationships
 - **PR Commands** - Trigger reviews with `/review` comments
 - **GitHub Integration** - Creates check runs, adds labels, posts comments
 
@@ -323,22 +326,23 @@ checks:
 
 ## 📋 Schema-Template System
 
-Visor includes a flexible schema-template system that provides structured output validation and customizable rendering.
+Visor's new schema-template system provides structured output validation and customizable rendering, replacing the previous category-based approach with a more flexible, configuration-driven system.
 
 ### Overview
 
 The schema-template system separates data structure (schemas) from presentation (templates), enabling:
 
 - **JSON Schema Validation**: Runtime validation of check results using AJV
-- **Flexible Templates**: Liquid-based templates for custom output rendering  
-- **Multiple Output Formats**: Support for structured tables and free-form markdown
-- **Check-Based Grouping**: Group GitHub comments by check name instead of categories
+- **Liquid Templates**: Dynamic content rendering with conditional logic and loops
+- **Multiple Output Formats**: Support for structured tables, free-form markdown, and custom formats
+- **Group-Based Comments**: Create separate GitHub comments based on `group` configuration
+- **Check-Focused Organization**: Group issues by check name rather than artificial categories
 - **Extensible Design**: Easy to add new schemas and output formats
 
 ### Configuration
 
 ```yaml
-version: "1.0"
+version: "2.0"  # New version with schema-template support
 
 checks:
   security:
@@ -354,17 +358,28 @@ checks:
       Return results in JSON format matching the code-review schema.
     on: [pr_opened, pr_updated]
 
+  performance:
+    type: ai
+    group: code-review        # Same group = combined in one comment
+    schema: code-review       # Same schema = same table format
+    prompt: |
+      Analyze performance issues including:
+      - Algorithm complexity
+      - Memory usage patterns
+      - Database query optimization
+    on: [pr_opened, pr_updated]
+
   full-review:
     type: ai
-    group: pr-overview       # Separate group = separate comment
-    schema: markdown         # Uses built-in markdown schema  
+    group: pr-overview       # Different group = separate comment
+    schema: text             # Uses built-in text schema for markdown
     prompt: |
       Create a comprehensive pull request overview in markdown format with:
       
       ## 📋 Pull Request Overview
       1. **Summary**: Brief description of changes
       2. **Files Changed**: Table of modified files
-      3. **Architecture Diagram**: Mermaid diagram showing relationships
+      3. **Architecture Impact**: Key architectural considerations
     on: [pr_opened]
 ```
 
@@ -388,8 +403,8 @@ Structured format for code analysis results:
 }
 ```
 
-#### Markdown Schema (`markdown`)
-Free-form markdown content:
+#### Text Schema (`text`)
+Free-form text/markdown content:
 ```json
 {
   "content": "# PR Overview\n\nThis PR adds authentication features..."
@@ -405,8 +420,8 @@ Renders structured data as HTML tables with:
 - Collapsible suggestion details
 - File and line information
 
-#### Markdown Template  
-Renders markdown content as-is for:
+#### Text Template  
+Renders text/markdown content as-is for:
 - PR overviews and summaries
 - Architecture diagrams
 - Custom formatted content
@@ -440,17 +455,54 @@ schemas:
 checks:
   metrics:
     schema: custom-metrics    # References custom schema
-    group: analysis
+    group: metrics           # Separate comment group
 ```
 
-### Benefits
+### Key Features Implemented
 
-- ✅ **No more "logic" issues** appearing when no logic checks configured
-- ✅ **Type safety** with JSON Schema validation
-- ✅ **Flexible rendering** with Liquid templates  
-- ✅ **Multiple output formats** (tables vs markdown)
-- ✅ **Better separation of concerns** (data vs presentation)
-- ✅ **Extensible architecture** for custom output types
+- ✅ **Check-Based Organization**: Issues grouped by check name, not artificial categories
+- ✅ **Group-Based Comments**: Multiple GitHub comments based on `group` property
+- ✅ **JSON Schema Validation**: Runtime validation with AJV library
+- ✅ **Liquid Templates**: Dynamic rendering with conditional logic
+- ✅ **Multiple Output Formats**: Structured tables vs free-form markdown
+- ✅ **Backwards Compatibility**: Existing configurations continue to work
+- ✅ **No False Categories**: Eliminates "logic" issues when no logic checks configured
+- ✅ **Type Safety**: Structured data validation prevents malformed output
+- ✅ **Extensible Design**: Easy to add custom schemas and templates
+
+### Migration from v1.0 to v2.0
+
+The schema-template system represents a major architectural improvement. Key changes:
+
+#### Configuration Updates
+```yaml
+# OLD v1.0 format
+version: "1.0"
+checks:
+  security:
+    type: ai
+    prompt: "Security analysis"
+    
+# NEW v2.0 format  
+version: "2.0"
+checks:
+  security:
+    type: ai
+    group: code-review     # NEW: Controls comment grouping
+    schema: code-review    # NEW: Enforces structured output
+    prompt: "Security analysis returning JSON matching code-review schema"
+```
+
+#### Output Changes
+- **Before**: Categories like "logic", "readability" appeared even when not configured
+- **After**: Only configured checks appear, grouped by actual check names
+- **Before**: Single monolithic comment with all results
+- **After**: Multiple organized comments based on `group` property
+
+#### Breaking Changes
+- Configuration `version: "2.0"` required for new features
+- Prompts should specify JSON Schema format for structured output
+- AI responses validated against schemas (invalid responses logged but not failed)
 
 ## 🧠 Advanced AI Features
 
@@ -524,8 +576,8 @@ CheckProviderRegistry.getInstance().registerProvider(new CustomCheckProvider());
 Create `visor.config.yaml` in your project root:
 
 ```yaml
-# visor.config.yaml
-version: 1.0
+# .visor.yaml
+version: "2.0"
 
 # Project metadata
 project:
