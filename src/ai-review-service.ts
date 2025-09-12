@@ -391,7 +391,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Create ProbeAgent instance with proper options
       // For text schema, use a simpler approach without tools
       const options: ProbeAgentOptions = {
-        promptType: schema === 'text' ? undefined : ('code-review-template' as any),
+        promptType: schema === 'text' ? undefined : ('code-review-template' as 'code-review'),
         customPrompt:
           schema === 'text'
             ? 'You are a helpful AI assistant. Respond only with valid JSON matching the provided schema. Do not use any tools or commands.'
@@ -492,20 +492,39 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     try {
-      // Clean response only if wrapped in JSON code blocks (preserve Mermaid blocks inside content)
-      let cleanResponse = response.trim();
+      // Simple JSON extraction: find first { or [ and last } or ], with {} taking priority
+      let jsonString = response.trim();
 
-      // Only remove outer JSON code block wrappers, not internal content
-      if (cleanResponse.startsWith('```json\n') && cleanResponse.endsWith('\n```')) {
-        cleanResponse = cleanResponse.slice(8, -4); // Remove ```json\n and \n```
-      } else if (cleanResponse.startsWith('```\n') && cleanResponse.endsWith('\n```')) {
-        cleanResponse = cleanResponse.slice(4, -4); // Remove ```\n and \n```
+      // Find the first occurrence of { or [
+      const firstBrace = jsonString.indexOf('{');
+      const firstBracket = jsonString.indexOf('[');
+
+      let startIndex = -1;
+      let endChar = '';
+
+      // Determine which comes first (or if only one exists), {} takes priority
+      if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+        // Object comes first or only objects exist
+        startIndex = firstBrace;
+        endChar = '}';
+      } else if (firstBracket !== -1) {
+        // Array comes first or only arrays exist
+        startIndex = firstBracket;
+        endChar = ']';
       }
 
-      // Parse the probe agent response directly
+      if (startIndex !== -1) {
+        // Find the last occurrence of the matching end character
+        const lastEndIndex = jsonString.lastIndexOf(endChar);
+        if (lastEndIndex !== -1 && lastEndIndex > startIndex) {
+          jsonString = jsonString.substring(startIndex, lastEndIndex + 1);
+        }
+      }
+
+      // Parse the extracted JSON
       let reviewData: AIResponseFormat;
       try {
-        reviewData = JSON.parse(cleanResponse);
+        reviewData = JSON.parse(jsonString);
         log('✅ Successfully parsed probe agent JSON response');
         if (debugInfo) debugInfo.jsonParseSuccess = true;
       } catch (initialError) {
