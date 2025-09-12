@@ -325,12 +325,6 @@ async function postCliReviewComment(
     // Use robust PR detection
     const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
 
-    // Extract commit SHA for comment metadata
-    const commitSha =
-      eventContext.event?.pull_request?.head?.sha ||
-      eventContext.payload?.event?.pull_request?.head?.sha ||
-      process.env.GITHUB_SHA;
-
     if (!prResult.prNumber) {
       console.log(
         `⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
@@ -445,13 +439,32 @@ async function postCliReviewComment(
       comment += '\n\n';
     }
 
+    // Fetch fresh PR data to get the latest commit SHA
+    let latestCommitSha: string | undefined;
+    try {
+      const { data: pullRequest } = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: prResult.prNumber,
+      });
+      latestCommitSha = pullRequest.head.sha;
+      console.log(`📝 Latest commit SHA: ${latestCommitSha.substring(0, 7)}`);
+    } catch (error) {
+      console.warn('⚠️ Could not fetch latest PR data:', error);
+      // Fallback to environment or event data
+      latestCommitSha =
+        eventContext.event?.pull_request?.head?.sha ||
+        eventContext.payload?.event?.pull_request?.head?.sha ||
+        process.env.GITHUB_SHA;
+    }
+
     // Use smart comment updating with unique ID
     const commentId = `visor-cli-review-${prResult.prNumber}`;
     await commentManager.updateOrCreateComment(owner, repo, prResult.prNumber, comment, {
       commentId,
       triggeredBy: 'visor-cli',
       allowConcurrentUpdates: true,
-      commitSha: commitSha,
+      commitSha: latestCommitSha,
     });
 
     console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
