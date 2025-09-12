@@ -43,7 +43,7 @@
     "@eslint/js": "^9.34.0",
     "@kie/act-js": "^2.6.2",
     "@kie/mock-github": "^2.0.1",
-    "@probelabs/probe": "^0.6.0-rc58",
+    "@probelabs/probe": "^0.6.0-rc60",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.3.0",

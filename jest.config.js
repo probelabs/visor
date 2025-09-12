@@ -12,9 +12,10 @@ module.exports = {
   ],
   moduleNameMapper: {
     '^@octokit/auth-app$': '<rootDir>/__mocks__/@octokit/auth-app.ts',
+    '^@probelabs/probe$': '<rootDir>/__mocks__/@probelabs/probe.ts',
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@octokit|@actions|@kie)/)',
+    'node_modules/(?!(@octokit|@actions|@kie|@probelabs)/)',
   ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   testTimeout: 10000, // Reduced from 30s to 10s for faster CI

@@ -1,7 +1,5 @@
-import { spawn } from 'child_process';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
+import { ProbeAgent } from '@probelabs/probe';
+import type { ProbeAgentOptions } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 
@@ -358,7 +356,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   }
 
   /**
-   * Call probe agent CLI tool with built-in schema validation
+   * Call ProbeAgent SDK with built-in schema validation
    */
   private async callProbeAgent(prompt: string, schema?: string): Promise<string> {
     // Handle mock model for testing
@@ -367,160 +365,43 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       return this.generateMockResponse(prompt);
     }
 
-    log('🤖 Calling probe agent for AI review...');
+    log('🤖 Creating ProbeAgent for AI review...');
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
-    return new Promise(async (resolve, reject) => {
-      const env: Record<string, string | undefined> = {
-        ...process.env,
+    try {
+      // Create ProbeAgent instance with proper options
+      const options: ProbeAgentOptions = {
+        promptType: 'code-review-template' as any, // Using template prompt for better context
+        allowEdit: false, // We don't want the agent to modify files
+        debug: this.config.debug || false,
       };
 
-      // Set API key based on provider
-      if (this.config.provider === 'google' && this.config.apiKey) {
-        env.GOOGLE_API_KEY = this.config.apiKey;
-        log('🔑 Using Google API key');
-      } else if (this.config.provider === 'anthropic' && this.config.apiKey) {
-        env.ANTHROPIC_API_KEY = this.config.apiKey;
-        log('🔑 Using Anthropic API key');
-      } else if (this.config.provider === 'openai' && this.config.apiKey) {
-        env.OPENAI_API_KEY = this.config.apiKey;
-        log('🔑 Using OpenAI API key');
+      // Add provider-specific options if configured
+      if (this.config.provider) {
+        options.provider = this.config.provider;
       }
-
-      // Set model if specified
       if (this.config.model) {
-        env.MODEL_NAME = this.config.model;
-        log(`🎯 Using model: ${this.config.model}`);
+        options.model = this.config.model;
       }
 
-      // Set provider if specified
-      if (this.config.provider) {
-        env.FORCE_PROVIDER = this.config.provider;
-      }
+      const agent = new ProbeAgent(options);
 
-      log('🚀 Spawning probe agent process...');
+      log('🚀 Calling ProbeAgent...');
+      // Pass schema in answer options if provided
+      const answerOptions = schema ? { schema } : undefined;
+      const response = await agent.answer(prompt, undefined, answerOptions);
 
-      // Load the appropriate schema
-      const schemaName = schema || 'code-review';
-      const schemaPath = path.join(__dirname, '..', 'output', schemaName, 'schema.json');
+      log('✅ ProbeAgent completed successfully');
+      log(`📤 Response length: ${response.length} characters`);
 
-      // Build command arguments
-      const args = ['-y', '@probelabs/probe', 'agent'];
-
-      // Add schema file path
-      args.push('--schema', schemaPath);
-
-      // Add provider if specified
-      if (this.config.provider) {
-        args.push('--provider', this.config.provider);
-      }
-
-      // Add model if specified
-      if (this.config.model && this.config.model !== 'mock') {
-        args.push('--model', this.config.model);
-      }
-
-      // Add code-review-template prompt for better context
-      args.push('--prompt', 'code-review-template');
-
-      // Create a temporary file for the prompt to avoid stdin limitations
-      const tmpDir = os.tmpdir();
-      const tmpFile = path.join(tmpDir, `visor-prompt-${Date.now()}.txt`);
-
-      try {
-        // Write prompt to temporary file
-        await fs.promises.writeFile(tmpFile, prompt, 'utf8');
-        log(`📝 Wrote prompt to temporary file: ${tmpFile}`);
-
-        // Pass the temporary file path to probe agent
-        args.push(tmpFile);
-      } catch (err) {
-        console.error('❌ Failed to write prompt to temporary file:', err);
-        reject(
-          new Error(
-            `Failed to write prompt to temporary file: ${err instanceof Error ? err.message : 'Unknown error'}`
-          )
-        );
-        return;
-      }
-
-      const child = spawn('npx', args, {
-        env,
-        shell: false,
-        stdio: ['pipe', 'pipe', 'pipe'], // Still need pipes for stdout/stderr
-      });
-
-      let output = '';
-      let error = '';
-      let isResolved = false;
-
-      child.stdout.on('data', data => {
-        const chunk = data.toString();
-        output += chunk;
-        log(
-          '📤 Received stdout chunk:',
-          chunk.substring(0, 200) + (chunk.length > 200 ? '...' : '')
-        );
-      });
-
-      child.stderr.on('data', data => {
-        const chunk = data.toString();
-        error += chunk;
-        log('⚠️ Received stderr:', chunk);
-      });
-
-      child.on('error', err => {
-        if (!isResolved) {
-          isResolved = true;
-          console.error('❌ Process error:', err.message);
-          // Clean up temp file on error
-          fs.promises.unlink(tmpFile).catch(() => {});
-          reject(new Error(`Failed to spawn probe agent: ${err.message}`));
-        }
-      });
-
-      // Set timeout
-      const timeout = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          console.error('⏰ AI review timed out after', this.config.timeout || 30000, 'ms');
-          child.kill('SIGKILL');
-          // Clean up temp file on timeout
-          fs.promises.unlink(tmpFile).catch(() => {});
-          reject(new Error(`AI review timed out after ${this.config.timeout || 30000}ms`));
-        }
-      }, this.config.timeout || 30000);
-
-      child.on('close', (code, signal) => {
-        clearTimeout(timeout);
-        if (!isResolved) {
-          isResolved = true;
-
-          log(`🏁 Process closed with code: ${code}, signal: ${signal}`);
-          log(`📤 Final output length: ${output.length} characters`);
-          log(`⚠️ Final error length: ${error.length} characters`);
-
-          // Clean up temporary file
-          fs.promises.unlink(tmpFile).catch(err => {
-            log(`⚠️ Failed to clean up temp file: ${err}`);
-          });
-
-          if (code === 0) {
-            log('✅ probe agent completed successfully');
-            resolve(output.trim());
-          } else {
-            console.error('❌ probe agent failed with code:', code);
-            console.error('❌ Error output:', error);
-            reject(
-              new Error(
-                `probe agent exited with code ${code}: ${error || 'No error details available'}`
-              )
-            );
-          }
-        }
-      });
-    });
+      return response;
+    } catch (error) {
+      console.error('❌ ProbeAgent failed:', error);
+      throw new Error(
+        `ProbeAgent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   /**

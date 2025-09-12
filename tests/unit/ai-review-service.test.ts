@@ -1,24 +1,14 @@
 import { AIReviewService } from '../../src/ai-review-service';
 import { PRInfo } from '../../src/pr-analyzer';
-import { spawn } from 'child_process';
-import { EventEmitter } from 'events';
+import { ProbeAgent } from '@probelabs/probe';
 
-// Mock child_process spawn
-jest.mock('child_process', () => ({
-  spawn: jest.fn(),
-}));
-
-// Mock fs.promises
-jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
-  promises: {
-    writeFile: jest.fn().mockResolvedValue(undefined),
-    unlink: jest.fn().mockResolvedValue(undefined),
-  },
+// Mock ProbeAgent
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn(),
 }));
 
 describe('AIReviewService', () => {
-  const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
+  const MockedProbeAgent = ProbeAgent as jest.MockedClass<typeof ProbeAgent>;
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
@@ -129,21 +119,9 @@ describe('AIReviewService', () => {
     it('should execute AI review when API key is available', async () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
-      // Mock successful probe agent response
-      const mockChild = new EventEmitter() as any;
-      mockChild.stdin = { write: jest.fn(), end: jest.fn() };
-      mockChild.stdout = new EventEmitter();
-      mockChild.stderr = new EventEmitter();
-      mockChild.kill = jest.fn();
-
-      mockSpawn.mockReturnValue(mockChild);
-
-      const service = new AIReviewService();
-      const reviewPromise = service.executeReview(mockPRInfo, 'security');
-
-      // Simulate probe agent response
-      setTimeout(() => {
-        const mockResponse = JSON.stringify({
+      // Mock ProbeAgent response
+      const mockAnswer = jest.fn().mockResolvedValue(
+        JSON.stringify({
           issues: [
             {
               file: 'test.js',
@@ -157,63 +135,74 @@ describe('AIReviewService', () => {
             },
           ],
           suggestions: ['Fix SQL injection vulnerability'],
-        });
-        mockChild.stdout.emit('data', Buffer.from(mockResponse));
-        mockChild.emit('close', 0);
-      }, 10);
+        })
+      );
 
-      const result = await reviewPromise;
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            answer: mockAnswer,
+          }) as any
+      );
+
+      const service = new AIReviewService();
+      const result = await service.executeReview(mockPRInfo, 'security', 'code-review');
 
       expect(result.issues).toHaveLength(1);
       expect(result.suggestions).toContain('Fix SQL injection vulnerability');
       expect(result.issues[0].message).toBe('SQL injection risk');
       expect(result.issues[0].suggestion).toBe('Use parameterized queries');
       expect(result.issues[0].replacement).toContain('db.query');
+      expect(MockedProbeAgent).toHaveBeenCalledWith({
+        promptType: 'code-review-template',
+        allowEdit: false,
+        debug: false,
+        provider: 'google',
+      });
     });
 
-    it('should handle probe agent errors and throw', async () => {
+    it('should handle ProbeAgent errors and throw', async () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
-      const mockChild = new EventEmitter() as any;
-      mockChild.stdin = { write: jest.fn(), end: jest.fn() };
-      mockChild.stdout = new EventEmitter();
-      mockChild.stderr = new EventEmitter();
-      mockChild.kill = jest.fn();
-
-      mockSpawn.mockReturnValue(mockChild);
+      const mockAnswer = jest.fn().mockRejectedValue(new Error('API rate limit exceeded'));
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            answer: mockAnswer,
+          }) as any
+      );
 
       const service = new AIReviewService();
-      const reviewPromise = service.executeReview(mockPRInfo, 'performance');
 
-      // Simulate probe agent error
-      setTimeout(() => {
-        mockChild.stderr.emit('data', Buffer.from('Error: API rate limit exceeded'));
-        mockChild.emit('close', 1);
-      }, 10);
-
-      await expect(reviewPromise).rejects.toThrow(
-        'probe agent exited with code 1: Error: API rate limit exceeded'
+      await expect(service.executeReview(mockPRInfo, 'performance')).rejects.toThrow(
+        'ProbeAgent execution failed: API rate limit exceeded'
       );
     });
 
     it('should handle timeout and throw', async () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
-      const mockChild = new EventEmitter() as any;
-      mockChild.stdin = { write: jest.fn(), end: jest.fn() };
-      mockChild.stdout = new EventEmitter();
-      mockChild.stderr = new EventEmitter();
-      mockChild.kill = jest.fn();
-
-      mockSpawn.mockReturnValue(mockChild);
+      // Mock ProbeAgent to throw a timeout error
+      const mockAnswer = jest.fn().mockRejectedValue(new Error('Request timed out'));
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            answer: mockAnswer,
+          }) as any
+      );
 
       const service = new AIReviewService({ timeout: 100 }); // Very short timeout
-      const reviewPromise = service.executeReview(mockPRInfo, 'Review this code for all issues');
 
-      // Don't emit any response, let it timeout
+      await expect(
+        service.executeReview(mockPRInfo, 'Review this code for all issues')
+      ).rejects.toThrow('ProbeAgent execution failed: Request timed out');
 
-      await expect(reviewPromise).rejects.toThrow('AI review timed out after 100ms');
-      expect(mockChild.kill).toHaveBeenCalled();
+      expect(MockedProbeAgent).toHaveBeenCalledWith({
+        promptType: 'code-review-template',
+        allowEdit: false,
+        debug: false,
+        provider: 'google',
+      });
     });
   });
 
