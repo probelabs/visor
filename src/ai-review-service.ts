@@ -492,11 +492,15 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     try {
-      // Clean response if wrapped in markdown code blocks
-      const cleanResponse = response
-        .replace(/^```json\n?/, '')
-        .replace(/\n?```$/, '')
-        .trim();
+      // Clean response only if wrapped in JSON code blocks (preserve Mermaid blocks inside content)
+      let cleanResponse = response.trim();
+
+      // Only remove outer JSON code block wrappers, not internal content
+      if (cleanResponse.startsWith('```json\n') && cleanResponse.endsWith('\n```')) {
+        cleanResponse = cleanResponse.slice(8, -4); // Remove ```json\n and \n```
+      } else if (cleanResponse.startsWith('```\n') && cleanResponse.endsWith('\n```')) {
+        cleanResponse = cleanResponse.slice(4, -4); // Remove ```\n and \n```
+      }
 
       // Parse the probe agent response directly
       let reviewData: AIResponseFormat;
