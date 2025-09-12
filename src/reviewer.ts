@@ -238,7 +238,14 @@ export class PRReviewer {
     issues: ReviewIssue[],
     schema: string
   ): Promise<string> {
-    const liquid = new Liquid();
+    const liquid = new Liquid({
+      // Configure Liquid to handle whitespace better
+      trimTagLeft: false, // Don't auto-trim left side of tags
+      trimTagRight: false, // Don't auto-trim right side of tags
+      trimOutputLeft: false, // Don't auto-trim left side of output
+      trimOutputRight: false, // Don't auto-trim right side of output
+      greedy: false, // Don't be greedy with whitespace trimming
+    });
 
     // Sanitize schema name to prevent path traversal attacks
     const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
@@ -266,8 +273,9 @@ export class PRReviewer {
       };
     }
 
-    // Render with Liquid template
-    return await liquid.parseAndRender(templateContent, templateData);
+    // Render with Liquid template and trim any extra whitespace at the start/end
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
   }
 
   private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {

@@ -10,28 +10,19 @@
   </thead>
   <tbody>
 {%- assign sorted_issues = issues | sort: 'severity' -%}
-{%- for issue in sorted_issues %}
+{%- for issue in sorted_issues -%}
     <tr>
-      <td>
-{%- case issue.severity -%}
-{%- when 'critical' -%}🔴 Critical
-{%- when 'error' -%}🟠 Error
-{%- when 'warning' -%}🟡 Warning
-{%- when 'info' -%}🟢 Info
-{%- else -%}📝 {{ issue.severity | capitalize | escape }}
-{%- endcase -%}
-      </td>
+      <td>{%- case issue.severity -%}
+{%- when 'critical' -%}🔴 Critical{%- when 'error' -%}🟠 Error{%- when 'warning' -%}🟡 Warning{%- when 'info' -%}🟢 Info{%- else -%}📝 {{ issue.severity | capitalize | escape }}{%- endcase -%}</td>
       <td><code>{{ issue.file | escape }}</code></td>
-      <td>{{ issue.line }}{% if issue.endLine %}-{{ issue.endLine }}{% endif %}</td>
-      <td><div>{{ issue.message | escape }}
-{%- if issue.suggestion %}
+      <td>{{ issue.line }}{%- if issue.endLine -%}-{{ issue.endLine }}{%- endif -%}</td>
+      <td><div>{{ issue.message | escape }}{%- if issue.suggestion -%}
         <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion | escape }}</details>
 {%- endif -%}
-{%- if issue.replacement %}
+{%- if issue.replacement -%}
         <details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code>{{ issue.replacement | escape }}</code></pre></details>
-{%- endif -%}
-        </div></td>
+{%- endif -%}</div></td>
     </tr>
-{%- endfor %}
+{%- endfor -%}
   </tbody>
 </table>
