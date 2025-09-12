@@ -1,0 +1,39 @@
+Create a comprehensive pull request overview with the following sections:
+
+## 📋 Pull Request Overview
+
+1. **Summary**: Brief description of what this PR does based on the changes
+2. **Files Changed**: Create a table showing modified files with their purpose
+3. **Architecture Impact**: How these changes affect the system architecture
+
+## 📊 Files Changed
+
+Create a markdown table with columns:
+| File | Lines Changed | Purpose/Component |
+|------|---------------|------------------|
+| path/to/file | +10/-5 | Brief description of what this file does |
+
+## 🏗️ Architecture Diagram
+
+Generate a mermaid diagram showing the relationships between the modified components:
+
+```mermaid
+graph TD
+  A[Component A] --> B[Component B]
+  B --> C[Database]
+  C --> D[API Endpoints]
+```
+
+Focus on:
+- Components that were modified
+- How they interact with each other
+- Data flow between components
+- Any new relationships introduced
+
+Keep the diagram clean and focused on the architectural changes.
+
+Based on these changes:
+- Added @probelabs/probe package to dependencies
+- Refactored src/ai-review-service.ts to use ProbeAgent SDK instead of spawning probe-chat CLI
+- Removed temporary file handling and process spawning logic
+- Updated tests to match new response format

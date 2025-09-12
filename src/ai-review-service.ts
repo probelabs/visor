@@ -412,18 +412,23 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided
-      let answerOptions: any = undefined;
+      let schemaString: string | undefined = undefined;
       if (schema) {
         try {
-          const schemaContent = await this.loadSchemaContent(schema);
-          answerOptions = { schema: schemaContent };
+          schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
-          answerOptions = undefined;
+          schemaString = undefined;
         }
       }
-      const response = await agent.answer(prompt, undefined, answerOptions);
+
+      // ProbeAgent now handles schema formatting internally!
+      const response = await agent.answer(
+        prompt,
+        undefined,
+        schemaString ? { schema: schemaString } : undefined
+      );
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
@@ -449,7 +454,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   /**
    * Load schema content from schema files
    */
-  private async loadSchemaContent(schemaName: string): Promise<object> {
+  private async loadSchemaContent(schemaName: string): Promise<string> {
     const fs = require('fs').promises;
     const path = require('path');
 
@@ -457,8 +462,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     const schemaPath = path.join(process.cwd(), 'output', schemaName, 'schema.json');
 
     try {
+      // Return the schema as a string, not parsed JSON
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-      return JSON.parse(schemaContent);
+      return schemaContent.trim();
     } catch (error) {
       throw new Error(
         `Failed to load schema from ${schemaPath}: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -501,34 +507,45 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       } catch (initialError) {
         log('🔍 Initial parsing failed, trying to extract JSON from response...');
 
-        // If the response starts with "I cannot" or similar, it's likely a refusal
-        if (
-          response.toLowerCase().includes('i cannot') ||
-          response.toLowerCase().includes('unable to')
-        ) {
-          console.error('🚫 AI refused to analyze - returning empty result');
-          return {
-            issues: [],
-            suggestions: [
-              'AI was unable to analyze this code. Please check the content or try again.',
-            ],
+        // For text schema, if JSON parsing fails, it might still be valid markdown content
+        if (schema === 'text' && !response.includes('{')) {
+          log('🔧 Text schema with non-JSON response - treating as content');
+          reviewData = {
+            content: response.trim(),
           };
-        }
+        } else {
+          // If the response starts with "I cannot" or similar, it's likely a refusal
+          if (
+            response.toLowerCase().includes('i cannot') ||
+            response.toLowerCase().includes('unable to')
+          ) {
+            console.error('🚫 AI refused to analyze - returning empty result');
+            return {
+              issues: [],
+              suggestions: [
+                'AI was unable to analyze this code. Please check the content or try again.',
+              ],
+            };
+          }
 
-        // Check if response is plain text and doesn't contain structured data
-        if (!response.includes('{') && !response.includes('}')) {
-          log('🔧 Plain text response detected, creating structured fallback...');
-          // Create a fallback response based on the plain text
-          const isNoChanges =
-            response.toLowerCase().includes('no') &&
-            (response.toLowerCase().includes('changes') || response.toLowerCase().includes('code'));
+          // Check if response is plain text and doesn't contain structured data
+          if (!response.includes('{') && !response.includes('}')) {
+            log('🔧 Plain text response detected, creating structured fallback...');
+            // Create a fallback response based on the plain text
+            const isNoChanges =
+              response.toLowerCase().includes('no') &&
+              (response.toLowerCase().includes('changes') ||
+                response.toLowerCase().includes('code'));
 
-          return {
-            issues: [],
-            suggestions: isNoChanges
-              ? ['No code changes detected in this analysis']
-              : [`AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`],
-          };
+            return {
+              issues: [],
+              suggestions: isNoChanges
+                ? ['No code changes detected in this analysis']
+                : [
+                    `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
+                  ],
+            };
+          }
         }
 
         // Try to find JSON within the response
@@ -545,19 +562,28 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           // Check if response is plain text and doesn't contain structured data
           if (!response.includes('{') && !response.includes('}')) {
             log('🔧 Plain text response detected, creating structured fallback...');
-            const isNoChanges =
-              response.toLowerCase().includes('no') &&
-              (response.toLowerCase().includes('changes') ||
-                response.toLowerCase().includes('code'));
 
-            reviewData = {
-              issues: [],
-              suggestions: isNoChanges
-                ? ['No code changes detected in this analysis']
-                : [
-                    `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
-                  ],
-            };
+            // For text schema, even without JSON, treat as valid content
+            if (schema === 'text') {
+              log('🔧 Text schema fallback - using entire response as content');
+              reviewData = {
+                content: response.trim(),
+              };
+            } else {
+              const isNoChanges =
+                response.toLowerCase().includes('no') &&
+                (response.toLowerCase().includes('changes') ||
+                  response.toLowerCase().includes('code'));
+
+              reviewData = {
+                issues: [],
+                suggestions: isNoChanges
+                  ? ['No code changes detected in this analysis']
+                  : [
+                      `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
+                    ],
+              };
+            }
           } else {
             throw initialError;
           }
