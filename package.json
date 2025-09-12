@@ -1,13 +1,25 @@
 {
-  "name": "gates",
+  "name": "@probelabs/visor",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
   "bin": {
     "visor": "./dist/cli-main.js"
   },
+  "files": [
+    "dist/",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "tsc",
+    "postbuild": "chmod +x dist/cli-main.js",
     "test": "jest",
+    "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src tests --ext .ts",
@@ -20,12 +32,25 @@
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
     "deploy:worker": "npx wrangler deploy",
-    "deploy": "npm run deploy:site && npm run deploy:worker"
+    "deploy": "npm run deploy:site && npm run deploy:worker",
+    "release": "./scripts/release.sh",
+    "release:patch": "./scripts/release.sh patch",
+    "release:minor": "./scripts/release.sh minor",
+    "release:major": "./scripts/release.sh major",
+    "release:prerelease": "./scripts/release.sh prerelease"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "A GitHub Action built with TypeScript and Octokit for interacting with GitHub repositories.",
+  "keywords": ["code-review", "ai", "github-action", "cli", "pr-review", "visor"],
+  "author": "Probe Labs",
+  "license": "MIT",
+  "description": "AI-powered code review tool for GitHub Pull Requests - CLI and GitHub Action",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/probelabs/visor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/probelabs/visor/issues"
+  },
+  "homepage": "https://github.com/probelabs/visor#readme",
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@octokit/action": "^8.0.2",
