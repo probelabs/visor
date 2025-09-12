@@ -388,8 +388,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       }
 
       // Create ProbeAgent instance with proper options
+      // For text schema, use a simpler approach without tools
       const options: ProbeAgentOptions = {
-        promptType: 'code-review-template' as any, // Using template prompt for better context
+        promptType: schema === 'text' ? undefined : ('code-review-template' as any),
+        customPrompt:
+          schema === 'text'
+            ? 'You are a helpful AI assistant. Respond only with valid JSON matching the provided schema. Do not use any tools or commands.'
+            : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
