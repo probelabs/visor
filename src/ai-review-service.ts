@@ -369,7 +369,24 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
+    // Store original env vars to restore later
+    const originalEnv: Record<string, string | undefined> = {
+      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+
     try {
+      // Set environment variables for ProbeAgent
+      // ProbeAgent SDK expects these to be in the environment
+      if (this.config.provider === 'google' && this.config.apiKey) {
+        process.env.GOOGLE_API_KEY = this.config.apiKey;
+      } else if (this.config.provider === 'anthropic' && this.config.apiKey) {
+        process.env.ANTHROPIC_API_KEY = this.config.apiKey;
+      } else if (this.config.provider === 'openai' && this.config.apiKey) {
+        process.env.OPENAI_API_KEY = this.config.apiKey;
+      }
+
       // Create ProbeAgent instance with proper options
       const options: ProbeAgentOptions = {
         promptType: 'code-review-template' as any, // Using template prompt for better context
@@ -401,6 +418,15 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       throw new Error(
         `ProbeAgent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    } finally {
+      // Restore original environment variables
+      Object.keys(originalEnv).forEach(key => {
+        if (originalEnv[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = originalEnv[key];
+        }
+      });
     }
   }
 
