@@ -122,6 +122,7 @@ export class AIReviewService {
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
+    log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
     log(`Schema type: ${schema || 'default (code-review)'}`);
     if (schema === 'text') {
       log('Using text schema - expecting JSON with content field');
