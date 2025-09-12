@@ -405,8 +405,18 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       const agent = new ProbeAgent(options);
 
       log('🚀 Calling ProbeAgent...');
-      // Pass schema in answer options if provided
-      const answerOptions = schema ? { schema } : undefined;
+      // Load and pass the actual schema content if provided
+      let answerOptions: any = undefined;
+      if (schema) {
+        try {
+          const schemaContent = await this.loadSchemaContent(schema);
+          answerOptions = { schema: schemaContent };
+          log(`📋 Loaded schema content for: ${schema}`);
+        } catch (error) {
+          log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
+          answerOptions = undefined;
+        }
+      }
       const response = await agent.answer(prompt, undefined, answerOptions);
 
       log('✅ ProbeAgent completed successfully');
@@ -427,6 +437,26 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           process.env[key] = originalEnv[key];
         }
       });
+    }
+  }
+
+  /**
+   * Load schema content from schema files
+   */
+  private async loadSchemaContent(schemaName: string): Promise<object> {
+    const fs = require('fs').promises;
+    const path = require('path');
+
+    // Construct path to schema file
+    const schemaPath = path.join(process.cwd(), 'output', schemaName, 'schema.json');
+
+    try {
+      const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+      return JSON.parse(schemaContent);
+    } catch (error) {
+      throw new Error(
+        `Failed to load schema from ${schemaPath}: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
