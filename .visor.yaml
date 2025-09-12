@@ -72,7 +72,7 @@ checks:
   full-review:
     type: ai
     group: pr-overview
-    schema: text
+    schema: plain
     prompt: |
       Create a comprehensive pull request overview with the following sections:
 

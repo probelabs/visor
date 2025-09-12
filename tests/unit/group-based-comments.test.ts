@@ -103,7 +103,7 @@ describe('Group-based Comments', () => {
           severity: 'info' as const,
           category: 'documentation' as const,
           group: 'pr-overview',
-          schema: 'text',
+          schema: 'plain',
         },
       ],
       suggestions: [],
@@ -118,6 +118,6 @@ describe('Group-based Comments', () => {
     // Should render as markdown content, not as table
     expect(call.body).toContain('## PR Overview');
     expect(call.body).toContain('This PR adds new features.');
-    expect(call.body).not.toContain('<table>'); // No table for text schema
+    expect(call.body).not.toContain('<table>'); // No table for plain schema
   });
 });

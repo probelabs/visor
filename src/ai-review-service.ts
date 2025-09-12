@@ -74,7 +74,7 @@ interface AIResponseFormat {
   }>;
   suggestions?: string[];
 
-  // For text schema - just content field
+  // For plain schema - just content field
   content?: string;
 }
 
@@ -124,8 +124,8 @@ export class AIReviewService {
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
     log(`Schema type: ${schema || 'default (code-review)'}`);
-    if (schema === 'text') {
-      log('Using text schema - expecting JSON with content field');
+    if (schema === 'plain') {
+      log('Using plain schema - expecting JSON with content field');
     }
 
     let debugInfo: AIDebugInfo | undefined;
@@ -389,11 +389,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       }
 
       // Create ProbeAgent instance with proper options
-      // For text schema, use a simpler approach without tools
+      // For plain schema, use a simpler approach without tools
       const options: ProbeAgentOptions = {
-        promptType: schema === 'text' ? undefined : ('code-review-template' as 'code-review'),
+        promptType: schema === 'plain' ? undefined : ('code-review-template' as 'code-review'),
         customPrompt:
-          schema === 'text'
+          schema === 'plain'
             ? 'You are a helpful AI assistant. Respond only with valid JSON matching the provided schema. Do not use any tools or commands.'
             : undefined,
         allowEdit: false, // We don't want the agent to modify files
@@ -530,9 +530,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       } catch (initialError) {
         log('🔍 Initial parsing failed, trying to extract JSON from response...');
 
-        // For text schema, if JSON parsing fails, it might still be valid markdown content
-        if (schema === 'text' && !response.includes('{')) {
-          log('🔧 Text schema with non-JSON response - treating as content');
+        // For plain schema, if JSON parsing fails, it might still be valid markdown content
+        if (schema === 'plain' && !response.includes('{')) {
+          log('🔧 Plain schema with non-JSON response - treating as content');
           reviewData = {
             content: response.trim(),
           };
@@ -586,9 +586,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           if (!response.includes('{') && !response.includes('}')) {
             log('🔧 Plain text response detected, creating structured fallback...');
 
-            // For text schema, even without JSON, treat as valid content
-            if (schema === 'text') {
-              log('🔧 Text schema fallback - using entire response as content');
+            // For plain schema, even without JSON, treat as valid content
+            if (schema === 'plain') {
+              log('🔧 Plain schema fallback - using entire response as content');
               reviewData = {
                 content: response.trim(),
               };
@@ -614,14 +614,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       }
 
       // Handle different schemas
-      if (schema === 'text') {
-        // For text schema, we expect a content field with text (usually markdown)
-        log('📝 Processing text schema response');
+      if (schema === 'plain') {
+        // For plain schema, we expect a content field with text (usually markdown)
+        log('📝 Processing plain schema response');
 
         if (!reviewData.content) {
-          console.error('❌ Text schema response missing content field');
+          console.error('❌ Plain schema response missing content field');
           console.error('🔍 Available fields:', Object.keys(reviewData));
-          throw new Error('Invalid text response: missing content field');
+          throw new Error('Invalid plain response: missing content field');
         }
 
         // Return a single "issue" that contains the text content

@@ -34,7 +34,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should load text schema correctly', async () => {
-      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
 
@@ -95,7 +95,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should validate markdown data against schema', async () => {
-      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
       const validate = ajv.compile(schema);
@@ -110,7 +110,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should reject invalid markdown data', async () => {
-      const schemaPath = path.join(__dirname, '../../output/text/schema.json');
+      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
       const schema = JSON.parse(schemaContent);
       const validate = ajv.compile(schema);
@@ -176,7 +176,7 @@ describe('Schema-Template System', () => {
     });
 
     test('should render text template correctly', async () => {
-      const templatePath = path.join(__dirname, '../../output/text/template.liquid');
+      const templatePath = path.join(__dirname, '../../output/plain/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
 
       const data = {
