@@ -1,5 +1,4 @@
 import { spawn } from 'child_process';
-import * as fs from 'fs';
 import * as path from 'path';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
@@ -109,7 +108,7 @@ export class AIReviewService {
   }
 
   /**
-   * Execute AI review using probe-chat
+   * Execute AI review using probe agent
    */
   async executeReview(
     prInfo: PRInfo,
@@ -183,7 +182,7 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeChat(prompt);
+      const response = await this.callProbeAgent(prompt, schema);
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -230,14 +229,10 @@ export class AIReviewService {
   private async buildCustomPrompt(
     prInfo: PRInfo,
     customInstructions: string,
-    schema?: string
+    _schema?: string
   ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
-
-    // Load the appropriate schema
-    const schemaName = schema || 'code-review';
-    const schemaDefinition = await this.loadSchemaDefinition(schemaName);
 
     return `You are a senior code reviewer. 
 
@@ -250,18 +245,6 @@ ${
 
 REVIEW INSTRUCTIONS:
 ${customInstructions}
-
-CRITICAL: You must respond with ONLY valid JSON that matches the following JSON schema EXACTLY.
-
-JSON Schema Definition:
-\`\`\`json
-${JSON.stringify(schemaDefinition, null, 2)}
-\`\`\`
-
-Your response MUST be valid JSON that conforms to the above schema.
-- Do not include any text before or after the JSON
-- Ensure all required fields are present
-- Follow the exact structure and types specified in the schema
 
 Analyze the following structured pull request data:
 
@@ -288,39 +271,6 @@ IMPORTANT RULES:
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
 
   // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
-
-  /**
-   * Load schema definition from file
-   */
-  private async loadSchemaDefinition(schemaName: string): Promise<Record<string, unknown>> {
-    try {
-      // Sanitize schema name to prevent path traversal attacks
-      const sanitizedSchemaName = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
-      if (!sanitizedSchemaName) {
-        throw new Error('Invalid schema name');
-      }
-      const schemaPath = path.join(__dirname, '..', 'output', sanitizedSchemaName, 'schema.json');
-      const schemaContent = await fs.promises.readFile(schemaPath, 'utf-8');
-      return JSON.parse(schemaContent);
-    } catch {
-      log(`Warning: Could not load schema ${schemaName}, using default code-review schema`);
-      // Return default code-review schema as fallback
-      try {
-        const defaultPath = path.join(__dirname, '..', 'output', 'code-review', 'schema.json');
-        const defaultContent = await fs.promises.readFile(defaultPath, 'utf-8');
-        return JSON.parse(defaultContent);
-      } catch {
-        // Minimal fallback if even default schema can't be loaded
-        return {
-          type: 'object',
-          properties: {
-            issues: { type: 'array' },
-            suggestions: { type: 'array' },
-          },
-        };
-      }
-    }
-  }
 
   /**
    * Format PR context for the AI using XML structure
@@ -406,16 +356,16 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   }
 
   /**
-   * Call probe-chat CLI tool using stdin to avoid shell escaping issues
+   * Call probe agent CLI tool with built-in schema validation
    */
-  private async callProbeChat(prompt: string): Promise<string> {
+  private async callProbeAgent(prompt: string, schema?: string): Promise<string> {
     // Handle mock model for testing
     if (this.config.model === 'mock') {
       log('🎭 Using mock AI model for testing');
       return this.generateMockResponse(prompt);
     }
 
-    log('🤖 Calling probe-chat for AI review...');
+    log('🤖 Calling probe agent for AI review...');
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
@@ -442,10 +392,40 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`🎯 Using model: ${this.config.model}`);
       }
 
-      log('🚀 Spawning probe-chat process...');
+      // Set provider if specified
+      if (this.config.provider) {
+        env.FORCE_PROVIDER = this.config.provider;
+      }
 
-      // Use stdin instead of -m flag to avoid shell escaping issues
-      const child = spawn('npx', ['-y', '@buger/probe-chat@latest', '--json'], {
+      log('🚀 Spawning probe agent process...');
+
+      // Load the appropriate schema
+      const schemaName = schema || 'code-review';
+      const schemaPath = path.join(__dirname, '..', 'output', schemaName, 'schema.json');
+
+      // Build command arguments
+      const args = ['-y', '@probelabs/probe', 'agent'];
+
+      // Add schema file path
+      args.push('--schema', schemaPath);
+
+      // Add provider if specified
+      if (this.config.provider) {
+        args.push('--provider', this.config.provider);
+      }
+
+      // Add model if specified
+      if (this.config.model && this.config.model !== 'mock') {
+        args.push('--model', this.config.model);
+      }
+
+      // Add code-review prompt for better context
+      args.push('--prompt', 'code-review');
+
+      // Read prompt from stdin
+      args.push('-');
+
+      const child = spawn('npx', args, {
         env,
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin, stdout, stderr
@@ -517,14 +497,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           log(`⚠️ Final error length: ${error.length} characters`);
 
           if (code === 0) {
-            log('✅ probe-chat completed successfully');
+            log('✅ probe agent completed successfully');
             resolve(output.trim());
           } else {
-            console.error('❌ probe-chat failed with code:', code);
+            console.error('❌ probe agent failed with code:', code);
             console.error('❌ Error output:', error);
             reject(
               new Error(
-                `probe-chat exited with code ${code}: ${error || 'No error details available'}`
+                `probe agent exited with code ${code}: ${error || 'No error details available'}`
               )
             );
           }
@@ -553,11 +533,17 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     try {
-      // First, try to parse as probe-chat response wrapper
-      let probeChatResponse;
+      // Clean response if wrapped in markdown code blocks
+      const cleanResponse = response
+        .replace(/^```json\n?/, '')
+        .replace(/\n?```$/, '')
+        .trim();
+
+      // Parse the probe agent response directly
+      let reviewData: AIResponseFormat;
       try {
-        probeChatResponse = JSON.parse(response);
-        log('✅ Successfully parsed probe-chat JSON wrapper');
+        reviewData = JSON.parse(cleanResponse);
+        log('✅ Successfully parsed probe agent JSON response');
         if (debugInfo) debugInfo.jsonParseSuccess = true;
       } catch (initialError) {
         log('🔍 Initial parsing failed, trying to extract JSON from response...');
@@ -599,84 +585,30 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           // Try the largest JSON-like string (likely the complete response)
           const largestJson = jsonMatches.reduce((a, b) => (a.length > b.length ? a : b));
           log('🔧 Attempting to parse extracted JSON...');
-          probeChatResponse = { response: largestJson };
-        } else {
-          // Re-throw the original error if we can't find JSON
-          throw initialError;
-        }
-      }
-
-      // Extract the actual review from the response field
-      let reviewData: AIResponseFormat;
-
-      if (probeChatResponse.response) {
-        log('📝 Found response field in probe-chat output');
-        const aiResponse = probeChatResponse.response;
-
-        // Log the AI response for debugging
-        log(
-          '🤖 AI response content:',
-          aiResponse.substring(0, 300) + (aiResponse.length > 300 ? '...' : '')
-        );
-
-        // The response might be wrapped in markdown code blocks
-        const cleanResponse = aiResponse
-          .replace(/^```json\n?/, '')
-          .replace(/\n?```$/, '')
-          .trim();
-
-        log(
-          '🧹 Cleaned response:',
-          cleanResponse.substring(0, 300) + (cleanResponse.length > 300 ? '...' : '')
-        );
-
-        // Try to parse the cleaned response as JSON
-        try {
-          reviewData = JSON.parse(cleanResponse);
-          log('✅ Successfully parsed AI review JSON');
+          reviewData = JSON.parse(largestJson);
+          log('✅ Successfully parsed extracted JSON');
           if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } catch (parseError) {
-          console.error('❌ Failed to parse AI review JSON:', parseError);
-          console.error('🔍 Attempting fallback parsing strategies...');
-
-          // Check if the AI response is plain text without JSON structure
-          if (!cleanResponse.includes('{') && !cleanResponse.includes('}')) {
-            log('🔧 Plain text AI response detected, creating structured fallback...');
+        } else {
+          // Check if response is plain text and doesn't contain structured data
+          if (!response.includes('{') && !response.includes('}')) {
+            log('🔧 Plain text response detected, creating structured fallback...');
             const isNoChanges =
-              cleanResponse.toLowerCase().includes('no') &&
-              (cleanResponse.toLowerCase().includes('changes') ||
-                cleanResponse.toLowerCase().includes('code'));
+              response.toLowerCase().includes('no') &&
+              (response.toLowerCase().includes('changes') ||
+                response.toLowerCase().includes('code'));
 
             reviewData = {
               issues: [],
               suggestions: isNoChanges
                 ? ['No code changes detected in this analysis']
                 : [
-                    `AI response: ${cleanResponse.substring(0, 200)}${cleanResponse.length > 200 ? '...' : ''}`,
+                    `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
                   ],
             };
-            log('✅ Created structured fallback from plain text response');
           } else {
-            // Try to extract JSON from anywhere in the response
-            const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              log('🔧 Found JSON pattern, attempting to parse...');
-              reviewData = JSON.parse(jsonMatch[0]);
-              log('✅ Successfully parsed JSON from pattern match');
-              if (debugInfo) debugInfo.jsonParseSuccess = true;
-            } else {
-              throw parseError;
-            }
+            throw initialError;
           }
         }
-      } else if (probeChatResponse.overallScore !== undefined) {
-        // Direct response without wrapper
-        log('📦 Direct response format detected');
-        reviewData = probeChatResponse;
-      } else {
-        console.error('❌ No response field found and not direct format');
-        console.error('🔍 Available fields:', Object.keys(probeChatResponse));
-        throw new Error('Invalid probe-chat response format: no response field found');
       }
 
       // Handle different schemas

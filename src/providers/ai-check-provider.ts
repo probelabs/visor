@@ -4,7 +4,7 @@ import { ReviewSummary } from '../reviewer';
 import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 
 /**
- * AI-powered check provider using probe-chat
+ * AI-powered check provider using probe agent
  */
 export class AICheckProvider extends CheckProvider {
   private aiReviewService: AIReviewService;

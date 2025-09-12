@@ -120,7 +120,7 @@ describe('AIReviewService', () => {
     it('should execute AI review when API key is available', async () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
-      // Mock successful probe-chat response
+      // Mock successful probe agent response
       const mockChild = new EventEmitter() as any;
       mockChild.stdin = { write: jest.fn(), end: jest.fn() };
       mockChild.stdout = new EventEmitter();
@@ -132,24 +132,22 @@ describe('AIReviewService', () => {
       const service = new AIReviewService();
       const reviewPromise = service.executeReview(mockPRInfo, 'security');
 
-      // Simulate probe-chat response
+      // Simulate probe agent response
       setTimeout(() => {
         const mockResponse = JSON.stringify({
-          response: JSON.stringify({
-            issues: [
-              {
-                file: 'test.js',
-                line: 5,
-                ruleId: 'security/sql-injection',
-                message: 'SQL injection risk',
-                severity: 'error',
-                category: 'security',
-                suggestion: 'Use parameterized queries',
-                replacement: 'db.query("SELECT * FROM users WHERE id = ?", [userId])',
-              },
-            ],
-            suggestions: ['Fix SQL injection vulnerability'],
-          }),
+          issues: [
+            {
+              file: 'test.js',
+              line: 5,
+              ruleId: 'security/sql-injection',
+              message: 'SQL injection risk',
+              severity: 'error',
+              category: 'security',
+              suggestion: 'Use parameterized queries',
+              replacement: 'db.query("SELECT * FROM users WHERE id = ?", [userId])',
+            },
+          ],
+          suggestions: ['Fix SQL injection vulnerability'],
         });
         mockChild.stdout.emit('data', Buffer.from(mockResponse));
         mockChild.emit('close', 0);
@@ -164,7 +162,7 @@ describe('AIReviewService', () => {
       expect(result.issues[0].replacement).toContain('db.query');
     });
 
-    it('should handle probe-chat errors and throw', async () => {
+    it('should handle probe agent errors and throw', async () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
       const mockChild = new EventEmitter() as any;
@@ -178,14 +176,14 @@ describe('AIReviewService', () => {
       const service = new AIReviewService();
       const reviewPromise = service.executeReview(mockPRInfo, 'performance');
 
-      // Simulate probe-chat error
+      // Simulate probe agent error
       setTimeout(() => {
         mockChild.stderr.emit('data', Buffer.from('Error: API rate limit exceeded'));
         mockChild.emit('close', 1);
       }, 10);
 
       await expect(reviewPromise).rejects.toThrow(
-        'probe-chat exited with code 1: Error: API rate limit exceeded'
+        'probe agent exited with code 1: Error: API rate limit exceeded'
       );
     });
 
@@ -214,25 +212,22 @@ describe('AIReviewService', () => {
   // All prompts now come from .visor.yaml configuration files.
 
   describe('Response Parsing', () => {
-    it('should parse probe-chat JSON response', () => {
+    it('should parse probe agent JSON response', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        response: JSON.stringify({
-          issues: [
-            {
-              file: 'app.js',
-              line: 10,
-              ruleId: 'logic/error-handling',
-              message: 'Missing error handling',
-              severity: 'warning',
-              category: 'logic',
-              suggestion: 'Add try-catch block to handle potential errors',
-              replacement:
-                'try {\n  // existing code\n} catch (error) {\n  console.error(error);\n}',
-            },
-          ],
-          suggestions: ['Add tests'],
-        }),
+        issues: [
+          {
+            file: 'app.js',
+            line: 10,
+            ruleId: 'logic/error-handling',
+            message: 'Missing error handling',
+            severity: 'warning',
+            category: 'logic',
+            suggestion: 'Add try-catch block to handle potential errors',
+            replacement: 'try {\n  // existing code\n} catch (error) {\n  console.error(error);\n}',
+          },
+        ],
+        suggestions: ['Add tests'],
       });
 
       const result = (service as any).parseAIResponse(response);
@@ -246,15 +241,13 @@ describe('AIReviewService', () => {
 
     it('should handle response wrapped in markdown code blocks', () => {
       const service = new AIReviewService();
-      const response = JSON.stringify({
-        response:
-          '```json\n' +
-          JSON.stringify({
-            issues: [],
-            suggestions: ['Code looks good overall'],
-          }) +
-          '\n```',
-      });
+      const response =
+        '```json\n' +
+        JSON.stringify({
+          issues: [],
+          suggestions: ['Code looks good overall'],
+        }) +
+        '\n```';
 
       const result = (service as any).parseAIResponse(response);
 
@@ -265,33 +258,31 @@ describe('AIReviewService', () => {
     it('should parse enhanced response format with suggestions and replacements', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        response: JSON.stringify({
-          issues: [
-            {
-              file: 'auth.js',
-              line: 15,
-              ruleId: 'security/sql-injection',
-              message: 'SQL query is vulnerable to injection attacks',
-              severity: 'critical',
-              category: 'security',
-              suggestion: 'Use parameterized queries to prevent SQL injection',
-              replacement:
-                'const query = "SELECT * FROM users WHERE id = ?";\nconst result = await db.query(query, [userId]);',
-            },
-            {
-              file: 'utils.js',
-              line: 23,
-              endLine: 25,
-              ruleId: 'style/naming',
-              message: 'Variable name should use camelCase',
-              severity: 'info',
-              category: 'style',
-              suggestion: 'Use camelCase naming convention for JavaScript variables',
-              replacement: 'const userName = getValue();',
-            },
-          ],
-          suggestions: ['Add input validation', 'Consider adding tests'],
-        }),
+        issues: [
+          {
+            file: 'auth.js',
+            line: 15,
+            ruleId: 'security/sql-injection',
+            message: 'SQL query is vulnerable to injection attacks',
+            severity: 'critical',
+            category: 'security',
+            suggestion: 'Use parameterized queries to prevent SQL injection',
+            replacement:
+              'const query = "SELECT * FROM users WHERE id = ?";\nconst result = await db.query(query, [userId]);',
+          },
+          {
+            file: 'utils.js',
+            line: 23,
+            endLine: 25,
+            ruleId: 'style/naming',
+            message: 'Variable name should use camelCase',
+            severity: 'info',
+            category: 'style',
+            suggestion: 'Use camelCase naming convention for JavaScript variables',
+            replacement: 'const userName = getValue();',
+          },
+        ],
+        suggestions: ['Add input validation', 'Consider adding tests'],
       });
 
       const result = (service as any).parseAIResponse(response);
@@ -319,20 +310,18 @@ describe('AIReviewService', () => {
     it('should preserve original severity levels', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        response: JSON.stringify({
-          suggestions: [],
-          issues: [
-            {
-              file: 'a.js',
-              line: 1,
-              message: 'Issue 1',
-              severity: 'critical',
-              category: 'security',
-            },
-            { file: 'b.js', line: 2, message: 'Issue 2', severity: 'major', category: 'logic' },
-            { file: 'c.js', line: 3, message: 'Issue 3', severity: 'minor', category: 'style' },
-          ],
-        }),
+        suggestions: [],
+        issues: [
+          {
+            file: 'a.js',
+            line: 1,
+            message: 'Issue 1',
+            severity: 'critical',
+            category: 'security',
+          },
+          { file: 'b.js', line: 2, message: 'Issue 2', severity: 'major', category: 'logic' },
+          { file: 'c.js', line: 3, message: 'Issue 3', severity: 'minor', category: 'style' },
+        ],
       });
 
       const result = (service as any).parseAIResponse(response);
@@ -345,13 +334,11 @@ describe('AIReviewService', () => {
     it('should preserve original categories', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        response: JSON.stringify({
-          suggestions: [],
-          issues: [
-            { file: 'a.js', line: 1, message: 'Bug', severity: 'error', category: 'bug' },
-            { file: 'b.js', line: 2, message: 'Docs', severity: 'info', category: 'docs' },
-          ],
-        }),
+        suggestions: [],
+        issues: [
+          { file: 'a.js', line: 1, message: 'Bug', severity: 'error', category: 'bug' },
+          { file: 'b.js', line: 2, message: 'Docs', severity: 'info', category: 'docs' },
+        ],
       });
 
       const result = (service as any).parseAIResponse(response);
