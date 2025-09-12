@@ -773,16 +773,26 @@ export class CheckExecutionEngine {
           log(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
           debugInfo.push(`❌ Check "${checkName}" failed: ${checkResult.error}`);
 
-          // Add error as an issue
+          // Check if this is a critical error
+          const isCriticalError =
+            checkResult.error.includes('API rate limit') ||
+            checkResult.error.includes('403') ||
+            checkResult.error.includes('401') ||
+            checkResult.error.includes('authentication') ||
+            checkResult.error.includes('API key');
+
+          // Add error as an issue with appropriate severity
           aggregatedIssues.push({
             file: 'system',
             line: 0,
             endLine: undefined,
             ruleId: `${checkName}/error`,
             message: `Check "${checkName}" failed: ${checkResult.error}`,
-            severity: 'error',
+            severity: isCriticalError ? 'critical' : 'error',
             category: 'logic',
-            suggestion: undefined,
+            suggestion: isCriticalError
+              ? 'Please check your API credentials and rate limits'
+              : undefined,
             replacement: undefined,
           });
         } else if (checkResult.result) {
@@ -811,15 +821,25 @@ export class CheckExecutionEngine {
         log(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
         debugInfo.push(`❌ Check "${checkName}" promise rejected: ${errorMessage}`);
 
+        // Check if this is a critical error
+        const isCriticalError =
+          errorMessage.includes('API rate limit') ||
+          errorMessage.includes('403') ||
+          errorMessage.includes('401') ||
+          errorMessage.includes('authentication') ||
+          errorMessage.includes('API key');
+
         aggregatedIssues.push({
           file: 'system',
           line: 0,
           endLine: undefined,
           ruleId: `${checkName}/promise-error`,
           message: `Check "${checkName}" execution failed: ${errorMessage}`,
-          severity: 'error',
+          severity: isCriticalError ? 'critical' : 'error',
           category: 'logic',
-          suggestion: undefined,
+          suggestion: isCriticalError
+            ? 'Please check your API credentials and rate limits'
+            : undefined,
           replacement: undefined,
         });
       }

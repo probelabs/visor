@@ -103,7 +103,31 @@ export class AICheckProvider extends CheckProvider {
 
     // Pass the custom prompt and schema - no fallbacks
     const schema = config.schema as string | undefined;
-    return await service.executeReview(prInfo, customPrompt, schema);
+
+    try {
+      return await service.executeReview(prInfo, customPrompt, schema);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Log detailed error information
+      console.error(`❌ AI Check Provider Error for check: ${errorMessage}`);
+
+      // Check if this is a critical error (authentication, rate limits, etc)
+      const isCriticalError =
+        errorMessage.includes('API rate limit') ||
+        errorMessage.includes('403') ||
+        errorMessage.includes('401') ||
+        errorMessage.includes('authentication') ||
+        errorMessage.includes('API key');
+
+      if (isCriticalError) {
+        console.error(`🚨 CRITICAL ERROR: AI provider authentication or rate limit issue detected`);
+        console.error(`🚨 This check cannot proceed without valid API credentials`);
+      }
+
+      // Re-throw with more context
+      throw new Error(`AI analysis failed: ${errorMessage}`);
+    }
   }
 
   getSupportedConfigKeys(): string[] {

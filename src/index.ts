@@ -162,6 +162,7 @@ export async function run(): Promise<void> {
       'create-check': getInput('create-check') || undefined,
       'add-labels': getInput('add-labels') || undefined,
       'fail-on-critical': getInput('fail-on-critical') || undefined,
+      'fail-on-api-error': getInput('fail-on-api-error') || undefined,
       'min-score': getInput('min-score') || undefined,
       // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path') || undefined,
@@ -1019,6 +1020,34 @@ async function handlePullRequestVisorMode(
 
     console.log('✅ Posted Visor config-based review comment');
 
+    // Check for API errors in the review issues
+    const apiErrors = review.issues.filter(
+      issue =>
+        issue.file === 'system' &&
+        issue.severity === 'critical' &&
+        (issue.message.includes('API rate limit') ||
+          issue.message.includes('403') ||
+          issue.message.includes('401') ||
+          issue.message.includes('authentication') ||
+          issue.message.includes('API key'))
+    );
+
+    if (apiErrors.length > 0) {
+      console.error('🚨 Critical API errors detected in review:');
+      apiErrors.forEach(error => {
+        console.error(`  - ${error.message}`);
+      });
+
+      // Check if we should fail on API errors
+      const failOnApiError = inputs['fail-on-api-error'] === 'true';
+      if (failOnApiError) {
+        setFailed(
+          `Critical API errors detected: ${apiErrors.length} authentication/rate limit issues found. Please check your API credentials.`
+        );
+        return;
+      }
+    }
+
     // Set outputs
     setOutput('auto-review-completed', 'true');
     setOutput('issues-found', calculateTotalIssues(review.issues).toString());
@@ -1026,6 +1055,7 @@ async function handlePullRequestVisorMode(
     setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
     setOutput('visor-config-used', 'true');
     setOutput('checks-executed', checksToRun.join(','));
+    setOutput('api-errors-found', apiErrors.length.toString());
   } catch (error) {
     console.error('❌ Error in Visor PR analysis:', error);
     setFailed(error instanceof Error ? error.message : 'Visor PR analysis failed');

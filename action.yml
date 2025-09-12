@@ -63,6 +63,10 @@ inputs:
     required: false
     default: 'false'
   
+  fail-on-api-error:
+    description: 'Fail the action if API authentication or rate limit errors occur'
+    required: false
+    default: 'false'
   
   debug:
     description: 'Enable debug mode for detailed output in comments'

@@ -20,6 +20,7 @@ export interface GitHubActionInputs {
   'create-check'?: string;
   'add-labels'?: string;
   'fail-on-critical'?: string;
+  'fail-on-api-error'?: string;
   'min-score'?: string;
   debug?: string;
   // Legacy inputs for backward compatibility
