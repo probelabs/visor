@@ -8,6 +8,15 @@ jest.mock('child_process', () => ({
   spawn: jest.fn(),
 }));
 
+// Mock fs.promises
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  promises: {
+    writeFile: jest.fn().mockResolvedValue(undefined),
+    unlink: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 describe('AIReviewService', () => {
   const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
   let originalEnv: NodeJS.ProcessEnv;

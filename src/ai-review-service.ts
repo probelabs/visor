@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 
@@ -369,7 +371,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const env: Record<string, string | undefined> = {
         ...process.env,
       };
@@ -419,16 +421,34 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         args.push('--model', this.config.model);
       }
 
-      // Add code-review prompt for better context
-      args.push('--prompt', 'code-review');
+      // Add code-review-template prompt for better context
+      args.push('--prompt', 'code-review-template');
 
-      // Read prompt from stdin
-      args.push('-');
+      // Create a temporary file for the prompt to avoid stdin limitations
+      const tmpDir = os.tmpdir();
+      const tmpFile = path.join(tmpDir, `visor-prompt-${Date.now()}.txt`);
+
+      try {
+        // Write prompt to temporary file
+        await fs.promises.writeFile(tmpFile, prompt, 'utf8');
+        log(`📝 Wrote prompt to temporary file: ${tmpFile}`);
+
+        // Pass the temporary file path to probe agent
+        args.push(tmpFile);
+      } catch (err) {
+        console.error('❌ Failed to write prompt to temporary file:', err);
+        reject(
+          new Error(
+            `Failed to write prompt to temporary file: ${err instanceof Error ? err.message : 'Unknown error'}`
+          )
+        );
+        return;
+      }
 
       const child = spawn('npx', args, {
         env,
         shell: false,
-        stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin, stdout, stderr
+        stdio: ['pipe', 'pipe', 'pipe'], // Still need pipes for stdout/stderr
       });
 
       let output = '';
@@ -454,28 +474,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         if (!isResolved) {
           isResolved = true;
           console.error('❌ Process error:', err.message);
-          reject(new Error(`Failed to spawn probe-chat: ${err.message}`));
+          // Clean up temp file on error
+          fs.promises.unlink(tmpFile).catch(() => {});
+          reject(new Error(`Failed to spawn probe agent: ${err.message}`));
         }
       });
-
-      // Write prompt to stdin and close it
-      try {
-        log('📝 Writing prompt to stdin...');
-        child.stdin.write(prompt, 'utf8');
-        child.stdin.end();
-        log('✅ Prompt written to stdin and closed');
-      } catch (err) {
-        if (!isResolved) {
-          isResolved = true;
-          console.error('❌ Error writing to stdin:', err);
-          reject(
-            new Error(
-              `Failed to write prompt to stdin: ${err instanceof Error ? err.message : 'Unknown error'}`
-            )
-          );
-        }
-        return;
-      }
 
       // Set timeout
       const timeout = setTimeout(() => {
@@ -483,6 +486,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           isResolved = true;
           console.error('⏰ AI review timed out after', this.config.timeout || 30000, 'ms');
           child.kill('SIGKILL');
+          // Clean up temp file on timeout
+          fs.promises.unlink(tmpFile).catch(() => {});
           reject(new Error(`AI review timed out after ${this.config.timeout || 30000}ms`));
         }
       }, this.config.timeout || 30000);
@@ -495,6 +500,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           log(`🏁 Process closed with code: ${code}, signal: ${signal}`);
           log(`📤 Final output length: ${output.length} characters`);
           log(`⚠️ Final error length: ${error.length} characters`);
+
+          // Clean up temporary file
+          fs.promises.unlink(tmpFile).catch(err => {
+            log(`⚠️ Failed to clean up temp file: ${err}`);
+          });
 
           if (code === 0) {
             log('✅ probe agent completed successfully');
