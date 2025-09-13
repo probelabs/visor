@@ -38,6 +38,7 @@ export class CLI {
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
+      .option('--fail-fast', 'Stop execution on first failure condition')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -80,6 +81,7 @@ export class CLI {
           value => parseInt(value, 10)
         )
         .option('--debug', 'Enable debug mode for detailed output')
+        .option('--fail-fast', 'Stop execution on first failure condition')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -100,6 +102,7 @@ export class CLI {
         configPath: options.config,
         timeout: options.timeout,
         debug: options.debug,
+        failFast: options.failFast,
         help: options.help,
         version: options.version,
       };
@@ -180,6 +183,7 @@ export class CLI {
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
+      .option('--fail-fast', 'Stop execution on first failure condition')
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work
@@ -215,7 +219,8 @@ Examples:
   visor --check architecture --check security --output markdown
   visor --check security --output sarif > results.sarif
   visor --check all --timeout 300000 --output json   # 5 minute timeout
-  visor --check all --debug --output markdown        # Enable debug mode`;
+  visor --check all --debug --output markdown        # Enable debug mode
+  visor --check all --fail-fast --output json        # Stop on first failure`;
   }
 
   /**

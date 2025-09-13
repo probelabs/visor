@@ -3,6 +3,117 @@
  */
 
 /**
+ * Failure condition severity levels
+ */
+export type FailureConditionSeverity = 'error' | 'warning' | 'info';
+
+/**
+ * Simple failure condition - just a JEXL expression
+ */
+export type SimpleFailureCondition = string;
+
+/**
+ * Complex failure condition with additional metadata
+ */
+export interface ComplexFailureCondition {
+  /** JEXL expression to evaluate */
+  condition: string;
+  /** Human-readable message when condition is met */
+  message?: string;
+  /** Severity level of the failure */
+  severity?: FailureConditionSeverity;
+  /** Whether this condition should halt execution */
+  halt_execution?: boolean;
+}
+
+/**
+ * Failure condition - can be a simple JEXL string or complex object
+ */
+export type FailureCondition = SimpleFailureCondition | ComplexFailureCondition;
+
+/**
+ * Collection of failure conditions
+ */
+export interface FailureConditions {
+  [conditionName: string]: FailureCondition;
+}
+
+/**
+ * Context object available to JEXL expressions for failure condition evaluation
+ */
+export interface FailureConditionContext {
+  /** Check results */
+  issues: Array<{
+    file: string;
+    line: number;
+    endLine?: number;
+    ruleId: string;
+    message: string;
+    severity: 'info' | 'warning' | 'error' | 'critical';
+    category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+    group?: string;
+    schema?: string;
+    suggestion?: string;
+    replacement?: string;
+  }>;
+
+  /** Array of suggestions from the check */
+  suggestions: string[];
+
+  /** Aggregated metadata for easy access */
+  metadata: {
+    /** Name of the check (e.g., "security-check") */
+    checkName: string;
+    /** Schema type (e.g., "code-review", "plain") */
+    schema: string;
+    /** Group name (e.g., "security-analysis") */
+    group: string;
+    /** Total number of issues found */
+    totalIssues: number;
+    /** Number of critical issues */
+    criticalIssues: number;
+    /** Number of error issues */
+    errorIssues: number;
+    /** Number of warning issues */
+    warningIssues: number;
+    /** Number of info issues */
+    infoIssues: number;
+  };
+
+  /** Debug information (if available) */
+  debug?: {
+    /** Any errors that occurred during processing */
+    errors: string[];
+    /** Processing time in milliseconds */
+    processingTime: number;
+    /** AI provider used */
+    provider: string;
+    /** AI model used */
+    model: string;
+  };
+}
+
+/**
+ * Result of failure condition evaluation
+ */
+export interface FailureConditionResult {
+  /** Name of the condition that was evaluated */
+  conditionName: string;
+  /** Whether the condition evaluated to true (failure) */
+  failed: boolean;
+  /** The JEXL expression that was evaluated */
+  expression: string;
+  /** Human-readable message */
+  message?: string;
+  /** Severity of the failure */
+  severity: FailureConditionSeverity;
+  /** Whether execution should halt */
+  haltExecution: boolean;
+  /** Error message if evaluation failed */
+  error?: string;
+}
+
+/**
  * Valid check types in configuration
  */
 export type ConfigCheckType = 'ai';
@@ -75,6 +186,12 @@ export interface CheckConfig {
   schema?: string;
   /** Custom template configuration - optional */
   template?: CustomTemplateConfig;
+  /** Condition to determine if check should run - runs if expression evaluates to true */
+  if?: string;
+  /** Simple fail condition - fails check if expression evaluates to true */
+  fail_if?: string;
+  /** Check-specific failure conditions - optional (deprecated, use fail_if) */
+  failure_conditions?: FailureConditions;
 }
 
 /**
@@ -163,6 +280,10 @@ export interface VisorConfig {
   ai_model?: string;
   /** Global AI provider setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  /** Simple global fail condition - fails if expression evaluates to true */
+  fail_if?: string;
+  /** Global failure conditions - optional (deprecated, use fail_if) */
+  failure_conditions?: FailureConditions;
 }
 
 /**
