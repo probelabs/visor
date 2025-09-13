@@ -145,7 +145,7 @@ export interface EnvConfig {
  */
 export interface AIProviderConfig {
   /** AI provider to use */
-  provider?: 'google' | 'anthropic' | 'openai';
+  provider?: 'google' | 'anthropic' | 'openai' | 'mock';
   /** Model name to use */
   model?: string;
   /** API key (usually from environment variables) */
@@ -175,7 +175,7 @@ export interface CheckConfig {
   /** AI model to use for this check - overrides global setting */
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
   /** Environment variables for this check */
   env?: EnvConfig;
   /** Check IDs that this check depends on (optional) */
@@ -293,7 +293,7 @@ export interface VisorConfig {
   /** Global AI model setting */
   ai_model?: string;
   /** Global AI provider setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
   /** Simple global fail condition - fails if expression evaluates to true */
   fail_if?: string;
   /** Global failure conditions - optional (deprecated, use fail_if) */

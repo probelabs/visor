@@ -693,6 +693,9 @@ export class CheckExecutionEngine {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),
       },
+      // Inherit global AI provider and model settings
+      ai_provider: checkConfig.ai_provider || config.ai_provider,
+      ai_model: checkConfig.ai_model || config.ai_model,
     };
 
     const result = await provider.execute(prInfo, providerConfig);

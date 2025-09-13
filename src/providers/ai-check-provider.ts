@@ -55,7 +55,7 @@ export class AICheckProvider extends CheckProvider {
     if (cfg.ai) {
       if (
         cfg.ai.provider &&
-        !['google', 'anthropic', 'openai'].includes(cfg.ai.provider as string)
+        !['google', 'anthropic', 'openai', 'mock'].includes(cfg.ai.provider as string)
       ) {
         return false;
       }
@@ -409,7 +409,7 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.timeout = config.ai.timeout as number;
       }
       if (config.ai.provider !== undefined) {
-        aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai';
+        aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai' | 'mock';
       }
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
@@ -421,7 +421,7 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.model = config.ai_model as string;
     }
     if (config.ai_provider !== undefined) {
-      aiConfig.provider = config.ai_provider as 'google' | 'anthropic' | 'openai';
+      aiConfig.provider = config.ai_provider as 'google' | 'anthropic' | 'openai' | 'mock';
     }
 
     // Get custom prompt from config - REQUIRED, no fallbacks

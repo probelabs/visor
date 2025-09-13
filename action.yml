@@ -57,6 +57,16 @@ inputs:
     description: 'Add quality labels to PR'
     required: false
     default: 'true'
+
+  ai-model:
+    description: 'AI model to use (mock, google-gemini-pro, claude-sonnet, etc.)'
+    required: false
+    default: ''
+
+  ai-provider:
+    description: 'AI provider to use (mock, google, anthropic, openai)'
+    required: false
+    default: ''
   
   fail-on-critical:
     description: 'Fail the action if critical issues are found'
