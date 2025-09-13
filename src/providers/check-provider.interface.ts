@@ -1,13 +1,13 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
-import { PromptConfig, EnvConfig } from '../types/config';
+import { EnvConfig } from '../types/config';
 
 /**
  * Configuration for a check provider
  */
 export interface CheckProviderConfig {
   type: string;
-  prompt?: string | PromptConfig;
+  prompt?: string;
   eventContext?: any;
   focus?: string;
   command?: string;

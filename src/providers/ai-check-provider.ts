@@ -2,7 +2,6 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { AIReviewService, AIReviewConfig } from '../ai-review-service';
-import { PromptConfig } from '../types/config';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
@@ -87,36 +86,18 @@ export class AICheckProvider extends CheckProvider {
    * Process prompt configuration to resolve final prompt string
    */
   private async processPrompt(
-    promptConfig: string | PromptConfig,
+    promptConfig: string,
     prInfo: PRInfo,
     eventContext?: any,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<string> {
     let promptContent: string;
 
-    // Handle string prompt (backward compatibility)
-    if (typeof promptConfig === 'string') {
-      // Auto-detect if it's a file path
-      if (await this.isFilePath(promptConfig)) {
-        promptContent = await this.loadPromptFromFile(promptConfig);
-      } else {
-        promptContent = promptConfig;
-      }
+    // Auto-detect if it's a file path or inline content
+    if (await this.isFilePath(promptConfig)) {
+      promptContent = await this.loadPromptFromFile(promptConfig);
     } else {
-      // Handle PromptConfig object - support both new auto-detection and legacy explicit format
-      if (promptConfig.content) {
-        // Auto-detect if content is actually a file path
-        if (await this.isFilePath(promptConfig.content)) {
-          promptContent = await this.loadPromptFromFile(promptConfig.content);
-        } else {
-          promptContent = promptConfig.content;
-        }
-      } else if (promptConfig.file) {
-        // Legacy explicit file property
-        promptContent = await this.loadPromptFromFile(promptConfig.file);
-      } else {
-        throw new Error('Prompt configuration must specify either "file" or "content"');
-      }
+      promptContent = promptConfig;
     }
 
     // Process Liquid templates in the prompt

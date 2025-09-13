@@ -10,8 +10,7 @@ checks:
     type: ai
     group: review
     schema: code-review
-    prompt:
-      content: |
+    prompt: |
         Please perform a comprehensive security analysis of the code changes in this pull request.
         
         Use the following template to structure your analysis:
@@ -101,8 +100,7 @@ checks:
     type: ai
     group: review
     schema: code-review
-    prompt:
-      content: |
+    prompt: |
         Please analyze the performance implications of the code changes in this pull request.
         
         Use the following template to organize your analysis:
@@ -160,8 +158,7 @@ checks:
     type: ai
     group: review
     schema: code-review
-    prompt:
-      content: |
+    prompt: |
         Please evaluate the code quality and maintainability of the changes in this pull request.
         
         Use the following template to structure your review:
@@ -237,8 +234,7 @@ checks:
     type: ai
     group: overview
     schema: plain
-    prompt:
-      content: |
+    prompt: |
         # 📋 Pull Request Overview: {{ pr.title }}
 
         {% if pr.body %}
