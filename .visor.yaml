@@ -15,15 +15,6 @@ checks:
     schema: code-review
     prompt: |
         Please perform a comprehensive security analysis of the code changes in this pull request.
-        
-        Use the following template to structure your analysis:
-
-        # Security Analysis for PR {{ pr.number }}: {{ pr.title }}
-
-        ## Context
-        - Repository: {{ event.repository.fullName or "project" }}
-        - Files changed: {{ files.size }}
-        - Author: {{ pr.author }}
 
         ## Files Changed
         {% for file in files %}
