@@ -189,7 +189,7 @@ export class PRReviewer {
 
     // Add debug section if available
     if (summary.debug) {
-      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n' + this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 
@@ -356,7 +356,7 @@ export class PRReviewer {
 
     // Add debug section if debug information is available
     if (summary.debug) {
-      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n' + this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 

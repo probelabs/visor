@@ -432,11 +432,9 @@ async function postCliReviewComment(
     // Add debug information if available
     if (cliOutput.debug) {
       const debugContent = formatDebugInfo(cliOutput.debug);
-      comment += commentManager.createCollapsibleSection(
-        '🐛 Debug Information',
-        debugContent,
-        false
-      );
+      comment +=
+        '\n\n' +
+        commentManager.createCollapsibleSection('🐛 Debug Information', debugContent, false);
       comment += '\n\n';
     }
 
