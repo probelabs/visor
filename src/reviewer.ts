@@ -143,6 +143,7 @@ export class PRReviewer {
         owner,
         repo,
         prNumber,
+        commitSha: options.commitSha,
       });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -170,6 +171,7 @@ export class PRReviewer {
         owner,
         repo,
         prNumber,
+        commitSha: options.commitSha,
       });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -184,7 +186,7 @@ export class PRReviewer {
   private async formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
     _options: ReviewOptions,
-    githubContext?: { owner: string; repo: string; prNumber: number }
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
     const totalIssues = calculateTotalIssues(summary.issues);
 
@@ -214,7 +216,7 @@ export class PRReviewer {
 
   private async renderWithSchemaTemplate(
     summary: ReviewSummary,
-    githubContext?: { owner: string; repo: string; prNumber: number }
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
     try {
       // Group issues by check name and render each check separately
@@ -259,19 +261,24 @@ export class PRReviewer {
 
   private enhanceIssuesWithGitHubLinks(
     issues: ReviewIssue[],
-    githubContext?: { owner: string; repo: string; prNumber: number }
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): any[] {
     if (!githubContext) {
       return issues;
     }
 
+    // Use commit SHA for permalink format that auto-expands
+    // If no commit SHA provided, fall back to PR files view
+    const baseUrl = githubContext.commitSha
+      ? `https://github.com/${githubContext.owner}/${githubContext.repo}/blob/${githubContext.commitSha}`
+      : `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files`;
+
     return issues.map(issue => ({
       ...issue,
-      githubUrl: issue.line
-        ? `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files#diff-${this.generateGitHubDiffHash(
-            issue.file
-          )}R${issue.line}`
-        : `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files`,
+      githubUrl:
+        githubContext.commitSha && issue.line
+          ? `${baseUrl}/${issue.file}#L${issue.line}${issue.endLine && issue.endLine !== issue.line ? `-L${issue.endLine}` : ''}`
+          : baseUrl,
       fileHash: this.generateGitHubDiffHash(issue.file),
     }));
   }
@@ -281,7 +288,7 @@ export class PRReviewer {
     issues: ReviewIssue[],
     schema: string,
     customTemplate?: CustomTemplateConfig,
-    githubContext?: { owner: string; repo: string; prNumber: number }
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
     const liquid = new Liquid({
       // Configure Liquid to handle whitespace better
@@ -316,7 +323,13 @@ export class PRReviewer {
       content?: string;
       issues?: any[];
       checkName: string;
-      github?: { owner: string; repo: string; prNumber: number; branch?: string };
+      github?: {
+        owner: string;
+        repo: string;
+        prNumber: number;
+        commitSha?: string;
+        branch?: string;
+      };
     };
 
     if (schema === 'plain') {

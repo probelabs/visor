@@ -753,6 +753,49 @@ describe('PRReviewer', () => {
       }
     });
 
+    test('should generate GitHub permalink when commit SHA is provided', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 127,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const issueWithLine: ReviewIssue = {
+        file: 'src/components/Button.tsx',
+        line: 42,
+        endLine: 45,
+        message: 'Missing prop validation',
+        severity: 'warning',
+        category: 'logic',
+        ruleId: 'quality/prop-validation',
+      };
+
+      const summary: ReviewSummary = {
+        issues: [issueWithLine],
+        suggestions: [],
+      };
+
+      // Pass commit SHA in options
+      await reviewer.postReviewComment('owner', 'repo', 1, summary, {
+        commitSha: 'abc123def456',
+      });
+
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalled();
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Should contain GitHub permalink with commit SHA (auto-expands in comments)
+      expect(callArgs.body).toContain(
+        'href="https://github.com/owner/repo/blob/abc123def456/src/components/Button.tsx#L42-L45'
+      );
+      expect(callArgs.body).toContain('<code>src/components/Button.tsx:42-45</code></a>');
+    });
+
     test('should generate GitHub links for files and line numbers', async () => {
       // Mock listComments to return empty (so it creates new comment)
       mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
@@ -787,9 +830,9 @@ describe('PRReviewer', () => {
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
       // Should contain GitHub link with file and line combined
-      expect(callArgs.body).toContain('href="https://github.com/owner/repo/pull/1/files#diff-');
+      // When no commit SHA is provided, should fall back to PR files view
+      expect(callArgs.body).toContain('href="https://github.com/owner/repo/pull/1/files');
       expect(callArgs.body).toContain('<code>src/components/Button.tsx:42-45</code></a>');
-      expect(callArgs.body).toContain('R42'); // R for right side (added lines) in the URL
     });
 
     test('should include category-specific recommendations', async () => {
