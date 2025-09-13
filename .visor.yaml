@@ -86,7 +86,14 @@ checks:
         - Unsafe deserializations
         - Resource exhaustion vulnerabilities
 
+        **Code Logic & Implementation:**
+        - Logic flaws that could lead to security issues
+        - Missing security controls for critical operations
+        - Insufficient test coverage for security-critical code
+        - Over-engineered security mechanisms that may have gaps
+
         Provide specific findings with clear explanations and actionable remediation steps for each issue discovered.
+        Pay special attention to areas lacking test coverage that handle sensitive operations.
     on: [pr_opened, pr_updated]
 
   # Performance analysis - Important for all applications
@@ -185,12 +192,36 @@ checks:
         - Input validation thoroughness
         - Edge case coverage
 
-        **Testing & Maintainability:**
-        - Test coverage implications
-        - Code testability
-        - Dependencies and coupling
+        **Testing & Test Coverage:**
+        - Missing tests for critical functionality
+        - Test coverage gaps and untested code paths
+        - Test quality and effectiveness
+        - Edge cases and error scenarios coverage
+        - Unit vs integration test appropriateness
+        - Test maintainability and clarity
+
+        **Over-Engineering & Complexity:**
+        - Unnecessary abstractions or complexity
+        - Premature optimization
+        - YAGNI (You Aren't Gonna Need It) violations
+        - Simpler alternative solutions available
+        - Code that could be more straightforward
+        - Excessive use of design patterns
+
+        **Logic & Correctness:**
+        - Logical errors or flaws in implementation
+        - Off-by-one errors
+        - Incorrect algorithm implementation
+        - Race conditions or timing issues
+        - Incorrect assumptions about data
+        - Missing validation or boundary checks
+
+        **Maintainability & Technical Debt:**
+        - Code testability issues
+        - Dependencies and coupling problems
         - Technical debt introduction
         - Future maintenance considerations
+        - Code duplication (DRY violations)
 
         **Language-Specific Best Practices:**
         - Idiomatic code usage
