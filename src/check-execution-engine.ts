@@ -7,6 +7,7 @@ import { CheckProviderConfig } from './providers/check-provider.interface';
 import { DependencyResolver, DependencyGraph } from './dependency-resolver';
 import { FailureConditionEvaluator } from './failure-condition-evaluator';
 import { FailureConditionResult } from './types/config';
+import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 
 export interface MockOctokit {
   rest: {
@@ -44,6 +45,15 @@ export interface CheckExecutionOptions {
   outputFormat?: string;
   config?: import('./types/config').VisorConfig;
   debug?: boolean; // Enable debug mode to collect AI execution details
+  // GitHub Check integration options
+  githubChecks?: {
+    enabled: boolean;
+    octokit?: import('@octokit/rest').Octokit;
+    owner?: string;
+    repo?: string;
+    headSha?: string;
+    prNumber?: number;
+  };
 }
 
 export class CheckExecutionEngine {
@@ -52,6 +62,9 @@ export class CheckExecutionEngine {
   private reviewer: PRReviewer;
   private providerRegistry: CheckProviderRegistry;
   private failureEvaluator: FailureConditionEvaluator;
+  private githubCheckService?: GitHubCheckService;
+  private checkRunMap?: Map<string, { id: number; url: string }>;
+  private githubContext?: { owner: string; repo: string };
 
   constructor(workingDirectory?: string) {
     this.gitAnalyzer = new GitRepositoryAnalyzer(workingDirectory);
@@ -78,11 +91,21 @@ export class CheckExecutionEngine {
           ? console.error
           : console.log;
 
+      // Initialize GitHub checks if enabled
+      if (options.githubChecks?.enabled && options.githubChecks.octokit) {
+        await this.initializeGitHubChecks(options, logFn);
+      }
+
       // Analyze the repository
       logFn('🔍 Analyzing local git repository...');
       const repositoryInfo = await this.gitAnalyzer.analyzeRepository();
 
       if (!repositoryInfo.isGitRepository) {
+        // Complete GitHub checks with error if they were initialized
+        if (this.checkRunMap) {
+          await this.completeGitHubChecksWithError('Not a git repository or no changes found');
+        }
+
         return this.createErrorResult(
           repositoryInfo,
           'Not a git repository or no changes found',
@@ -95,6 +118,11 @@ export class CheckExecutionEngine {
       // Convert to PRInfo format for compatibility with existing reviewer
       const prInfo = this.gitAnalyzer.toPRInfo(repositoryInfo);
 
+      // Update GitHub checks to in-progress status
+      if (this.checkRunMap) {
+        await this.updateGitHubChecksInProgress(options);
+      }
+
       // Execute checks using the existing PRReviewer
       logFn(`🤖 Executing checks: ${options.checks.join(', ')}`);
       const reviewSummary = await this.executeReviewChecks(
@@ -105,6 +133,11 @@ export class CheckExecutionEngine {
         options.outputFormat,
         options.debug
       );
+
+      // Complete GitHub checks with results
+      if (this.checkRunMap) {
+        await this.completeGitHubChecksWithResults(reviewSummary, options);
+      }
 
       const executionTime = Date.now() - startTime;
 
@@ -132,6 +165,12 @@ export class CheckExecutionEngine {
       };
     } catch (error) {
       console.error('Error executing checks:', error);
+
+      // Complete GitHub checks with error if they were initialized
+      if (this.checkRunMap) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        await this.completeGitHubChecksWithError(errorMessage);
+      }
 
       const fallbackRepositoryInfo: GitRepositoryInfo = {
         title: 'Error during analysis',
@@ -1284,6 +1323,211 @@ export class CheckExecutionEngine {
         branch: 'unknown',
         filesChanged: 0,
       };
+    }
+  }
+
+  /**
+   * Initialize GitHub check runs for each configured check
+   */
+  private async initializeGitHubChecks(
+    options: CheckExecutionOptions,
+    logFn: (message: string) => void
+  ): Promise<void> {
+    if (
+      !options.githubChecks?.octokit ||
+      !options.githubChecks.owner ||
+      !options.githubChecks.repo ||
+      !options.githubChecks.headSha
+    ) {
+      logFn('⚠️ GitHub checks enabled but missing required parameters');
+      return;
+    }
+
+    try {
+      this.githubCheckService = new GitHubCheckService(options.githubChecks.octokit);
+      this.checkRunMap = new Map();
+      this.githubContext = {
+        owner: options.githubChecks.owner,
+        repo: options.githubChecks.repo,
+      };
+
+      logFn(`🔍 Creating GitHub check runs for ${options.checks.length} checks...`);
+
+      for (const checkName of options.checks) {
+        try {
+          const checkRunOptions: CheckRunOptions = {
+            owner: options.githubChecks.owner,
+            repo: options.githubChecks.repo,
+            head_sha: options.githubChecks.headSha,
+            name: `Visor: ${checkName}`,
+            external_id: `visor-${checkName}-${options.githubChecks.headSha.substring(0, 7)}`,
+          };
+
+          const checkRun = await this.githubCheckService.createCheckRun(checkRunOptions, {
+            title: `${checkName} Analysis`,
+            summary: `Running ${checkName} check using AI-powered analysis...`,
+          });
+
+          this.checkRunMap.set(checkName, checkRun);
+          logFn(`✅ Created check run for ${checkName}: ${checkRun.url}`);
+        } catch (error) {
+          logFn(`❌ Failed to create check run for ${checkName}: ${error}`);
+        }
+      }
+    } catch (error) {
+      // Check if this is a permissions error
+      if (
+        error instanceof Error &&
+        (error.message.includes('403') || error.message.includes('checks:write'))
+      ) {
+        logFn(
+          '⚠️ GitHub checks API not available - insufficient permissions. Check runs will be skipped.'
+        );
+        logFn('💡 To enable check runs, ensure your GitHub token has "checks:write" permission.');
+        this.githubCheckService = undefined;
+        this.checkRunMap = undefined;
+      } else {
+        logFn(`❌ Failed to initialize GitHub check runs: ${error}`);
+        this.githubCheckService = undefined;
+        this.checkRunMap = undefined;
+      }
+    }
+  }
+
+  /**
+   * Update GitHub check runs to in-progress status
+   */
+  private async updateGitHubChecksInProgress(options: CheckExecutionOptions): Promise<void> {
+    if (
+      !this.githubCheckService ||
+      !this.checkRunMap ||
+      !options.githubChecks?.owner ||
+      !options.githubChecks.repo
+    ) {
+      return;
+    }
+
+    for (const [checkName, checkRun] of this.checkRunMap) {
+      try {
+        await this.githubCheckService.updateCheckRunInProgress(
+          options.githubChecks.owner,
+          options.githubChecks.repo,
+          checkRun.id,
+          {
+            title: `Analyzing with ${checkName}...`,
+            summary: `AI-powered analysis is in progress for ${checkName} check.`,
+          }
+        );
+        console.log(`🔄 Updated ${checkName} check to in-progress status`);
+      } catch (error) {
+        console.error(`❌ Failed to update ${checkName} check to in-progress: ${error}`);
+      }
+    }
+  }
+
+  /**
+   * Complete GitHub check runs with results
+   */
+  private async completeGitHubChecksWithResults(
+    reviewSummary: ReviewSummary,
+    options: CheckExecutionOptions
+  ): Promise<void> {
+    if (
+      !this.githubCheckService ||
+      !this.checkRunMap ||
+      !options.githubChecks?.owner ||
+      !options.githubChecks.repo
+    ) {
+      return;
+    }
+
+    // Group issues by check name
+    const issuesByCheck = new Map<string, any[]>();
+
+    // Initialize empty arrays for all checks
+    for (const checkName of this.checkRunMap.keys()) {
+      issuesByCheck.set(checkName, []);
+    }
+
+    // Group issues by their check name (extracted from ruleId prefix)
+    for (const issue of reviewSummary.issues || []) {
+      if (issue.ruleId && issue.ruleId.includes('/')) {
+        const checkName = issue.ruleId.split('/')[0];
+        if (issuesByCheck.has(checkName)) {
+          issuesByCheck.get(checkName)!.push(issue);
+        }
+      }
+    }
+
+    console.log(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
+
+    for (const [checkName, checkRun] of this.checkRunMap) {
+      try {
+        const checkIssues = issuesByCheck.get(checkName) || [];
+
+        // Evaluate failure conditions for this specific check
+        const failureResults = await this.evaluateFailureConditions(
+          checkName,
+          { issues: checkIssues, suggestions: [] },
+          options.config
+        );
+
+        await this.githubCheckService.completeCheckRun(
+          options.githubChecks.owner,
+          options.githubChecks.repo,
+          checkRun.id,
+          checkName,
+          failureResults,
+          checkIssues
+        );
+
+        console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
+      } catch (error) {
+        console.error(`❌ Failed to complete ${checkName} check: ${error}`);
+
+        // Try to mark the check as failed due to execution error
+        try {
+          await this.githubCheckService.completeCheckRun(
+            options.githubChecks.owner,
+            options.githubChecks.repo,
+            checkRun.id,
+            checkName,
+            [],
+            [],
+            error instanceof Error ? error.message : 'Unknown error occurred'
+          );
+        } catch (finalError) {
+          console.error(`❌ Failed to mark ${checkName} check as failed: ${finalError}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Complete GitHub check runs with error status
+   */
+  private async completeGitHubChecksWithError(errorMessage: string): Promise<void> {
+    if (!this.githubCheckService || !this.checkRunMap || !this.githubContext) {
+      return;
+    }
+
+    console.log(`❌ Completing ${this.checkRunMap.size} GitHub check runs with error...`);
+
+    for (const [checkName, checkRun] of this.checkRunMap) {
+      try {
+        await this.githubCheckService.completeCheckRun(
+          this.githubContext.owner,
+          this.githubContext.repo,
+          checkRun.id,
+          checkName,
+          [],
+          [],
+          errorMessage
+        );
+        console.log(`❌ Completed ${checkName} check with error: ${errorMessage}`);
+      } catch (error) {
+        console.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
+      }
     }
   }
 }

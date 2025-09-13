@@ -255,6 +255,18 @@ export interface FileCommentOutput {
 }
 
 /**
+ * GitHub Check Runs output configuration
+ */
+export interface GitHubCheckOutput {
+  /** Whether GitHub check runs are enabled */
+  enabled: boolean;
+  /** Whether to create individual check runs per configured check */
+  per_check: boolean;
+  /** Custom name prefix for check runs */
+  name_prefix?: string;
+}
+
+/**
  * Output configuration
  */
 export interface OutputConfig {
@@ -262,6 +274,8 @@ export interface OutputConfig {
   pr_comment: PrCommentOutput;
   /** File comment configuration (optional) */
   file_comment?: FileCommentOutput;
+  /** GitHub check runs configuration (optional) */
+  github_checks?: GitHubCheckOutput;
 }
 
 /**

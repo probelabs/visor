@@ -105,7 +105,16 @@ outputs:
   
   pr-action:
     description: 'The GitHub PR action that triggered this run (opened, synchronize, edited)'
-  
+
+  check-runs-created:
+    description: 'Number of GitHub check runs created'
+
+  check-runs-urls:
+    description: 'URLs of created GitHub check runs (comma-separated)'
+
+  checks-api-available:
+    description: 'Whether GitHub Checks API was available (true/false)'
+
   # Legacy outputs for backward compatibility
   repo-name:
     description: 'Name of the repository (legacy)'

@@ -4,6 +4,9 @@ version: "1.0"
 # This configuration provides comprehensive analysis while being language-agnostic
 # and adaptable to different project types and coding standards.
 
+# Global fail condition - fail if critical or error issues found in code-review schema checks
+fail_if: "metadata.criticalIssues > 0 || metadata.errorIssues > 0"
+
 checks:
   # Security analysis - Critical for all projects
   security:
@@ -22,36 +25,9 @@ checks:
         - Files changed: {{ files.size }}
         - Author: {{ pr.author }}
 
-        ## File Analysis
-        {% assign tsFiles = utils.filesByExtension.ts %}
-        {% assign jsFiles = utils.filesByExtension.js %}
-        {% assign pyFiles = utils.filesByExtension.py %}
-        {% assign otherFiles = files | where: "filename", "*" %}
-        
-        {% if tsFiles.size > 0 %}
-        ### TypeScript Files ({{ tsFiles.size }})
-        {% for file in tsFiles %}
-        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
-        {% endfor %}
-        {% endif %}
-        
-        {% if jsFiles.size > 0 %}
-        ### JavaScript Files ({{ jsFiles.size }})
-        {% for file in jsFiles %}
-        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
-        {% endfor %}
-        {% endif %}
-        
-        {% if pyFiles.size > 0 %}
-        ### Python Files ({{ pyFiles.size }})
-        {% for file in pyFiles %}
-        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
-        {% endfor %}
-        {% endif %}
-        
-        ### All Changed Files
+        ## Files Changed
         {% for file in files %}
-        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
+        - `{{ file.filename }}` - {{ file.status }}, +{{ file.additions }}/-{{ file.deletions }} ({{ file.changes }} total changes)
         {% endfor %}
 
         ## Instructions
@@ -275,4 +251,15 @@ checks:
 
         Provide a balanced technical assessment suitable for both developers and stakeholders.
     on: [pr_opened, pr_updated]
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+
+  github_checks:
+    enabled: true
+    per_check: true
+    name_prefix: "Visor"
 
