@@ -234,21 +234,11 @@ checks:
            - Key technical changes introduced
            - Affected system components
 
-        2. **Risk Assessment**
-           - Potential impact on system stability
-           - Deployment considerations
-           - Potential breaking changes
-
-        3. **Architecture Visualization**
+        2. **Architecture Visualization**
            - Create appropriate mermaid diagram(s) showing:
              - Component relationships (use `graph TD/LR`)
              - Process flows (use `flowchart` or `sequenceDiagram`)
              - Data flow between modified components
-
-        4. **Recommendations**
-           - Priority actions based on analysis results
-           - Testing suggestions
-           - Monitoring recommendations
 
         **Guidelines for diagrams:**
         - Use multiple diagrams if there are distinct architectural aspects

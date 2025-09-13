@@ -673,39 +673,20 @@ export class PRReviewer {
         // Wrap content in a div for better table layout control
         let issueContent = '';
 
-        // Escape HTML in the main message to prevent HTML injection
-        const escapedMessage = comment.message
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#x27;');
-
-        issueContent += escapedMessage;
+        // Pass the message as-is - Liquid template will handle escaping
+        issueContent += comment.message;
 
         if (comment.suggestion) {
-          // Escape HTML in the suggestion to prevent nested HTML rendering
-          const escapedSuggestion = comment.suggestion
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#x27;');
-          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
+          // Pass suggestion as-is - Liquid template will handle escaping
+          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${comment.suggestion}</details>`;
         }
 
         if (comment.replacement) {
           // Extract language hint from file extension
           const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
           const languageHint = this.getLanguageHint(fileExt);
-          // Escape HTML in the replacement code to prevent nested HTML rendering
-          const escapedReplacement = comment.replacement
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#x27;');
-          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
+          // Pass replacement as-is - Liquid template will handle escaping
+          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${comment.replacement}</code></pre></details>`;
         }
 
         // Wrap all content in a div for better table cell containment
