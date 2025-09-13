@@ -96,12 +96,23 @@ export class AICheckProvider extends CheckProvider {
 
     // Handle string prompt (backward compatibility)
     if (typeof promptConfig === 'string') {
-      promptContent = promptConfig;
+      // Auto-detect if it's a file path
+      if (await this.isFilePath(promptConfig)) {
+        promptContent = await this.loadPromptFromFile(promptConfig);
+      } else {
+        promptContent = promptConfig;
+      }
     } else {
-      // Handle PromptConfig object
+      // Handle PromptConfig object - support both new auto-detection and legacy explicit format
       if (promptConfig.content) {
-        promptContent = promptConfig.content;
+        // Auto-detect if content is actually a file path
+        if (await this.isFilePath(promptConfig.content)) {
+          promptContent = await this.loadPromptFromFile(promptConfig.content);
+        } else {
+          promptContent = promptConfig.content;
+        }
       } else if (promptConfig.file) {
+        // Legacy explicit file property
         promptContent = await this.loadPromptFromFile(promptConfig.file);
       } else {
         throw new Error('Prompt configuration must specify either "file" or "content"');
@@ -110,6 +121,79 @@ export class AICheckProvider extends CheckProvider {
 
     // Process Liquid templates in the prompt
     return await this.renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults);
+  }
+
+  /**
+   * Detect if a string is likely a file path and if the file exists
+   */
+  private async isFilePath(str: string): Promise<boolean> {
+    // Quick checks to exclude obvious non-file-path content
+    if (!str || str.trim() !== str || str.length > 512) {
+      return false;
+    }
+
+    // Exclude strings that are clearly content (contain common content indicators)
+    // But be more careful with paths that might contain common words as directory names
+    if (
+      /\s{2,}/.test(str) || // Multiple consecutive spaces
+      /\n/.test(str) || // Contains newlines
+      /^(please|analyze|review|check|find|identify|look|search)/i.test(str.trim()) || // Starts with command words
+      str.split(' ').length > 8 // Too many words for a typical file path
+    ) {
+      return false;
+    }
+
+    // For strings with path separators, be more lenient about common words
+    // as they might be legitimate directory names
+    if (!/[\/\\]/.test(str)) {
+      // Only apply strict English word filter to non-path strings
+      if (/\b(the|and|or|but|for|with|by|from|in|on|at|as)\b/i.test(str)) {
+        return false;
+      }
+    }
+
+    // Positive indicators for file paths
+    const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
+    const hasPathSeparators = /[\/\\]/.test(str);
+    const isRelativePath = /^\.{1,2}\//.test(str);
+    const isAbsolutePath = path.isAbsolute(str);
+    const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
+
+    // Must have at least one strong indicator
+    if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
+      return false;
+    }
+
+    // Must contain only typical file path characters
+    if (!hasTypicalFileChars) {
+      return false;
+    }
+
+    // Additional validation for suspected file paths
+    try {
+      // Try to resolve and check if file exists
+      let resolvedPath: string;
+
+      if (path.isAbsolute(str)) {
+        resolvedPath = path.normalize(str);
+      } else {
+        // Resolve relative to current working directory
+        resolvedPath = path.resolve(process.cwd(), str);
+      }
+
+      // Check if file exists
+      const fs = require('fs').promises;
+      try {
+        const stat = await fs.stat(resolvedPath);
+        return stat.isFile();
+      } catch {
+        // File doesn't exist, but might still be a valid file path format
+        // Return true if it has strong file path indicators
+        return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
+      }
+    } catch {
+      return false;
+    }
   }
 
   /**

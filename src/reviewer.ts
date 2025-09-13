@@ -815,16 +815,93 @@ export class PRReviewer {
    */
   private async loadCustomTemplate(config: CustomTemplateConfig): Promise<string> {
     if (config.content) {
-      // Use raw template content directly
-      return config.content;
+      // Auto-detect if content is actually a file path
+      if (await this.isFilePath(config.content)) {
+        return await this.loadTemplateFromFile(config.content);
+      } else {
+        // Use raw template content directly
+        return config.content;
+      }
     }
 
     if (config.file) {
-      // Load template from file
+      // Legacy explicit file property
       return await this.loadTemplateFromFile(config.file);
     }
 
     throw new Error('Custom template configuration must specify either "file" or "content"');
+  }
+
+  /**
+   * Detect if a string is likely a file path and if the file exists
+   */
+  private async isFilePath(str: string): Promise<boolean> {
+    // Quick checks to exclude obvious non-file-path content
+    if (!str || str.trim() !== str || str.length > 512) {
+      return false;
+    }
+
+    // Exclude strings that are clearly content (contain common content indicators)
+    // But be more careful with paths that might contain common words as directory names
+    if (
+      /\s{2,}/.test(str) || // Multiple consecutive spaces
+      /\n/.test(str) || // Contains newlines
+      /^(please|analyze|review|check|find|identify|look|search)/i.test(str.trim()) || // Starts with command words
+      str.split(' ').length > 8 // Too many words for a typical file path
+    ) {
+      return false;
+    }
+
+    // For strings with path separators, be more lenient about common words
+    // as they might be legitimate directory names
+    if (!/[\/\\]/.test(str)) {
+      // Only apply strict English word filter to non-path strings
+      if (/\b(the|and|or|but|for|with|by|from|in|on|at|as)\b/i.test(str)) {
+        return false;
+      }
+    }
+
+    // Positive indicators for file paths
+    const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
+    const hasPathSeparators = /[\/\\]/.test(str);
+    const isRelativePath = /^\.{1,2}\//.test(str);
+    const isAbsolutePath = path.isAbsolute(str);
+    const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
+
+    // Must have at least one strong indicator
+    if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
+      return false;
+    }
+
+    // Must contain only typical file path characters
+    if (!hasTypicalFileChars) {
+      return false;
+    }
+
+    // Additional validation for suspected file paths
+    try {
+      // Try to resolve and check if file exists
+      let resolvedPath: string;
+
+      if (path.isAbsolute(str)) {
+        resolvedPath = path.normalize(str);
+      } else {
+        // Resolve relative to current working directory
+        resolvedPath = path.resolve(process.cwd(), str);
+      }
+
+      // Check if file exists
+      try {
+        const stat = await fs.stat(resolvedPath);
+        return stat.isFile();
+      } catch {
+        // File doesn't exist, but might still be a valid file path format
+        // Return true if it has strong file path indicators
+        return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
+      }
+    } catch {
+      return false;
+    }
   }
 
   /**
