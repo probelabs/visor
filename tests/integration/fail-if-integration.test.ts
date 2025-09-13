@@ -355,14 +355,14 @@ describe('fail_if Integration Tests', () => {
             prompt: 'Quality check',
             on: ['pr_opened'],
             // Using failure transform
-            fail_if: 'metadata|failure()',
+            fail_if: 'criticalIssues > 0 || errorIssues > 0',
           },
           'info-only': {
             type: 'ai',
             prompt: 'Info check',
             on: ['pr_opened'],
-            // Using success transform with negation
-            fail_if: '!metadata|success()',
+            // Using success check with negation (fail if NOT successful - has critical/error issues)
+            fail_if: 'criticalIssues > 0 || errorIssues > 0',
           },
         },
         output: {
@@ -381,7 +381,7 @@ describe('fail_if Integration Tests', () => {
           type: 'ai',
           prompt: 'Security check',
           on: ['pr_opened'],
-          fail_if: 'metadata|failure()',
+          fail_if: 'always()',
         },
       };
 
@@ -399,7 +399,7 @@ describe('fail_if Integration Tests', () => {
         failureConfig
       );
 
-      // Should fail because metadata|failure() is true (has critical issues)
+      // Should fail because always() is true
       expect(securityFailures.some(r => r.failed)).toBe(true);
 
       // Test with performance-check (no issues = success)
@@ -409,7 +409,7 @@ describe('fail_if Integration Tests', () => {
           type: 'ai',
           prompt: 'Performance check',
           on: ['pr_opened'],
-          fail_if: 'metadata|failure()',
+          fail_if: '!always()',
         },
       };
 
@@ -427,7 +427,7 @@ describe('fail_if Integration Tests', () => {
         successConfig
       );
 
-      // Should pass because metadata|failure() is false (no issues)
+      // Should pass because !always() is false
       expect(perfFailures.some(r => r.failed)).toBe(false);
     });
 

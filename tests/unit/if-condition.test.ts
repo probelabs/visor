@@ -296,7 +296,7 @@ describe('If condition evaluation', () => {
     it('should default to true when expression is invalid', async () => {
       const invalidExpression = await evaluator.evaluateIfCondition(
         'test-check',
-        'this is not valid JEXL ++',
+        'this is not valid expression syntax ++',
         {
           branch: 'main',
           baseBranch: 'main',

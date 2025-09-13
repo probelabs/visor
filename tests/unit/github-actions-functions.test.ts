@@ -1,5 +1,5 @@
 /**
- * Tests for GitHub Actions-like functions in JEXL
+ * Tests for GitHub Actions-like functions in expressions
  */
 
 import { FailureConditionEvaluator } from '../../src/failure-condition-evaluator';

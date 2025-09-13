@@ -290,7 +290,7 @@ describe('FailureConditionEvaluator', () => {
       expect(errorsResult?.failed).toBe(false); // No errors in mock
     });
 
-    it('should handle malformed JEXL expressions gracefully', async () => {
+    it('should handle malformed expressions gracefully', async () => {
       const conditions: FailureConditions = {
         valid_condition: 'metadata.totalIssues > 0',
         invalid_syntax: 'metadata.totalIssues >>', // Invalid syntax
@@ -313,7 +313,7 @@ describe('FailureConditionEvaluator', () => {
 
       const invalidResult = results.find(r => r.conditionName === 'invalid_syntax');
       expect(invalidResult?.failed).toBe(false);
-      expect(invalidResult?.error).toContain('JEXL evaluation error');
+      expect(invalidResult?.error).toContain('Expression evaluation error');
 
       const undefinedResult = results.find(r => r.conditionName === 'undefined_property');
       expect(undefinedResult?.failed).toBe(false); // undefined > 0 is false

@@ -8,7 +8,7 @@
 export type FailureConditionSeverity = 'error' | 'warning' | 'info';
 
 /**
- * Simple failure condition - just a JEXL expression
+ * Simple failure condition - just an expression string
  */
 export type SimpleFailureCondition = string;
 
@@ -16,7 +16,7 @@ export type SimpleFailureCondition = string;
  * Complex failure condition with additional metadata
  */
 export interface ComplexFailureCondition {
-  /** JEXL expression to evaluate */
+  /** Expression to evaluate using Function Constructor */
   condition: string;
   /** Human-readable message when condition is met */
   message?: string;
@@ -27,7 +27,7 @@ export interface ComplexFailureCondition {
 }
 
 /**
- * Failure condition - can be a simple JEXL string or complex object
+ * Failure condition - can be a simple expression string or complex object
  */
 export type FailureCondition = SimpleFailureCondition | ComplexFailureCondition;
 
@@ -39,7 +39,7 @@ export interface FailureConditions {
 }
 
 /**
- * Context object available to JEXL expressions for failure condition evaluation
+ * Context object available to expressions for failure condition evaluation
  */
 export interface FailureConditionContext {
   /** Check results */
@@ -101,7 +101,7 @@ export interface FailureConditionResult {
   conditionName: string;
   /** Whether the condition evaluated to true (failure) */
   failed: boolean;
-  /** The JEXL expression that was evaluated */
+  /** The expression that was evaluated */
   expression: string;
   /** Human-readable message */
   message?: string;

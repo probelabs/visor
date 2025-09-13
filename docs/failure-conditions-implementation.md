@@ -4,19 +4,19 @@ This document provides a complete overview of the enhanced failure condition con
 
 ## Overview
 
-The enhanced failure condition system allows users to define flexible, powerful conditions using JEXL expressions that determine when code reviews should fail or generate warnings. It supports both global conditions (applied to all checks) and check-specific conditions, with comprehensive metadata access.
+The enhanced failure condition system allows users to define flexible, powerful conditions using JavaScript expressions that determine when code reviews should fail or generate warnings. It supports both global conditions (applied to all checks) and check-specific conditions, with comprehensive metadata access.
 
 ## Architecture
 
 ### Key Components
 
 1. **FailureConditionEvaluator** (`src/failure-condition-evaluator.ts`)
-   - Core JEXL evaluation engine with custom helper functions
+   - Core expression evaluation engine using Function Constructor with custom helper functions
    - Processes conditions and generates structured results
 
 2. **Enhanced Configuration Types** (`src/types/config.ts`)
    - TypeScript interfaces for failure conditions
-   - Context object definition for JEXL expressions
+   - Context object definition for expression evaluation
 
 3. **CheckExecutionEngine Integration** (`src/check-execution-engine.ts`)
    - Integration with existing check execution pipeline

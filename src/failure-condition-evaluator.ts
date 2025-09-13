@@ -1,8 +1,7 @@
 /**
- * Failure condition evaluation engine using JEXL expressions
+ * Failure condition evaluation engine using Function Constructor for secure expression evaluation
  */
 
-const jexl = require('jexl');
 import { ReviewSummary } from './reviewer';
 import {
   FailureConditions,
@@ -13,124 +12,11 @@ import {
 } from './types/config';
 
 /**
- * Evaluates failure conditions using JEXL expressions
+ * Evaluates failure conditions using Function Constructor for secure evaluation
  */
 export class FailureConditionEvaluator {
-  private jexlEngine: any;
-
   constructor() {
-    this.jexlEngine = jexl;
-    this.setupJexlExtensions();
-  }
-
-  /**
-   * Setup custom JEXL extensions for array operations and utility functions
-   * Designed to mirror GitHub Actions expression functions for familiarity
-   */
-  private setupJexlExtensions(): void {
-    try {
-      // GitHub Actions-like contains() function
-      this.jexlEngine.addFunction('contains', (haystack: any, needle: any) => {
-        if (typeof haystack === 'string') {
-          return haystack.includes(String(needle));
-        }
-        if (Array.isArray(haystack)) {
-          return haystack.includes(needle);
-        }
-        return false;
-      });
-
-      // GitHub Actions-like startsWith() function
-      this.jexlEngine.addFunction('startsWith', (str: string, prefix: string) => {
-        if (typeof str !== 'string') return false;
-        return str.startsWith(prefix);
-      });
-
-      // GitHub Actions-like endsWith() function
-      this.jexlEngine.addFunction('endsWith', (str: string, suffix: string) => {
-        if (typeof str !== 'string') return false;
-        return str.endsWith(suffix);
-      });
-
-      // GitHub Actions-like always() - always true
-      this.jexlEngine.addFunction('always', () => true);
-
-      // GitHub Actions-like success() - check if check succeeded (no critical/error issues)
-      this.jexlEngine.addTransform('success', (val: any) => {
-        // If called on metadata object, check for no critical issues
-        if (val && typeof val === 'object' && 'criticalIssues' in val) {
-          return val.criticalIssues === 0 && val.errorIssues === 0;
-        }
-        // Default to checking if value is truthy
-        return !val || val === 0;
-      });
-
-      // GitHub Actions-like failure() - check if check failed (has critical/error issues)
-      this.jexlEngine.addTransform('failure', (val: any) => {
-        // If called on metadata object, check for critical issues
-        if (val && typeof val === 'object' && 'criticalIssues' in val) {
-          return val.criticalIssues > 0 || val.errorIssues > 0;
-        }
-        // Default to checking if value indicates failure
-        return Boolean(val);
-      });
-
-      // Also add as functions for standalone use
-      this.jexlEngine.addFunction('success', () => {
-        // This will be used in context: metadata|success()
-        return false; // Requires context via transform
-      });
-
-      this.jexlEngine.addFunction('failure', () => {
-        // This will be used in context: metadata|failure()
-        return false; // Requires context via transform
-      });
-
-      // Custom helper: check if any issue matches criteria (more intuitive than array filters)
-      this.jexlEngine.addFunction('hasIssue', (issues: any[], field: string, value: any) => {
-        if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue[field] === value);
-      });
-
-      // Custom helper: count matching issues
-      this.jexlEngine.addFunction('countIssues', (issues: any[], field: string, value: any) => {
-        if (!Array.isArray(issues)) return 0;
-        return issues.filter(issue => issue[field] === value).length;
-      });
-
-      // Custom helper: check if any file path contains text
-      this.jexlEngine.addFunction('hasFileMatching', (issues: any[], pattern: string) => {
-        if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue.file && issue.file.includes(pattern));
-      });
-
-      // Helper function to get array length (JEXL doesn't support .length natively)
-      this.jexlEngine.addFunction('length', (arr: any) => {
-        if (Array.isArray(arr)) return arr.length;
-        if (typeof arr === 'string') return arr.length;
-        if (arr && typeof arr === 'object') return Object.keys(arr).length;
-        return 0;
-      });
-
-      // Deprecated functions for backward compatibility
-      this.jexlEngine.addFunction('hasIssueWith', (issues: any[], field: string, value: any) => {
-        if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue[field] === value);
-      });
-
-      this.jexlEngine.addFunction('hasSuggestion', (suggestions: string[], text: string) => {
-        if (!Array.isArray(suggestions)) return false;
-        return suggestions.some(s => s.toLowerCase().includes(text.toLowerCase()));
-      });
-
-      this.jexlEngine.addFunction('hasFileWith', (issues: any[], text: string) => {
-        if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue.file && issue.file.includes(text));
-      });
-    } catch {
-      // Fallback if addFunction is not available - use basic JEXL expressions only
-      console.warn('JEXL extensions not available, using basic expressions only');
-    }
+    // No initialization needed for Function Constructor approach
   }
 
   /**
@@ -146,8 +32,7 @@ export class FailureConditionEvaluator {
     const context = this.buildEvaluationContext(checkName, checkSchema, checkGroup, reviewSummary);
 
     try {
-      const result = await this.jexlEngine.eval(expression, context);
-      return Boolean(result);
+      return this.evaluateExpression(expression, context);
     } catch (error) {
       console.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
@@ -201,8 +86,7 @@ export class FailureConditionEvaluator {
     };
 
     try {
-      const result = await this.jexlEngine.eval(expression, context);
-      return Boolean(result);
+      return this.evaluateExpression(expression, context);
     } catch (error) {
       console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
       // Default to running the check if evaluation fails
@@ -292,8 +176,7 @@ export class FailureConditionEvaluator {
     const config = this.extractConditionConfig(condition);
 
     try {
-      const result = await this.jexlEngine.eval(expression, context);
-      const failed = Boolean(result);
+      const failed = this.evaluateExpression(expression, context);
 
       return {
         conditionName,
@@ -305,13 +188,169 @@ export class FailureConditionEvaluator {
       };
     } catch (error) {
       throw new Error(
-        `JEXL evaluation error: ${error instanceof Error ? error.message : String(error)}`
+        `Expression evaluation error: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
   /**
-   * Extract the JEXL expression from a failure condition
+   * Secure expression evaluation using Function Constructor
+   * Supports the same GitHub Actions-style functions as the previous JEXL implementation
+   */
+  private evaluateExpression(condition: string, context: any): boolean {
+    try {
+      // Helper functions for GitHub Actions-style expressions
+      const contains = (searchString: string, searchValue: string): boolean =>
+        String(searchString).toLowerCase().includes(String(searchValue).toLowerCase());
+
+      const startsWith = (searchString: string, searchValue: string): boolean =>
+        String(searchString).toLowerCase().startsWith(String(searchValue).toLowerCase());
+
+      const endsWith = (searchString: string, searchValue: string): boolean =>
+        String(searchString).toLowerCase().endsWith(String(searchValue).toLowerCase());
+
+      const length = (value: any): number => {
+        if (typeof value === 'string' || Array.isArray(value)) {
+          return value.length;
+        }
+        if (value && typeof value === 'object') {
+          return Object.keys(value).length;
+        }
+        return 0;
+      };
+
+      const always = (): boolean => true;
+      const success = (): boolean => true;
+      const failure = (): boolean => false;
+
+      // Helper functions for array operations
+      const hasIssue = (issues: any[], field: string, value: any): boolean => {
+        if (!Array.isArray(issues)) return false;
+        return issues.some(issue => issue[field] === value);
+      };
+
+      const countIssues = (issues: any[], field: string, value: any): number => {
+        if (!Array.isArray(issues)) return 0;
+        return issues.filter(issue => issue[field] === value).length;
+      };
+
+      const hasFileMatching = (issues: any[], pattern: string): boolean => {
+        if (!Array.isArray(issues)) return false;
+        return issues.some(issue => issue.file && issue.file.includes(pattern));
+      };
+
+      const hasSuggestion = (suggestions: string[], text: string): boolean => {
+        if (!Array.isArray(suggestions)) return false;
+        return suggestions.some(s => s.toLowerCase().includes(text.toLowerCase()));
+      };
+
+      // Backward compatibility aliases
+      const hasIssueWith = hasIssue;
+      const hasFileWith = hasFileMatching;
+
+      // Extract context variables
+      const issues = context.issues || [];
+      const suggestions = context.suggestions || [];
+      const metadata = context.metadata || {};
+      const criticalIssues = metadata.criticalIssues || 0;
+      const errorIssues = metadata.errorIssues || 0;
+      const totalIssues = metadata.totalIssues || 0;
+      const warningIssues = metadata.warningIssues || 0;
+      const infoIssues = metadata.infoIssues || 0;
+
+      // Additional context for 'if' conditions
+      const checkName = context.checkName || '';
+      const branch = context.branch || 'unknown';
+      const baseBranch = context.baseBranch || 'main';
+      const filesChanged = context.filesChanged || [];
+      const filesCount = context.filesCount || 0;
+      const event = context.event || 'manual';
+      const env = context.env || {};
+      const outputs = context.outputs || {};
+      const debug = context.debug || null;
+
+      // Create a sandboxed function with only allowed variables and functions
+      const func = new Function(
+        // Context variables
+        'issues',
+        'suggestions',
+        'metadata',
+        'criticalIssues',
+        'errorIssues',
+        'totalIssues',
+        'warningIssues',
+        'infoIssues',
+        // If condition context
+        'checkName',
+        'branch',
+        'baseBranch',
+        'filesChanged',
+        'filesCount',
+        'event',
+        'env',
+        'outputs',
+        'debug',
+        // Helper functions
+        'contains',
+        'startsWith',
+        'endsWith',
+        'length',
+        'always',
+        'success',
+        'failure',
+        'hasIssue',
+        'countIssues',
+        'hasFileMatching',
+        'hasSuggestion',
+        'hasIssueWith',
+        'hasFileWith',
+        // Allow Math for calculations
+        'Math',
+        `"use strict"; return ${condition.trim()}`
+      );
+
+      return func(
+        issues,
+        suggestions,
+        metadata,
+        criticalIssues,
+        errorIssues,
+        totalIssues,
+        warningIssues,
+        infoIssues,
+        checkName,
+        branch,
+        baseBranch,
+        filesChanged,
+        filesCount,
+        event,
+        env,
+        outputs,
+        debug,
+        contains,
+        startsWith,
+        endsWith,
+        length,
+        always,
+        success,
+        failure,
+        hasIssue,
+        countIssues,
+        hasFileMatching,
+        hasSuggestion,
+        hasIssueWith,
+        hasFileWith,
+        Math
+      );
+    } catch (error) {
+      console.error('❌ Failed to evaluate expression:', condition, error);
+      // Re-throw the error so it can be caught at a higher level for error reporting
+      throw error;
+    }
+  }
+
+  /**
+   * Extract the expression from a failure condition
    */
   private extractExpression(condition: FailureCondition): string {
     if (typeof condition === 'string') {
@@ -339,7 +378,7 @@ export class FailureConditionEvaluator {
   }
 
   /**
-   * Build the evaluation context for JEXL expressions
+   * Build the evaluation context for expressions
    */
   private buildEvaluationContext(
     checkName: string,

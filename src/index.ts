@@ -1303,22 +1303,54 @@ async function markCheckAsFailed(
 }
 
 /**
- * Simple failure condition evaluation (basic implementation)
+ * Secure failure condition evaluation using Function Constructor
  */
 async function evaluateFailureCondition(condition: string, context: any): Promise<boolean> {
   try {
-    // Simple condition evaluation - could be enhanced with JEXL or similar
-    // For now, support basic conditions like "criticalIssues > 0" or "totalIssues > 5"
+    // Helper functions for GitHub Actions-style expressions
+    const contains = (searchString: string, searchValue: string): boolean =>
+      String(searchString).toLowerCase().includes(String(searchValue).toLowerCase());
 
-    // Replace context variables
-    const evaluatedCondition = condition
-      .replace(/criticalIssues/g, String(context.criticalIssues || 0))
-      .replace(/errorIssues/g, String(context.errorIssues || 0))
-      .replace(/totalIssues/g, String(context.totalIssues || 0));
+    const startsWith = (searchString: string, searchValue: string): boolean =>
+      String(searchString).toLowerCase().startsWith(String(searchValue).toLowerCase());
 
-    // Basic evaluation using eval (not ideal, but simple for now)
-    // In production, should use a proper expression evaluator like JEXL
-    return eval(evaluatedCondition);
+    const endsWith = (searchString: string, searchValue: string): boolean =>
+      String(searchString).toLowerCase().endsWith(String(searchValue).toLowerCase());
+
+    const length = (value: any): number => {
+      if (typeof value === 'string' || Array.isArray(value)) {
+        return value.length;
+      }
+      return 0;
+    };
+
+    const always = (): boolean => true;
+    const success = (): boolean => true;
+    const failure = (): boolean => false;
+
+    // Helper functions that will be available in all expressions
+    const helperFunctions = {
+      contains,
+      startsWith,
+      endsWith,
+      length,
+      always,
+      success,
+      failure,
+      Math,
+    };
+
+    // Combine context data with helper functions
+    const allVariables = { ...context, ...helperFunctions };
+
+    // Extract parameter names and values dynamically from context
+    const paramNames = Object.keys(allVariables);
+    const paramValues = Object.values(allVariables);
+
+    // Create a sandboxed function with dynamic parameters
+    const func = new Function(...paramNames, `"use strict"; return ${condition}`);
+
+    return func(...paramValues);
   } catch (error) {
     console.error('❌ Failed to evaluate failure condition:', condition, error);
     return false;

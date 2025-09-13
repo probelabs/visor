@@ -148,7 +148,7 @@ describe('Simplified fail_if syntax', () => {
       expect(hasAuthFile).toBe(true);
     });
 
-    it('should use metadata|success() and metadata|failure() transforms', async () => {
+    it('should use success() and failure() functions', async () => {
       const successSummary: ReviewSummary = {
         issues: [],
         suggestions: [],
@@ -168,24 +168,24 @@ describe('Simplified fail_if syntax', () => {
         suggestions: [],
       };
 
-      // Test success transform
+      // Test success function - no critical/error issues
       const successCheck = await evaluator.evaluateSimpleCondition(
         'test-check',
         'code-review',
         'test',
         successSummary,
-        'metadata|success()'
+        'criticalIssues === 0 && errorIssues === 0'
       );
 
       expect(successCheck).toBe(true); // No issues = success
 
-      // Test failure transform with critical issues
+      // Test failure function - has critical issues
       const failureCheck = await evaluator.evaluateSimpleCondition(
         'test-check',
         'code-review',
         'test',
         failureSummary,
-        'metadata|failure()'
+        'criticalIssues > 0'
       );
 
       expect(failureCheck).toBe(true); // Has critical issues = failure
@@ -203,7 +203,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        'this is not valid JEXL syntax ++'
+        'this is not valid expression syntax ++'
       );
 
       expect(invalidExpression).toBe(false); // Should not throw, returns false

@@ -2,9 +2,8 @@
  * E2E test for complete failure conditions workflow
  */
 
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
-import { existsSync } from 'fs';
 import { join } from 'path';
 
 describe('Failure Conditions E2E Workflow', () => {
@@ -69,44 +68,37 @@ function anotherFunction(param) {
     }
   });
 
-  it.skip('should have fail-fast option in CLI help', async () => {
-    const cliPath = join(__dirname, '..', '..', 'dist', 'cli-main.js');
+  it('should have fail-fast option in CLI help', async () => {
+    const { main } = await import('../../src/cli-main');
 
-    // Check if file exists
-    if (!existsSync(cliPath)) {
-      throw new Error(`CLI file does not exist at: ${cliPath}`);
-    }
+    // Mock process.argv and console.log to capture help output
+    const originalArgv = process.argv;
+    const originalExit = process.exit;
+    const originalConsoleLog = console.log;
 
-    let output: string;
+    let helpOutput = '';
+    const mockConsoleLog = jest.fn((message: string) => {
+      helpOutput += message + '\n';
+    });
+    const mockProcessExit = jest.fn();
+
     try {
-      // Use execSync for simpler execution
-      output = execSync(`node "${cliPath}" --help`, {
-        cwd: join(__dirname, '..', '..'),
-        encoding: 'utf8',
-        timeout: 10000,
-        stdio: 'pipe',
-      });
-    } catch (error: any) {
-      console.error('Error executing CLI:', error.message);
-      if (error.stdout) {
-        console.log('Error stdout:', error.stdout.toString());
-      }
-      if (error.stderr) {
-        console.log('Error stderr:', error.stderr.toString());
-      }
-      // Use the stdout from error if available (help commands often use exit code 0)
-      output = error.stdout?.toString() || '';
-      if (!output) {
-        throw new Error(`CLI execution failed: ${error.message}`);
-      }
+      process.argv = ['node', 'visor', '--help'];
+      console.log = mockConsoleLog;
+      process.exit = mockProcessExit as any;
+
+      await main();
+
+      expect(mockConsoleLog).toHaveBeenCalled();
+      expect(helpOutput).toContain('Visor - AI-powered code review tool');
+      expect(helpOutput).toContain('--fail-fast');
+      expect(helpOutput).toContain('Stop execution on first failure condition');
+      expect(mockProcessExit).toHaveBeenCalledWith(0);
+    } finally {
+      process.argv = originalArgv;
+      process.exit = originalExit;
+      console.log = originalConsoleLog;
     }
-
-    console.log('CLI output length:', output.length);
-    console.log('CLI output first 200 chars:', JSON.stringify(output.substring(0, 200)));
-
-    expect(output).toContain('Visor - AI-powered code review tool');
-    expect(output).toContain('--fail-fast');
-    expect(output).toContain('Stop execution on first failure condition');
   }, 15000);
 
   it('should handle invalid failure conditions gracefully', async () => {
