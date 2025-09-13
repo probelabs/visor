@@ -387,6 +387,37 @@ checks:
 
 Visor supports advanced prompt features including Liquid templates, file-based prompts, and access to event context and previous check results.
 
+### Smart Auto-Detection
+
+Visor automatically detects whether your prompt is a file path or inline content:
+
+```yaml
+checks:
+  security:
+    type: ai
+    # File path - automatically detected
+    prompt: ./templates/security-analysis.liquid
+    
+  performance:
+    type: ai
+    # Inline string - automatically detected
+    prompt: "Analyze this code for performance issues"
+    
+  quality:
+    type: ai
+    # Multi-line string - automatically detected
+    prompt: |
+      Review this code for:
+      - Code quality issues
+      - Best practices violations
+      - Maintainability concerns
+```
+
+**Auto-detection rules:**
+- ✅ **File paths**: `./file.liquid`, `../templates/prompt.md`, `/absolute/path/file.txt`
+- ✅ **Inline content**: `Analyze this code`, `Review for security issues`
+- ✅ **Multi-line**: Uses YAML `|` or `>` syntax for longer prompts
+
 ### Liquid Template Support
 
 Prompts can use [Liquid templating](https://shopify.github.io/liquid/) with rich context data:
@@ -434,14 +465,12 @@ Store prompts in external files for better organization:
 checks:
   security-review:
     type: ai
-    prompt:
-      file: "./prompts/security-detailed.liquid"
+    prompt: ./prompts/security-detailed.liquid  # Auto-detects file path
     on: [pr_opened, pr_updated]
     
   architecture-check:
     type: ai  
-    prompt:
-      file: "/absolute/path/to/architecture-prompt.liquid"
+    prompt: /absolute/path/to/architecture-prompt.liquid  # Auto-detects file path
     on: [pr_opened]
 ```
 
@@ -514,7 +543,7 @@ checks:
     type: ai
     prompt: "Analyze security vulnerabilities..."
     template:
-      file: "./templates/security-report.liquid"
+      file: ./templates/security-report.liquid
       # OR inline content:
       # content: |
       #   # 🔒 Security Report
@@ -795,9 +824,9 @@ Add custom schemas in your config:
 ```yaml
 schemas:
   custom-metrics:
-    file: "./schemas/metrics.json"     # Local file
+    file: ./schemas/metrics.json     # Local file
   compliance:  
-    url: "https://example.com/compliance.json"  # Remote URL
+    url: https://example.com/compliance.json  # Remote URL
 
 checks:
   metrics:
