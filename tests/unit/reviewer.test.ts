@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { PRReviewer } from '../../src/reviewer';
+import { PRReviewer, ReviewIssue, ReviewSummary } from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
 // Mock CheckExecutionEngine
@@ -425,15 +425,13 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain('### Style Issues (1)');
       expect(callArgs.body).toContain('<table>');
       expect(callArgs.body).toContain('<th>Severity</th>');
-      expect(callArgs.body).toContain('<th>File</th>');
-      expect(callArgs.body).toContain('<th>Line</th>');
+      expect(callArgs.body).toContain('<th>Location</th>');
       expect(callArgs.body).toContain('<th>Issue</th>');
       expect(callArgs.body).not.toContain('<th>Category</th>'); // Category column removed since we have separate tables
       // Should not contain the old summary sections
       expect(callArgs.body).not.toContain('📊 Summary');
       expect(callArgs.body).not.toContain('**Total Issues Found:**');
-      expect(callArgs.body).toContain('<code>src/test.ts</code>');
-      expect(callArgs.body).toContain('<td>10</td>');
+      expect(callArgs.body).toContain('<code>src/test.ts:10</code>');
     });
 
     test('should format comment with different severity levels', async () => {
@@ -753,6 +751,45 @@ describe('PRReviewer', () => {
         expect(styleSection[0]).toContain('Inconsistent formatting');
         expect(styleSection[0]).not.toContain('Authentication bypass'); // Security issue should not be here
       }
+    });
+
+    test('should generate GitHub links for files and line numbers', async () => {
+      // Mock listComments to return empty (so it creates new comment)
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({
+        data: {
+          id: 126,
+          body: 'Test comment',
+          user: { login: 'visor-bot' },
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+      });
+
+      const issueWithLine: ReviewIssue = {
+        file: 'src/components/Button.tsx',
+        line: 42,
+        endLine: 45,
+        message: 'Missing prop validation',
+        severity: 'warning',
+        category: 'logic',
+        ruleId: 'quality/prop-validation',
+      };
+
+      const summary: ReviewSummary = {
+        issues: [issueWithLine],
+        suggestions: [],
+      };
+
+      await reviewer.postReviewComment('owner', 'repo', 1, summary, {});
+
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalled();
+      const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
+
+      // Should contain GitHub link with file and line combined
+      expect(callArgs.body).toContain('href="https://github.com/owner/repo/pull/1/files#diff-');
+      expect(callArgs.body).toContain('<code>src/components/Button.tsx:42-45</code></a>');
+      expect(callArgs.body).toContain('R42'); // R for right side (added lines) in the URL
     });
 
     test('should include category-specific recommendations', async () => {

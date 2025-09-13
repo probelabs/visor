@@ -6,6 +6,7 @@ import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
 import { CustomTemplateConfig } from './types/config';
+import * as crypto from 'crypto';
 
 export interface ReviewIssue {
   // Location
@@ -138,7 +139,11 @@ export class PRReviewer {
 
     // If no groups or only one group, use the original single comment approach
     if (Object.keys(issuesByGroup).length <= 1) {
-      const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
+      const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
+        owner,
+        repo,
+        prNumber,
+      });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId: options.commentId,
@@ -161,7 +166,11 @@ export class PRReviewer {
         ? `${options.commentId}-${groupName}`
         : `visor-${groupName}`;
 
-      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
+      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
+        owner,
+        repo,
+        prNumber,
+      });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId: groupCommentId,
@@ -174,7 +183,8 @@ export class PRReviewer {
 
   private async formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
-    _options: ReviewOptions
+    _options: ReviewOptions,
+    githubContext?: { owner: string; repo: string; prNumber: number }
   ): Promise<string> {
     const totalIssues = calculateTotalIssues(summary.issues);
 
@@ -186,7 +196,7 @@ export class PRReviewer {
     } else {
       comment += `## 🔍 Code Analysis Results\n\n`;
       // Use new schema-template system for content generation
-      const templateContent = await this.renderWithSchemaTemplate(summary);
+      const templateContent = await this.renderWithSchemaTemplate(summary, githubContext);
       comment += templateContent;
     }
 
@@ -202,7 +212,10 @@ export class PRReviewer {
     return comment;
   }
 
-  private async renderWithSchemaTemplate(summary: ReviewSummary): Promise<string> {
+  private async renderWithSchemaTemplate(
+    summary: ReviewSummary,
+    githubContext?: { owner: string; repo: string; prNumber: number }
+  ): Promise<string> {
     try {
       // Group issues by check name and render each check separately
       const issuesByCheck = this.groupIssuesByCheck(summary.issues);
@@ -220,7 +233,8 @@ export class PRReviewer {
           checkName,
           checkIssues,
           checkSchema,
-          customTemplate
+          customTemplate,
+          githubContext
         );
         renderedSections.push(renderedSection);
       }
@@ -238,11 +252,36 @@ export class PRReviewer {
     }
   }
 
+  private generateGitHubDiffHash(filePath: string): string {
+    // GitHub uses SHA256 hash of the file path for diff anchors
+    return crypto.createHash('sha256').update(filePath).digest('hex');
+  }
+
+  private enhanceIssuesWithGitHubLinks(
+    issues: ReviewIssue[],
+    githubContext?: { owner: string; repo: string; prNumber: number }
+  ): any[] {
+    if (!githubContext) {
+      return issues;
+    }
+
+    return issues.map(issue => ({
+      ...issue,
+      githubUrl: issue.line
+        ? `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files#diff-${this.generateGitHubDiffHash(
+            issue.file
+          )}R${issue.line}`
+        : `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files`,
+      fileHash: this.generateGitHubDiffHash(issue.file),
+    }));
+  }
+
   private async renderSingleCheckTemplate(
     checkName: string,
     issues: ReviewIssue[],
     schema: string,
-    customTemplate?: CustomTemplateConfig
+    customTemplate?: CustomTemplateConfig,
+    githubContext?: { owner: string; repo: string; prNumber: number }
   ): Promise<string> {
     const liquid = new Liquid({
       // Configure Liquid to handle whitespace better
@@ -270,19 +309,29 @@ export class PRReviewer {
       templateContent = await fs.readFile(templatePath, 'utf-8');
     }
 
-    let templateData: { content?: string; issues?: ReviewIssue[]; checkName: string };
+    // Enhance issues with GitHub links if context is available
+    const enhancedIssues = this.enhanceIssuesWithGitHubLinks(issues, githubContext);
+
+    let templateData: {
+      content?: string;
+      issues?: any[];
+      checkName: string;
+      github?: { owner: string; repo: string; prNumber: number; branch?: string };
+    };
 
     if (schema === 'plain') {
       // For plain schema, pass the message content directly
       templateData = {
         content: issues.length > 0 ? issues[0].message : 'No content available',
         checkName: checkName,
+        github: githubContext,
       };
     } else {
-      // For code-review schema, pass issues directly (no more checkName extraction needed)
+      // For code-review schema, pass enhanced issues with GitHub links
       templateData = {
-        issues: issues,
+        issues: enhancedIssues,
         checkName: checkName,
+        github: githubContext,
       };
     }
 

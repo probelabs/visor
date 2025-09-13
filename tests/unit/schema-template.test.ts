@@ -159,8 +159,7 @@ describe('Schema-Template System', () => {
 
       // Check that it renders as HTML table
       expect(rendered).toContain('<table');
-      expect(rendered).toContain('<th>File</th>');
-      expect(rendered).toContain('<th>Line</th>');
+      expect(rendered).toContain('<th>Location</th>');
       expect(rendered).toContain('<th>Issue</th>');
       expect(rendered).toContain('<th>Severity</th>');
 

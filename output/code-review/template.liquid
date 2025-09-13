@@ -3,8 +3,7 @@
   <thead>
     <tr>
       <th>Severity</th>
-      <th>File</th>
-      <th>Line</th>
+      <th>Location</th>
       <th>Issue</th>
     </tr>
   </thead>
@@ -14,8 +13,7 @@
     <tr>
       <td>{%- case issue.severity -%}
 {%- when 'critical' -%}🔴 Critical{%- when 'error' -%}🟠 Error{%- when 'warning' -%}🟡 Warning{%- when 'info' -%}🟢 Info{%- else -%}📝 {{ issue.severity | capitalize | escape }}{%- endcase -%}</td>
-      <td><code>{{ issue.file | escape }}</code></td>
-      <td>{{ issue.line }}{%- if issue.endLine -%}-{{ issue.endLine }}{%- endif -%}</td>
+      <td>{%- if issue.githubUrl -%}<a href="{{ issue.githubUrl }}"><code>{{ issue.file | escape }}:{{ issue.line }}{%- if issue.endLine and issue.endLine != issue.line -%}-{{ issue.endLine }}{%- endif -%}</code></a>{%- else -%}<code>{{ issue.file | escape }}:{{ issue.line }}{%- if issue.endLine and issue.endLine != issue.line -%}-{{ issue.endLine }}{%- endif -%}</code>{%- endif -%}</td>
       <td><div>{{ issue.message | escape }}{%- if issue.suggestion -%}
         <details><summary>💡 <strong>Suggestion</strong></summary>{{ issue.suggestion | escape }}</details>
 {%- endif -%}
