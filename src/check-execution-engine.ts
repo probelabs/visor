@@ -397,12 +397,13 @@ export class CheckExecutionEngine {
           const result = await provider.execute(prInfo, providerConfig, dependencyResults);
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
-          // Add group and schema info to issues from config
+          // Add group, schema, and template info to issues from config
           const enrichedIssues = result.issues.map(issue => ({
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
             schema: checkConfig.schema,
+            template: checkConfig.template,
           }));
 
           const enrichedResult = {
@@ -531,6 +532,7 @@ export class CheckExecutionEngine {
           ruleId: `${checkName}/${issue.ruleId}`,
           group: checkConfig.group,
           schema: checkConfig.schema,
+          template: checkConfig.template,
         }));
 
         const enrichedResult = {

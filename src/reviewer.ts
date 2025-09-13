@@ -5,6 +5,7 @@ import { AIReviewService, AIDebugInfo } from './ai-review-service';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
+import { CustomTemplateConfig } from './types/config';
 
 export interface ReviewIssue {
   // Location
@@ -21,6 +22,8 @@ export interface ReviewIssue {
   // Group and schema for comment separation
   group?: string;
   schema?: string;
+  // Custom template configuration
+  template?: CustomTemplateConfig;
 
   // Optional enhancement
   suggestion?: string;
@@ -212,10 +215,12 @@ export class PRReviewer {
 
       for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
         const checkSchema = checkIssues[0]?.schema || 'code-review';
+        const customTemplate = checkIssues[0]?.template;
         const renderedSection = await this.renderSingleCheckTemplate(
           checkName,
           checkIssues,
-          checkSchema
+          checkSchema,
+          customTemplate
         );
         renderedSections.push(renderedSection);
       }
@@ -236,7 +241,8 @@ export class PRReviewer {
   private async renderSingleCheckTemplate(
     checkName: string,
     issues: ReviewIssue[],
-    schema: string
+    schema: string,
+    customTemplate?: CustomTemplateConfig
   ): Promise<string> {
     const liquid = new Liquid({
       // Configure Liquid to handle whitespace better
@@ -247,15 +253,22 @@ export class PRReviewer {
       greedy: false, // Don't be greedy with whitespace trimming
     });
 
-    // Sanitize schema name to prevent path traversal attacks
-    const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
-    if (!sanitizedSchema) {
-      throw new Error('Invalid schema name');
-    }
+    // Load template content based on configuration
+    let templateContent: string;
 
-    // Load the appropriate template based on schema
-    const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
-    const templateContent = await fs.readFile(templatePath, 'utf-8');
+    if (customTemplate) {
+      templateContent = await this.loadCustomTemplate(customTemplate);
+    } else {
+      // Sanitize schema name to prevent path traversal attacks
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchema) {
+        throw new Error('Invalid schema name');
+      }
+
+      // Load the appropriate template based on schema
+      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs.readFile(templatePath, 'utf-8');
+    }
 
     let templateData: { content?: string; issues?: ReviewIssue[]; checkName: string };
 
@@ -752,5 +765,70 @@ export class PRReviewer {
     };
 
     return langMap[fileExtension] || fileExtension;
+  }
+
+  /**
+   * Load custom template content from file or raw content
+   */
+  private async loadCustomTemplate(config: CustomTemplateConfig): Promise<string> {
+    if (config.content) {
+      // Use raw template content directly
+      return config.content;
+    }
+
+    if (config.file) {
+      // Load template from file
+      return await this.loadTemplateFromFile(config.file);
+    }
+
+    throw new Error('Custom template configuration must specify either "file" or "content"');
+  }
+
+  /**
+   * Safely load template from file with security checks
+   */
+  private async loadTemplateFromFile(templatePath: string): Promise<string> {
+    // Resolve the path (handles both relative and absolute paths)
+    let resolvedPath: string;
+
+    if (path.isAbsolute(templatePath)) {
+      // Absolute path - use as-is but validate it's not trying to escape expected directories
+      resolvedPath = path.normalize(templatePath);
+    } else {
+      // Relative path - resolve relative to current working directory
+      resolvedPath = path.resolve(process.cwd(), templatePath);
+    }
+
+    // Security: Normalize and check for path traversal attempts
+    const normalizedPath = path.normalize(resolvedPath);
+
+    // Security: For relative paths, ensure they don't escape the current directory
+    if (!path.isAbsolute(templatePath)) {
+      const currentDir = path.resolve(process.cwd());
+      if (!normalizedPath.startsWith(currentDir)) {
+        throw new Error('Invalid template file path: path traversal detected');
+      }
+    }
+
+    // Security: Additional check for obvious path traversal patterns
+    if (templatePath.includes('../..')) {
+      throw new Error('Invalid template file path: path traversal detected');
+    }
+
+    // Security: Check file extension
+    if (!normalizedPath.endsWith('.liquid')) {
+      throw new Error('Invalid template file: must have .liquid extension');
+    }
+
+    try {
+      const templateContent = await fs.readFile(normalizedPath, 'utf-8');
+      return templateContent;
+    } catch (error) {
+      throw new Error(
+        `Failed to load custom template from ${normalizedPath}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
   }
 }

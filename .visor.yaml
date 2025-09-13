@@ -1,111 +1,237 @@
 version: "1.0"
 
+# General-purpose code review configuration suitable for any project
+# This configuration provides comprehensive analysis while being language-agnostic
+# and adaptable to different project types and coding standards.
+
 checks:
+  # Security analysis - Critical for all projects
   security:
     type: ai
     group: code-review
     schema: code-review
-    prompt: |
-      Perform comprehensive security analysis focusing on:
-      - SQL injection vulnerabilities
-      - XSS attack vectors  
-      - Authentication/authorization issues
-      - Sensitive data exposure
-      - Input validation and sanitization
-      - Unsafe eval() usage
-      - Environment variable security
-      
-      Return results in JSON format matching the code-review schema.
+    prompt:
+      content: |
+        Please perform a comprehensive security analysis of the code changes in this pull request.
+        
+        Use the following template to structure your analysis:
+
+        # Security Analysis for PR {{ pr.number }}: {{ pr.title }}
+
+        ## Context
+        - Repository: {{ event.repository.fullName or "project" }}
+        - Files changed: {{ files.size }}
+        - Author: {{ pr.author }}
+
+        ## File Analysis
+        {% for ext, files in utils.filesByExtension %}
+        ### {{ ext | upcase }} Files ({{ files.size }})
+        {% for file in files %}
+        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
+        {% endfor %}
+        {% endfor %}
+
+        ## Instructions
+        Follow these security review guidelines and analyze for vulnerabilities:
+
+        **Input Validation & Injection Attacks:**
+        - SQL injection in database queries
+        - XSS vulnerabilities in user input handling
+        - Command injection in system calls
+        - Path traversal in file operations
+        - LDAP injection in authentication
+
+        **Authentication & Authorization:**
+        - Weak authentication mechanisms
+        - Session management flaws
+        - Access control bypasses
+        - Privilege escalation opportunities
+        - JWT token handling issues
+
+        **Data Protection:**
+        - Sensitive data exposure in logs/errors
+        - Unencrypted data storage
+        - Insecure data transmission
+        - API key or credential leaks
+        - Privacy regulation compliance
+
+        **Infrastructure Security:**
+        - Insecure configurations
+        - Missing security headers
+        - Vulnerable dependencies
+        - Unsafe deserializations
+        - Resource exhaustion vulnerabilities
+
+        Provide specific findings with clear explanations and actionable remediation steps for each issue discovered.
     on: [pr_opened, pr_updated]
 
+  # Performance analysis - Important for all applications
   performance:
     type: ai
     group: code-review
     schema: code-review
-    prompt: |
-      Review for performance issues:
-      - N+1 database queries
-      - Memory leaks and excessive allocations
-      - Inefficient algorithms and data structures
-      - Missing caching opportunities
-      - Unnecessary async operations
-      - Large file processing without streaming
-      - Blocking operations in event loops
-      
-      Return results in JSON format matching the code-review schema.
+    prompt:
+      content: |
+        Please analyze the performance implications of the code changes in this pull request.
+        
+        Use the following template to organize your analysis:
+
+        # Performance Analysis for PR {{ pr.number }}
+
+        {% if utils.hasLargeChanges %}
+        ⚠️ **Large Changes Detected** - Extra attention to performance implications.
+        {% endif %}
+
+        ## Files to Analyze
+        {% for file in files %}
+        - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
+        {% endfor %}
+
+        ## Instructions
+        Review the code changes according to these performance criteria:
+
+        **Algorithm & Data Structure Efficiency:**
+        - Time complexity analysis (O(n), O(n²), etc.)
+        - Space complexity and memory usage
+        - Inefficient loops and nested operations
+        - Suboptimal data structure choices
+
+        **Database Performance:**
+        - N+1 query problems
+        - Missing database indexes
+        - Inefficient JOIN operations
+        - Large result set retrievals
+        - Transaction scope issues
+
+        **Resource Management:**
+        - Memory leaks and excessive allocations
+        - File handle management
+        - Connection pooling issues
+        - Resource cleanup patterns
+
+        **Async & Concurrency:**
+        - Blocking operations in async contexts
+        - Race conditions and deadlocks
+        - Inefficient parallel processing
+        - Thread safety concerns
+
+        **Frontend Performance (if applicable):**
+        - Bundle size impact
+        - Render-blocking operations
+        - Unnecessary re-renders
+        - Large asset optimization
+
+        Identify specific performance issues and provide optimization recommendations with expected impact.
     on: [pr_opened, pr_updated]
 
-  style:
+  # Code quality and maintainability
+  quality:
     type: ai
     group: code-review
     schema: code-review
-    prompt: |
-      Check for style and consistency issues:
-      - Naming conventions adherence
-      - Code formatting consistency
-      - Comment quality and documentation
-      - Import organization
-      - Consistent error handling patterns
-      - TypeScript best practices
-      
-      Return results in JSON format matching the code-review schema.
-    on: [pr_opened]
+    prompt:
+      content: |
+        Please evaluate the code quality and maintainability of the changes in this pull request.
+        
+        Use the following template to structure your review:
 
-  architecture:
-    type: ai
-    group: code-review
-    schema: code-review
-    prompt: |
-      Analyze architectural aspects:
-      - SOLID principles adherence
-      - Design pattern usage appropriateness
-      - Circular dependencies
-      - Module coupling and cohesion
-      - Error handling architecture
-      - Separation of concerns
-      - Code reusability and maintainability
-      
-      Return results in JSON format matching the code-review schema.
+        # Code Quality Review for PR {{ pr.number }}
+
+
+        ## Instructions
+        Assess the code quality according to these guidelines:
+
+        **Code Structure & Design:**
+        - SOLID principles adherence
+        - Design pattern appropriateness
+        - Separation of concerns
+        - Module cohesion and coupling
+        - Code organization and clarity
+
+        **Naming & Documentation:**
+        - Variable, function, and class naming clarity
+        - Comment quality and relevance
+        - API documentation completeness
+        - Code self-documentation level
+
+        **Error Handling & Reliability:**
+        - Exception handling completeness
+        - Error propagation patterns
+        - Graceful failure handling
+        - Input validation thoroughness
+        - Edge case coverage
+
+        **Testing & Maintainability:**
+        - Test coverage implications
+        - Code testability
+        - Dependencies and coupling
+        - Technical debt introduction
+        - Future maintenance considerations
+
+        **Language-Specific Best Practices:**
+        - Idiomatic code usage
+        - Framework/library best practices
+        - Type safety (if applicable)
+        - Resource management patterns
+
+        Focus on actionable improvements that enhance code maintainability and provide specific recommendations.
     on: [pr_opened, pr_updated]
 
-  # PR overview with file changes and mermaid diagram
-  full-review:
+  # PR overview with intelligent analysis
+  overview:
     type: ai
     group: pr-overview
     schema: plain
-    prompt: |
-      Create a comprehensive pull request overview with the following sections:
+    prompt:
+      content: |
+        # 📋 Pull Request Overview: {{ pr.title }}
 
-      ## 📋 Pull Request Overview
-      
-      1. **Summary**: Brief description of what this PR does based on the changes
-      2. **Files Changed**: Create a table showing modified files with their purpose
-      3. **Architecture Impact**: How these changes affect the system architecture
-      
-      ## 📊 Files Changed
-      
-      Create a markdown table with columns:
-      | File | Lines Changed | Purpose/Component |
-      |------|---------------|------------------|
-      | path/to/file | +10/-5 | Brief description of what this file does |
-      
-      ## 🏗️ Architecture Diagram
-      
-      Generate a mermaid diagram showing the relationships between the modified components:
-      
-      ```mermaid
-      graph TD
-        A[Component A] --> B[Component B]
-        B --> C[Database]
-        C --> D[API Endpoints]
-      ```
-      
-      Focus on:
-      - Components that were modified
-      - How they interact with each other
-      - Data flow between components
-      - Any new relationships introduced
-      
-      Keep the diagram clean and focused on the architectural changes.
+        {% if pr.body %}
+        ## Description
+        {{ pr.body }}
+        {% endif %}
+
+        ## Files Changed Analysis
+
+        | File | Type | Status | Changes | Impact |
+        |------|------|--------|---------|--------|
+        {% for file in files %}
+        | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status | capitalize }} | +{{ file.additions }}/-{{ file.deletions }} | {% if file.changes > 50 %}High{% elsif file.changes > 20 %}Medium{% else %}Low{% endif %} |
+        {% endfor %}
+
+        ## Architecture & Impact Assessment
+
+        Please generate a comprehensive overview and analysis of this pull request.
+        
+        Follow these instructions to create a thorough assessment:
+
+        1. **Change Impact Analysis**
+           - What this PR accomplishes
+           - Key technical changes introduced
+           - Affected system components
+
+        2. **Risk Assessment**
+           - Potential impact on system stability
+           - Deployment considerations
+           - Potential breaking changes
+
+        3. **Architecture Visualization**
+           - Create appropriate mermaid diagram(s) showing:
+             - Component relationships (use `graph TD/LR`)
+             - Process flows (use `flowchart` or `sequenceDiagram`)
+             - Data flow between modified components
+
+        4. **Recommendations**
+           - Priority actions based on analysis results
+           - Testing suggestions
+           - Monitoring recommendations
+
+        **Guidelines for diagrams:**
+        - Use multiple diagrams if there are distinct architectural aspects
+        - Choose the most appropriate diagram type for each concept
+        - Focus on modified components and their relationships
+        - Keep diagrams clean and informative
+
+        Provide a balanced technical assessment suitable for both developers and stakeholders.
     on: [pr_opened, pr_updated]
 

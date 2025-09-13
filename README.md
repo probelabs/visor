@@ -383,6 +383,188 @@ checks:
     on: [pr_opened]
 ```
 
+## 🎯 Enhanced Prompts
+
+Visor supports advanced prompt features including Liquid templates, file-based prompts, and access to event context and previous check results.
+
+### Liquid Template Support
+
+Prompts can use [Liquid templating](https://shopify.github.io/liquid/) with rich context data:
+
+```yaml
+checks:
+  context-aware-review:
+    type: ai
+    prompt: |
+      # Review for PR {{ pr.number }}: {{ pr.title }}
+      
+      ## PR Details
+      - Author: {{ pr.author }}
+      - Branch: {{ pr.headBranch }} → {{ pr.baseBranch }}
+      - Files changed: {{ files.size }}
+      - Total changes: +{{ pr.totalAdditions }}/-{{ pr.totalDeletions }}
+      
+      ## File Analysis
+      {% if utils.filesByExtension.ts %}
+      ### TypeScript Files ({{ utils.filesByExtension.ts.size }})
+      {% for file in utils.filesByExtension.ts %}
+      - {{ file.filename }} (+{{ file.additions }}/-{{ file.deletions }})
+      {% endfor %}
+      {% endif %}
+      
+      {% if utils.hasLargeChanges %}
+      ⚠️ **Warning**: This PR contains large changes requiring careful review.
+      {% endif %}
+      
+      ## Previous Results
+      {% if outputs.security %}
+      Security check found {{ outputs.security.totalIssues }} issues:
+      {% for issue in outputs.security.securityIssues %}
+      - **{{ issue.severity | upcase }}**: {{ issue.message }} in {{ issue.file }}:{{ issue.line }}
+      {% endfor %}
+      {% endif %}
+    on: [pr_opened, pr_updated]
+```
+
+### File-Based Prompts
+
+Store prompts in external files for better organization:
+
+```yaml
+checks:
+  security-review:
+    type: ai
+    prompt:
+      file: "./prompts/security-detailed.liquid"
+    on: [pr_opened, pr_updated]
+    
+  architecture-check:
+    type: ai  
+    prompt:
+      file: "/absolute/path/to/architecture-prompt.liquid"
+    on: [pr_opened]
+```
+
+### Template Context Variables
+
+#### PR Information (`pr`)
+```liquid
+{{ pr.number }}          <!-- PR number -->
+{{ pr.title }}           <!-- PR title -->
+{{ pr.author }}          <!-- PR author -->
+{{ pr.baseBranch }}      <!-- Base branch name -->
+{{ pr.headBranch }}      <!-- Head branch name -->
+{{ pr.totalAdditions }}  <!-- Total lines added -->
+{{ pr.totalDeletions }}  <!-- Total lines deleted -->
+{{ pr.isIncremental }}   <!-- Boolean: incremental analysis -->
+```
+
+#### File Information (`files` and `utils`)
+```liquid
+{{ files.size }}                          <!-- Number of files changed -->
+{{ utils.filesByExtension.ts.size }}     <!-- TypeScript files count -->
+{{ utils.filesByExtension.js.size }}     <!-- JavaScript files count -->
+{{ utils.addedFiles.size }}              <!-- Newly added files -->
+{{ utils.modifiedFiles.size }}           <!-- Modified files -->
+{{ utils.hasLargeChanges }}              <!-- Boolean: large changes detected -->
+{{ utils.totalFiles }}                   <!-- Total files changed -->
+```
+
+#### GitHub Event Context (`event`)
+```liquid
+{{ event.name }}                  <!-- Event name (pull_request, issue_comment, etc.) -->
+{{ event.action }}               <!-- Event action (opened, updated, etc.) -->
+{{ event.repository.fullName }}  <!-- Repository owner/name -->
+
+<!-- For comment-triggered events -->
+{% if event.comment %}
+{{ event.comment.body }}         <!-- Comment text -->
+{{ event.comment.author }}       <!-- Comment author -->
+{% endif %}
+```
+
+#### Previous Check Results (`outputs`)
+```liquid
+{% if outputs.security %}
+Security Results:
+- Total issues: {{ outputs.security.totalIssues }}
+- Critical: {{ outputs.security.criticalIssues }}
+- Errors: {{ outputs.security.errorIssues }}
+- Warnings: {{ outputs.security.warningIssues }}
+
+Security Issues:
+{% for issue in outputs.security.securityIssues %}
+- {{ issue.severity | upcase }}: {{ issue.message }}
+{% endfor %}
+
+Suggestions:
+{% for suggestion in outputs.security.suggestions %}
+- {{ suggestion }}
+{% endfor %}
+{% endif %}
+```
+
+### Custom Templates
+
+Customize output rendering with custom templates:
+
+```yaml
+checks:
+  security-with-custom-output:
+    type: ai
+    prompt: "Analyze security vulnerabilities..."
+    template:
+      file: "./templates/security-report.liquid"
+      # OR inline content:
+      # content: |
+      #   # 🔒 Security Report
+      #   {% for issue in issues %}
+      #   - **{{ issue.severity }}**: {{ issue.message }}
+      #   {% endfor %}
+    on: [pr_opened]
+```
+
+### Advanced Example: Multi-Context Review
+
+```yaml
+checks:
+  comprehensive-review:
+    type: ai
+    depends_on: [security, performance]  # Run after these checks
+    prompt:
+      content: |
+        # Comprehensive Review for {{ event.repository.fullName }}#{{ pr.number }}
+        
+        {% if event.comment %}
+        Triggered by comment: "{{ event.comment.body }}" from {{ event.comment.author }}
+        {% endif %}
+        
+        ## Previous Analysis Summary
+        {% if outputs.security %}
+        - **Security**: {{ outputs.security.totalIssues }} issues found
+          {% for issue in outputs.security.criticalIssues %}
+          - 🔴 **CRITICAL**: {{ issue.message }}
+          {% endfor %}
+        {% endif %}
+        
+        {% if outputs.performance %}
+        - **Performance**: {{ outputs.performance.totalIssues }} issues found  
+        {% endif %}
+        
+        ## New Focus Areas
+        Based on file changes in this PR:
+        {% for ext, files in utils.filesByExtension %}
+        - {{ ext | upcase }} files: {{ files.size }}
+        {% endfor %}
+        
+        Please provide an architectural review focusing on:
+        1. Integration between modified components
+        2. Impact on existing security measures  
+        3. Performance implications of changes
+        4. Maintainability and technical debt
+    on: [pr_opened, pr_updated]
+```
+
 ### Built-in Schemas
 
 #### Code Review Schema (`code-review`)

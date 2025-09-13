@@ -458,8 +458,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     const fs = require('fs').promises;
     const path = require('path');
 
-    // Construct path to schema file
-    const schemaPath = path.join(process.cwd(), 'output', schemaName, 'schema.json');
+    // Sanitize schema name to prevent path traversal attacks
+    const sanitizedSchemaName = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
+    if (!sanitizedSchemaName || sanitizedSchemaName !== schemaName) {
+      throw new Error('Invalid schema name');
+    }
+
+    // Construct path to schema file using sanitized name
+    const schemaPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
 
     try {
       // Return the schema as a string, not parsed JSON

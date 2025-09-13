@@ -326,7 +326,12 @@ export class EventMapper {
   }> {
     return Object.entries(this.config.checks || {}).map(([name, config]) => ({
       name,
-      description: config.prompt.split('\n')[0] || 'No description available',
+      description:
+        typeof config.prompt === 'string'
+          ? config.prompt.split('\n')[0] || 'No description available'
+          : config.prompt.content?.split('\n')[0] ||
+            config.prompt.file ||
+            'No description available',
       triggers: config.on,
     }));
   }

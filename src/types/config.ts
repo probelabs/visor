@@ -42,8 +42,8 @@ export interface AIProviderConfig {
 export interface CheckConfig {
   /** Type of check to perform */
   type: ConfigCheckType;
-  /** AI prompt for the check or focus type (security/performance/style/all) */
-  prompt: string;
+  /** AI prompt for the check - can be string or prompt config object */
+  prompt: string | PromptConfig;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
   focus?: string;
   /** Command that triggers this check (e.g., "review", "security-scan") - optional */
@@ -60,6 +60,28 @@ export interface CheckConfig {
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") - optional */
   schema?: string;
+  /** Custom template configuration - optional */
+  template?: CustomTemplateConfig;
+}
+
+/**
+ * Custom template configuration
+ */
+export interface CustomTemplateConfig {
+  /** Path to custom template file (relative to config file or absolute) */
+  file?: string;
+  /** Raw template content as string */
+  content?: string;
+}
+
+/**
+ * Prompt configuration - supports both string and file reference
+ */
+export interface PromptConfig {
+  /** Raw prompt content as string (supports Liquid templates) */
+  content?: string;
+  /** Path to prompt file (relative to config file or absolute) */
+  file?: string;
 }
 
 /**
