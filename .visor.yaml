@@ -92,7 +92,7 @@ checks:
         - Insufficient test coverage for security-critical code
         - Over-engineered security mechanisms that may have gaps
 
-        Provide specific findings with clear explanations and actionable remediation steps for each issue discovered.
+        Provide specific findings with clear explanations and actionable remediation steps. Include suggestions and code fixes when applicable.
         Pay special attention to areas lacking test coverage that handle sensitive operations.
     on: [pr_opened, pr_updated]
 
@@ -152,7 +152,7 @@ checks:
         - Unnecessary re-renders
         - Large asset optimization
 
-        Identify specific performance issues and provide optimization recommendations with expected impact.
+        Identify specific performance issues and provide optimization recommendations with expected impact. Include suggestions and code fixes when applicable.
     on: [pr_opened, pr_updated]
 
   # Code quality and maintainability
@@ -229,7 +229,7 @@ checks:
         - Type safety (if applicable)
         - Resource management patterns
 
-        Focus on actionable improvements that enhance code maintainability and provide specific recommendations.
+        Focus on actionable improvements that enhance code maintainability and provide specific recommendations. Include suggestions and code fixes when applicable.
     on: [pr_opened, pr_updated]
 
   # PR overview with intelligent analysis
