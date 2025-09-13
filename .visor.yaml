@@ -8,7 +8,7 @@ checks:
   # Security analysis - Critical for all projects
   security:
     type: ai
-    group: code-review
+    group: review
     schema: code-review
     prompt:
       content: |
@@ -24,11 +24,35 @@ checks:
         - Author: {{ pr.author }}
 
         ## File Analysis
-        {% for ext, files in utils.filesByExtension %}
-        ### {{ ext | upcase }} Files ({{ files.size }})
-        {% for file in files %}
+        {% assign tsFiles = utils.filesByExtension.ts %}
+        {% assign jsFiles = utils.filesByExtension.js %}
+        {% assign pyFiles = utils.filesByExtension.py %}
+        {% assign otherFiles = files | where: "filename", "*" %}
+        
+        {% if tsFiles.size > 0 %}
+        ### TypeScript Files ({{ tsFiles.size }})
+        {% for file in tsFiles %}
         - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
         {% endfor %}
+        {% endif %}
+        
+        {% if jsFiles.size > 0 %}
+        ### JavaScript Files ({{ jsFiles.size }})
+        {% for file in jsFiles %}
+        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
+        {% endfor %}
+        {% endif %}
+        
+        {% if pyFiles.size > 0 %}
+        ### Python Files ({{ pyFiles.size }})
+        {% for file in pyFiles %}
+        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
+        {% endfor %}
+        {% endif %}
+        
+        ### All Changed Files
+        {% for file in files %}
+        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
         {% endfor %}
 
         ## Instructions
@@ -68,7 +92,7 @@ checks:
   # Performance analysis - Important for all applications
   performance:
     type: ai
-    group: code-review
+    group: review
     schema: code-review
     prompt:
       content: |
@@ -127,7 +151,7 @@ checks:
   # Code quality and maintainability
   quality:
     type: ai
-    group: code-review
+    group: review
     schema: code-review
     prompt:
       content: |
@@ -180,7 +204,7 @@ checks:
   # PR overview with intelligent analysis
   overview:
     type: ai
-    group: pr-overview
+    group: overview
     schema: plain
     prompt:
       content: |
