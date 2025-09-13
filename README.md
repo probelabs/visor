@@ -565,6 +565,171 @@ checks:
     on: [pr_opened, pr_updated]
 ```
 
+## 🔧 Advanced Configuration
+
+### Check-Level AI Configuration
+
+Override global AI settings for specific checks:
+
+```yaml
+# Global AI settings (optional)
+ai_model: gpt-3.5-turbo
+ai_provider: openai
+
+checks:
+  security-advanced:
+    type: ai
+    prompt: "Perform advanced security analysis..."
+    # Override global settings for this check
+    ai_model: claude-3-opus
+    ai_provider: anthropic
+    on: [pr_opened]
+    
+  performance-quick:
+    type: ai
+    prompt: "Quick performance check..."
+    # Use different model for performance checks
+    ai_model: gpt-4-turbo
+    # ai_provider will inherit global setting (openai)
+    on: [pr_updated]
+    
+  quality-standard:
+    type: ai
+    prompt: "Standard quality review..."
+    # No overrides - uses global settings
+    on: [pr_opened]
+```
+
+### Environment Variable Configuration
+
+Use environment variables with GitHub Actions-like syntax:
+
+```yaml
+# Global environment variables
+env:
+  DEFAULT_TIMEOUT: "30000"
+  LOG_LEVEL: "info"
+  SHARED_SECRET: "${{ env.GITHUB_TOKEN }}"
+
+checks:
+  security-with-env:
+    type: ai
+    prompt: |
+      Security analysis using timeout: ${{ env.SECURITY_TIMEOUT }}ms
+      API endpoint: ${{ env.SECURITY_API_ENDPOINT }}
+      
+      Analyze these files for security issues...
+    # Check-specific environment variables
+    env:
+      SECURITY_API_KEY: "${{ env.ANTHROPIC_API_KEY }}"
+      SECURITY_TIMEOUT: "${DEFAULT_TIMEOUT}"  # Reference global env
+      ANALYSIS_MODE: "comprehensive"
+      CUSTOM_RULES: "security,auth,crypto"
+    # Use environment variable for AI model
+    ai_model: "${{ env.SECURITY_MODEL }}"
+    ai_provider: "${{ env.PREFERRED_AI_PROVIDER }}"
+    on: [pr_opened, pr_updated]
+```
+
+#### Environment Variable Syntax
+
+Visor supports multiple environment variable syntaxes:
+
+```yaml
+env:
+  # GitHub Actions style (recommended)
+  API_KEY: "${{ env.OPENAI_API_KEY }}"
+  
+  # Shell style
+  MODEL_NAME: "${CUSTOM_MODEL}"
+  
+  # Simple shell style
+  PROVIDER: "$AI_PROVIDER"
+  
+  # Mixed usage
+  ENDPOINT: "https://${{ env.API_HOST }}/v1/${API_VERSION}"
+  
+  # Static values
+  TIMEOUT: 45000
+  DEBUG_MODE: true
+  FEATURES: "security,performance"
+```
+
+### Configuration Inheritance
+
+Configuration follows this priority order:
+
+1. **Check-level settings** (highest priority)
+2. **Global configuration**
+3. **Environment variables**
+4. **Default values** (lowest priority)
+
+```yaml
+# Global defaults
+ai_model: gpt-3.5-turbo
+ai_provider: openai
+env:
+  GLOBAL_TIMEOUT: "30000"
+  
+checks:
+  example-check:
+    type: ai
+    prompt: "Example analysis"
+    # These override global settings
+    ai_model: claude-3-opus    # Overrides global ai_model
+    # ai_provider: inherits openai from global
+    
+    env:
+      # Inherits GLOBAL_TIMEOUT from global env
+      CHECK_TIMEOUT: "45000"   # Check-specific setting
+      API_KEY: "${{ env.ANTHROPIC_API_KEY }}"  # From process env
+```
+
+### Production Environment Setup
+
+For production deployments, set up environment variables:
+
+```bash
+# AI Provider API Keys
+export OPENAI_API_KEY="sk-your-openai-key"
+export ANTHROPIC_API_KEY="sk-ant-your-anthropic-key"
+export GOOGLE_API_KEY="your-google-api-key"
+
+# GitHub Integration
+export GITHUB_TOKEN="ghp_your-github-token"
+
+# Custom Configuration
+export SECURITY_MODEL="claude-3-opus"
+export PERFORMANCE_MODEL="gpt-4-turbo"
+export PREFERRED_AI_PROVIDER="anthropic"
+export ANALYSIS_TIMEOUT="60000"
+```
+
+Then reference them in your configuration:
+
+```yaml
+env:
+  # Production environment references
+  OPENAI_KEY: "${{ env.OPENAI_API_KEY }}"
+  ANTHROPIC_KEY: "${{ env.ANTHROPIC_API_KEY }}"
+  GITHUB_ACCESS_TOKEN: "${{ env.GITHUB_TOKEN }}"
+
+checks:
+  production-security:
+    type: ai
+    ai_model: "${{ env.SECURITY_MODEL }}"
+    ai_provider: "${{ env.PREFERRED_AI_PROVIDER }}"
+    env:
+      API_KEY: "${{ env.ANTHROPIC_KEY }}"
+      TIMEOUT: "${{ env.ANALYSIS_TIMEOUT }}"
+    prompt: |
+      Production security analysis with ${{ env.ANALYSIS_TIMEOUT }}ms timeout
+      Using provider: ${{ env.PREFERRED_AI_PROVIDER }}
+      Model: ${{ env.SECURITY_MODEL }}
+      
+      Perform comprehensive security analysis...
+```
+
 ### Built-in Schemas
 
 #### Code Review Schema (`code-review`)

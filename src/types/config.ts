@@ -23,6 +23,13 @@ export type ConfigOutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 export type GroupByOption = 'check' | 'file' | 'severity';
 
 /**
+ * Environment variable reference configuration
+ */
+export interface EnvConfig {
+  [key: string]: string | number | boolean;
+}
+
+/**
  * AI provider configuration
  */
 export interface AIProviderConfig {
@@ -54,6 +61,12 @@ export interface CheckConfig {
   triggers?: string[];
   /** AI provider configuration (optional) */
   ai?: AIProviderConfig;
+  /** AI model to use for this check - overrides global setting */
+  ai_model?: string;
+  /** AI provider to use for this check - overrides global setting */
+  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  /** Environment variables for this check */
+  env?: EnvConfig;
   /** Check IDs that this check depends on (optional) */
   depends_on?: string[];
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
@@ -144,6 +157,12 @@ export interface VisorConfig {
   checks: Record<string, CheckConfig>;
   /** Output configuration */
   output: OutputConfig;
+  /** Global environment variables */
+  env?: EnvConfig;
+  /** Global AI model setting */
+  ai_model?: string;
+  /** Global AI provider setting */
+  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
 }
 
 /**

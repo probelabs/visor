@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 import { PromptConfig } from '../types/config';
+import { EnvironmentResolver } from '../utils/env-resolver';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -306,9 +307,31 @@ export class AICheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
+    // Apply environment configuration if present
+    if (config.env) {
+      const result = EnvironmentResolver.withTemporaryEnv(config.env, () => {
+        // This will be executed with the temporary environment
+        return this.executeWithConfig(prInfo, config, _dependencyResults);
+      });
+
+      if (result instanceof Promise) {
+        return result;
+      }
+      return result;
+    }
+
+    return this.executeWithConfig(prInfo, config, _dependencyResults);
+  }
+
+  private async executeWithConfig(
+    prInfo: PRInfo,
+    config: CheckProviderConfig,
+    _dependencyResults?: Map<string, ReviewSummary>
+  ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
+    // Check-level AI configuration (ai object)
     if (config.ai) {
       // Only set properties that are actually defined to avoid overriding env vars
       if (config.ai.apiKey !== undefined) {
@@ -326,6 +349,14 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
       }
+    }
+
+    // Check-level AI model and provider (top-level properties)
+    if (config.ai_model !== undefined) {
+      aiConfig.model = config.ai_model as string;
+    }
+    if (config.ai_provider !== undefined) {
+      aiConfig.provider = config.ai_provider as 'google' | 'anthropic' | 'openai';
     }
 
     // Get custom prompt from config - REQUIRED, no fallbacks
@@ -394,6 +425,9 @@ export class AICheckProvider extends CheckProvider {
       'ai.model',
       'ai.apiKey',
       'ai.timeout',
+      'ai_model',
+      'ai_provider',
+      'env',
     ];
   }
 
