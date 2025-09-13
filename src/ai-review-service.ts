@@ -492,51 +492,102 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     try {
-      // Simple JSON extraction: find first { or [ and last } or ], with {} taking priority
-      let jsonString = response.trim();
-
-      // Find the first occurrence of { or [
-      const firstBrace = jsonString.indexOf('{');
-      const firstBracket = jsonString.indexOf('[');
-
-      let startIndex = -1;
-      let endChar = '';
-
-      // Determine which comes first (or if only one exists), {} takes priority
-      if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-        // Object comes first or only objects exist
-        startIndex = firstBrace;
-        endChar = '}';
-      } else if (firstBracket !== -1) {
-        // Array comes first or only arrays exist
-        startIndex = firstBracket;
-        endChar = ']';
-      }
-
-      if (startIndex !== -1) {
-        // Find the last occurrence of the matching end character
-        const lastEndIndex = jsonString.lastIndexOf(endChar);
-        if (lastEndIndex !== -1 && lastEndIndex > startIndex) {
-          jsonString = jsonString.substring(startIndex, lastEndIndex + 1);
-        }
-      }
-
-      // Parse the extracted JSON
+      // Handle different schema types differently
       let reviewData: AIResponseFormat;
-      try {
-        reviewData = JSON.parse(jsonString);
-        log('✅ Successfully parsed probe agent JSON response');
-        if (debugInfo) debugInfo.jsonParseSuccess = true;
-      } catch (initialError) {
-        log('🔍 Initial parsing failed, trying to extract JSON from response...');
 
-        // For plain schema, if JSON parsing fails, it might still be valid markdown content
-        if (schema === 'plain' && !response.includes('{')) {
-          log('🔧 Plain schema with non-JSON response - treating as content');
+      if (schema === 'plain') {
+        // For plain schema, ProbeAgent returns JSON with a content field
+        log('📝 Processing plain schema response (expect JSON with content field)');
+
+        // Extract JSON using the same logic as other schemas
+        // ProbeAgent's cleanSchemaResponse now strips code blocks, so we need to find JSON boundaries
+        const trimmed = response.trim();
+        const firstBrace = trimmed.indexOf('{');
+        const firstBracket = trimmed.indexOf('[');
+        const lastBrace = trimmed.lastIndexOf('}');
+        const lastBracket = trimmed.lastIndexOf(']');
+
+        let jsonStr = trimmed;
+        let startIdx = -1;
+        let endIdx = -1;
+
+        // Prioritize {} if both exist
+        if (firstBrace !== -1 && lastBrace !== -1) {
+          if (
+            firstBracket === -1 ||
+            firstBrace < firstBracket ||
+            (firstBrace < firstBracket && lastBrace > lastBracket)
+          ) {
+            startIdx = firstBrace;
+            endIdx = lastBrace;
+          }
+        }
+
+        // Fall back to [] if no valid {} or [] is better
+        if (startIdx === -1 && firstBracket !== -1 && lastBracket !== -1) {
+          startIdx = firstBracket;
+          endIdx = lastBracket;
+        }
+
+        // If we found valid JSON boundaries, extract it
+        if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+          jsonStr = trimmed.substring(startIdx, endIdx + 1);
+          log(`🔍 Extracted JSON from response (chars ${startIdx} to ${endIdx + 1})`);
+        }
+
+        try {
+          reviewData = JSON.parse(jsonStr);
+          log('✅ Successfully parsed plain schema JSON response');
+          if (debugInfo) debugInfo.jsonParseSuccess = true;
+        } catch {
+          // If JSON parsing fails, treat the entire response as content
+          log('🔧 Plain schema fallback - treating entire response as content');
           reviewData = {
             content: response.trim(),
           };
-        } else {
+          if (debugInfo) debugInfo.jsonParseSuccess = true;
+        }
+      } else {
+        // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
+        log('🔍 Extracting JSON from AI response...');
+
+        // Simple JSON extraction: find first { or [ and last } or ], with {} taking priority
+        let jsonString = response.trim();
+
+        // Find the first occurrence of { or [
+        const firstBrace = jsonString.indexOf('{');
+        const firstBracket = jsonString.indexOf('[');
+
+        let startIndex = -1;
+        let endChar = '';
+
+        // Determine which comes first (or if only one exists), {} takes priority
+        if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+          // Object comes first or only objects exist
+          startIndex = firstBrace;
+          endChar = '}';
+        } else if (firstBracket !== -1) {
+          // Array comes first or only arrays exist
+          startIndex = firstBracket;
+          endChar = ']';
+        }
+
+        if (startIndex !== -1) {
+          // Find the last occurrence of the matching end character
+          const lastEndIndex = jsonString.lastIndexOf(endChar);
+          if (lastEndIndex !== -1 && lastEndIndex > startIndex) {
+            jsonString = jsonString.substring(startIndex, lastEndIndex + 1);
+          }
+        }
+
+        // Parse the extracted JSON
+        try {
+          reviewData = JSON.parse(jsonString);
+          log('✅ Successfully parsed probe agent JSON response');
+          if (debugInfo) debugInfo.jsonParseSuccess = true;
+        } catch (initialError) {
+          log('🔍 Initial parsing failed, trying to extract JSON from response...');
+
           // If the response starts with "I cannot" or similar, it's likely a refusal
           if (
             response.toLowerCase().includes('i cannot') ||
@@ -551,48 +602,21 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             };
           }
 
-          // Check if response is plain text and doesn't contain structured data
-          if (!response.includes('{') && !response.includes('}')) {
-            log('🔧 Plain text response detected, creating structured fallback...');
-            // Create a fallback response based on the plain text
-            const isNoChanges =
-              response.toLowerCase().includes('no') &&
-              (response.toLowerCase().includes('changes') ||
-                response.toLowerCase().includes('code'));
+          // Try to find JSON within the response
+          const jsonMatches = response.match(/\{[\s\S]*\}/g);
+          if (jsonMatches && jsonMatches.length > 0) {
+            log('🔧 Found potential JSON in response, attempting to parse...');
+            // Try the largest JSON-like string (likely the complete response)
+            const largestJson = jsonMatches.reduce((a, b) => (a.length > b.length ? a : b));
+            log('🔧 Attempting to parse extracted JSON...');
+            reviewData = JSON.parse(largestJson);
+            log('✅ Successfully parsed extracted JSON');
+            if (debugInfo) debugInfo.jsonParseSuccess = true;
+          } else {
+            // Check if response is plain text and doesn't contain structured data
+            if (!response.includes('{') && !response.includes('}')) {
+              log('🔧 Plain text response detected, creating structured fallback...');
 
-            return {
-              issues: [],
-              suggestions: isNoChanges
-                ? ['No code changes detected in this analysis']
-                : [
-                    `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
-                  ],
-            };
-          }
-        }
-
-        // Try to find JSON within the response
-        const jsonMatches = response.match(/\{[\s\S]*\}/g);
-        if (jsonMatches && jsonMatches.length > 0) {
-          log('🔧 Found potential JSON in response, attempting to parse...');
-          // Try the largest JSON-like string (likely the complete response)
-          const largestJson = jsonMatches.reduce((a, b) => (a.length > b.length ? a : b));
-          log('🔧 Attempting to parse extracted JSON...');
-          reviewData = JSON.parse(largestJson);
-          log('✅ Successfully parsed extracted JSON');
-          if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } else {
-          // Check if response is plain text and doesn't contain structured data
-          if (!response.includes('{') && !response.includes('}')) {
-            log('🔧 Plain text response detected, creating structured fallback...');
-
-            // For plain schema, even without JSON, treat as valid content
-            if (schema === 'plain') {
-              log('🔧 Plain schema fallback - using entire response as content');
-              reviewData = {
-                content: response.trim(),
-              };
-            } else {
               const isNoChanges =
                 response.toLowerCase().includes('no') &&
                 (response.toLowerCase().includes('changes') ||
@@ -606,9 +630,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
                       `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
                     ],
               };
+            } else {
+              throw initialError;
             }
-          } else {
-            throw initialError;
           }
         }
       }
