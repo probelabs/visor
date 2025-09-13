@@ -1,0 +1,525 @@
+/**
+ * GitHub Check Service for creating and managing check runs based on failure conditions
+ */
+
+import { Octokit } from '@octokit/rest';
+import { FailureConditionResult } from './types/config';
+import { ReviewIssue } from './reviewer';
+
+export interface CheckRunOptions {
+  owner: string;
+  repo: string;
+  head_sha: string;
+  name: string;
+  details_url?: string;
+  external_id?: string;
+}
+
+export interface CheckRunAnnotation {
+  path: string;
+  start_line: number;
+  end_line: number;
+  annotation_level: 'notice' | 'warning' | 'failure';
+  message: string;
+  title?: string;
+  raw_details?: string;
+}
+
+export interface CheckRunSummary {
+  title: string;
+  summary: string;
+  text?: string;
+}
+
+export type CheckRunStatus = 'queued' | 'in_progress' | 'completed';
+export type CheckRunConclusion =
+  | 'success'
+  | 'failure'
+  | 'neutral'
+  | 'cancelled'
+  | 'timed_out'
+  | 'action_required';
+
+/**
+ * Service for managing GitHub Check Runs based on Visor failure conditions
+ */
+export class GitHubCheckService {
+  private octokit: Octokit;
+  private maxAnnotations = 50; // GitHub API limit
+
+  constructor(octokit: Octokit) {
+    this.octokit = octokit;
+  }
+
+  /**
+   * Create a new check run in queued status
+   */
+  async createCheckRun(
+    options: CheckRunOptions,
+    summary?: CheckRunSummary
+  ): Promise<{ id: number; url: string }> {
+    try {
+      const response = await this.octokit.rest.checks.create({
+        owner: options.owner,
+        repo: options.repo,
+        name: options.name,
+        head_sha: options.head_sha,
+        status: 'queued',
+        details_url: options.details_url,
+        external_id: options.external_id,
+        output: summary
+          ? {
+              title: summary.title,
+              summary: summary.summary,
+              text: summary.text,
+            }
+          : undefined,
+      });
+
+      return {
+        id: response.data.id,
+        url: response.data.html_url || '',
+      };
+    } catch (error) {
+      throw new Error(
+        `Failed to create check run: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Update check run to in_progress status
+   */
+  async updateCheckRunInProgress(
+    owner: string,
+    repo: string,
+    check_run_id: number,
+    summary?: CheckRunSummary
+  ): Promise<void> {
+    try {
+      await this.octokit.rest.checks.update({
+        owner,
+        repo,
+        check_run_id,
+        status: 'in_progress',
+        output: summary
+          ? {
+              title: summary.title,
+              summary: summary.summary,
+              text: summary.text,
+            }
+          : undefined,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to update check run to in_progress: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Complete a check run with results based on failure conditions
+   */
+  async completeCheckRun(
+    owner: string,
+    repo: string,
+    check_run_id: number,
+    checkName: string,
+    failureResults: FailureConditionResult[],
+    reviewIssues: ReviewIssue[] = [],
+    executionError?: string
+  ): Promise<void> {
+    try {
+      const { conclusion, summary } = this.determineCheckRunConclusion(
+        checkName,
+        failureResults,
+        reviewIssues,
+        executionError
+      );
+
+      const annotations = this.convertIssuesToAnnotations(reviewIssues);
+
+      await this.octokit.rest.checks.update({
+        owner,
+        repo,
+        check_run_id,
+        status: 'completed',
+        conclusion,
+        completed_at: new Date().toISOString(),
+        output: {
+          title: summary.title,
+          summary: summary.summary,
+          text: summary.text,
+          annotations: annotations.slice(0, this.maxAnnotations), // GitHub limit
+        },
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to complete check run: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Determine check run conclusion based on failure conditions and issues
+   */
+  private determineCheckRunConclusion(
+    checkName: string,
+    failureResults: FailureConditionResult[],
+    reviewIssues: ReviewIssue[],
+    executionError?: string
+  ): { conclusion: CheckRunConclusion; summary: CheckRunSummary } {
+    // Handle execution errors first
+    if (executionError) {
+      return {
+        conclusion: 'failure',
+        summary: {
+          title: '❌ Check Execution Failed',
+          summary: `The ${checkName} check failed to execute properly.`,
+          text: `**Error:** ${executionError}\n\nPlease check your configuration and try again.`,
+        },
+      };
+    }
+
+    // Check for failed conditions
+    const failedConditions = failureResults.filter(result => result.failed);
+    const errorConditions = failedConditions.filter(result => result.severity === 'error');
+    const warningConditions = failedConditions.filter(result => result.severity === 'warning');
+
+    // Count issues by severity
+    const criticalIssues = reviewIssues.filter(issue => issue.severity === 'critical').length;
+    const errorIssues = reviewIssues.filter(issue => issue.severity === 'error').length;
+    const warningIssues = reviewIssues.filter(issue => issue.severity === 'warning').length;
+    const totalIssues = reviewIssues.length;
+
+    // Determine conclusion based on failure conditions and issues
+    let conclusion: CheckRunConclusion;
+    let title: string;
+    let summaryText: string;
+    let details: string;
+
+    if (errorConditions.length > 0 || criticalIssues > 0) {
+      conclusion = 'failure';
+      title = '🚨 Check Failed';
+      summaryText = `${checkName} check failed due to ${errorConditions.length > 0 ? 'failure conditions' : 'critical issues'}.`;
+
+      details = this.formatCheckDetails(failureResults, reviewIssues, {
+        failedConditions: errorConditions.length,
+        warningConditions: warningConditions.length,
+        criticalIssues,
+        errorIssues,
+        warningIssues,
+        totalIssues,
+      });
+    } else if (warningConditions.length > 0 || errorIssues > 0) {
+      conclusion = 'neutral';
+      title = '⚠️ Check Completed with Warnings';
+      summaryText = `${checkName} check completed but found ${warningConditions.length > 0 ? 'warning conditions' : 'error-level issues'}.`;
+
+      details = this.formatCheckDetails(failureResults, reviewIssues, {
+        failedConditions: 0,
+        warningConditions: warningConditions.length,
+        criticalIssues,
+        errorIssues,
+        warningIssues,
+        totalIssues,
+      });
+    } else if (warningIssues > 0) {
+      conclusion = 'neutral';
+      title = '⚠️ Check Completed with Minor Issues';
+      summaryText = `${checkName} check completed with ${warningIssues} warning${warningIssues === 1 ? '' : 's'}.`;
+
+      details = this.formatCheckDetails(failureResults, reviewIssues, {
+        failedConditions: 0,
+        warningConditions: 0,
+        criticalIssues,
+        errorIssues,
+        warningIssues,
+        totalIssues,
+      });
+    } else {
+      conclusion = 'success';
+      title = '✅ Check Passed';
+      summaryText = `${checkName} check completed successfully with no issues found.`;
+
+      details = this.formatCheckDetails(failureResults, reviewIssues, {
+        failedConditions: 0,
+        warningConditions: 0,
+        criticalIssues: 0,
+        errorIssues: 0,
+        warningIssues: 0,
+        totalIssues: 0,
+      });
+    }
+
+    return {
+      conclusion,
+      summary: {
+        title,
+        summary: summaryText,
+        text: details,
+      },
+    };
+  }
+
+  /**
+   * Format detailed check results for the check run summary
+   */
+  private formatCheckDetails(
+    failureResults: FailureConditionResult[],
+    reviewIssues: ReviewIssue[],
+    counts: {
+      failedConditions: number;
+      warningConditions: number;
+      criticalIssues: number;
+      errorIssues: number;
+      warningIssues: number;
+      totalIssues: number;
+    }
+  ): string {
+    const sections: string[] = [];
+
+    // Summary section
+    sections.push('## 📊 Summary');
+    sections.push(`- **Total Issues:** ${counts.totalIssues}`);
+    if (counts.criticalIssues > 0) {
+      sections.push(`- **Critical Issues:** ${counts.criticalIssues}`);
+    }
+    if (counts.errorIssues > 0) {
+      sections.push(`- **Error Issues:** ${counts.errorIssues}`);
+    }
+    if (counts.warningIssues > 0) {
+      sections.push(`- **Warning Issues:** ${counts.warningIssues}`);
+    }
+    sections.push('');
+
+    // Failure conditions section
+    if (failureResults.length > 0) {
+      sections.push('## 🔍 Failure Condition Results');
+
+      const failedConditions = failureResults.filter(result => result.failed);
+      const passedConditions = failureResults.filter(result => !result.failed);
+
+      if (failedConditions.length > 0) {
+        sections.push('### ❌ Failed Conditions');
+        failedConditions.forEach(condition => {
+          sections.push(
+            `- **${condition.conditionName}**: ${condition.message || condition.expression}`
+          );
+          if (condition.severity === 'error') {
+            sections.push(`  - ⚠️ **Severity:** Error`);
+          }
+        });
+        sections.push('');
+      }
+
+      if (passedConditions.length > 0) {
+        sections.push('### ✅ Passed Conditions');
+        passedConditions.forEach(condition => {
+          sections.push(
+            `- **${condition.conditionName}**: ${condition.message || 'Condition passed'}`
+          );
+        });
+        sections.push('');
+      }
+    }
+
+    // Issues by category section
+    if (reviewIssues.length > 0) {
+      const issuesByCategory = this.groupIssuesByCategory(reviewIssues);
+      sections.push('## 🐛 Issues by Category');
+
+      Object.entries(issuesByCategory).forEach(([category, issues]) => {
+        if (issues.length > 0) {
+          sections.push(
+            `### ${this.getCategoryEmoji(category)} ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
+          );
+
+          // Show only first 5 issues per category to keep the summary concise
+          const displayIssues = issues.slice(0, 5);
+          displayIssues.forEach(issue => {
+            const severityIcon = this.getSeverityIcon(issue.severity);
+            sections.push(`- ${severityIcon} **${issue.file}:${issue.line}** - ${issue.message}`);
+          });
+
+          if (issues.length > 5) {
+            sections.push(`- *...and ${issues.length - 5} more ${category} issues*`);
+          }
+          sections.push('');
+        }
+      });
+    }
+
+    // Footer
+    sections.push('---');
+    sections.push(
+      '*Generated by [Visor](https://github.com/probelabs/visor) - AI-powered code review*'
+    );
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Convert review issues to GitHub check run annotations
+   */
+  private convertIssuesToAnnotations(reviewIssues: ReviewIssue[]): CheckRunAnnotation[] {
+    return reviewIssues
+      .slice(0, this.maxAnnotations) // Respect GitHub's annotation limit
+      .map(issue => ({
+        path: issue.file,
+        start_line: issue.line,
+        end_line: issue.endLine || issue.line,
+        annotation_level: this.mapSeverityToAnnotationLevel(issue.severity),
+        message: issue.message,
+        title: `${issue.category} Issue`,
+        raw_details: issue.suggestion || undefined,
+      }));
+  }
+
+  /**
+   * Map Visor issue severity to GitHub annotation level
+   */
+  private mapSeverityToAnnotationLevel(severity: string): 'notice' | 'warning' | 'failure' {
+    switch (severity) {
+      case 'critical':
+      case 'error':
+        return 'failure';
+      case 'warning':
+        return 'warning';
+      case 'info':
+      default:
+        return 'notice';
+    }
+  }
+
+  /**
+   * Group issues by category
+   */
+  private groupIssuesByCategory(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+
+    issues.forEach(issue => {
+      const category = issue.category || 'general';
+      if (!grouped[category]) {
+        grouped[category] = [];
+      }
+      grouped[category].push(issue);
+    });
+
+    return grouped;
+  }
+
+  /**
+   * Get emoji for issue category
+   */
+  private getCategoryEmoji(category: string): string {
+    const emojiMap: Record<string, string> = {
+      security: '🔐',
+      performance: '⚡',
+      style: '🎨',
+      logic: '🧠',
+      architecture: '🏗️',
+      documentation: '📚',
+      general: '📝',
+    };
+    return emojiMap[category.toLowerCase()] || '📝';
+  }
+
+  /**
+   * Get icon for issue severity
+   */
+  private getSeverityIcon(severity: string): string {
+    const iconMap: Record<string, string> = {
+      critical: '🚨',
+      error: '❌',
+      warning: '⚠️',
+      info: 'ℹ️',
+    };
+    return iconMap[severity.toLowerCase()] || 'ℹ️';
+  }
+
+  /**
+   * Create multiple check runs for different checks with failure condition support
+   */
+  async createMultipleCheckRuns(
+    options: CheckRunOptions,
+    checkResults: Array<{
+      checkName: string;
+      failureResults: FailureConditionResult[];
+      reviewIssues: ReviewIssue[];
+      executionError?: string;
+    }>
+  ): Promise<Array<{ checkName: string; id: number; url: string }>> {
+    const results: Array<{ checkName: string; id: number; url: string }> = [];
+
+    for (const checkResult of checkResults) {
+      try {
+        // Create check run
+        const checkRun = await this.createCheckRun({
+          ...options,
+          name: `Visor: ${checkResult.checkName}`,
+          external_id: `visor-${checkResult.checkName}-${options.head_sha.substring(0, 7)}`,
+        });
+
+        // Update to in progress
+        await this.updateCheckRunInProgress(options.owner, options.repo, checkRun.id, {
+          title: `Running ${checkResult.checkName} check...`,
+          summary: `Analyzing code with ${checkResult.checkName} check using AI.`,
+        });
+
+        // Complete with results
+        await this.completeCheckRun(
+          options.owner,
+          options.repo,
+          checkRun.id,
+          checkResult.checkName,
+          checkResult.failureResults,
+          checkResult.reviewIssues,
+          checkResult.executionError
+        );
+
+        results.push({
+          checkName: checkResult.checkName,
+          id: checkRun.id,
+          url: checkRun.url,
+        });
+      } catch (error) {
+        console.error(`Failed to create check run for ${checkResult.checkName}:`, error);
+        // Continue with other checks even if one fails
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get check runs for a specific commit
+   */
+  async getCheckRuns(
+    owner: string,
+    repo: string,
+    ref: string
+  ): Promise<Array<{ id: number; name: string; status: string; conclusion: string | null }>> {
+    try {
+      const response = await this.octokit.rest.checks.listForRef({
+        owner,
+        repo,
+        ref,
+        filter: 'all',
+      });
+
+      return response.data.check_runs
+        .filter(check => check.name.startsWith('Visor:'))
+        .map(check => ({
+          id: check.id,
+          name: check.name,
+          status: check.status,
+          conclusion: check.conclusion,
+        }));
+    } catch (error) {
+      throw new Error(
+        `Failed to get check runs: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+}

@@ -5,6 +5,7 @@ import { ConfigManager } from './config';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters } from './output-formatters';
 import { calculateTotalIssues, calculateCriticalIssues } from './reviewer';
+import { FailureConditionResult } from './types/config';
 
 /**
  * Main CLI entry point for Visor
@@ -145,8 +146,54 @@ export async function main(): Promise<void> {
         debug: cliOptions.debug, // Pass debug flag from CLI options
       });
 
+      // Evaluate failure conditions for each executed check
+      const allFailureResults: FailureConditionResult[] = [];
+      let shouldHaltExecution = false;
+
+      for (const checkName of checksToRun) {
+        try {
+          const failureResults = await executionEngine.evaluateFailureConditions(
+            checkName,
+            analysisResult.reviewSummary,
+            config
+          );
+
+          allFailureResults.push(...failureResults);
+
+          // Check for halt condition if --fail-fast is enabled
+          if (
+            cliOptions.failFast &&
+            failureResults.some(result => result.failed && result.haltExecution)
+          ) {
+            shouldHaltExecution = true;
+            break;
+          }
+        } catch (error) {
+          // Log failure condition evaluation errors but don't stop execution
+          const logFn =
+            mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif'
+              ? console.error
+              : console.log;
+          logFn(
+            `⚠️  Warning: Failed to evaluate failure conditions for check '${checkName}': ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        }
+      }
+
+      // Add failure condition results to analysis result
+      const enrichedAnalysisResult = {
+        ...analysisResult,
+        failureConditions: allFailureResults,
+      };
+
       // Format and display the results
-      await displayResults(analysisResult, mergedConfig.cliOutput);
+      await displayResults(enrichedAnalysisResult, mergedConfig.cliOutput);
+
+      // Determine exit code based on failure conditions
+      const hasFailedConditions = allFailureResults.some(result => result.failed);
+      if (hasFailedConditions || shouldHaltExecution) {
+        process.exit(1);
+      }
     } catch (error) {
       console.error(
         '❌ Error executing checks:',
