@@ -46,7 +46,8 @@
       "Bash(mkdir:*)",
       "Bash(xargs sed:*)",
       "Bash(xargs:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Read(//home/buger/projects/probe/npm/**)"
     ]
   },
   "hooks": {

@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["issues"],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "line", "severity", "message"],
+        "properties": {
+          "file": {"type": "string"},
+          "line": {"type": "number"},
+          "severity": {"type": "string", "enum": ["critical", "warning", "info"]},
+          "message": {"type": "string"}
+        }
+      }
+    }
+  }
+}

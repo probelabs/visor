@@ -1,0 +1,9 @@
+Review the following code changes for security, performance, and style issues:
+
+File: src/ai-review-service.ts
+Changes:
+- Replaced spawn() with ProbeAgent SDK
+- Removed temporary file handling
+- Added direct API integration
+
+Return results in JSON format matching the provided schema.

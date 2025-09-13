@@ -23,6 +23,13 @@ export type ConfigOutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 export type GroupByOption = 'check' | 'file' | 'severity';
 
 /**
+ * Environment variable reference configuration
+ */
+export interface EnvConfig {
+  [key: string]: string | number | boolean;
+}
+
+/**
  * AI provider configuration
  */
 export interface AIProviderConfig {
@@ -42,7 +49,7 @@ export interface AIProviderConfig {
 export interface CheckConfig {
   /** Type of check to perform */
   type: ConfigCheckType;
-  /** AI prompt for the check or focus type (security/performance/style/all) */
+  /** AI prompt for the check - can be inline string or file path (auto-detected) */
   prompt: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
   focus?: string;
@@ -54,12 +61,40 @@ export interface CheckConfig {
   triggers?: string[];
   /** AI provider configuration (optional) */
   ai?: AIProviderConfig;
+  /** AI model to use for this check - overrides global setting */
+  ai_model?: string;
+  /** AI provider to use for this check - overrides global setting */
+  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  /** Environment variables for this check */
+  env?: EnvConfig;
   /** Check IDs that this check depends on (optional) */
   depends_on?: string[];
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") - optional */
   schema?: string;
+  /** Custom template configuration - optional */
+  template?: CustomTemplateConfig;
+}
+
+/**
+ * Custom template configuration
+ */
+export interface CustomTemplateConfig {
+  /** Path to custom template file (relative to config file or absolute) */
+  file?: string;
+  /** Raw template content as string */
+  content?: string;
+}
+
+/**
+ * Prompt configuration - supports both string and file reference
+ */
+export interface PromptConfig {
+  /** Raw prompt content as string (supports Liquid templates) */
+  content?: string;
+  /** Path to prompt file (relative to config file or absolute) */
+  file?: string;
 }
 
 /**
@@ -122,6 +157,12 @@ export interface VisorConfig {
   checks: Record<string, CheckConfig>;
   /** Output configuration */
   output: OutputConfig;
+  /** Global environment variables */
+  env?: EnvConfig;
+  /** Global AI model setting */
+  ai_model?: string;
+  /** Global AI provider setting */
+  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
 }
 
 /**

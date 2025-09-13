@@ -162,6 +162,7 @@ export async function run(): Promise<void> {
       'create-check': getInput('create-check') || undefined,
       'add-labels': getInput('add-labels') || undefined,
       'fail-on-critical': getInput('fail-on-critical') || undefined,
+      'fail-on-api-error': getInput('fail-on-api-error') || undefined,
       'min-score': getInput('min-score') || undefined,
       // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path') || undefined,
@@ -325,12 +326,6 @@ async function postCliReviewComment(
     // Use robust PR detection
     const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
 
-    // Extract commit SHA for comment metadata
-    const commitSha =
-      eventContext.event?.pull_request?.head?.sha ||
-      eventContext.payload?.event?.pull_request?.head?.sha ||
-      process.env.GITHUB_SHA;
-
     if (!prResult.prNumber) {
       console.log(
         `⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`
@@ -437,12 +432,29 @@ async function postCliReviewComment(
     // Add debug information if available
     if (cliOutput.debug) {
       const debugContent = formatDebugInfo(cliOutput.debug);
-      comment += commentManager.createCollapsibleSection(
-        '🐛 Debug Information',
-        debugContent,
-        false
-      );
+      comment +=
+        '\n\n' +
+        commentManager.createCollapsibleSection('🐛 Debug Information', debugContent, false);
       comment += '\n\n';
+    }
+
+    // Fetch fresh PR data to get the latest commit SHA
+    let latestCommitSha: string | undefined;
+    try {
+      const { data: pullRequest } = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: prResult.prNumber,
+      });
+      latestCommitSha = pullRequest.head.sha;
+      console.log(`📝 Latest commit SHA: ${latestCommitSha.substring(0, 7)}`);
+    } catch (error) {
+      console.warn('⚠️ Could not fetch latest PR data:', error);
+      // Fallback to environment or event data
+      latestCommitSha =
+        eventContext.event?.pull_request?.head?.sha ||
+        eventContext.payload?.event?.pull_request?.head?.sha ||
+        process.env.GITHUB_SHA;
     }
 
     // Use smart comment updating with unique ID
@@ -451,7 +463,7 @@ async function postCliReviewComment(
       commentId,
       triggeredBy: 'visor-cli',
       allowConcurrentUpdates: true,
-      commitSha: commitSha,
+      commitSha: latestCommitSha,
     });
 
     console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
@@ -1006,6 +1018,34 @@ async function handlePullRequestVisorMode(
 
     console.log('✅ Posted Visor config-based review comment');
 
+    // Check for API errors in the review issues
+    const apiErrors = review.issues.filter(
+      issue =>
+        issue.file === 'system' &&
+        issue.severity === 'critical' &&
+        (issue.message.includes('API rate limit') ||
+          issue.message.includes('403') ||
+          issue.message.includes('401') ||
+          issue.message.includes('authentication') ||
+          issue.message.includes('API key'))
+    );
+
+    if (apiErrors.length > 0) {
+      console.error('🚨 Critical API errors detected in review:');
+      apiErrors.forEach(error => {
+        console.error(`  - ${error.message}`);
+      });
+
+      // Check if we should fail on API errors
+      const failOnApiError = inputs['fail-on-api-error'] === 'true';
+      if (failOnApiError) {
+        setFailed(
+          `Critical API errors detected: ${apiErrors.length} authentication/rate limit issues found. Please check your API credentials.`
+        );
+        return;
+      }
+    }
+
     // Set outputs
     setOutput('auto-review-completed', 'true');
     setOutput('issues-found', calculateTotalIssues(review.issues).toString());
@@ -1013,6 +1053,7 @@ async function handlePullRequestVisorMode(
     setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
     setOutput('visor-config-used', 'true');
     setOutput('checks-executed', checksToRun.join(','));
+    setOutput('api-errors-found', apiErrors.length.toString());
   } catch (error) {
     console.error('❌ Error in Visor PR analysis:', error);
     setFailed(error instanceof Error ? error.message : 'Visor PR analysis failed');

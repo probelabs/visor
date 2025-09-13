@@ -1,0 +1,67 @@
+name: Release to npm
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v1.0.0
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # For npm provenance
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        env:
+          CI: true
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify package files
+        run: |
+          echo "📦 Package contents:"
+          npm pack --dry-run
+          echo "✅ Package verification complete"
+
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting package version to $VERSION"
+          npm version $VERSION --no-git-tag-version
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post-release notification
+        if: success()
+        run: |
+          echo "🎉 Successfully published @probelabs/visor@${GITHUB_REF#refs/tags/v} to npm!"
+          echo "📦 Install with: npx -y @probelabs/visor"

@@ -29,7 +29,7 @@ export class DependencyResolver {
    */
   static buildDependencyGraph(checkDependencies: Record<string, string[]>): DependencyGraph {
     const nodes = new Map<string, CheckNode>();
-    
+
     // Initialize all nodes
     for (const checkId of Object.keys(checkDependencies)) {
       nodes.set(checkId, {
@@ -46,7 +46,7 @@ export class DependencyResolver {
         if (!nodes.has(depId)) {
           throw new Error(`Check "${checkId}" depends on "${depId}" but "${depId}" is not defined`);
         }
-        
+
         const depNode = nodes.get(depId)!;
         depNode.dependents.push(checkId);
       }
@@ -76,7 +76,10 @@ export class DependencyResolver {
   /**
    * Detect cycles in the dependency graph using DFS
    */
-  private static detectCycles(nodes: Map<string, CheckNode>): { hasCycles: boolean; cycleNodes?: string[] } {
+  private static detectCycles(nodes: Map<string, CheckNode>): {
+    hasCycles: boolean;
+    cycleNodes?: string[];
+  } {
     const visited = new Set<string>();
     const recursionStack = new Set<string>();
     const cycleNodes: string[] = [];
@@ -130,7 +133,7 @@ export class DependencyResolver {
     while (remainingNodes.size > 0) {
       // Find nodes with no remaining dependencies
       const readyNodes: string[] = [];
-      
+
       for (const [nodeId, node] of remainingNodes.entries()) {
         const unmetDependencies = node.dependencies.filter(depId => remainingNodes.has(depId));
         if (unmetDependencies.length === 0) {

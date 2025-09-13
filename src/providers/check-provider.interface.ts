@@ -1,5 +1,6 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
+import { EnvConfig } from '../types/config';
 
 /**
  * Configuration for a check provider
@@ -7,6 +8,7 @@ import { ReviewSummary } from '../reviewer';
 export interface CheckProviderConfig {
   type: string;
   prompt?: string;
+  eventContext?: any;
   focus?: string;
   command?: string;
   args?: string[];
@@ -18,7 +20,7 @@ export interface CheckProviderConfig {
   timeout?: number;
   metadata?: Record<string, unknown>;
   workingDirectory?: string;
-  env?: Record<string, string>;
+  env?: EnvConfig;
   ai?: {
     provider?: string;
     model?: string;
@@ -26,6 +28,10 @@ export interface CheckProviderConfig {
     timeout?: number;
     debug?: boolean;
   };
+  /** AI model to use for this check - overrides global setting */
+  ai_model?: string;
+  /** AI provider to use for this check - overrides global setting */
+  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
   [key: string]: unknown;
 }
 

@@ -5,6 +5,8 @@ import { AIReviewService, AIDebugInfo } from './ai-review-service';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
+import { CustomTemplateConfig } from './types/config';
+import * as crypto from 'crypto';
 
 export interface ReviewIssue {
   // Location
@@ -21,6 +23,8 @@ export interface ReviewIssue {
   // Group and schema for comment separation
   group?: string;
   schema?: string;
+  // Custom template configuration
+  template?: CustomTemplateConfig;
 
   // Optional enhancement
   suggestion?: string;
@@ -135,7 +139,12 @@ export class PRReviewer {
 
     // If no groups or only one group, use the original single comment approach
     if (Object.keys(issuesByGroup).length <= 1) {
-      const comment = await this.formatReviewCommentWithVisorFormat(summary, options);
+      const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
+        owner,
+        repo,
+        prNumber,
+        commitSha: options.commitSha,
+      });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId: options.commentId,
@@ -158,7 +167,12 @@ export class PRReviewer {
         ? `${options.commentId}-${groupName}`
         : `visor-${groupName}`;
 
-      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options);
+      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
+        owner,
+        repo,
+        prNumber,
+        commitSha: options.commitSha,
+      });
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId: groupCommentId,
@@ -171,7 +185,8 @@ export class PRReviewer {
 
   private async formatReviewCommentWithVisorFormat(
     summary: ReviewSummary,
-    _options: ReviewOptions
+    _options: ReviewOptions,
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
     const totalIssues = calculateTotalIssues(summary.issues);
 
@@ -183,13 +198,13 @@ export class PRReviewer {
     } else {
       comment += `## 🔍 Code Analysis Results\n\n`;
       // Use new schema-template system for content generation
-      const templateContent = await this.renderWithSchemaTemplate(summary);
+      const templateContent = await this.renderWithSchemaTemplate(summary, githubContext);
       comment += templateContent;
     }
 
     // Add debug section if available
     if (summary.debug) {
-      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n' + this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 
@@ -199,7 +214,10 @@ export class PRReviewer {
     return comment;
   }
 
-  private async renderWithSchemaTemplate(summary: ReviewSummary): Promise<string> {
+  private async renderWithSchemaTemplate(
+    summary: ReviewSummary,
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
+  ): Promise<string> {
     try {
       // Group issues by check name and render each check separately
       const issuesByCheck = this.groupIssuesByCheck(summary.issues);
@@ -212,10 +230,13 @@ export class PRReviewer {
 
       for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
         const checkSchema = checkIssues[0]?.schema || 'code-review';
+        const customTemplate = checkIssues[0]?.template;
         const renderedSection = await this.renderSingleCheckTemplate(
           checkName,
           checkIssues,
-          checkSchema
+          checkSchema,
+          customTemplate,
+          githubContext
         );
         renderedSections.push(renderedSection);
       }
@@ -233,41 +254,103 @@ export class PRReviewer {
     }
   }
 
+  private generateGitHubDiffHash(filePath: string): string {
+    // GitHub uses SHA256 hash of the file path for diff anchors
+    return crypto.createHash('sha256').update(filePath).digest('hex');
+  }
+
+  private enhanceIssuesWithGitHubLinks(
+    issues: ReviewIssue[],
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
+  ): any[] {
+    if (!githubContext) {
+      return issues;
+    }
+
+    // Use commit SHA for permalink format that auto-expands
+    // If no commit SHA provided, fall back to PR files view
+    const baseUrl = githubContext.commitSha
+      ? `https://github.com/${githubContext.owner}/${githubContext.repo}/blob/${githubContext.commitSha}`
+      : `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files`;
+
+    return issues.map(issue => ({
+      ...issue,
+      githubUrl:
+        githubContext.commitSha && issue.line
+          ? `${baseUrl}/${issue.file}#L${issue.line}${issue.endLine && issue.endLine !== issue.line ? `-L${issue.endLine}` : ''}`
+          : baseUrl,
+      fileHash: this.generateGitHubDiffHash(issue.file),
+    }));
+  }
+
   private async renderSingleCheckTemplate(
     checkName: string,
     issues: ReviewIssue[],
-    schema: string
+    schema: string,
+    customTemplate?: CustomTemplateConfig,
+    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    const liquid = new Liquid();
+    const liquid = new Liquid({
+      // Configure Liquid to handle whitespace better
+      trimTagLeft: false, // Don't auto-trim left side of tags
+      trimTagRight: false, // Don't auto-trim right side of tags
+      trimOutputLeft: false, // Don't auto-trim left side of output
+      trimOutputRight: false, // Don't auto-trim right side of output
+      greedy: false, // Don't be greedy with whitespace trimming
+    });
 
-    // Sanitize schema name to prevent path traversal attacks
-    const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
-    if (!sanitizedSchema) {
-      throw new Error('Invalid schema name');
+    // Load template content based on configuration
+    let templateContent: string;
+
+    if (customTemplate) {
+      templateContent = await this.loadCustomTemplate(customTemplate);
+    } else {
+      // Sanitize schema name to prevent path traversal attacks
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchema) {
+        throw new Error('Invalid schema name');
+      }
+
+      // Load the appropriate template based on schema
+      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs.readFile(templatePath, 'utf-8');
     }
 
-    // Load the appropriate template based on schema
-    const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
-    const templateContent = await fs.readFile(templatePath, 'utf-8');
+    // Enhance issues with GitHub links if context is available
+    const enhancedIssues = this.enhanceIssuesWithGitHubLinks(issues, githubContext);
 
-    let templateData: { content?: string; issues?: ReviewIssue[]; checkName: string };
+    let templateData: {
+      content?: string;
+      issues?: any[];
+      checkName: string;
+      github?: {
+        owner: string;
+        repo: string;
+        prNumber: number;
+        commitSha?: string;
+        branch?: string;
+      };
+    };
 
-    if (schema === 'text') {
-      // For text schema, pass the message content directly
+    if (schema === 'plain') {
+      // For plain schema, pass the message content directly
       templateData = {
         content: issues.length > 0 ? issues[0].message : 'No content available',
         checkName: checkName,
+        github: githubContext,
       };
     } else {
-      // For code-review schema, pass issues directly (no more checkName extraction needed)
+      // For code-review schema, pass enhanced issues with GitHub links
       templateData = {
-        issues: issues,
+        issues: enhancedIssues,
         checkName: checkName,
+        github: githubContext,
       };
     }
 
-    // Render with Liquid template
-    return await liquid.parseAndRender(templateContent, templateData);
+    // Render with Liquid template and trim any extra whitespace at the start/end
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
   }
 
   private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
@@ -348,7 +431,7 @@ export class PRReviewer {
 
     // Add debug section if debug information is available
     if (summary.debug) {
-      comment += this.formatDebugSection(summary.debug);
+      comment += '\n\n' + this.formatDebugSection(summary.debug);
       comment += '\n\n';
     }
 
@@ -652,39 +735,20 @@ export class PRReviewer {
         // Wrap content in a div for better table layout control
         let issueContent = '';
 
-        // Escape HTML in the main message to prevent HTML injection
-        const escapedMessage = comment.message
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#x27;');
-
-        issueContent += escapedMessage;
+        // Pass the message as-is - Liquid template will handle escaping
+        issueContent += comment.message;
 
         if (comment.suggestion) {
-          // Escape HTML in the suggestion to prevent nested HTML rendering
-          const escapedSuggestion = comment.suggestion
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#x27;');
-          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${escapedSuggestion}</details>`;
+          // Pass suggestion as-is - Liquid template will handle escaping
+          issueContent += `\n<details><summary>💡 <strong>Suggestion</strong></summary>${comment.suggestion}</details>`;
         }
 
         if (comment.replacement) {
           // Extract language hint from file extension
           const fileExt = comment.file.split('.').pop()?.toLowerCase() || 'text';
           const languageHint = this.getLanguageHint(fileExt);
-          // Escape HTML in the replacement code to prevent nested HTML rendering
-          const escapedReplacement = comment.replacement
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#x27;');
-          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${escapedReplacement}</code></pre></details>`;
+          // Pass replacement as-is - Liquid template will handle escaping
+          issueContent += `\n<details><summary>🔧 <strong>Suggested Fix</strong></summary><pre><code class="language-${languageHint}">${comment.replacement}</code></pre></details>`;
         }
 
         // Wrap all content in a div for better table cell containment
@@ -744,5 +808,147 @@ export class PRReviewer {
     };
 
     return langMap[fileExtension] || fileExtension;
+  }
+
+  /**
+   * Load custom template content from file or raw content
+   */
+  private async loadCustomTemplate(config: CustomTemplateConfig): Promise<string> {
+    if (config.content) {
+      // Auto-detect if content is actually a file path
+      if (await this.isFilePath(config.content)) {
+        return await this.loadTemplateFromFile(config.content);
+      } else {
+        // Use raw template content directly
+        return config.content;
+      }
+    }
+
+    if (config.file) {
+      // Legacy explicit file property
+      return await this.loadTemplateFromFile(config.file);
+    }
+
+    throw new Error('Custom template configuration must specify either "file" or "content"');
+  }
+
+  /**
+   * Detect if a string is likely a file path and if the file exists
+   */
+  private async isFilePath(str: string): Promise<boolean> {
+    // Quick checks to exclude obvious non-file-path content
+    if (!str || str.trim() !== str || str.length > 512) {
+      return false;
+    }
+
+    // Exclude strings that are clearly content (contain common content indicators)
+    // But be more careful with paths that might contain common words as directory names
+    if (
+      /\s{2,}/.test(str) || // Multiple consecutive spaces
+      /\n/.test(str) || // Contains newlines
+      /^(please|analyze|review|check|find|identify|look|search)/i.test(str.trim()) || // Starts with command words
+      str.split(' ').length > 8 // Too many words for a typical file path
+    ) {
+      return false;
+    }
+
+    // For strings with path separators, be more lenient about common words
+    // as they might be legitimate directory names
+    if (!/[\/\\]/.test(str)) {
+      // Only apply strict English word filter to non-path strings
+      if (/\b(the|and|or|but|for|with|by|from|in|on|at|as)\b/i.test(str)) {
+        return false;
+      }
+    }
+
+    // Positive indicators for file paths
+    const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
+    const hasPathSeparators = /[\/\\]/.test(str);
+    const isRelativePath = /^\.{1,2}\//.test(str);
+    const isAbsolutePath = path.isAbsolute(str);
+    const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
+
+    // Must have at least one strong indicator
+    if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
+      return false;
+    }
+
+    // Must contain only typical file path characters
+    if (!hasTypicalFileChars) {
+      return false;
+    }
+
+    // Additional validation for suspected file paths
+    try {
+      // Try to resolve and check if file exists
+      let resolvedPath: string;
+
+      if (path.isAbsolute(str)) {
+        resolvedPath = path.normalize(str);
+      } else {
+        // Resolve relative to current working directory
+        resolvedPath = path.resolve(process.cwd(), str);
+      }
+
+      // Check if file exists
+      try {
+        const stat = await fs.stat(resolvedPath);
+        return stat.isFile();
+      } catch {
+        // File doesn't exist, but might still be a valid file path format
+        // Return true if it has strong file path indicators
+        return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Safely load template from file with security checks
+   */
+  private async loadTemplateFromFile(templatePath: string): Promise<string> {
+    // Resolve the path (handles both relative and absolute paths)
+    let resolvedPath: string;
+
+    if (path.isAbsolute(templatePath)) {
+      // Absolute path - use as-is but validate it's not trying to escape expected directories
+      resolvedPath = path.normalize(templatePath);
+    } else {
+      // Relative path - resolve relative to current working directory
+      resolvedPath = path.resolve(process.cwd(), templatePath);
+    }
+
+    // Security: Normalize and check for path traversal attempts
+    const normalizedPath = path.normalize(resolvedPath);
+
+    // Security: For relative paths, ensure they don't escape the current directory
+    if (!path.isAbsolute(templatePath)) {
+      const currentDir = path.resolve(process.cwd());
+      if (!normalizedPath.startsWith(currentDir)) {
+        throw new Error('Invalid template file path: path traversal detected');
+      }
+    }
+
+    // Security: Additional check for obvious path traversal patterns
+    if (templatePath.includes('../..')) {
+      throw new Error('Invalid template file path: path traversal detected');
+    }
+
+    // Security: Check file extension
+    if (!normalizedPath.endsWith('.liquid')) {
+      throw new Error('Invalid template file: must have .liquid extension');
+    }
+
+    try {
+      const templateContent = await fs.readFile(normalizedPath, 'utf-8');
+      return templateContent;
+    } catch (error) {
+      throw new Error(
+        `Failed to load custom template from ${normalizedPath}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
   }
 }

@@ -383,6 +383,382 @@ checks:
     on: [pr_opened]
 ```
 
+## 🎯 Enhanced Prompts
+
+Visor supports advanced prompt features including Liquid templates, file-based prompts, and access to event context and previous check results.
+
+### Smart Auto-Detection
+
+Visor automatically detects whether your prompt is a file path or inline content:
+
+```yaml
+checks:
+  security:
+    type: ai
+    # File path - automatically detected
+    prompt: ./templates/security-analysis.liquid
+    
+  performance:
+    type: ai
+    # Inline string - automatically detected
+    prompt: "Analyze this code for performance issues"
+    
+  quality:
+    type: ai
+    # Multi-line string - automatically detected
+    prompt: |
+      Review this code for:
+      - Code quality issues
+      - Best practices violations
+      - Maintainability concerns
+```
+
+**Auto-detection rules:**
+- ✅ **File paths**: `./file.liquid`, `../templates/prompt.md`, `/absolute/path/file.txt`
+- ✅ **Inline content**: `Analyze this code`, `Review for security issues`
+- ✅ **Multi-line**: Uses YAML `|` or `>` syntax for longer prompts
+
+### Liquid Template Support
+
+Prompts can use [Liquid templating](https://shopify.github.io/liquid/) with rich context data:
+
+```yaml
+checks:
+  context-aware-review:
+    type: ai
+    prompt: |
+      # Review for PR {{ pr.number }}: {{ pr.title }}
+      
+      ## PR Details
+      - Author: {{ pr.author }}
+      - Branch: {{ pr.headBranch }} → {{ pr.baseBranch }}
+      - Files changed: {{ files.size }}
+      - Total changes: +{{ pr.totalAdditions }}/-{{ pr.totalDeletions }}
+      
+      ## File Analysis
+      {% if utils.filesByExtension.ts %}
+      ### TypeScript Files ({{ utils.filesByExtension.ts.size }})
+      {% for file in utils.filesByExtension.ts %}
+      - {{ file.filename }} (+{{ file.additions }}/-{{ file.deletions }})
+      {% endfor %}
+      {% endif %}
+      
+      {% if utils.hasLargeChanges %}
+      ⚠️ **Warning**: This PR contains large changes requiring careful review.
+      {% endif %}
+      
+      ## Previous Results
+      {% if outputs.security %}
+      Security check found {{ outputs.security.totalIssues }} issues:
+      {% for issue in outputs.security.securityIssues %}
+      - **{{ issue.severity | upcase }}**: {{ issue.message }} in {{ issue.file }}:{{ issue.line }}
+      {% endfor %}
+      {% endif %}
+    on: [pr_opened, pr_updated]
+```
+
+### File-Based Prompts
+
+Store prompts in external files for better organization:
+
+```yaml
+checks:
+  security-review:
+    type: ai
+    prompt: ./prompts/security-detailed.liquid  # Auto-detects file path
+    on: [pr_opened, pr_updated]
+    
+  architecture-check:
+    type: ai  
+    prompt: /absolute/path/to/architecture-prompt.liquid  # Auto-detects file path
+    on: [pr_opened]
+```
+
+### Template Context Variables
+
+#### PR Information (`pr`)
+```liquid
+{{ pr.number }}          <!-- PR number -->
+{{ pr.title }}           <!-- PR title -->
+{{ pr.author }}          <!-- PR author -->
+{{ pr.baseBranch }}      <!-- Base branch name -->
+{{ pr.headBranch }}      <!-- Head branch name -->
+{{ pr.totalAdditions }}  <!-- Total lines added -->
+{{ pr.totalDeletions }}  <!-- Total lines deleted -->
+{{ pr.isIncremental }}   <!-- Boolean: incremental analysis -->
+```
+
+#### File Information (`files` and `utils`)
+```liquid
+{{ files.size }}                          <!-- Number of files changed -->
+{{ utils.filesByExtension.ts.size }}     <!-- TypeScript files count -->
+{{ utils.filesByExtension.js.size }}     <!-- JavaScript files count -->
+{{ utils.addedFiles.size }}              <!-- Newly added files -->
+{{ utils.modifiedFiles.size }}           <!-- Modified files -->
+{{ utils.hasLargeChanges }}              <!-- Boolean: large changes detected -->
+{{ utils.totalFiles }}                   <!-- Total files changed -->
+```
+
+#### GitHub Event Context (`event`)
+```liquid
+{{ event.name }}                  <!-- Event name (pull_request, issue_comment, etc.) -->
+{{ event.action }}               <!-- Event action (opened, updated, etc.) -->
+{{ event.repository.fullName }}  <!-- Repository owner/name -->
+
+<!-- For comment-triggered events -->
+{% if event.comment %}
+{{ event.comment.body }}         <!-- Comment text -->
+{{ event.comment.author }}       <!-- Comment author -->
+{% endif %}
+```
+
+#### Previous Check Results (`outputs`)
+```liquid
+{% if outputs.security %}
+Security Results:
+- Total issues: {{ outputs.security.totalIssues }}
+- Critical: {{ outputs.security.criticalIssues }}
+- Errors: {{ outputs.security.errorIssues }}
+- Warnings: {{ outputs.security.warningIssues }}
+
+Security Issues:
+{% for issue in outputs.security.securityIssues %}
+- {{ issue.severity | upcase }}: {{ issue.message }}
+{% endfor %}
+
+Suggestions:
+{% for suggestion in outputs.security.suggestions %}
+- {{ suggestion }}
+{% endfor %}
+{% endif %}
+```
+
+### Custom Templates
+
+Customize output rendering with custom templates:
+
+```yaml
+checks:
+  security-with-custom-output:
+    type: ai
+    prompt: "Analyze security vulnerabilities..."
+    template:
+      file: ./templates/security-report.liquid
+      # OR inline content:
+      # content: |
+      #   # 🔒 Security Report
+      #   {% for issue in issues %}
+      #   - **{{ issue.severity }}**: {{ issue.message }}
+      #   {% endfor %}
+    on: [pr_opened]
+```
+
+### Advanced Example: Multi-Context Review
+
+```yaml
+checks:
+  comprehensive-review:
+    type: ai
+    depends_on: [security, performance]  # Run after these checks
+    prompt:
+      content: |
+        # Comprehensive Review for {{ event.repository.fullName }}#{{ pr.number }}
+        
+        {% if event.comment %}
+        Triggered by comment: "{{ event.comment.body }}" from {{ event.comment.author }}
+        {% endif %}
+        
+        ## Previous Analysis Summary
+        {% if outputs.security %}
+        - **Security**: {{ outputs.security.totalIssues }} issues found
+          {% for issue in outputs.security.criticalIssues %}
+          - 🔴 **CRITICAL**: {{ issue.message }}
+          {% endfor %}
+        {% endif %}
+        
+        {% if outputs.performance %}
+        - **Performance**: {{ outputs.performance.totalIssues }} issues found  
+        {% endif %}
+        
+        ## New Focus Areas
+        Based on file changes in this PR:
+        {% for ext, files in utils.filesByExtension %}
+        - {{ ext | upcase }} files: {{ files.size }}
+        {% endfor %}
+        
+        Please provide an architectural review focusing on:
+        1. Integration between modified components
+        2. Impact on existing security measures  
+        3. Performance implications of changes
+        4. Maintainability and technical debt
+    on: [pr_opened, pr_updated]
+```
+
+## 🔧 Advanced Configuration
+
+### Check-Level AI Configuration
+
+Override global AI settings for specific checks:
+
+```yaml
+# Global AI settings (optional)
+ai_model: gpt-3.5-turbo
+ai_provider: openai
+
+checks:
+  security-advanced:
+    type: ai
+    prompt: "Perform advanced security analysis..."
+    # Override global settings for this check
+    ai_model: claude-3-opus
+    ai_provider: anthropic
+    on: [pr_opened]
+    
+  performance-quick:
+    type: ai
+    prompt: "Quick performance check..."
+    # Use different model for performance checks
+    ai_model: gpt-4-turbo
+    # ai_provider will inherit global setting (openai)
+    on: [pr_updated]
+    
+  quality-standard:
+    type: ai
+    prompt: "Standard quality review..."
+    # No overrides - uses global settings
+    on: [pr_opened]
+```
+
+### Environment Variable Configuration
+
+Use environment variables with GitHub Actions-like syntax:
+
+```yaml
+# Global environment variables
+env:
+  DEFAULT_TIMEOUT: "30000"
+  LOG_LEVEL: "info"
+  SHARED_SECRET: "${{ env.GITHUB_TOKEN }}"
+
+checks:
+  security-with-env:
+    type: ai
+    prompt: |
+      Security analysis using timeout: ${{ env.SECURITY_TIMEOUT }}ms
+      API endpoint: ${{ env.SECURITY_API_ENDPOINT }}
+      
+      Analyze these files for security issues...
+    # Check-specific environment variables
+    env:
+      SECURITY_API_KEY: "${{ env.ANTHROPIC_API_KEY }}"
+      SECURITY_TIMEOUT: "${DEFAULT_TIMEOUT}"  # Reference global env
+      ANALYSIS_MODE: "comprehensive"
+      CUSTOM_RULES: "security,auth,crypto"
+    # Use environment variable for AI model
+    ai_model: "${{ env.SECURITY_MODEL }}"
+    ai_provider: "${{ env.PREFERRED_AI_PROVIDER }}"
+    on: [pr_opened, pr_updated]
+```
+
+#### Environment Variable Syntax
+
+Visor supports multiple environment variable syntaxes:
+
+```yaml
+env:
+  # GitHub Actions style (recommended)
+  API_KEY: "${{ env.OPENAI_API_KEY }}"
+  
+  # Shell style
+  MODEL_NAME: "${CUSTOM_MODEL}"
+  
+  # Simple shell style
+  PROVIDER: "$AI_PROVIDER"
+  
+  # Mixed usage
+  ENDPOINT: "https://${{ env.API_HOST }}/v1/${API_VERSION}"
+  
+  # Static values
+  TIMEOUT: 45000
+  DEBUG_MODE: true
+  FEATURES: "security,performance"
+```
+
+### Configuration Inheritance
+
+Configuration follows this priority order:
+
+1. **Check-level settings** (highest priority)
+2. **Global configuration**
+3. **Environment variables**
+4. **Default values** (lowest priority)
+
+```yaml
+# Global defaults
+ai_model: gpt-3.5-turbo
+ai_provider: openai
+env:
+  GLOBAL_TIMEOUT: "30000"
+  
+checks:
+  example-check:
+    type: ai
+    prompt: "Example analysis"
+    # These override global settings
+    ai_model: claude-3-opus    # Overrides global ai_model
+    # ai_provider: inherits openai from global
+    
+    env:
+      # Inherits GLOBAL_TIMEOUT from global env
+      CHECK_TIMEOUT: "45000"   # Check-specific setting
+      API_KEY: "${{ env.ANTHROPIC_API_KEY }}"  # From process env
+```
+
+### Production Environment Setup
+
+For production deployments, set up environment variables:
+
+```bash
+# AI Provider API Keys
+export OPENAI_API_KEY="sk-your-openai-key"
+export ANTHROPIC_API_KEY="sk-ant-your-anthropic-key"
+export GOOGLE_API_KEY="your-google-api-key"
+
+# GitHub Integration
+export GITHUB_TOKEN="ghp_your-github-token"
+
+# Custom Configuration
+export SECURITY_MODEL="claude-3-opus"
+export PERFORMANCE_MODEL="gpt-4-turbo"
+export PREFERRED_AI_PROVIDER="anthropic"
+export ANALYSIS_TIMEOUT="60000"
+```
+
+Then reference them in your configuration:
+
+```yaml
+env:
+  # Production environment references
+  OPENAI_KEY: "${{ env.OPENAI_API_KEY }}"
+  ANTHROPIC_KEY: "${{ env.ANTHROPIC_API_KEY }}"
+  GITHUB_ACCESS_TOKEN: "${{ env.GITHUB_TOKEN }}"
+
+checks:
+  production-security:
+    type: ai
+    ai_model: "${{ env.SECURITY_MODEL }}"
+    ai_provider: "${{ env.PREFERRED_AI_PROVIDER }}"
+    env:
+      API_KEY: "${{ env.ANTHROPIC_KEY }}"
+      TIMEOUT: "${{ env.ANALYSIS_TIMEOUT }}"
+    prompt: |
+      Production security analysis with ${{ env.ANALYSIS_TIMEOUT }}ms timeout
+      Using provider: ${{ env.PREFERRED_AI_PROVIDER }}
+      Model: ${{ env.SECURITY_MODEL }}
+      
+      Perform comprehensive security analysis...
+```
+
 ### Built-in Schemas
 
 #### Code Review Schema (`code-review`)
@@ -448,9 +824,9 @@ Add custom schemas in your config:
 ```yaml
 schemas:
   custom-metrics:
-    file: "./schemas/metrics.json"     # Local file
+    file: ./schemas/metrics.json     # Local file
   compliance:  
-    url: "https://example.com/compliance.json"  # Remote URL
+    url: https://example.com/compliance.json  # Remote URL
 
 checks:
   metrics:
