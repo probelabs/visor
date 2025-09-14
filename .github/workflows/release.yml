@@ -60,8 +60,8 @@ jobs:
   release-action:
     runs-on: ubuntu-latest
     permissions:
-      # Minimal permissions during dependency installation
-      contents: read
+      # Need contents: write for creating GitHub releases
+      contents: write
       id-token: write
 
     steps:
