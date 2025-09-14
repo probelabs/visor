@@ -118,9 +118,6 @@ jobs:
 
             ```yaml
             - uses: ${{ github.repository }}@${{ github.ref_name }}
-              with:
-                github_token: ${{ secrets.GITHUB_TOKEN }}
-                checks: performance,security,architecture,style
             ```
 
             ### Using Visor CLI
