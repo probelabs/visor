@@ -42,43 +42,37 @@ export interface FailureConditions {
  * Context object available to expressions for failure condition evaluation
  */
 export interface FailureConditionContext {
-  /** Check results */
-  issues: Array<{
-    file: string;
-    line: number;
-    endLine?: number;
-    ruleId: string;
-    message: string;
-    severity: 'info' | 'warning' | 'error' | 'critical';
-    category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
-    group?: string;
-    schema?: string;
-    suggestion?: string;
-    replacement?: string;
-  }>;
+  /** Check results - raw output from the check/schema */
+  output: {
+    /** Check results */
+    issues?: Array<{
+      file: string;
+      line: number;
+      endLine?: number;
+      ruleId: string;
+      message: string;
+      severity: 'info' | 'warning' | 'error' | 'critical';
+      category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+      group?: string;
+      schema?: string;
+      suggestion?: string;
+      replacement?: string;
+    }>;
 
-  /** Array of suggestions from the check */
-  suggestions: string[];
+    /** Array of suggestions from the check */
+    suggestions?: string[];
 
-  /** Aggregated metadata for easy access */
-  metadata: {
-    /** Name of the check (e.g., "security-check") */
-    checkName: string;
-    /** Schema type (e.g., "code-review", "plain") */
-    schema: string;
-    /** Group name (e.g., "security-analysis") */
-    group: string;
-    /** Total number of issues found */
-    totalIssues: number;
-    /** Number of critical issues */
-    criticalIssues: number;
-    /** Number of error issues */
-    errorIssues: number;
-    /** Number of warning issues */
-    warningIssues: number;
-    /** Number of info issues */
-    infoIssues: number;
+    /** Any additional fields provided by the check/schema */
+    [key: string]: any;
   };
+
+  /** Previous check outputs for dependencies - keyed by check name */
+  outputs?: Record<string, any>;
+
+  /** Check context information */
+  checkName?: string;
+  schema?: string;
+  group?: string;
 
   /** Debug information (if available) */
   debug?: {

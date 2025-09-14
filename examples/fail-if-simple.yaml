@@ -4,7 +4,7 @@ version: "1.0"
 # The check fails if the expression evaluates to true
 
 # Global fail condition - applies to all checks
-fail_if: "metadata.criticalIssues > 0"
+fail_if: "output.issues.some(i => i.severity === 'critical')"
 
 checks:
   # Security check - zero tolerance
@@ -14,7 +14,7 @@ checks:
     prompt: "Analyze for security vulnerabilities"
     on: [pr_opened, pr_updated]
     # Fail if ANY security issues found
-    fail_if: "metadata.totalIssues > 0"
+    fail_if: "output.issues.length > 0"
 
   # Performance check - some tolerance
   performance-check:
@@ -23,7 +23,7 @@ checks:
     prompt: "Review for performance issues"
     on: [pr_opened, pr_updated]
     # Fail only if critical performance issues
-    fail_if: "metadata.criticalIssues > 0 || metadata.errorIssues > 2"
+    fail_if: "output.issues.some(i => i.severity === 'critical') || output.issues.filter(i => i.severity === 'error').length > 2"
 
   # Code style - lenient
   style-check:
@@ -32,7 +32,7 @@ checks:
     prompt: "Check code style and formatting"
     on: [pr_opened, pr_updated]
     # Only fail if too many style issues
-    fail_if: "metadata.totalIssues > 20"
+    fail_if: "output.issues.length > 20"
 
   # Using GitHub Actions-style functions
   quality-gate:
@@ -40,8 +40,8 @@ checks:
     schema: code-review
     prompt: "Overall code quality check"
     on: [pr_opened, pr_updated]
-    # Using the success/failure transforms
-    fail_if: "metadata|failure()"  # Fails if metadata indicates failure
+    # Using expressions with output
+    fail_if: "output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"  # Fails if critical or error issues found
 
   # With contains() function
   sensitive-files:
@@ -58,8 +58,8 @@ checks:
     schema: code-review
     prompt: "Review API endpoints"
     on: [pr_opened, pr_updated]
-    # Stricter for API files
-    fail_if: "startsWith(metadata.checkName, 'api') && metadata.totalIssues > 0"
+    # Stricter for API files (using checkName from context)
+    fail_if: "startsWith(checkName, 'api') && output.issues.length > 0"
 
   # Always pass example
   info-only:
@@ -79,9 +79,9 @@ checks:
     depends_on: [security-check, performance-check]
     # Fail if previous checks found issues OR current check has critical issues
     fail_if: |
-      (outputs['security-check'] && outputs['security-check'].totalIssues > 0) ||
-      (outputs['performance-check'] && outputs['performance-check'].criticalIssues > 0) ||
-      metadata.criticalIssues > 0
+      (outputs['security-check'] && outputs['security-check'].issues.length > 0) ||
+      (outputs['performance-check'] && outputs['performance-check'].issues.some(i => i.severity === 'critical')) ||
+      output.issues.some(i => i.severity === 'critical')
 
 output:
   pr_comment:

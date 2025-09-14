@@ -5,7 +5,7 @@ version: "1.0"
 # and adaptable to different project types and coding standards.
 
 # Global fail condition - fail if critical or error issues found in code-review schema checks
-fail_if: "metadata.criticalIssues > 0 || metadata.errorIssues > 0"
+fail_if: "output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
 
 checks:
   # Security analysis - Critical for all projects
@@ -68,16 +68,6 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Please analyze the performance implications of the code changes in this pull request.
-        
-        Use the following template to organize your analysis:
-
-        # Performance Analysis for PR {{ pr.number }}
-
-        {% if utils.hasLargeChanges %}
-        ⚠️ **Large Changes Detected** - Extra attention to performance implications.
-        {% endif %}
-
         ## Files to Analyze
         {% for file in files %}
         - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
@@ -127,11 +117,6 @@ checks:
     schema: code-review
     prompt: |
         Please evaluate the code quality and maintainability of the changes in this pull request.
-        
-        Use the following template to structure your review:
-
-        # Code Quality Review for PR {{ pr.number }}
-
 
         ## Instructions
         Assess the code quality according to these guidelines:
@@ -242,15 +227,3 @@ checks:
 
         Provide a balanced technical assessment suitable for both developers and stakeholders.
     on: [pr_opened, pr_updated]
-
-output:
-  pr_comment:
-    format: markdown
-    group_by: check
-    collapse: true
-
-  github_checks:
-    enabled: true
-    per_check: true
-    name_prefix: "Visor"
-

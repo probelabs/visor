@@ -10,13 +10,13 @@ failure_conditions:
 
   # Using contains() like GitHub Actions
   no_sql_injection:
-    condition: '!contains(metadata.checkName, "skip") || metadata.criticalIssues == 0'
+    condition: '!contains(checkName, "skip") || !output.issues.some(i => i.severity === "critical")'
     message: "Critical issues found in non-skipped checks"
     severity: error
 
   # Using startsWith() for check name patterns
   security_checks_strict:
-    condition: 'startsWith(metadata.checkName, "security") && metadata.totalIssues == 0'
+    condition: 'startsWith(checkName, "security") && output.issues.length == 0'
     message: "Security checks must have zero issues"
     severity: error
 
@@ -31,7 +31,7 @@ checks:
     failure_conditions:
       # Using contains() to check for specific text in file paths
       sensitive_files:
-        condition: 'hasFileMatching(issues, ".env") || hasFileMatching(issues, "secret")'
+        condition: 'hasFileMatching(output.issues, ".env") || hasFileMatching(output.issues, "secret")'
         message: "Issues found in sensitive files"
         severity: error
 
@@ -53,14 +53,14 @@ checks:
       performance_gates:
         condition: |
           !failure() &&
-          !contains(metadata.group, "skip") &&
-          metadata.criticalIssues == 0
+          !contains(checkName, "skip") &&
+          !output.issues.some(i => i.severity === "critical")
         message: "Performance check passed quality gates"
         severity: info
 
       # Using endsWith() for file type checking
       frontend_performance:
-        condition: 'hasFileMatching(issues, ".js") || hasFileMatching(issues, ".tsx")'
+        condition: 'hasFileMatching(output.issues, ".js") || hasFileMatching(output.issues, ".tsx")'
         message: "Frontend performance issues detected"
         severity: warning
 
@@ -75,8 +75,8 @@ checks:
       # Complex condition similar to GitHub Actions
       style_enforcement:
         condition: |
-          (metadata.schema == 'code-review' && metadata.warningIssues > 5) ||
-          (contains(metadata.group, 'strict') && metadata.totalIssues > 0)
+          (checkName.includes('code-review') && output.issues.filter(i => i.severity === 'warning').length > 5) ||
+          (contains(checkName, 'strict') && output.issues.length > 0)
         message: "Style violations exceed threshold"
         severity: warning
 

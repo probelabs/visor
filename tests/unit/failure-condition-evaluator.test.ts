@@ -79,9 +79,9 @@ describe('FailureConditionEvaluator', () => {
   describe('evaluateConditions', () => {
     it('should evaluate simple global conditions', async () => {
       const globalConditions: FailureConditions = {
-        critical_blocker: 'metadata.criticalIssues > 0',
-        error_threshold: 'metadata.errorIssues >= 2',
-        total_issues: 'metadata.totalIssues > 10',
+        critical_blocker: 'output.issues.some(i => i.severity === "critical")',
+        error_threshold: 'output.issues.filter(i => i.severity === "error").length >= 2',
+        total_issues: 'output.issues.length > 10',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -104,11 +104,13 @@ describe('FailureConditionEvaluator', () => {
       expect(totalResult?.failed).toBe(false); // Only 4 total issues
     });
 
-    it('should evaluate complex conditions with metadata access', async () => {
+    it('should evaluate complex conditions with output access', async () => {
       const conditions: FailureConditions = {
-        security_check: 'metadata.checkName == "security" && metadata.criticalIssues > 0',
-        schema_based: 'metadata.schema == "code-review" && metadata.totalIssues >= 4',
-        group_specific: 'metadata.group == "security-analysis" && metadata.warningIssues >= 1',
+        security_check:
+          'checkName == "security" && output.issues.some(i => i.severity === "critical")',
+        schema_based: 'schema == "code-review" && output.issues.length >= 4',
+        group_specific:
+          'group == "security-analysis" && output.issues.filter(i => i.severity === "warning").length >= 1',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -133,10 +135,10 @@ describe('FailureConditionEvaluator', () => {
 
     it('should evaluate conditions with helper functions for issues', async () => {
       const conditions: FailureConditions = {
-        has_sql_injection: 'hasFileWith(issues, "auth")',
-        has_critical_security: 'hasIssueWith(issues, "severity", "critical")',
-        count_errors: 'countIssues(issues, "severity", "error") >= 1',
-        file_analysis: 'hasFileWith(issues, "auth")',
+        has_sql_injection: 'hasFileWith(output.issues, "auth")',
+        has_critical_security: 'hasIssueWith(output.issues, "severity", "critical")',
+        count_errors: 'countIssues(output.issues, "severity", "error") >= 1',
+        file_analysis: 'hasFileWith(output.issues, "auth")',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -192,13 +194,15 @@ describe('FailureConditionEvaluator', () => {
     it('should evaluate complex failure conditions with metadata', async () => {
       const conditions: FailureConditions = {
         complex_condition: {
-          condition: 'metadata.criticalIssues > 0 && metadata.checkName == "security"',
+          condition:
+            'output.issues.some(i => i.severity === "critical") && checkName == "security"',
           message: 'Critical security issues require immediate attention',
           severity: 'error',
           halt_execution: true,
         },
         performance_warning: {
-          condition: 'metadata.errorIssues >= 1 && debug && debug.processingTime > 3000',
+          condition:
+            'output.issues.filter(i => i.severity === "error").length >= 1 && debug && debug.processingTime > 3000',
           message: 'Performance analysis found issues and took significant time',
           severity: 'warning',
           halt_execution: false,
@@ -229,13 +233,13 @@ describe('FailureConditionEvaluator', () => {
 
     it('should handle check-specific conditions overriding global ones', async () => {
       const globalConditions: FailureConditions = {
-        quality_gate: 'metadata.totalIssues > 10',
-        critical_gate: 'metadata.criticalIssues > 0',
+        quality_gate: 'output.issues.length > 10',
+        critical_gate: 'output.issues.some(i => i.severity === "critical")',
       };
 
       const checkConditions: FailureConditions = {
-        quality_gate: 'metadata.totalIssues > 2', // Override with stricter limit
-        security_specific: 'metadata.errorIssues >= 1',
+        quality_gate: 'output.issues.length > 2', // Override with stricter limit
+        security_specific: 'output.issues.filter(i => i.severity === "error").length >= 1',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -252,7 +256,7 @@ describe('FailureConditionEvaluator', () => {
       // Check-specific quality_gate should override global one
       const qualityResult = results.find(r => r.conditionName === 'quality_gate');
       expect(qualityResult?.failed).toBe(true); // 4 > 2 (check-specific threshold)
-      expect(qualityResult?.expression).toBe('metadata.totalIssues > 2');
+      expect(qualityResult?.expression).toBe('output.issues.length > 2');
 
       // Global critical_gate should remain
       const criticalResult = results.find(r => r.conditionName === 'critical_gate');
@@ -292,9 +296,9 @@ describe('FailureConditionEvaluator', () => {
 
     it('should handle malformed expressions gracefully', async () => {
       const conditions: FailureConditions = {
-        valid_condition: 'metadata.totalIssues > 0',
-        invalid_syntax: 'metadata.totalIssues >>', // Invalid syntax
-        undefined_property: 'metadata.nonexistentProperty > 0',
+        valid_condition: 'output.issues.length > 0',
+        invalid_syntax: 'output.issues.length >>', // Invalid syntax
+        undefined_property: 'output.nonexistentProperty > 0',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -409,7 +413,7 @@ describe('FailureConditionEvaluator', () => {
         {
           conditionName: 'error_condition',
           failed: true,
-          expression: 'metadata.criticalIssues > 0',
+          expression: 'output.issues.some(i => i.severity === "critical")',
           message: 'Critical issues found',
           severity: 'error',
           haltExecution: true,
@@ -417,14 +421,14 @@ describe('FailureConditionEvaluator', () => {
         {
           conditionName: 'warning_condition',
           failed: true,
-          expression: 'metadata.totalIssues > 5',
+          expression: 'output.issues.length > 5',
           severity: 'warning',
           haltExecution: false,
         },
         {
           conditionName: 'passed_condition',
           failed: false,
-          expression: 'metadata.totalIssues > 10',
+          expression: 'output.issues.length > 10',
           severity: 'info',
           haltExecution: false,
         },
@@ -434,7 +438,7 @@ describe('FailureConditionEvaluator', () => {
       expect(formatted).toContain('❌ **Error conditions (1):**');
       expect(formatted).toContain('error_condition: Critical issues found');
       expect(formatted).toContain('⚠️ **Warning conditions (1):**');
-      expect(formatted).toContain('warning_condition: metadata.totalIssues > 5');
+      expect(formatted).toContain('warning_condition: output.issues.length > 5');
       expect(formatted).not.toContain('passed_condition'); // Should not include passed conditions
     });
 
@@ -443,7 +447,7 @@ describe('FailureConditionEvaluator', () => {
         {
           conditionName: 'passed_condition',
           failed: false,
-          expression: 'metadata.totalIssues > 10',
+          expression: 'output.issues.length > 10',
           severity: 'info',
           haltExecution: false,
         },

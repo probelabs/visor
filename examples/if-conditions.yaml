@@ -11,7 +11,7 @@ checks:
     prompt: "Check production readiness and deployment safety"
     on: [pr_opened, pr_updated]
     if: 'branch == "main" || baseBranch == "main"'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Run only when there are file changes
   incremental-review:
@@ -20,7 +20,7 @@ checks:
     prompt: "Review changed files for issues"
     on: [pr_opened, pr_updated]
     if: "filesCount > 0"
-    fail_if: "metadata.errorIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'error')"
 
   # Run only on feature branches
   feature-validation:
@@ -29,7 +29,7 @@ checks:
     prompt: "Validate feature implementation"
     on: [pr_opened, pr_updated]
     if: 'startsWith(branch, "feature/")'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Run only in CI environment
   ci-only-check:
@@ -38,7 +38,7 @@ checks:
     prompt: "Comprehensive security scan"
     on: [pr_opened, pr_updated]
     if: 'env.CI == "true"'
-    fail_if: "metadata.totalIssues > 0"
+    fail_if: "output.issues.length > 0"
 
   # Run when specific files are changed
   auth-security-check:
@@ -48,7 +48,7 @@ checks:
     on: [pr_opened, pr_updated]
     # Run when auth-related files are modified
     if: 'contains(filesChanged, "auth") || contains(filesChanged, "login") || contains(filesChanged, "session")'
-    fail_if: "metadata.totalIssues > 0"
+    fail_if: "output.issues.length > 0"
 
   # Complex condition - run on main or when many files changed
   comprehensive-review:
@@ -58,7 +58,7 @@ checks:
     on: [pr_opened, pr_updated]
     # Run on main branch OR when more than 10 files changed
     if: 'branch == "main" || filesCount > 10'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Always run (default behavior)
   standard-check:
@@ -67,7 +67,7 @@ checks:
     prompt: "Standard code review"
     on: [pr_opened, pr_updated]
     if: "always()"  # Explicitly always run
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Never run (can be enabled by removing/changing condition)
   disabled-check:
@@ -76,7 +76,7 @@ checks:
     prompt: "Currently disabled check"
     on: [pr_opened, pr_updated]
     if: "!always()"  # Never run
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Dependency-based execution
   security-check:
@@ -85,7 +85,7 @@ checks:
     prompt: "Security vulnerability scan"
     on: [pr_opened, pr_updated]
     if: "always()"
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   performance-check:
     type: ai
@@ -93,7 +93,7 @@ checks:
     prompt: "Performance analysis"
     on: [pr_opened, pr_updated]
     if: "always()"
-    fail_if: "metadata.errorIssues > 2"
+    fail_if: "output.issues.filter(i => i.severity === 'error').length > 2"
 
   # Run only if security check found issues
   security-remediation:
@@ -104,7 +104,7 @@ checks:
     depends_on: [security-check]
     # Only run if security check found issues (use length() function)
     if: 'outputs["security-check"] && length(outputs["security-check"].issues) > 0'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Run only if all previous checks passed
   final-validation:
@@ -121,7 +121,7 @@ checks:
       outputs["performance-check"] &&
       !hasIssue(outputs["performance-check"].issues, "severity", "critical") &&
       !hasIssue(outputs["performance-check"].issues, "severity", "error")
-    fail_if: "metadata.totalIssues > 0"
+    fail_if: "output.issues.length > 0"
 
   # Environment-specific checks
   staging-check:
@@ -131,7 +131,7 @@ checks:
     on: [pr_opened, pr_updated]
     # Run only in staging environment
     if: 'env.ENVIRONMENT == "staging"'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
   # Time-based or conditional skip
   weekend-check:
@@ -141,7 +141,7 @@ checks:
     on: [pr_opened, pr_updated]
     # Could be used with env vars set by CI to control execution
     if: 'env.RUN_WEEKEND_CHECKS == "true"'
-    fail_if: "metadata.criticalIssues > 0"
+    fail_if: "output.issues.some(i => i.severity === 'critical')"
 
 output:
   pr_comment:

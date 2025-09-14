@@ -3,20 +3,20 @@ version: "1.0"
 # Advanced failure conditions example
 # This shows complex JEXL expressions with metadata access and business logic
 
-# Global failure conditions with metadata-based logic
+# Global failure conditions with schema-based logic
 failure_conditions:
   # Only apply critical issue limits to code-review schema checks
   critical_code_review:
-    condition: "metadata.schema == 'code-review' && metadata.criticalIssues > 0"
+    condition: "checkName.includes('code-review') && output.issues.some(i => i.severity === 'critical')"
     message: "Critical issues found in code review - blocking merge"
     severity: error
 
   # Different thresholds for different check types
   schema_based_limits:
     condition: |
-      (metadata.schema == 'security' && metadata.totalIssues > 2) ||
-      (metadata.schema == 'performance' && metadata.criticalIssues > 0) ||
-      (metadata.schema == 'plain' && metadata.errorIssues > 5)
+      (checkName.includes('security') && output.issues.length > 2) ||
+      (checkName.includes('performance') && output.issues.some(i => i.severity === 'critical')) ||
+      (checkName.includes('plain') && output.issues.filter(i => i.severity === 'error').length > 5)
     message: "Schema-specific quality gate failed"
     severity: error
 
@@ -39,20 +39,20 @@ checks:
     failure_conditions:
       # Zero tolerance for SQL injection patterns (GitHub Actions-like syntax)
       sql_injection_check:
-        condition: 'hasIssue(issues, "ruleId", "security/sql-injection")'
+        condition: 'hasIssue(output.issues, "ruleId", "security/sql-injection")'
         message: "SQL injection vulnerability detected - immediate fix required"
         severity: error
         halt_execution: true
 
       # Count specific security issue types
       critical_security_count:
-        condition: 'countIssues(issues, "severity", "critical") == 0'
+        condition: 'countIssues(output.issues, "severity", "critical") == 0'
         message: "Critical security issues must be resolved"
         severity: error
 
       # File-based analysis using contains-like function
       auth_file_issues:
-        condition: 'hasFileMatching(issues, "auth") && metadata.criticalIssues > 0'
+        condition: 'hasFileMatching(output.issues, "auth") && output.issues.some(i => i.severity === "critical")'
         message: "Critical issues found in authentication-related files"
         severity: error
 
@@ -68,15 +68,15 @@ checks:
       # Complex performance criteria
       performance_quality_gate:
         condition: |
-          metadata.criticalIssues == 0 &&
-          metadata.errorIssues <= 2 &&
-          !hasFileWith(issues, "database") || countIssues(issues, "category", "performance") <= 3
+          !output.issues.some(i => i.severity === "critical") &&
+          output.issues.filter(i => i.severity === "error").length <= 2 &&
+          !hasFileWith(output.issues, "database") || countIssues(output.issues, "category", "performance") <= 3
         message: "Performance quality gate failed"
         severity: warning
 
       # Database-specific rules
       database_performance:
-        condition: 'hasFileWith(issues, "db") && countIssues(issues, "severity", "critical") > 0'
+        condition: 'hasFileWith(output.issues, "db") && countIssues(output.issues, "severity", "critical") > 0'
         message: "Critical database performance issues found"
         severity: error
 
@@ -91,7 +91,7 @@ checks:
     failure_conditions:
       # Only fail for large changes
       architecture_impact:
-        condition: "metadata.totalIssues > 5 && metadata.criticalIssues > 1"
+        condition: "output.issues.length > 5 && output.issues.filter(i => i.severity === 'critical').length > 1"
         message: "Significant architectural concerns identified"
         severity: warning
 
@@ -112,16 +112,16 @@ checks:
     failure_conditions:
       # Suggestion-based conditions
       missing_docs:
-        condition: 'hasSuggestion(suggestions, "documentation")'
+        condition: 'hasSuggestion(output.suggestions, "documentation")'
         message: "Documentation improvements suggested"
         severity: warning
 
       # Complex style rules
       style_quality:
         condition: |
-          metadata.warningIssues <= 10 &&
-          !hasIssueWith(issues, "category", "documentation") ||
-          metadata.totalIssues <= 15
+          output.issues.filter(i => i.severity === "warning").length <= 10 &&
+          !hasIssueWith(output.issues, "category", "documentation") ||
+          output.issues.length <= 15
         message: "Code style within acceptable limits"
         severity: info
 

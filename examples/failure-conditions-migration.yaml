@@ -15,11 +15,11 @@ version: "1.0"
 # Global failure conditions - start simple
 failure_conditions:
   # Basic quality gate
-  default_quality_gate: "metadata.totalIssues > 20"
+  default_quality_gate: "output.issues.length > 20"
 
   # Critical issue blocker
   critical_blocker:
-    condition: "metadata.criticalIssues > 0"
+    condition: "output.issues.some(i => i.severity === 'critical')"
     message: "Critical issues found - deployment blocked"
     severity: error
     halt_execution: true
@@ -38,11 +38,11 @@ checks:
     # Start with simple check-specific conditions
     failure_conditions:
       # Security-specific gate
-      security_gate: "metadata.errorIssues >= 1"
+      security_gate: "output.issues.some(i => i.severity === 'error')"
 
       # Specific security patterns
       sensitive_operations:
-        condition: "hasFileWith(issues, 'password') || hasFileWith(issues, 'token')"
+        condition: "hasFileWith(output.issues, 'password') || hasFileWith(output.issues, 'token')"
         message: "Sensitive security operations detected"
         severity: warning
 
@@ -57,7 +57,7 @@ checks:
 
     failure_conditions:
       # Performance threshold
-      performance_issues: "metadata.errorIssues > 2"
+      performance_issues: "output.issues.filter(i => i.severity === 'error').length > 2"
 
 # Output configuration
 output:

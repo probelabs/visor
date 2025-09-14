@@ -6,14 +6,14 @@ version: "1.0"
 # Global failure conditions that apply to all checks
 failure_conditions:
   # Fail if any critical issues are found
-  no_critical_issues: "metadata.criticalIssues == 0"
+  no_critical_issues: "!output.issues.some(i => i.severity === 'critical')"
 
   # Fail if there are more than 3 error-level issues
-  error_threshold: "metadata.errorIssues <= 3"
+  error_threshold: "output.issues.filter(i => i.severity === 'error').length <= 3"
 
   # Warn if there are more than 10 total issues
   total_issue_limit:
-    condition: "metadata.totalIssues <= 10"
+    condition: "output.issues.length <= 10"
     message: "Too many issues found - consider refactoring"
     severity: warning
 
@@ -28,7 +28,7 @@ checks:
     # Check-specific failure conditions (override global ones)
     failure_conditions:
       # Security issues are always critical - no tolerance
-      zero_security_issues: "metadata.totalIssues == 0"
+      zero_security_issues: "output.issues.length == 0"
 
   # Performance check with multiple failure conditions
   performance-check:
@@ -39,7 +39,7 @@ checks:
 
     failure_conditions:
       # Allow some performance warnings but no critical issues
-      performance_gate: "metadata.criticalIssues == 0 && metadata.errorIssues <= 1"
+      performance_gate: "!output.issues.some(i => i.severity === 'critical') && output.issues.filter(i => i.severity === 'error').length <= 1"
 
 output:
   pr_comment:

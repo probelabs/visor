@@ -34,7 +34,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        'metadata.criticalIssues > 0'
+        'output.issues.some(i => i.severity === "critical")'
       );
 
       expect(shouldFail).toBe(true);
@@ -45,7 +45,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        'metadata.criticalIssues > 10'
+        'output.issues.filter(i => i.severity === "critical").length > 10'
       );
 
       expect(shouldPass).toBe(false);
@@ -74,7 +74,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        'contains(metadata.checkName, "security")'
+        'contains(checkName, "security")'
       );
 
       expect(containsCheck).toBe(true);
@@ -85,7 +85,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        'startsWith(metadata.checkName, "api")'
+        'startsWith(checkName, "api")'
       );
 
       expect(startsWithCheck).toBe(true);
@@ -120,7 +120,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewSummary,
-        '(metadata.errorIssues > 0 && metadata.warningIssues > 0) || metadata.totalIssues > 5'
+        '(output.issues.some(i => i.severity === "error") && output.issues.some(i => i.severity === "warning")) || output.issues.length > 5'
       );
 
       expect(complexCondition).toBe(true);
@@ -246,7 +246,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewWithWarning, // Only warning, but security check fails on ANY issues
-        'metadata.totalIssues > 0'
+        'output.issues.length > 0'
       );
 
       expect(securityFail).toBe(true);
@@ -257,7 +257,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewWithCritical, // Has critical issue
-        'metadata.criticalIssues > 0'
+        'output.issues.some(i => i.severity === "critical")'
       );
 
       expect(styleFail).toBe(true);
@@ -268,7 +268,7 @@ describe('Simplified fail_if syntax', () => {
         'code-review',
         'test',
         reviewWithWarning, // Only warning, no critical
-        'metadata.criticalIssues > 0'
+        'output.issues.some(i => i.severity === "critical")'
       );
 
       expect(stylePass).toBe(false);

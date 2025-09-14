@@ -27,9 +27,16 @@ export class FailureConditionEvaluator {
     checkSchema: string,
     checkGroup: string,
     reviewSummary: ReviewSummary,
-    expression: string
+    expression: string,
+    previousOutputs?: Record<string, any>
   ): Promise<boolean> {
-    const context = this.buildEvaluationContext(checkName, checkSchema, checkGroup, reviewSummary);
+    const context = this.buildEvaluationContext(
+      checkName,
+      checkSchema,
+      checkGroup,
+      reviewSummary,
+      previousOutputs
+    );
 
     try {
       return this.evaluateExpression(expression, context);
@@ -103,9 +110,16 @@ export class FailureConditionEvaluator {
     checkGroup: string,
     reviewSummary: ReviewSummary,
     globalConditions?: FailureConditions,
-    checkConditions?: FailureConditions
+    checkConditions?: FailureConditions,
+    previousOutputs?: Record<string, any>
   ): Promise<FailureConditionResult[]> {
-    const context = this.buildEvaluationContext(checkName, checkSchema, checkGroup, reviewSummary);
+    const context = this.buildEvaluationContext(
+      checkName,
+      checkSchema,
+      checkGroup,
+      reviewSummary,
+      previousOutputs
+    );
 
     const results: FailureConditionResult[] = [];
 
@@ -249,17 +263,35 @@ export class FailureConditionEvaluator {
       const hasFileWith = hasFileMatching;
 
       // Extract context variables
-      const issues = context.issues || [];
-      const suggestions = context.suggestions || [];
-      const metadata = context.metadata || {};
-      const criticalIssues = metadata.criticalIssues || 0;
-      const errorIssues = metadata.errorIssues || 0;
-      const totalIssues = metadata.totalIssues || 0;
-      const warningIssues = metadata.warningIssues || 0;
-      const infoIssues = metadata.infoIssues || 0;
+      const output = context.output || {};
+      const issues = output.issues || [];
+      const suggestions = output.suggestions || [];
 
-      // Additional context for 'if' conditions
+      // Backward compatibility: provide metadata for transition period
+      // TODO: Remove after all configurations are updated
+      const metadata = context.metadata || {
+        checkName: context.checkName || '',
+        schema: context.schema || '',
+        group: context.group || '',
+        criticalIssues: issues.filter((i: any) => i.severity === 'critical').length,
+        errorIssues: issues.filter((i: any) => i.severity === 'error').length,
+        warningIssues: issues.filter((i: any) => i.severity === 'warning').length,
+        infoIssues: issues.filter((i: any) => i.severity === 'info').length,
+        totalIssues: issues.length,
+        hasChanges: context.hasChanges || false,
+      };
+
+      // Legacy variables for backward compatibility
+      const criticalIssues = metadata.criticalIssues;
+      const errorIssues = metadata.errorIssues;
+      const totalIssues = metadata.totalIssues;
+      const warningIssues = metadata.warningIssues;
+      const infoIssues = metadata.infoIssues;
+
+      // Additional context for 'if' conditions and some failure conditions
       const checkName = context.checkName || '';
+      const schema = context.schema || '';
+      const group = context.group || '';
       const branch = context.branch || 'unknown';
       const baseBranch = context.baseBranch || 'main';
       const filesChanged = context.filesChanged || [];
@@ -271,7 +303,11 @@ export class FailureConditionEvaluator {
 
       // Create a sandboxed function with only allowed variables and functions
       const func = new Function(
-        // Context variables
+        // Primary context variables
+        'output',
+        'outputs',
+        'debug',
+        // Legacy compatibility variables
         'issues',
         'suggestions',
         'metadata',
@@ -282,14 +318,14 @@ export class FailureConditionEvaluator {
         'infoIssues',
         // If condition context
         'checkName',
+        'schema',
+        'group',
         'branch',
         'baseBranch',
         'filesChanged',
         'filesCount',
         'event',
         'env',
-        'outputs',
-        'debug',
         // Helper functions
         'contains',
         'startsWith',
@@ -310,6 +346,10 @@ export class FailureConditionEvaluator {
       );
 
       return func(
+        output,
+        outputs,
+        debug,
+        // Legacy compatibility
         issues,
         suggestions,
         metadata,
@@ -319,14 +359,14 @@ export class FailureConditionEvaluator {
         warningIssues,
         infoIssues,
         checkName,
+        schema,
+        group,
         branch,
         baseBranch,
         filesChanged,
         filesCount,
         event,
         env,
-        outputs,
-        debug,
         contains,
         startsWith,
         endsWith,
@@ -384,42 +424,35 @@ export class FailureConditionEvaluator {
     checkName: string,
     checkSchema: string,
     checkGroup: string,
-    reviewSummary: ReviewSummary
+    reviewSummary: ReviewSummary,
+    previousOutputs?: Record<string, any>
   ): FailureConditionContext {
     const { issues, suggestions, debug } = reviewSummary;
 
-    // Calculate aggregated metadata
-    const totalIssues = issues.length;
-    const criticalIssues = issues.filter(i => i.severity === 'critical').length;
-    const errorIssues = issues.filter(i => i.severity === 'error').length;
-    const warningIssues = issues.filter(i => i.severity === 'warning').length;
-    const infoIssues = issues.filter(i => i.severity === 'info').length;
-
     const context: FailureConditionContext = {
-      issues: issues.map(issue => ({
-        file: issue.file,
-        line: issue.line,
-        endLine: issue.endLine,
-        ruleId: issue.ruleId,
-        message: issue.message,
-        severity: issue.severity,
-        category: issue.category,
-        group: issue.group,
-        schema: issue.schema,
-        suggestion: issue.suggestion,
-        replacement: issue.replacement,
-      })),
-      suggestions,
-      metadata: {
-        checkName,
-        schema: checkSchema,
-        group: checkGroup,
-        totalIssues,
-        criticalIssues,
-        errorIssues,
-        warningIssues,
-        infoIssues,
+      output: {
+        issues: issues.map(issue => ({
+          file: issue.file,
+          line: issue.line,
+          endLine: issue.endLine,
+          ruleId: issue.ruleId,
+          message: issue.message,
+          severity: issue.severity,
+          category: issue.category,
+          group: issue.group,
+          schema: issue.schema,
+          suggestion: issue.suggestion,
+          replacement: issue.replacement,
+        })),
+        suggestions,
+        // Include additional schema-specific data from reviewSummary
+        ...(reviewSummary as any), // Pass through any additional fields
       },
+      outputs: previousOutputs || {},
+      // Add basic context info for failure conditions
+      checkName: checkName,
+      schema: checkSchema,
+      group: checkGroup,
     };
 
     // Add debug information if available
