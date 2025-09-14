@@ -457,4 +457,157 @@ describe('FailureConditionEvaluator', () => {
       expect(formatted).toBe('✅ All failure conditions passed');
     });
   });
+
+  describe('security tests', () => {
+    it('should block access to process object', async () => {
+      const conditions: FailureConditions = {
+        malicious_process: 'process.exit(1)',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should block access to require function', async () => {
+      const conditions: FailureConditions = {
+        malicious_require: 'require("fs").readFileSync("/etc/passwd")',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should block access to global object', async () => {
+      const conditions: FailureConditions = {
+        malicious_global: 'global.process.exit(1)',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should block access to Function constructor', async () => {
+      const conditions: FailureConditions = {
+        malicious_function: 'Function("return process").call(null)()',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should block access to eval function', async () => {
+      const conditions: FailureConditions = {
+        malicious_eval: 'eval("process.exit(1)")',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should block attempts to escape sandbox via constructor', async () => {
+      const conditions: FailureConditions = {
+        constructor_escape: '("").constructor.constructor("return process")()',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(1);
+      const result = results[0];
+      expect(result.failed).toBe(false);
+      expect(result.error).toContain('Expression evaluation error');
+    });
+
+    it('should allow safe array and string operations', async () => {
+      const conditions: FailureConditions = {
+        safe_array_ops: 'output.issues.some(i => i.severity === "critical")',
+        safe_string_ops: 'checkName.toLowerCase().includes("security")',
+        safe_math_ops: 'Math.max(output.issues.length, 5) > 3',
+        safe_helper_function: 'contains(checkName, "security")',
+      };
+
+      const results = await evaluator.evaluateConditions(
+        'security',
+        'code-review',
+        'security-analysis',
+        mockReviewSummary,
+        conditions
+      );
+
+      expect(results).toHaveLength(4);
+
+      // All results should evaluate without errors
+      results.forEach(result => {
+        expect(result.error).toBeUndefined();
+      });
+
+      // Check specific results
+      const arrayOpsResult = results.find(r => r.conditionName === 'safe_array_ops');
+      expect(arrayOpsResult?.failed).toBe(true); // Has critical issues
+
+      const stringOpsResult = results.find(r => r.conditionName === 'safe_string_ops');
+      expect(stringOpsResult?.failed).toBe(true); // checkName contains "security"
+
+      const mathOpsResult = results.find(r => r.conditionName === 'safe_math_ops');
+      expect(mathOpsResult?.failed).toBe(true); // Math.max(4, 5) = 5 > 3
+
+      const helperResult = results.find(r => r.conditionName === 'safe_helper_function');
+      expect(helperResult?.failed).toBe(true); // contains("security", "security") = true
+    });
+  });
 });

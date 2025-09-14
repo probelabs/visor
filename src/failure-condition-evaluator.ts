@@ -1,5 +1,5 @@
 /**
- * Failure condition evaluation engine using Function Constructor for secure expression evaluation
+ * Failure condition evaluation engine using SandboxJS for secure expression evaluation
  */
 
 import { ReviewSummary } from './reviewer';
@@ -10,13 +10,80 @@ import {
   FailureConditionResult,
   FailureConditionSeverity,
 } from './types/config';
+import Sandbox from '@nyariv/sandboxjs';
 
 /**
- * Evaluates failure conditions using Function Constructor for secure evaluation
+ * Evaluates failure conditions using SandboxJS for secure evaluation
  */
 export class FailureConditionEvaluator {
+  private sandbox: Sandbox;
+
   constructor() {
-    // No initialization needed for Function Constructor approach
+    this.sandbox = this.createSecureSandbox();
+  }
+
+  /**
+   * Create a secure sandbox with whitelisted functions and globals
+   */
+  private createSecureSandbox(): Sandbox {
+    // Start with safe globals and prototypes
+    const globals = {
+      ...Sandbox.SAFE_GLOBALS,
+      // Allow Math for calculations
+      Math,
+      // Allow console for debugging (in controlled environment)
+      console: {
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
+      },
+    };
+
+    // Create prototype whitelist - use safe defaults
+    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
+
+    // Explicitly allow array methods that we need
+    const arrayMethods = new Set([
+      'some',
+      'every',
+      'filter',
+      'map',
+      'reduce',
+      'find',
+      'includes',
+      'indexOf',
+      'length',
+      'slice',
+      'concat',
+      'join',
+    ]);
+    prototypeWhitelist.set(Array.prototype, arrayMethods);
+
+    // Allow string methods
+    const stringMethods = new Set([
+      'toLowerCase',
+      'toUpperCase',
+      'includes',
+      'indexOf',
+      'startsWith',
+      'endsWith',
+      'slice',
+      'substring',
+      'length',
+      'trim',
+      'split',
+      'replace',
+    ]);
+    prototypeWhitelist.set(String.prototype, stringMethods);
+
+    // Allow basic object methods
+    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
+    prototypeWhitelist.set(Object.prototype, objectMethods);
+
+    return new Sandbox({
+      globals,
+      prototypeWhitelist,
+    });
   }
 
   /**
@@ -208,8 +275,8 @@ export class FailureConditionEvaluator {
   }
 
   /**
-   * Secure expression evaluation using Function Constructor
-   * Supports the same GitHub Actions-style functions as the previous JEXL implementation
+   * Secure expression evaluation using SandboxJS
+   * Supports the same GitHub Actions-style functions as the previous implementation
    */
   private evaluateExpression(condition: string, context: any): boolean {
     try {
@@ -301,55 +368,13 @@ export class FailureConditionEvaluator {
       const outputs = context.outputs || {};
       const debug = context.debug || null;
 
-      // Create a sandboxed function with only allowed variables and functions
-      const func = new Function(
+      // Create scope with all context variables and helper functions
+      const scope = {
         // Primary context variables
-        'output',
-        'outputs',
-        'debug',
-        // Legacy compatibility variables
-        'issues',
-        'suggestions',
-        'metadata',
-        'criticalIssues',
-        'errorIssues',
-        'totalIssues',
-        'warningIssues',
-        'infoIssues',
-        // If condition context
-        'checkName',
-        'schema',
-        'group',
-        'branch',
-        'baseBranch',
-        'filesChanged',
-        'filesCount',
-        'event',
-        'env',
-        // Helper functions
-        'contains',
-        'startsWith',
-        'endsWith',
-        'length',
-        'always',
-        'success',
-        'failure',
-        'hasIssue',
-        'countIssues',
-        'hasFileMatching',
-        'hasSuggestion',
-        'hasIssueWith',
-        'hasFileWith',
-        // Allow Math for calculations
-        'Math',
-        `"use strict"; return ${condition.trim()}`
-      );
-
-      return func(
         output,
         outputs,
         debug,
-        // Legacy compatibility
+        // Legacy compatibility variables
         issues,
         suggestions,
         metadata,
@@ -358,6 +383,7 @@ export class FailureConditionEvaluator {
         totalIssues,
         warningIssues,
         infoIssues,
+        // If condition context
         checkName,
         schema,
         group,
@@ -367,6 +393,7 @@ export class FailureConditionEvaluator {
         filesCount,
         event,
         env,
+        // Helper functions
         contains,
         startsWith,
         endsWith,
@@ -380,8 +407,14 @@ export class FailureConditionEvaluator {
         hasSuggestion,
         hasIssueWith,
         hasFileWith,
-        Math
-      );
+      };
+
+      // Compile and execute the expression in the sandbox
+      const exec = this.sandbox.compile(`return (${condition.trim()});`);
+      const result = exec(scope).run();
+
+      // Ensure we return a boolean
+      return Boolean(result);
     } catch (error) {
       console.error('❌ Failed to evaluate expression:', condition, error);
       // Re-throw the error so it can be caught at a higher level for error reporting
