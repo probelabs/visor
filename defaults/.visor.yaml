@@ -1,0 +1,184 @@
+version: "1.0"
+
+# Default Visor configuration - provides comprehensive code analysis out-of-the-box
+# Uses mock provider for CI compatibility when no AI API keys are configured
+# Users can override this by creating their own .visor.yaml in their project root
+
+# Global AI provider settings - uses mock by default for CI compatibility
+ai_provider: "mock"
+
+# Global fail condition - fail if critical issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
+
+checks:
+  # Security analysis - Critical for all projects
+  security:
+    type: ai
+    group: review
+    schema: code-review
+    ai_provider: "mock"
+    prompt: |
+        Please perform a comprehensive security analysis of the code changes in this pull request.
+
+        ## Files Changed
+        {% for file in files %}
+        - `{{ file.filename }}` - {{ file.status }}, +{{ file.additions }}/-{{ file.deletions }} ({{ file.changes }} total changes)
+        {% endfor %}
+
+        ## Instructions
+        Analyze the code for security vulnerabilities including:
+
+        **Input Validation & Injection:**
+        - SQL injection in database queries
+        - XSS vulnerabilities in user input handling
+        - Command injection in system calls
+        - Path traversal in file operations
+
+        **Authentication & Authorization:**
+        - Weak authentication mechanisms
+        - Session management flaws
+        - Access control bypasses
+        - Privilege escalation opportunities
+
+        **Data Protection:**
+        - Sensitive data exposure in logs/errors
+        - Unencrypted data storage
+        - API key or credential leaks
+        - Privacy regulation compliance
+
+        **Infrastructure Security:**
+        - Insecure configurations
+        - Missing security headers
+        - Vulnerable dependencies
+        - Resource exhaustion vulnerabilities
+
+        Provide specific findings with clear explanations and actionable remediation steps.
+    on: [pr_opened, pr_updated]
+
+  # Performance analysis - Important for all applications
+  performance:
+    type: ai
+    group: review
+    schema: code-review
+    ai_provider: "mock"
+    prompt: |
+        Review the code changes for performance issues:
+
+        ## Files to Analyze
+        {% for file in files %}
+        - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
+        {% endfor %}
+
+        ## Analysis Areas
+        **Algorithm & Data Structure Efficiency:**
+        - Time complexity analysis (O(n), O(n²), etc.)
+        - Space complexity and memory usage
+        - Inefficient loops and nested operations
+        - Suboptimal data structure choices
+
+        **Database Performance:**
+        - N+1 query problems
+        - Missing database indexes
+        - Inefficient JOIN operations
+        - Large result set retrievals
+
+        **Resource Management:**
+        - Memory leaks and excessive allocations
+        - File handle management
+        - Connection pooling issues
+        - Resource cleanup patterns
+
+        **Async & Concurrency:**
+        - Blocking operations in async contexts
+        - Race conditions and deadlocks
+        - Inefficient parallel processing
+
+        Identify specific performance issues and provide optimization recommendations.
+    on: [pr_opened, pr_updated]
+
+  # Code quality and maintainability
+  quality:
+    type: ai
+    group: review
+    schema: code-review
+    ai_provider: "mock"
+    prompt: |
+        Evaluate the code quality and maintainability of the changes:
+
+        ## Quality Assessment Areas
+        **Code Structure & Design:**
+        - SOLID principles adherence
+        - Design pattern appropriateness
+        - Separation of concerns
+        - Code organization and clarity
+
+        **Error Handling & Reliability:**
+        - Exception handling completeness
+        - Error propagation patterns
+        - Input validation thoroughness
+        - Edge case coverage
+
+        **Testing & Test Coverage:**
+        - Missing tests for critical functionality
+        - Test coverage gaps
+        - Test quality and effectiveness
+        - Edge cases and error scenarios coverage
+
+        **Maintainability:**
+        - Code testability issues
+        - Dependencies and coupling problems
+        - Technical debt introduction
+        - Code duplication (DRY violations)
+
+        **Language-Specific Best Practices:**
+        - Idiomatic code usage
+        - Framework/library best practices
+        - Type safety (if applicable)
+
+        Focus on actionable improvements that enhance code maintainability.
+    on: [pr_opened, pr_updated]
+
+  # PR overview with intelligent analysis
+  overview:
+    type: ai
+    group: overview
+    schema: plain
+    ai_provider: "mock"
+    prompt: |
+        # 📋 Pull Request Overview: {{ pr.title }}
+
+        {% if pr.body %}
+        ## Description
+        {{ pr.body }}
+        {% endif %}
+
+        ## Files Changed Analysis
+
+        | File | Type | Status | Changes | Impact |
+        |------|------|--------|---------|--------|
+        {% for file in files %}
+        | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status | capitalize }} | +{{ file.additions }}/-{{ file.deletions }} | {% if file.changes > 50 %}High{% elsif file.changes > 20 %}Medium{% else %}Low{% endif %} |
+        {% endfor %}
+
+        ## Instructions
+        Generate a comprehensive overview and analysis of this pull request:
+
+        1. **Change Impact Analysis**
+           - What this PR accomplishes
+           - Key technical changes introduced
+           - Affected system components
+
+        2. **Architecture Assessment**
+           - Component relationships affected
+           - Process flows modified
+           - Data flow changes
+
+        Provide a balanced technical assessment suitable for developers and stakeholders.
+    on: [pr_opened, pr_updated]
+
+# Output configuration
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

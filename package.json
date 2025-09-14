@@ -7,6 +7,7 @@
   },
   "files": [
     "dist/",
+    "defaults/",
     "action.yml",
     "README.md",
     "LICENSE"

@@ -373,17 +373,33 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
     }, 45000);
 
     it(
-      'should show warning when no checks specified',
+      'should use bundled default checks when no checks specified',
       async () => {
         await initGitRepo(tempDir);
 
         const result = await runCLI([]);
 
-        expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain('No checks specified');
-        expect(result.stderr).toContain(
-          'Available check types: performance, architecture, security, style, all'
-        );
+        // Should not fail due to "no checks specified" since bundled config provides default checks
+        expect(result.stderr).not.toContain('No checks specified');
+
+        // The CLI may fail due to git issues or AI service calls, but it shouldn't
+        // fail specifically due to lack of checks configuration
+        // Check that it got past the "no checks specified" validation
+        if (result.stderr.includes('Not a git repository')) {
+          // If it failed on git check, that means it passed the checks configuration step
+          // This confirms bundled config provided checks successfully
+          expect(result.stderr).not.toContain('No checks specified');
+        } else {
+          // If it succeeded or failed for other reasons, check for expected output
+          // For non-JSON output, status messages go to stdout, not stderr
+          const output = result.stdout + result.stderr;
+          expect(output).toContain('🔍 Visor - AI-powered code review tool');
+
+          // Should show debug info about extracted checks from bundled config
+          expect(output).toMatch(
+            /Debug.*Extracted checks from config.*\[.*security.*performance.*quality.*overview.*\]/
+          );
+        }
       },
       timeout
     );
