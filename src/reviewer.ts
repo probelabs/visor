@@ -627,6 +627,7 @@ export class PRReviewer {
       `**Provider:** ${debug.provider}`,
       `**Model:** ${debug.model}`,
       `**API Key Source:** ${debug.apiKeySource}`,
+      `**Schema Type:** ${debug.schemaName || 'default (code-review)'}`,
       `**Total Processing Time:** ${debug.processingTime}ms`,
       `**Total Prompt Length:** ${debug.promptLength} characters`,
       `**Total Response Length:** ${debug.responseLength} characters`,
@@ -639,6 +640,15 @@ export class PRReviewer {
       debug.errors.forEach(error => {
         lines.push(`- ${error}`);
       });
+      lines.push('');
+    }
+
+    // Add schema information if available
+    if (debug.schema) {
+      lines.push('## 📋 Schema Used');
+      lines.push('```json');
+      lines.push(debug.schema);
+      lines.push('```');
       lines.push('');
     }
 
@@ -681,6 +691,21 @@ export class PRReviewer {
       lines.push('---');
       lines.push('');
     });
+
+    // Add raw unprocessed prompt and response at the end for complete transparency
+    lines.push('## 📄 Raw Prompt (Complete)');
+    lines.push('');
+    lines.push('```');
+    lines.push(debug.prompt);
+    lines.push('```');
+    lines.push('');
+
+    lines.push('## 📄 Raw Response (Complete)');
+    lines.push('');
+    lines.push('```');
+    lines.push(debug.rawResponse);
+    lines.push('```');
+    lines.push('');
 
     return lines.join('\n');
   }

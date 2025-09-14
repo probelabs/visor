@@ -43,6 +43,10 @@ export interface AIDebugInfo {
   errors?: string[];
   /** Whether JSON parsing succeeded */
   jsonParseSuccess: boolean;
+  /** Schema used for response validation */
+  schema?: string;
+  /** Schema name/type requested */
+  schemaName?: string;
   /** Timestamp when request was made */
   timestamp: string;
   /** Total API calls made */
@@ -142,6 +146,8 @@ export class AIReviewService {
         errors: [],
         jsonParseSuccess: false,
         timestamp,
+        schemaName: schema,
+        schema: undefined, // Will be populated when schema is loaded
       };
     }
 
@@ -183,7 +189,7 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeAgent(prompt, schema);
+      const response = await this.callProbeAgent(prompt, schema, debugInfo);
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -359,7 +365,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   /**
    * Call ProbeAgent SDK with built-in schema validation
    */
-  private async callProbeAgent(prompt: string, schema?: string): Promise<string> {
+  private async callProbeAgent(
+    prompt: string,
+    schema?: string,
+    debugInfo?: AIDebugInfo
+  ): Promise<string> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing');
@@ -417,13 +427,21 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         try {
           schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
+          // Add schema content to debug info
+          if (debugInfo) {
+            debugInfo.schema = schemaString;
+          }
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
+          if (debugInfo && debugInfo.errors) {
+            debugInfo.errors.push(`Failed to load schema: ${error}`);
+          }
         }
       }
 
       // ProbeAgent now handles schema formatting internally!
+      // Pass schema in options object with 'schema' property
       const response = await agent.answer(
         prompt,
         undefined,
