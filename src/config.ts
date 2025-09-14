@@ -21,7 +21,13 @@ import { CliOptions } from './types/cli';
  */
 export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = ['ai'];
-  private validEventTriggers: EventTrigger[] = ['pr_opened', 'pr_updated', 'pr_closed'];
+  private validEventTriggers: EventTrigger[] = [
+    'pr_opened',
+    'pr_updated',
+    'pr_closed',
+    'issue_opened',
+    'issue_comment',
+  ];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
 

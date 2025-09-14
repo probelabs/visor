@@ -278,6 +278,14 @@ export class AICheckProvider extends CheckProvider {
             issue: eventContext.issue
               ? {
                   number: eventContext.issue.number,
+                  title: eventContext.issue.title,
+                  body: eventContext.issue.body,
+                  state: eventContext.issue.state,
+                  author: eventContext.issue.user?.login,
+                  labels: eventContext.issue.labels || [],
+                  assignees: eventContext.issue.assignees?.map((a: any) => a.login) || [],
+                  createdAt: eventContext.issue.created_at,
+                  updatedAt: eventContext.issue.updated_at,
                   isPullRequest: !!eventContext.issue.pull_request,
                 }
               : undefined,

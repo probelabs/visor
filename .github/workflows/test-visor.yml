@@ -74,10 +74,10 @@ jobs:
       - name: 📊 Generate Sample Reports
         run: |
           # Generate reports in all formats for artifact upload (using mock provider)
-          ./dist/cli-main.js --check all --config .visor.test.yaml --output json 2>/dev/null > sample-report.json || echo '{"error": "No mock provider"}' > sample-report.json
-          ./dist/cli-main.js --check all --config .visor.test.yaml --output sarif 2>/dev/null > sample-report.sarif || echo '{"error": "No mock provider"}' > sample-report.sarif
-          ./dist/cli-main.js --check all --config .visor.test.yaml --output markdown 2>&1 > sample-report.md || echo "Error: No mock provider" > sample-report.md
-          ./dist/cli-main.js --check all --config .visor.test.yaml --output table 2>&1 > sample-report.txt || echo "Error: No mock provider" > sample-report.txt
+          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output json 2>/dev/null > sample-report.json || echo '{"error": "Mock provider failed"}' > sample-report.json
+          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output sarif 2>/dev/null > sample-report.sarif || echo '{"error": "Mock provider failed"}' > sample-report.sarif
+          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output markdown 2>&1 > sample-report.md || echo "Error: Mock provider failed" > sample-report.md
+          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output table 2>&1 > sample-report.txt || echo "Error: Mock provider failed" > sample-report.txt
       
       - name: 📈 Upload Sample Reports
         uses: actions/upload-artifact@v4

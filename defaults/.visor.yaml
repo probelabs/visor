@@ -4,8 +4,8 @@ version: "1.0"
 # Uses mock provider for CI compatibility when no AI API keys are configured
 # Users can override this by creating their own .visor.yaml in their project root
 
-# Global AI provider settings - uses mock by default for CI compatibility
-ai_provider: "mock"
+# Global AI provider settings - users should configure their preferred provider
+# For CI testing, use --provider mock CLI flag instead
 
 # Global fail condition - fail if critical issues are found
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
@@ -16,7 +16,6 @@ checks:
     type: ai
     group: review
     schema: code-review
-    ai_provider: "mock"
     prompt: |
         Please perform a comprehensive security analysis of the code changes in this pull request.
 
@@ -60,7 +59,6 @@ checks:
     type: ai
     group: review
     schema: code-review
-    ai_provider: "mock"
     prompt: |
         Review the code changes for performance issues:
 
@@ -101,7 +99,6 @@ checks:
     type: ai
     group: review
     schema: code-review
-    ai_provider: "mock"
     prompt: |
         Evaluate the code quality and maintainability of the changes:
 
@@ -143,7 +140,6 @@ checks:
     type: ai
     group: overview
     schema: plain
-    ai_provider: "mock"
     prompt: |
         # 📋 Pull Request Overview: {{ pr.title }}
 
@@ -160,21 +156,146 @@ checks:
         | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status | capitalize }} | +{{ file.additions }}/-{{ file.deletions }} | {% if file.changes > 50 %}High{% elsif file.changes > 20 %}Medium{% else %}Low{% endif %} |
         {% endfor %}
 
-        ## Instructions
-        Generate a comprehensive overview and analysis of this pull request:
+        ## Architecture & Impact Assessment
+
+        Please generate a comprehensive overview and analysis of this pull request.
+
+        Follow these instructions to create a thorough assessment:
 
         1. **Change Impact Analysis**
            - What this PR accomplishes
            - Key technical changes introduced
            - Affected system components
 
-        2. **Architecture Assessment**
-           - Component relationships affected
-           - Process flows modified
-           - Data flow changes
+        2. **Architecture Visualization**
+           - Create appropriate mermaid diagram(s) showing:
+             - Component relationships (use `graph TD/LR`)
+             - Process flows (use `flowchart` or `sequenceDiagram`)
+             - Data flow between modified components
 
-        Provide a balanced technical assessment suitable for developers and stakeholders.
+        **Guidelines for diagrams:**
+        - Use multiple diagrams if there are distinct architectural aspects
+        - Choose the most appropriate diagram type for each concept
+        - Focus on modified components and their relationships
+        - Keep diagrams clean and informative
+
+        Provide a balanced technical assessment suitable for both developers and stakeholders.
     on: [pr_opened, pr_updated]
+
+  # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
+  issue-assistant:
+    type: ai
+    group: issue-support
+    schema: plain
+    prompt: |
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance based on the trigger event.
+
+        ## Event Context
+        **Event Type**: {{ event.name }} - {{ event.action }}
+        {% if event.issue -%}
+        **Issue #{{ event.issue.number }}**: {{ event.issue.title }}
+        **Author**: {{ event.issue.author }}
+        **State**: {{ event.issue.state }}
+        **Created**: {{ event.issue.createdAt }}
+        {%- if event.issue.labels.size > 0 %}
+        **Labels**: {% for label in event.issue.labels %}{{ label.name }}{% unless forloop.last %}, {% endunless %}{% endfor %}
+        {%- endif %}
+        {%- if event.issue.assignees.size > 0 %}
+        **Assignees**: {% for assignee in event.issue.assignees %}{{ assignee }}{% unless forloop.last %}, {% endunless %}{% endfor %}
+        {%- endif %}
+        {%- endif %}
+        {%- if event.comment %}
+        **Comment by**: {{ event.comment.author }}
+        {%- endif %}
+
+        ## Repository Analysis Context
+        {%- if pr.title %}
+        **Recent PR Activity**: {{ pr.title }}
+        {%- endif %}
+        {%- if utils.totalFiles > 0 %}
+        **Project Size**: {{ utils.totalFiles }} files
+        **Technologies**: {% for ext in utils.filesByExtension %}{{ ext[0] }}{% unless forloop.last %}, {% endunless %}{% endfor %}
+        {%- endif %}
+
+        ## Instructions
+
+        {%- if event.name == 'issues' and event.action == 'opened' %}
+
+        **ISSUE TRIAGE MODE**
+
+        Analyze this new issue and provide intelligent triage:
+
+        ### Issue Content
+        {{ event.issue.body }}
+
+        ### Analysis Tasks
+        1. **Categorize** the issue (bug/feature/documentation/question/enhancement/maintenance)
+        2. **Assess priority** (low/medium/high/urgent) based on:
+           - Impact on users/system
+           - Security implications
+           - Blocking nature
+           - Community interest
+        3. **Estimate complexity** (trivial/simple/moderate/complex)
+        4. **Suggest timeline** for resolution
+        5. **Recommend labels** that would help with organization
+        6. **Identify stakeholders** who should be involved or assignees
+        7. **Provide initial response** to the issue author
+
+        ### Response Requirements
+        - Be professional and welcoming
+        - Show you understand the request
+        - Provide clear next steps
+        - Ask clarifying questions if needed
+        - Include technical insights where appropriate
+
+        {%- elsif event.name == 'issue_comment' %}
+
+        **ASSISTANCE MODE**
+
+        A user has asked a question or provided additional information. Provide helpful technical assistance:
+
+        ### Original Issue
+        {%- if event.issue.title %}
+        **Title**: {{ event.issue.title }}
+        {%- endif %}
+        {%- if event.issue.body %}
+        **Description**: {{ event.issue.body }}
+        {%- endif %}
+
+        ### Latest Comment
+        {{ event.comment.body }}
+
+        ### Analysis Tasks
+        1. **Understand the context** of their question/comment
+        2. **Provide technical guidance** based on project knowledge
+        3. **Reference relevant code/files** if applicable
+        4. **Suggest implementation approaches** for feature requests
+        5. **Provide debugging steps** for bug reports
+        6. **Link to documentation** or similar issues if helpful
+        7. **Offer code examples** when appropriate
+
+        ### Response Requirements
+        - Address their specific question directly
+        - Provide actionable guidance
+        - Be encouraging and supportive
+        - Use technical language appropriate to their level
+        - Include code examples where helpful
+        - Reference project conventions and patterns
+
+        {%- endif %}
+
+        ### Special Instructions
+        - Always be professional, helpful, and encouraging
+        - Focus on actionable advice and clear next steps
+        - Use markdown formatting for better readability
+        - Include relevant code examples when helpful
+        - Reference project context and patterns when applicable
+        - If dealing with `/visor` commands in comments, acknowledge and provide assistance
+        - Maintain consistency with project tone and contributor guidelines
+
+        ### Response Format
+        Provide a well-structured markdown response with clear sections and helpful guidance.
+    on: [issue_opened, issue_comment]
 
 # Output configuration
 output:

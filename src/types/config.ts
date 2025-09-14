@@ -115,7 +115,12 @@ export type ConfigCheckType = 'ai';
 /**
  * Valid event triggers for checks
  */
-export type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed';
+export type EventTrigger =
+  | 'pr_opened'
+  | 'pr_updated'
+  | 'pr_closed'
+  | 'issue_opened'
+  | 'issue_comment';
 
 /**
  * Valid output formats

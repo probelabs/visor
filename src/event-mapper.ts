@@ -22,6 +22,21 @@ export interface GitHubEventContext {
   };
   issue?: {
     number: number;
+    title?: string;
+    body?: string;
+    state?: string;
+    user?: {
+      login: string;
+    };
+    labels?: Array<{
+      name: string;
+      color: string;
+    }>;
+    assignees?: Array<{
+      login: string;
+    }>;
+    created_at?: string;
+    updated_at?: string;
     pull_request?: Record<string, unknown>;
   };
   comment?: {
@@ -114,10 +129,16 @@ export class EventMapper {
         if (action === 'closed') return 'pr_closed';
         break;
 
+      case 'issues':
+        if (action === 'opened') return 'issue_opened';
+        break;
+
       case 'issue_comment':
-        // Only handle PR comments
+        // Handle both PR comments and issue comments
         if (eventContext.issue?.pull_request) {
-          return 'pr_updated'; // Treat comments as PR updates
+          return 'pr_updated'; // Treat PR comments as PR updates
+        } else {
+          return 'issue_comment'; // Handle issue comments
         }
         break;
 
