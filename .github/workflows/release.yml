@@ -104,7 +104,7 @@ jobs:
           }' > action-dist/package.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d611 # v2.0.8
+        uses: softprops/action-gh-release@v2.3.3
         with:
           generate_release_notes: true
           draft: false
