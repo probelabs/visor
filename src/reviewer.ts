@@ -645,7 +645,7 @@ export class PRReviewer {
 
     // Add schema information if available
     if (debug.schema) {
-      lines.push('## 📋 Schema Used');
+      lines.push('## 📋 Schema Options Passed to ProbeAgent');
       lines.push('```json');
       lines.push(debug.schema);
       lines.push('```');
@@ -694,6 +694,10 @@ export class PRReviewer {
 
     // Add raw unprocessed prompt and response at the end for complete transparency
     lines.push('## 📄 Raw Prompt (Complete)');
+    lines.push('');
+    lines.push(
+      "> Note: XML special characters are escaped (e.g., `&apos;` for `'`) to ensure valid XML when sending to AI."
+    );
     lines.push('');
     lines.push('```');
     lines.push(debug.prompt);
