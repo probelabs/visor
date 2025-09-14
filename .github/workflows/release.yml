@@ -187,24 +187,35 @@ jobs:
             "main": "index.js"
           }' > action-dist/package.json
 
-      - name: Commit bundled files to tag
+      - name: Commit bundled files and update release
         run: |
           # Configure git
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          # Copy bundled files to dist/ directory
+          # Copy bundled files to dist/ directory in the repo
           mkdir -p dist
           cp action-dist/index.js dist/
           cp action-dist/licenses.txt dist/ 2>/dev/null || true
 
-          # Add bundled files to the current branch
+          # Add bundled files to git
           git add dist/ action.yml
-          git commit -m "Add bundled dist files for ${GITHUB_REF_NAME}" || echo "No changes to commit"
 
-          # Update the tag to point to this commit
-          git tag -f ${GITHUB_REF_NAME}
-          git push origin ${GITHUB_REF_NAME} --force
+          # Check if there are changes to commit
+          if ! git diff --cached --quiet; then
+            git commit -m "Add bundled dist files for ${GITHUB_REF_NAME}"
 
-          echo "✅ Bundled files committed to tag ${GITHUB_REF_NAME}"
+            # Delete the existing tag and recreate it
+            git tag -d ${GITHUB_REF_NAME} || true
+            git push origin :refs/tags/${GITHUB_REF_NAME} || true
+
+            # Create new tag pointing to the commit with bundled files
+            git tag ${GITHUB_REF_NAME}
+            git push origin ${GITHUB_REF_NAME}
+
+            echo "✅ Bundled files committed and tag updated"
+          else
+            echo "No changes to commit"
+          fi
+
           echo "📦 Users can now use: uses: ${{ github.repository }}@${GITHUB_REF_NAME}"
