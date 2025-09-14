@@ -282,6 +282,9 @@ export class CheckExecutionEngine {
         prompt: focus,
         focus: focus,
         ai: timeout ? { timeout } : undefined,
+        // Inherit global AI provider and model settings if config is available
+        ai_provider: config?.ai_provider,
+        ai_model: config?.ai_model,
       };
 
       const result = await provider.execute(prInfo, providerConfig);
