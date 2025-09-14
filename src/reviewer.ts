@@ -23,6 +23,8 @@ export interface ReviewIssue {
   // Group and schema for comment separation
   group?: string;
   schema?: string;
+  // Timestamp when the issue was created (for ordering)
+  timestamp?: number;
   // Custom template configuration
   template?: CustomTemplateConfig;
 
@@ -155,8 +157,19 @@ export class PRReviewer {
       return;
     }
 
+    // Sort groups by the earliest timestamp of issues in each group
+    // This ensures comments are posted in the order checks completed
+    const sortedGroups = Object.entries(issuesByGroup).sort(
+      ([_aName, aIssues], [_bName, bIssues]) => {
+        // Find the earliest timestamp in each group
+        const aEarliest = Math.min(...aIssues.map(i => i.timestamp || Infinity));
+        const bEarliest = Math.min(...bIssues.map(i => i.timestamp || Infinity));
+        return aEarliest - bEarliest;
+      }
+    );
+
     // Create separate comments for each group
-    for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
+    for (const [groupName, groupIssues] of sortedGroups) {
       const groupSummary: ReviewSummary = {
         ...summary,
         issues: groupIssues,

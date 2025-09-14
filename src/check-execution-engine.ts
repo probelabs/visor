@@ -468,13 +468,14 @@ export class CheckExecutionEngine {
           const result = await provider.execute(prInfo, providerConfig, dependencyResults);
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
-          // Add group, schema, and template info to issues from config
+          // Add group, schema, template info and timestamp to issues from config
           const enrichedIssues = result.issues.map(issue => ({
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
             schema: checkConfig.schema,
             template: checkConfig.template,
+            timestamp: Date.now(),
           }));
 
           const enrichedResult = {
@@ -627,13 +628,14 @@ export class CheckExecutionEngine {
           `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
         );
 
-        // Add group and schema info to issues from config
+        // Add group, schema info and timestamp to issues from config
         const enrichedIssues = result.issues.map(issue => ({
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
           group: checkConfig.group,
           schema: checkConfig.schema,
           template: checkConfig.template,
+          timestamp: Date.now(),
         }));
 
         const enrichedResult = {
@@ -700,12 +702,13 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
-    // Prefix issues with check name and add group/schema info from config
+    // Prefix issues with check name and add group/schema info and timestamp from config
     const prefixedIssues = result.issues.map(issue => ({
       ...issue,
       ruleId: `${checkName}/${issue.ruleId}`,
       group: checkConfig.group,
       schema: checkConfig.schema,
+      timestamp: Date.now(),
     }));
 
     return {
