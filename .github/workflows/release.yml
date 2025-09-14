@@ -1,4 +1,4 @@
-name: Release to npm
+name: Release
 
 on:
   push:
@@ -6,18 +6,18 @@ on:
       - 'v*.*.*'  # Trigger on version tags like v1.0.0
 
 jobs:
-  release:
+  release-npm:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write  # For npm provenance
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -51,17 +51,166 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Post-release notification
         if: success()
         run: |
           echo "🎉 Successfully published @probelabs/visor@${GITHUB_REF#refs/tags/v} to npm!"
           echo "📦 Install with: npx -y @probelabs/visor"
+
+  release-action:
+    runs-on: ubuntu-latest
+    permissions:
+      # Minimal permissions during dependency installation
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Bundle action
+        run: |
+          # Install ncc to bundle the action
+          npm install -g @vercel/ncc
+
+          # Create dist folder for GitHub Action
+          mkdir -p action-dist
+
+          # Bundle the main action file with all dependencies
+          ncc build dist/index.js -o action-dist --license licenses.txt
+
+          # Copy action.yml to root of action-dist
+          cp action.yml action-dist/
+
+          # Create a minimal package.json for the action
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo '{
+            "name": "visor-action",
+            "version": "'$VERSION'",
+            "private": true,
+            "main": "index.js"
+          }' > action-dist/package.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d611 # v2.0.8
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
+          body: |
+            ## What's Changed
+
+            See auto-generated release notes below.
+
+            ### Using Visor as a GitHub Action
+
+            ```yaml
+            - uses: ${{ github.repository }}@${{ github.ref_name }}
+              with:
+                github_token: ${{ secrets.GITHUB_TOKEN }}
+                checks: performance,security,architecture,style
+            ```
+
+            ### Using Visor CLI
+
+            ```bash
+            npx -y @probelabs/visor --check all
+            ```
+
+            ### Installation Options
+
+            **NPM (Global)**
+            ```bash
+            npm install -g @probelabs/visor
+            visor --check all
+            ```
+
+            **NPX (No installation)**
+            ```bash
+            npx -y @probelabs/visor --check security --output json
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Separate job with write permissions only for git operations
+  update-action-branch:
+    runs-on: ubuntu-latest
+    needs: release-action
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Bundle action
+        run: |
+          # Install ncc to bundle the action
+          npm install -g @vercel/ncc
+
+          # Create dist folder for GitHub Action
+          mkdir -p action-dist
+
+          # Bundle the main action file with all dependencies
+          ncc build dist/index.js -o action-dist --license licenses.txt
+
+          # Copy action.yml to root of action-dist
+          cp action.yml action-dist/
+
+          # Create a minimal package.json for the action
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo '{
+            "name": "visor-action",
+            "version": "'$VERSION'",
+            "private": true,
+            "main": "index.js"
+          }' > action-dist/package.json
+
+      - name: Create action branch
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # Create orphan branch for action dist
+          git checkout --orphan action-dist
+
+          # Remove all files
+          git rm -rf .
+
+          # Copy only action dist files
+          cp -r action-dist/* .
+
+          # Add and commit
+          git add .
+          git commit -m "Release action dist for ${GITHUB_REF_NAME}"
+
+          # Force push to action-dist branch
+          git push origin action-dist --force
+
+          echo "✅ Action dist pushed to action-dist branch"
+          echo "📦 Users can now use: uses: ${{ github.repository }}@action-dist"
