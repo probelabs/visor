@@ -9,6 +9,36 @@ import { FailureConditionEvaluator } from './failure-condition-evaluator';
 import { FailureConditionResult } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 
+/**
+ * Filter environment variables to only include safe ones for sandbox evaluation
+ */
+function getSafeEnvironmentVariables(): Record<string, any> {
+  const safeEnvVars = [
+    'CI',
+    'GITHUB_EVENT_NAME',
+    'GITHUB_REPOSITORY',
+    'GITHUB_REF',
+    'GITHUB_SHA',
+    'GITHUB_HEAD_REF',
+    'GITHUB_BASE_REF',
+    'GITHUB_ACTOR',
+    'GITHUB_WORKFLOW',
+    'GITHUB_RUN_ID',
+    'GITHUB_RUN_NUMBER',
+    'NODE_ENV',
+  ];
+
+  const safeEnv: Record<string, any> = {};
+
+  for (const key of safeEnvVars) {
+    if (process.env[key]) {
+      safeEnv[key] = process.env[key];
+    }
+  }
+
+  return safeEnv;
+}
+
 export interface MockOctokit {
   rest: {
     pulls: {
@@ -428,7 +458,7 @@ export class CheckExecutionEngine {
                 baseBranch: prInfo.base,
                 filesChanged: prInfo.files.map(f => f.filename),
                 event: 'manual', // TODO: Get actual event from context
-                environment: process.env as Record<string, any>,
+                environment: getSafeEnvironmentVariables(),
                 previousResults: results,
               }
             );
@@ -592,7 +622,7 @@ export class CheckExecutionEngine {
               baseBranch: prInfo.base,
               filesChanged: prInfo.files.map(f => f.filename),
               event: 'manual', // TODO: Get actual event from context
-              environment: process.env as Record<string, any>,
+              environment: getSafeEnvironmentVariables(),
               previousResults: new Map(), // No previous results in parallel execution
             }
           );

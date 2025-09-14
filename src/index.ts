@@ -9,6 +9,7 @@ import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { FailureConditionEvaluator } from './failure-condition-evaluator';
 
 // Type definitions for CLI output
 interface CliReviewOutput {
@@ -1204,41 +1205,81 @@ async function evaluateCheckFailureConditions(
 
   // Check global fail_if condition
   if (config.fail_if) {
-    const shouldFail = await evaluateFailureCondition(config.fail_if, {
-      totalIssues: checkIssues.length,
-      criticalIssues,
-      errorIssues,
-      checkName,
-    });
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: checkIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
 
-    if (shouldFail) {
-      failureResults.push({
-        conditionName: 'global_fail_if',
-        failed: true,
-        severity: 'error',
-        expression: config.fail_if,
-        message: 'Global failure condition met',
-      });
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        checkName,
+        'legacy',
+        'legacy',
+        reviewSummary,
+        config.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: 'global_fail_if',
+          failed: true,
+          severity: 'error',
+          expression: config.fail_if,
+          message: 'Global failure condition met',
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
     }
   }
 
   // Check check-specific fail_if condition
   if (checkConfig?.fail_if) {
-    const shouldFail = await evaluateFailureCondition(checkConfig.fail_if, {
-      totalIssues: checkIssues.length,
-      criticalIssues,
-      errorIssues,
-      checkName,
-    });
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: checkIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
 
-    if (shouldFail) {
-      failureResults.push({
-        conditionName: `${checkName}_fail_if`,
-        failed: true,
-        severity: 'error',
-        expression: checkConfig.fail_if,
-        message: `Check ${checkName} failure condition met`,
-      });
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        checkName,
+        'legacy',
+        'legacy',
+        reviewSummary,
+        checkConfig.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: `${checkName}_fail_if`,
+          failed: true,
+          severity: 'error',
+          expression: checkConfig.fail_if,
+          message: `Check ${checkName} failure condition met`,
+        });
+      }
+    } catch (error) {
+      console.error(
+        '❌ Failed to evaluate check-specific fail_if condition:',
+        checkConfig.fail_if,
+        error
+      );
     }
   }
 
@@ -1255,21 +1296,39 @@ async function evaluateGlobalFailureConditions(config: any, allIssues: any[]): P
 
   // Check global fail_if condition
   if (config.fail_if) {
-    const shouldFail = await evaluateFailureCondition(config.fail_if, {
-      totalIssues: allIssues.length,
-      criticalIssues,
-      errorIssues,
-      checkName: 'combined',
-    });
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: allIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
 
-    if (shouldFail) {
-      failureResults.push({
-        conditionName: 'global_fail_if',
-        failed: true,
-        severity: 'error',
-        expression: config.fail_if,
-        message: 'Global failure condition met',
-      });
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        'combined',
+        'legacy',
+        'legacy',
+        reviewSummary,
+        config.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: 'global_fail_if',
+          failed: true,
+          severity: 'error',
+          expression: config.fail_if,
+          message: 'Global failure condition met',
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
     }
   }
 
@@ -1299,61 +1358,6 @@ async function markCheckAsFailed(
     );
   } catch (finalError) {
     console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
-  }
-}
-
-/**
- * Secure failure condition evaluation using Function Constructor
- */
-async function evaluateFailureCondition(condition: string, context: any): Promise<boolean> {
-  try {
-    // Helper functions for GitHub Actions-style expressions
-    const contains = (searchString: string, searchValue: string): boolean =>
-      String(searchString).toLowerCase().includes(String(searchValue).toLowerCase());
-
-    const startsWith = (searchString: string, searchValue: string): boolean =>
-      String(searchString).toLowerCase().startsWith(String(searchValue).toLowerCase());
-
-    const endsWith = (searchString: string, searchValue: string): boolean =>
-      String(searchString).toLowerCase().endsWith(String(searchValue).toLowerCase());
-
-    const length = (value: any): number => {
-      if (typeof value === 'string' || Array.isArray(value)) {
-        return value.length;
-      }
-      return 0;
-    };
-
-    const always = (): boolean => true;
-    const success = (): boolean => true;
-    const failure = (): boolean => false;
-
-    // Helper functions that will be available in all expressions
-    const helperFunctions = {
-      contains,
-      startsWith,
-      endsWith,
-      length,
-      always,
-      success,
-      failure,
-      Math,
-    };
-
-    // Combine context data with helper functions
-    const allVariables = { ...context, ...helperFunctions };
-
-    // Extract parameter names and values dynamically from context
-    const paramNames = Object.keys(allVariables);
-    const paramValues = Object.values(allVariables);
-
-    // Create a sandboxed function with dynamic parameters
-    const func = new Function(...paramNames, `"use strict"; return ${condition}`);
-
-    return func(...paramValues);
-  } catch (error) {
-    console.error('❌ Failed to evaluate failure condition:', condition, error);
-    return false;
   }
 }
 
