@@ -422,6 +422,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         try {
           schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
+          log(`📄 Raw schema JSON:\n${schemaString}`);
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
@@ -438,6 +439,12 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Store the exact schema options being passed to ProbeAgent in debug info
       if (debugInfo && schemaOptions) {
         debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
+      }
+
+      // Log the schema options being passed to ProbeAgent
+      if (schemaOptions) {
+        log(`🎯 Schema options passed to ProbeAgent.answer():`);
+        log(JSON.stringify(schemaOptions, null, 2));
       }
 
       const response = await agent.answer(prompt, undefined, schemaOptions);
