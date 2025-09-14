@@ -447,6 +447,39 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(JSON.stringify(schemaOptions, null, 2));
       }
 
+      // Log the equivalent CLI command for local reproduction
+      const provider = this.config.provider || 'auto';
+      const model = this.config.model || 'default';
+
+      // Save prompt to a temp file for easier reproduction
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        const tempDir = os.tmpdir();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+
+        fs.writeFileSync(promptFile, prompt, 'utf-8');
+        log(`\n💾 Prompt saved to: ${promptFile}`);
+
+        log(`\n📝 To reproduce locally, run:`);
+
+        let cliCommand = `npx @probelabs/probe@latest agent`;
+        cliCommand += ` --provider ${provider}`;
+        if (model !== 'default') {
+          cliCommand += ` --model ${model}`;
+        }
+        if (schema) {
+          cliCommand += ` --schema output/${schema}/schema.json`;
+        }
+        cliCommand += ` "${promptFile}"`;
+
+        log(`\n$ ${cliCommand}\n`);
+      } catch (error) {
+        log(`⚠️ Could not save prompt file: ${error}`);
+      }
+
       const response = await agent.answer(prompt, undefined, schemaOptions);
 
       log('✅ ProbeAgent completed successfully');
