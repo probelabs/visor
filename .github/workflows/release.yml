@@ -1,6 +1,20 @@
 name: Release
 
 on:
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.3)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+  # Still support tag-based releases for automation
   push:
     tags:
       - 'v*.*.*'  # Trigger on version tags like v1.0.0
@@ -40,9 +54,17 @@ jobs:
           npm pack --dry-run
           echo "✅ Package verification complete"
 
-      - name: Set version from tag
+      - name: Set version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG_NAME="v$VERSION"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG_NAME=${GITHUB_REF##*/}
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
           echo "Setting package version to $VERSION"
           npm version $VERSION --no-git-tag-version
 
@@ -95,10 +117,9 @@ jobs:
           cp action.yml action-dist/
 
           # Create a minimal package.json for the action
-          VERSION=${GITHUB_REF#refs/tags/v}
           echo '{
             "name": "visor-action",
-            "version": "'$VERSION'",
+            "version": "'${{ env.VERSION }}'",
             "private": true,
             "main": "index.js"
           }' > action-dist/package.json
@@ -106,9 +127,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2.3.3
         with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Release ${{ env.TAG_NAME }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
+          prerelease: ${{ github.event.inputs.prerelease || contains(env.VERSION, '-beta') || contains(env.VERSION, '-alpha') || contains(env.VERSION, '-rc') }}
           body: |
             ## What's Changed
 
@@ -117,7 +140,7 @@ jobs:
             ### Using Visor as a GitHub Action
 
             ```yaml
-            - uses: ${{ github.repository }}@${{ github.ref_name }}
+            - uses: ${{ github.repository }}@${{ env.TAG_NAME }}
             ```
 
             ### Using Visor CLI
@@ -179,10 +202,9 @@ jobs:
           cp action.yml action-dist/
 
           # Create a minimal package.json for the action
-          VERSION=${GITHUB_REF#refs/tags/v}
           echo '{
             "name": "visor-action",
-            "version": "'$VERSION'",
+            "version": "'${{ env.VERSION }}'",
             "private": true,
             "main": "index.js"
           }' > action-dist/package.json
@@ -203,19 +225,24 @@ jobs:
 
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
-            git commit -m "Add bundled dist files for ${GITHUB_REF_NAME}"
+            git commit -m "Add bundled dist files for ${{ env.TAG_NAME }}"
 
-            # Delete the existing tag and recreate it
-            git tag -d ${GITHUB_REF_NAME} || true
-            git push origin :refs/tags/${GITHUB_REF_NAME} || true
-
-            # Create new tag pointing to the commit with bundled files
-            git tag ${GITHUB_REF_NAME}
-            git push origin ${GITHUB_REF_NAME}
+            # For manual releases, create the tag. For tag-triggered releases, update it
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              # Create new tag for manual release
+              git tag ${{ env.TAG_NAME }}
+              git push origin ${{ env.TAG_NAME }}
+            else
+              # Update existing tag for tag-triggered release
+              git tag -d ${{ env.TAG_NAME }} || true
+              git push origin :refs/tags/${{ env.TAG_NAME }} || true
+              git tag ${{ env.TAG_NAME }}
+              git push origin ${{ env.TAG_NAME }}
+            fi
 
             echo "✅ Bundled files committed and tag updated"
           else
             echo "No changes to commit"
           fi
 
-          echo "📦 Users can now use: uses: ${{ github.repository }}@${GITHUB_REF_NAME}"
+          echo "📦 Users can now use: uses: ${{ github.repository }}@${{ env.TAG_NAME }}"
