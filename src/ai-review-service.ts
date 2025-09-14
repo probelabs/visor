@@ -117,7 +117,8 @@ export class AIReviewService {
   async executeReview(
     prInfo: PRInfo,
     customPrompt: string,
-    schema?: string
+    schema?: string,
+    _checkName?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -189,7 +190,7 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeAgent(prompt, schema, debugInfo);
+      const response = await this.callProbeAgent(prompt, schema, debugInfo, _checkName);
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -363,7 +364,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   private async callProbeAgent(
     prompt: string,
     schema?: string,
-    debugInfo?: AIDebugInfo
+    debugInfo?: AIDebugInfo,
+    checkName?: string
   ): Promise<string> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
@@ -371,7 +373,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       return this.generateMockResponse(prompt);
     }
 
+    // Create ProbeAgent instance with proper options
+    // For plain schema, use a simpler approach without tools
+    const timestamp = new Date().toISOString();
+    const sessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName || 'unknown'}`;
+
     log('🤖 Creating ProbeAgent for AI review...');
+    log(`🆔 Session ID: ${sessionId}`);
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
@@ -392,10 +400,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       } else if (this.config.provider === 'openai' && this.config.apiKey) {
         process.env.OPENAI_API_KEY = this.config.apiKey;
       }
-
-      // Create ProbeAgent instance with proper options
-      // For plain schema, use a simpler approach without tools
       const options: ProbeAgentOptions = {
+        sessionId: sessionId,
         promptType: schema === 'plain' ? undefined : ('code-review-template' as 'code-review'),
         customPrompt:
           schema === 'plain'

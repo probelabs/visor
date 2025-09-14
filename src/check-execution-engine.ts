@@ -483,6 +483,7 @@ export class CheckExecutionEngine {
             focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
             schema: checkConfig.schema,
             group: checkConfig.group,
+            checkName: checkName, // Add checkName for sessionID
             ai: {
               timeout: timeout || 600000,
               debug: debug,

@@ -125,7 +125,12 @@ describe('AICheckProvider', () => {
       const result = await provider.execute(mockPRInfo, config);
 
       expect(result).toEqual(mockReview);
-      expect(mockService.executeReview).toHaveBeenCalledWith(mockPRInfo, 'all', undefined);
+      expect(mockService.executeReview).toHaveBeenCalledWith(
+        mockPRInfo,
+        'all',
+        undefined,
+        undefined
+      );
     });
 
     it('should map security prompt to security focus', async () => {
@@ -150,7 +155,12 @@ describe('AICheckProvider', () => {
 
       await provider.execute(mockPRInfo, config);
 
-      expect(mockService.executeReview).toHaveBeenCalledWith(mockPRInfo, 'security', undefined);
+      expect(mockService.executeReview).toHaveBeenCalledWith(
+        mockPRInfo,
+        'security',
+        undefined,
+        undefined
+      );
     });
 
     it('should pass AI config to service', async () => {

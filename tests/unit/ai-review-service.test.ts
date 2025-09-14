@@ -153,12 +153,18 @@ describe('AIReviewService', () => {
       expect(result.issues[0].message).toBe('SQL injection risk');
       expect(result.issues[0].suggestion).toBe('Use parameterized queries');
       expect(result.issues[0].replacement).toContain('db.query');
-      expect(MockedProbeAgent).toHaveBeenCalledWith({
-        promptType: 'code-review-template',
-        allowEdit: false,
-        debug: false,
-        provider: 'google',
-      });
+      expect(MockedProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          promptType: 'code-review-template',
+          allowEdit: false,
+          debug: false,
+          provider: 'google',
+          sessionId: expect.stringMatching(
+            /^visor-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-unknown$/
+          ),
+          customPrompt: undefined,
+        })
+      );
     });
 
     it('should handle ProbeAgent errors and throw', async () => {
@@ -197,12 +203,18 @@ describe('AIReviewService', () => {
         service.executeReview(mockPRInfo, 'Review this code for all issues')
       ).rejects.toThrow('ProbeAgent execution failed: Request timed out');
 
-      expect(MockedProbeAgent).toHaveBeenCalledWith({
-        promptType: 'code-review-template',
-        allowEdit: false,
-        debug: false,
-        provider: 'google',
-      });
+      expect(MockedProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          promptType: 'code-review-template',
+          allowEdit: false,
+          debug: false,
+          provider: 'google',
+          sessionId: expect.stringMatching(
+            /^visor-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-unknown$/
+          ),
+          customPrompt: undefined,
+        })
+      );
     });
   });
 

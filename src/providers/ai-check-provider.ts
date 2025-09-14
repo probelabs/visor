@@ -462,7 +462,8 @@ export class AICheckProvider extends CheckProvider {
     console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
 
     try {
-      return await service.executeReview(prInfo, processedPrompt, schema);
+      console.error(`🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`);
+      return await service.executeReview(prInfo, processedPrompt, schema, config.checkName);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

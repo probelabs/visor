@@ -32,6 +32,8 @@ export interface CheckProviderConfig {
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  /** Check name for sessionID and logging purposes */
+  checkName?: string;
   [key: string]: unknown;
 }
 
