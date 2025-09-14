@@ -1,11 +1,14 @@
 version: "1.0"
 
-# General-purpose code review configuration suitable for any project
-# This configuration provides comprehensive analysis while being language-agnostic
-# and adaptable to different project types and coding standards.
+# Default Visor configuration - provides comprehensive code analysis out-of-the-box
+# Uses mock provider for CI compatibility when no AI API keys are configured
+# Users can override this by creating their own .visor.yaml in their project root
 
-# Global fail condition - fail if critical or error issues found in code-review schema checks
-fail_if: "output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
+# Global AI provider settings - uses mock by default for CI compatibility
+ai_provider: "mock"
+
+# Global fail condition - fail if critical issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
 
 checks:
   # Security analysis - Critical for all projects
@@ -13,6 +16,7 @@ checks:
     type: ai
     group: review
     schema: code-review
+    ai_provider: "mock"
     prompt: |
         Please perform a comprehensive security analysis of the code changes in this pull request.
 
@@ -22,26 +26,23 @@ checks:
         {% endfor %}
 
         ## Instructions
-        Follow these security review guidelines and analyze for vulnerabilities:
+        Analyze the code for security vulnerabilities including:
 
-        **Input Validation & Injection Attacks:**
+        **Input Validation & Injection:**
         - SQL injection in database queries
         - XSS vulnerabilities in user input handling
         - Command injection in system calls
         - Path traversal in file operations
-        - LDAP injection in authentication
 
         **Authentication & Authorization:**
         - Weak authentication mechanisms
         - Session management flaws
         - Access control bypasses
         - Privilege escalation opportunities
-        - JWT token handling issues
 
         **Data Protection:**
         - Sensitive data exposure in logs/errors
         - Unencrypted data storage
-        - Insecure data transmission
         - API key or credential leaks
         - Privacy regulation compliance
 
@@ -49,17 +50,9 @@ checks:
         - Insecure configurations
         - Missing security headers
         - Vulnerable dependencies
-        - Unsafe deserializations
         - Resource exhaustion vulnerabilities
 
-        **Code Logic & Implementation:**
-        - Logic flaws that could lead to security issues
-        - Missing security controls for critical operations
-        - Insufficient test coverage for security-critical code
-        - Over-engineered security mechanisms that may have gaps
-
-        Provide specific findings with clear explanations and actionable remediation steps. Include suggestions and code fixes when applicable.
-        Pay special attention to areas lacking test coverage that handle sensitive operations.
+        Provide specific findings with clear explanations and actionable remediation steps.
     on: [pr_opened, pr_updated]
 
   # Performance analysis - Important for all applications
@@ -67,15 +60,16 @@ checks:
     type: ai
     group: review
     schema: code-review
+    ai_provider: "mock"
     prompt: |
+        Review the code changes for performance issues:
+
         ## Files to Analyze
         {% for file in files %}
         - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
         {% endfor %}
 
-        ## Instructions
-        Review the code changes according to these performance criteria:
-
+        ## Analysis Areas
         **Algorithm & Data Structure Efficiency:**
         - Time complexity analysis (O(n), O(n²), etc.)
         - Space complexity and memory usage
@@ -87,7 +81,6 @@ checks:
         - Missing database indexes
         - Inefficient JOIN operations
         - Large result set retrievals
-        - Transaction scope issues
 
         **Resource Management:**
         - Memory leaks and excessive allocations
@@ -99,15 +92,8 @@ checks:
         - Blocking operations in async contexts
         - Race conditions and deadlocks
         - Inefficient parallel processing
-        - Thread safety concerns
 
-        **Frontend Performance (if applicable):**
-        - Bundle size impact
-        - Render-blocking operations
-        - Unnecessary re-renders
-        - Large asset optimization
-
-        Identify specific performance issues and provide optimization recommendations with expected impact. Include suggestions and code fixes when applicable.
+        Identify specific performance issues and provide optimization recommendations.
     on: [pr_opened, pr_updated]
 
   # Code quality and maintainability
@@ -115,70 +101,41 @@ checks:
     type: ai
     group: review
     schema: code-review
+    ai_provider: "mock"
     prompt: |
-        Please evaluate the code quality and maintainability of the changes in this pull request.
+        Evaluate the code quality and maintainability of the changes:
 
-        ## Instructions
-        Assess the code quality according to these guidelines:
-
+        ## Quality Assessment Areas
         **Code Structure & Design:**
         - SOLID principles adherence
         - Design pattern appropriateness
         - Separation of concerns
-        - Module cohesion and coupling
         - Code organization and clarity
-
-        **Naming & Documentation:**
-        - Variable, function, and class naming clarity
-        - Comment quality and relevance
-        - API documentation completeness
-        - Code self-documentation level
 
         **Error Handling & Reliability:**
         - Exception handling completeness
         - Error propagation patterns
-        - Graceful failure handling
         - Input validation thoroughness
         - Edge case coverage
 
         **Testing & Test Coverage:**
         - Missing tests for critical functionality
-        - Test coverage gaps and untested code paths
+        - Test coverage gaps
         - Test quality and effectiveness
         - Edge cases and error scenarios coverage
-        - Unit vs integration test appropriateness
-        - Test maintainability and clarity
 
-        **Over-Engineering & Complexity:**
-        - Unnecessary abstractions or complexity
-        - Premature optimization
-        - YAGNI (You Aren't Gonna Need It) violations
-        - Simpler alternative solutions available
-        - Code that could be more straightforward
-        - Excessive use of design patterns
-
-        **Logic & Correctness:**
-        - Logical errors or flaws in implementation
-        - Off-by-one errors
-        - Incorrect algorithm implementation
-        - Race conditions or timing issues
-        - Incorrect assumptions about data
-        - Missing validation or boundary checks
-
-        **Maintainability & Technical Debt:**
+        **Maintainability:**
         - Code testability issues
         - Dependencies and coupling problems
         - Technical debt introduction
-        - Future maintenance considerations
         - Code duplication (DRY violations)
 
         **Language-Specific Best Practices:**
         - Idiomatic code usage
         - Framework/library best practices
         - Type safety (if applicable)
-        - Resource management patterns
 
-        Focus on actionable improvements that enhance code maintainability and provide specific recommendations. Include suggestions and code fixes when applicable.
+        Focus on actionable improvements that enhance code maintainability.
     on: [pr_opened, pr_updated]
 
   # PR overview with intelligent analysis
@@ -186,6 +143,7 @@ checks:
     type: ai
     group: overview
     schema: plain
+    ai_provider: "mock"
     prompt: |
         # 📋 Pull Request Overview: {{ pr.title }}
 
@@ -202,28 +160,25 @@ checks:
         | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status | capitalize }} | +{{ file.additions }}/-{{ file.deletions }} | {% if file.changes > 50 %}High{% elsif file.changes > 20 %}Medium{% else %}Low{% endif %} |
         {% endfor %}
 
-        ## Architecture & Impact Assessment
-
-        Please generate a comprehensive overview and analysis of this pull request.
-        
-        Follow these instructions to create a thorough assessment:
+        ## Instructions
+        Generate a comprehensive overview and analysis of this pull request:
 
         1. **Change Impact Analysis**
            - What this PR accomplishes
            - Key technical changes introduced
            - Affected system components
 
-        2. **Architecture Visualization**
-           - Create appropriate mermaid diagram(s) showing:
-             - Component relationships (use `graph TD/LR`)
-             - Process flows (use `flowchart` or `sequenceDiagram`)
-             - Data flow between modified components
+        2. **Architecture Assessment**
+           - Component relationships affected
+           - Process flows modified
+           - Data flow changes
 
-        **Guidelines for diagrams:**
-        - Use multiple diagrams if there are distinct architectural aspects
-        - Choose the most appropriate diagram type for each concept
-        - Focus on modified components and their relationships
-        - Keep diagrams clean and informative
-
-        Provide a balanced technical assessment suitable for both developers and stakeholders.
+        Provide a balanced technical assessment suitable for developers and stakeholders.
     on: [pr_opened, pr_updated]
+
+# Output configuration
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

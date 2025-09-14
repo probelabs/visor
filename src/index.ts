@@ -8,6 +8,8 @@ import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli
 import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
+import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { FailureConditionEvaluator } from './failure-condition-evaluator';
 
 // Type definitions for CLI output
 interface CliReviewOutput {
@@ -796,8 +798,32 @@ async function handlePullRequestEvent(
     parallelExecution: false,
   };
 
+  // Create GitHub check runs for legacy auto-review
+  let checkResults: any = null;
+  if (inputs && inputs['github-token']) {
+    checkResults = await createGitHubChecks(
+      octokit,
+      inputs,
+      owner,
+      repo,
+      pullRequest.head?.sha || 'unknown',
+      ['auto-review'],
+      config
+    );
+  }
+
+  // Update checks to in-progress status
+  if (checkResults) {
+    await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
+  }
+
   // Perform the review with debug options
   const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+
+  // Complete GitHub check runs with results
+  if (checkResults) {
+    await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, review, config);
+  }
 
   // If debug mode is enabled, output debug information to console
   if (reviewOptions.debug && review.debug) {
@@ -858,6 +884,11 @@ async function handlePullRequestEvent(
   setOutput('issues-found', calculateTotalIssues(review.issues).toString());
   setOutput('pr-action', action);
   setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
+
+  // Set GitHub check run outputs
+  setOutput('checks-api-available', checkResults.checksApiAvailable.toString());
+  setOutput('check-runs-created', checkResults.checkRunsCreated.toString());
+  setOutput('check-runs-urls', checkResults.checkRunUrls.join(','));
 }
 
 async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Promise<void> {
@@ -873,6 +904,461 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
   console.log(`Repository: ${repoData.full_name}`);
   console.log(`Description: ${repoData.description || 'No description'}`);
   console.log(`Stars: ${repoData.stargazers_count}`);
+}
+
+/**
+ * Create GitHub check runs for individual checks if enabled
+ */
+async function createGitHubChecks(
+  octokit: Octokit,
+  inputs: GitHubActionInputs,
+  owner: string,
+  repo: string,
+  headSha: string,
+  checksToRun: string[],
+  config: any
+): Promise<{
+  checkRunMap: Map<string, { id: number; url: string }> | null;
+  checksApiAvailable: boolean;
+  checkRunsCreated: number;
+  checkRunUrls: string[];
+}> {
+  // Check if GitHub checks are enabled via input (default is true)
+  const createCheckInput = inputs['create-check'] !== 'false';
+
+  // Check if GitHub checks are enabled via config (default is true if not specified)
+  const createCheckConfig = config?.output?.github_checks?.enabled !== false;
+
+  if (!createCheckInput || !createCheckConfig) {
+    const reason = !createCheckInput ? 'create-check input' : 'configuration';
+    console.log(`🔧 GitHub check runs disabled via ${reason}`);
+    return {
+      checkRunMap: null,
+      checksApiAvailable: true,
+      checkRunsCreated: 0,
+      checkRunUrls: [],
+    };
+  }
+
+  // Check if per-check mode is enabled (default is true)
+  const perCheckMode = config?.output?.github_checks?.per_check !== false;
+
+  try {
+    const checkService = new GitHubCheckService(octokit);
+    const checkRunMap = new Map<string, { id: number; url: string }>();
+    const checkRunUrls: string[] = [];
+
+    // Get custom name prefix if specified
+    const namePrefix = config?.output?.github_checks?.name_prefix || 'Visor';
+
+    if (perCheckMode) {
+      console.log(`🔍 Creating individual GitHub check runs for ${checksToRun.length} checks...`);
+
+      // Create individual check runs for each configured check
+      for (const checkName of checksToRun) {
+        try {
+          const checkRunOptions: CheckRunOptions = {
+            owner,
+            repo,
+            head_sha: headSha,
+            name: `${namePrefix}: ${checkName}`,
+            external_id: `visor-${checkName}-${headSha.substring(0, 7)}`,
+          };
+
+          const checkRun = await checkService.createCheckRun(checkRunOptions, {
+            title: `${checkName} Analysis`,
+            summary: `Running ${checkName} check using AI-powered analysis...`,
+          });
+
+          checkRunMap.set(checkName, checkRun);
+          checkRunUrls.push(checkRun.url);
+          console.log(`✅ Created check run for ${checkName}: ${checkRun.url}`);
+        } catch (error) {
+          console.error(`❌ Failed to create check run for ${checkName}:`, error);
+          // Continue with other checks even if one fails
+        }
+      }
+    } else {
+      // Create a single check run for all checks
+      console.log(`🔍 Creating single GitHub check run for ${checksToRun.length} checks...`);
+
+      try {
+        const checkRunOptions: CheckRunOptions = {
+          owner,
+          repo,
+          head_sha: headSha,
+          name: `${namePrefix}: Code Review`,
+          external_id: `visor-combined-${headSha.substring(0, 7)}`,
+        };
+
+        const checkRun = await checkService.createCheckRun(checkRunOptions, {
+          title: 'AI Code Review',
+          summary: `Running ${checksToRun.join(', ')} checks using AI-powered analysis...`,
+        });
+
+        // Use 'combined' as the key for all checks
+        checkRunMap.set('combined', checkRun);
+        checkRunUrls.push(checkRun.url);
+        console.log(`✅ Created combined check run: ${checkRun.url}`);
+      } catch (error) {
+        console.error(`❌ Failed to create combined check run:`, error);
+      }
+    }
+
+    return {
+      checkRunMap,
+      checksApiAvailable: true,
+      checkRunsCreated: checkRunMap.size,
+      checkRunUrls,
+    };
+  } catch (error) {
+    // Check if this is a permissions error
+    if (
+      error instanceof Error &&
+      (error.message.includes('403') || error.message.includes('checks:write'))
+    ) {
+      console.warn(
+        '⚠️ GitHub checks API not available - insufficient permissions. Check runs will be skipped.'
+      );
+      console.warn(
+        '💡 To enable check runs, ensure your GitHub token has "checks:write" permission.'
+      );
+      return {
+        checkRunMap: null,
+        checksApiAvailable: false,
+        checkRunsCreated: 0,
+        checkRunUrls: [],
+      };
+    } else {
+      console.error('❌ Failed to create GitHub check runs:', error);
+      return {
+        checkRunMap: null,
+        checksApiAvailable: false,
+        checkRunsCreated: 0,
+        checkRunUrls: [],
+      };
+    }
+  }
+}
+
+/**
+ * Update GitHub check runs to in-progress status
+ */
+async function updateChecksInProgress(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  checkRunMap: Map<string, { id: number; url: string }> | null
+): Promise<void> {
+  if (!checkRunMap) return;
+
+  const checkService = new GitHubCheckService(octokit);
+
+  for (const [checkName, checkRun] of checkRunMap) {
+    try {
+      await checkService.updateCheckRunInProgress(owner, repo, checkRun.id, {
+        title: `Analyzing with ${checkName}...`,
+        summary: `AI-powered analysis is in progress for ${checkName} check.`,
+      });
+      console.log(`🔄 Updated ${checkName} check to in-progress status`);
+    } catch (error) {
+      console.error(`❌ Failed to update ${checkName} check to in-progress:`, error);
+    }
+  }
+}
+
+/**
+ * Complete GitHub check runs with results
+ */
+async function completeGitHubChecks(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  checkRunMap: Map<string, { id: number; url: string }> | null,
+  reviewSummary: any,
+  config: any
+): Promise<void> {
+  if (!checkRunMap) return;
+
+  const checkService = new GitHubCheckService(octokit);
+  const perCheckMode = config?.output?.github_checks?.per_check !== false;
+
+  console.log(`🏁 Completing ${checkRunMap.size} GitHub check runs...`);
+
+  if (perCheckMode && !checkRunMap.has('combined')) {
+    // Per-check mode: complete individual check runs
+    await completeIndividualChecks(checkService, owner, repo, checkRunMap, reviewSummary, config);
+  } else {
+    // Combined mode: complete single check run with all results
+    await completeCombinedCheck(checkService, owner, repo, checkRunMap, reviewSummary, config);
+  }
+}
+
+/**
+ * Complete individual GitHub check runs
+ */
+async function completeIndividualChecks(
+  checkService: GitHubCheckService,
+  owner: string,
+  repo: string,
+  checkRunMap: Map<string, { id: number; url: string }>,
+  reviewSummary: any,
+  config: any
+): Promise<void> {
+  // Group issues by check name
+  const issuesByCheck = new Map<string, any[]>();
+
+  // Initialize empty arrays for all checks
+  for (const checkName of checkRunMap.keys()) {
+    issuesByCheck.set(checkName, []);
+  }
+
+  // Group issues by their check name (extracted from ruleId prefix)
+  for (const issue of reviewSummary.issues || []) {
+    if (issue.ruleId && issue.ruleId.includes('/')) {
+      const checkName = issue.ruleId.split('/')[0];
+      if (issuesByCheck.has(checkName)) {
+        issuesByCheck.get(checkName)!.push(issue);
+      }
+    }
+  }
+
+  for (const [checkName, checkRun] of checkRunMap) {
+    try {
+      const checkIssues = issuesByCheck.get(checkName) || [];
+      const checkConfig = config.checks?.[checkName];
+
+      // Evaluate failure conditions for this specific check
+      const failureResults = await evaluateCheckFailureConditions(
+        config,
+        checkConfig,
+        checkName,
+        checkIssues
+      );
+
+      await checkService.completeCheckRun(
+        owner,
+        repo,
+        checkRun.id,
+        checkName,
+        failureResults,
+        checkIssues
+      );
+
+      console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
+    } catch (error) {
+      console.error(`❌ Failed to complete ${checkName} check:`, error);
+      await markCheckAsFailed(checkService, owner, repo, checkRun.id, checkName, error);
+    }
+  }
+}
+
+/**
+ * Complete combined GitHub check run
+ */
+async function completeCombinedCheck(
+  checkService: GitHubCheckService,
+  owner: string,
+  repo: string,
+  checkRunMap: Map<string, { id: number; url: string }>,
+  reviewSummary: any,
+  config: any
+): Promise<void> {
+  const combinedCheckRun = checkRunMap.get('combined');
+  if (!combinedCheckRun) return;
+
+  try {
+    // Use all issues for the combined check
+    const allIssues = reviewSummary.issues || [];
+
+    // Evaluate global failure conditions
+    const failureResults = await evaluateGlobalFailureConditions(config, allIssues);
+
+    await checkService.completeCheckRun(
+      owner,
+      repo,
+      combinedCheckRun.id,
+      'Code Review',
+      failureResults,
+      allIssues
+    );
+
+    console.log(`✅ Completed combined check with ${allIssues.length} issues`);
+  } catch (error) {
+    console.error(`❌ Failed to complete combined check:`, error);
+    await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);
+  }
+}
+
+/**
+ * Evaluate failure conditions for a specific check
+ */
+async function evaluateCheckFailureConditions(
+  config: any,
+  checkConfig: any,
+  checkName: string,
+  checkIssues: any[]
+): Promise<any[]> {
+  const failureResults: any[] = [];
+  const criticalIssues = checkIssues.filter(issue => issue.severity === 'critical').length;
+  const errorIssues = checkIssues.filter(issue => issue.severity === 'error').length;
+
+  // Check global fail_if condition
+  if (config.fail_if) {
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: checkIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
+
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        checkName,
+        'legacy',
+        'legacy',
+        reviewSummary,
+        config.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: 'global_fail_if',
+          failed: true,
+          severity: 'error',
+          expression: config.fail_if,
+          message: 'Global failure condition met',
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
+    }
+  }
+
+  // Check check-specific fail_if condition
+  if (checkConfig?.fail_if) {
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: checkIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
+
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        checkName,
+        'legacy',
+        'legacy',
+        reviewSummary,
+        checkConfig.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: `${checkName}_fail_if`,
+          failed: true,
+          severity: 'error',
+          expression: checkConfig.fail_if,
+          message: `Check ${checkName} failure condition met`,
+        });
+      }
+    } catch (error) {
+      console.error(
+        '❌ Failed to evaluate check-specific fail_if condition:',
+        checkConfig.fail_if,
+        error
+      );
+    }
+  }
+
+  return failureResults;
+}
+
+/**
+ * Evaluate global failure conditions for combined check
+ */
+async function evaluateGlobalFailureConditions(config: any, allIssues: any[]): Promise<any[]> {
+  const failureResults: any[] = [];
+  const criticalIssues = allIssues.filter(issue => issue.severity === 'critical').length;
+  const errorIssues = allIssues.filter(issue => issue.severity === 'error').length;
+
+  // Check global fail_if condition
+  if (config.fail_if) {
+    try {
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = {
+        issues: [],
+        suggestions: [],
+        metadata: {
+          totalIssues: allIssues.length,
+          criticalIssues,
+          errorIssues,
+          warningIssues: 0,
+          infoIssues: 0,
+        },
+      };
+
+      const shouldFail = await evaluator.evaluateSimpleCondition(
+        'combined',
+        'legacy',
+        'legacy',
+        reviewSummary,
+        config.fail_if
+      );
+
+      if (shouldFail) {
+        failureResults.push({
+          conditionName: 'global_fail_if',
+          failed: true,
+          severity: 'error',
+          expression: config.fail_if,
+          message: 'Global failure condition met',
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
+    }
+  }
+
+  return failureResults;
+}
+
+/**
+ * Mark a check as failed due to execution error
+ */
+async function markCheckAsFailed(
+  checkService: GitHubCheckService,
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  checkName: string,
+  error: unknown
+): Promise<void> {
+  try {
+    await checkService.completeCheckRun(
+      owner,
+      repo,
+      checkRunId,
+      checkName,
+      [],
+      [],
+      error instanceof Error ? error.message : 'Unknown error occurred'
+    );
+  } catch (finalError) {
+    console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
+  }
 }
 
 /**
@@ -990,6 +1476,27 @@ async function handlePullRequestVisorMode(
       parallelExecution: true,
     };
 
+    // Fetch PR info to get commit SHA for metadata
+    const { data: pullRequest } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber,
+    });
+
+    // Create GitHub check runs for each configured check
+    const checkResults = await createGitHubChecks(
+      octokit,
+      inputs,
+      owner,
+      repo,
+      pullRequest.head.sha,
+      checksToRun,
+      config
+    );
+
+    // Update checks to in-progress status
+    await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
+
     // Perform the review
     console.log('🤖 Starting parallel AI review with Visor config...');
     const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
@@ -1000,12 +1507,10 @@ async function handlePullRequestVisorMode(
       (review.debug as any).parallelExecution = true;
     }
 
-    // Fetch PR info to get commit SHA for metadata
-    const { data: pullRequest } = await octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: prNumber,
-    });
+    // Complete GitHub check runs with results
+    if (checkResults) {
+      await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, review, config);
+    }
 
     // Post comment using group-based comment separation
     const commentId = `visor-config-review-${prNumber}`;
@@ -1054,6 +1559,11 @@ async function handlePullRequestVisorMode(
     setOutput('visor-config-used', 'true');
     setOutput('checks-executed', checksToRun.join(','));
     setOutput('api-errors-found', apiErrors.length.toString());
+
+    // Set GitHub check run outputs
+    setOutput('checks-api-available', checkResults.checksApiAvailable.toString());
+    setOutput('check-runs-created', checkResults.checkRunsCreated.toString());
+    setOutput('check-runs-urls', checkResults.checkRunUrls.join(','));
   } catch (error) {
     console.error('❌ Error in Visor PR analysis:', error);
     setFailed(error instanceof Error ? error.message : 'Visor PR analysis failed');

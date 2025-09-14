@@ -1,0 +1,48 @@
+version: "1.0"
+
+# Basic failure conditions example
+# This shows simple single-line JEXL expressions for common quality gates
+
+# Global failure conditions that apply to all checks
+failure_conditions:
+  # Fail if any critical issues are found
+  no_critical_issues: "!output.issues.some(i => i.severity === 'critical')"
+
+  # Fail if there are more than 3 error-level issues
+  error_threshold: "output.issues.filter(i => i.severity === 'error').length <= 3"
+
+  # Warn if there are more than 10 total issues
+  total_issue_limit:
+    condition: "output.issues.length <= 10"
+    message: "Too many issues found - consider refactoring"
+    severity: warning
+
+checks:
+  # Basic security check with simple failure condition
+  security-check:
+    type: ai
+    schema: code-review
+    prompt: "Analyze for security vulnerabilities including SQL injection, XSS, authentication issues, and data exposure."
+    on: [pr_opened, pr_updated]
+
+    # Check-specific failure conditions (override global ones)
+    failure_conditions:
+      # Security issues are always critical - no tolerance
+      zero_security_issues: "output.issues.length == 0"
+
+  # Performance check with multiple failure conditions
+  performance-check:
+    type: ai
+    schema: code-review
+    prompt: "Review for performance issues including N+1 queries, inefficient algorithms, memory leaks, and blocking operations."
+    on: [pr_opened, pr_updated]
+
+    failure_conditions:
+      # Allow some performance warnings but no critical issues
+      performance_gate: "!output.issues.some(i => i.severity === 'critical') && output.issues.filter(i => i.severity === 'error').length <= 1"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

@@ -3,6 +3,111 @@
  */
 
 /**
+ * Failure condition severity levels
+ */
+export type FailureConditionSeverity = 'error' | 'warning' | 'info';
+
+/**
+ * Simple failure condition - just an expression string
+ */
+export type SimpleFailureCondition = string;
+
+/**
+ * Complex failure condition with additional metadata
+ */
+export interface ComplexFailureCondition {
+  /** Expression to evaluate using Function Constructor */
+  condition: string;
+  /** Human-readable message when condition is met */
+  message?: string;
+  /** Severity level of the failure */
+  severity?: FailureConditionSeverity;
+  /** Whether this condition should halt execution */
+  halt_execution?: boolean;
+}
+
+/**
+ * Failure condition - can be a simple expression string or complex object
+ */
+export type FailureCondition = SimpleFailureCondition | ComplexFailureCondition;
+
+/**
+ * Collection of failure conditions
+ */
+export interface FailureConditions {
+  [conditionName: string]: FailureCondition;
+}
+
+/**
+ * Context object available to expressions for failure condition evaluation
+ */
+export interface FailureConditionContext {
+  /** Check results - raw output from the check/schema */
+  output: {
+    /** Check results */
+    issues?: Array<{
+      file: string;
+      line: number;
+      endLine?: number;
+      ruleId: string;
+      message: string;
+      severity: 'info' | 'warning' | 'error' | 'critical';
+      category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+      group?: string;
+      schema?: string;
+      suggestion?: string;
+      replacement?: string;
+    }>;
+
+    /** Array of suggestions from the check */
+    suggestions?: string[];
+
+    /** Any additional fields provided by the check/schema */
+    [key: string]: any;
+  };
+
+  /** Previous check outputs for dependencies - keyed by check name */
+  outputs?: Record<string, any>;
+
+  /** Check context information */
+  checkName?: string;
+  schema?: string;
+  group?: string;
+
+  /** Debug information (if available) */
+  debug?: {
+    /** Any errors that occurred during processing */
+    errors: string[];
+    /** Processing time in milliseconds */
+    processingTime: number;
+    /** AI provider used */
+    provider: string;
+    /** AI model used */
+    model: string;
+  };
+}
+
+/**
+ * Result of failure condition evaluation
+ */
+export interface FailureConditionResult {
+  /** Name of the condition that was evaluated */
+  conditionName: string;
+  /** Whether the condition evaluated to true (failure) */
+  failed: boolean;
+  /** The expression that was evaluated */
+  expression: string;
+  /** Human-readable message */
+  message?: string;
+  /** Severity of the failure */
+  severity: FailureConditionSeverity;
+  /** Whether execution should halt */
+  haltExecution: boolean;
+  /** Error message if evaluation failed */
+  error?: string;
+}
+
+/**
  * Valid check types in configuration
  */
 export type ConfigCheckType = 'ai';
@@ -34,7 +139,7 @@ export interface EnvConfig {
  */
 export interface AIProviderConfig {
   /** AI provider to use */
-  provider?: 'google' | 'anthropic' | 'openai';
+  provider?: 'google' | 'anthropic' | 'openai' | 'mock';
   /** Model name to use */
   model?: string;
   /** API key (usually from environment variables) */
@@ -64,7 +169,7 @@ export interface CheckConfig {
   /** AI model to use for this check - overrides global setting */
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
   /** Environment variables for this check */
   env?: EnvConfig;
   /** Check IDs that this check depends on (optional) */
@@ -75,6 +180,12 @@ export interface CheckConfig {
   schema?: string;
   /** Custom template configuration - optional */
   template?: CustomTemplateConfig;
+  /** Condition to determine if check should run - runs if expression evaluates to true */
+  if?: string;
+  /** Simple fail condition - fails check if expression evaluates to true */
+  fail_if?: string;
+  /** Check-specific failure conditions - optional (deprecated, use fail_if) */
+  failure_conditions?: FailureConditions;
 }
 
 /**
@@ -138,6 +249,18 @@ export interface FileCommentOutput {
 }
 
 /**
+ * GitHub Check Runs output configuration
+ */
+export interface GitHubCheckOutput {
+  /** Whether GitHub check runs are enabled */
+  enabled: boolean;
+  /** Whether to create individual check runs per configured check */
+  per_check: boolean;
+  /** Custom name prefix for check runs */
+  name_prefix?: string;
+}
+
+/**
  * Output configuration
  */
 export interface OutputConfig {
@@ -145,6 +268,8 @@ export interface OutputConfig {
   pr_comment: PrCommentOutput;
   /** File comment configuration (optional) */
   file_comment?: FileCommentOutput;
+  /** GitHub check runs configuration (optional) */
+  github_checks?: GitHubCheckOutput;
 }
 
 /**
@@ -162,7 +287,11 @@ export interface VisorConfig {
   /** Global AI model setting */
   ai_model?: string;
   /** Global AI provider setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  /** Simple global fail condition - fails if expression evaluates to true */
+  fail_if?: string;
+  /** Global failure conditions - optional (deprecated, use fail_if) */
+  failure_conditions?: FailureConditions;
 }
 
 /**

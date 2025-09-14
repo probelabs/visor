@@ -22,6 +22,8 @@ export interface CliOptions {
   timeout?: number;
   /** Enable debug mode for detailed output */
   debug?: boolean;
+  /** Stop execution on first failure condition */
+  failFast?: boolean;
   /** Show help text */
   help?: boolean;
   /** Show version */

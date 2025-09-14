@@ -1,0 +1,28 @@
+version: "1.0"
+
+# Test configuration for CI - uses mock AI and minimal checks
+# This prevents API key requirements during automated testing
+
+# Global AI provider setting - use mock for CI
+ai_provider: mock
+ai_model: mock
+
+checks:
+  # Simple security check using mock AI provider
+  security:
+    type: ai
+    group: test
+    schema: plain
+    prompt: "This is a mock security analysis for CI testing. No real security analysis is performed."
+    ai_provider: mock
+    ai_model: mock
+    on: [pr_opened, pr_updated]
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+
+  github_checks:
+    enabled: false  # Disable GitHub checks during CI testing

@@ -39,6 +39,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           owner: 'octocat'
           repo: 'Hello-World'
+          ai-model: 'mock'
+          ai-provider: 'mock'
+          config-path: '.visor.test.yaml'
 
   test-scenarios:
     runs-on: ubuntu-latest
@@ -65,5 +68,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: 'false'
+          ai-model: 'mock'
+          ai-provider: 'mock'
+          config-path: '.visor.test.yaml'
         env:
           GITHUB_EVENT_NAME: 'repository'

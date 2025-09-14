@@ -7,6 +7,7 @@
   },
   "files": [
     "dist/",
+    "defaults/",
     "action.yml",
     "README.md",
     "LICENSE"
@@ -39,7 +40,14 @@
     "release:major": "./scripts/release.sh major",
     "release:prerelease": "./scripts/release.sh prerelease"
   },
-  "keywords": ["code-review", "ai", "github-action", "cli", "pr-review", "visor"],
+  "keywords": [
+    "code-review",
+    "ai",
+    "github-action",
+    "cli",
+    "pr-review",
+    "visor"
+  ],
   "author": "Probe Labs",
   "license": "MIT",
   "description": "AI-powered code review tool for GitHub Pull Requests - CLI and GitHub Action",
@@ -53,6 +61,7 @@
   "homepage": "https://github.com/probelabs/visor#readme",
   "dependencies": {
     "@actions/core": "^1.11.1",
+    "@nyariv/sandboxjs": "^0.8.25",
     "@octokit/action": "^8.0.2",
     "@octokit/auth-app": "^8.1.0",
     "@octokit/core": "^7.0.3",

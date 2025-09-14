@@ -18,7 +18,7 @@ export interface AIReviewConfig {
   apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 600000ms (10 minutes)
-  provider?: 'google' | 'anthropic' | 'openai';
+  provider?: 'google' | 'anthropic' | 'openai' | 'mock';
   debug?: boolean; // Enable debug mode
 }
 
@@ -145,9 +145,9 @@ export class AIReviewService {
       };
     }
 
-    // Handle mock model first (no API key needed)
-    if (this.config.model === 'mock') {
-      log('🎭 Using mock AI model for testing - skipping API key validation');
+    // Handle mock model/provider first (no API key needed)
+    if (this.config.model === 'mock' || this.config.provider === 'mock') {
+      log('🎭 Using mock AI model/provider for testing - skipping API key validation');
     } else {
       // Check if API key is available for real AI models
       if (!this.config.apiKey) {
@@ -360,9 +360,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
    * Call ProbeAgent SDK with built-in schema validation
    */
   private async callProbeAgent(prompt: string, schema?: string): Promise<string> {
-    // Handle mock model for testing
-    if (this.config.model === 'mock') {
-      log('🎭 Using mock AI model for testing');
+    // Handle mock model/provider for testing
+    if (this.config.model === 'mock' || this.config.provider === 'mock') {
+      log('🎭 Using mock AI model/provider for testing');
       return this.generateMockResponse(prompt);
     }
 
@@ -772,7 +772,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
     // Generate mock response based on prompt content
     const mockResponse = {
-      response: JSON.stringify({
+      content: JSON.stringify({
         issues: [
           {
             file: 'test.ts',

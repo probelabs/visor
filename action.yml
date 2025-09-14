@@ -1,5 +1,5 @@
 name: 'Visor AI Code Review'
-description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues'
+description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues. Works out-of-the-box without configuration.'
 author: 'Visor Team'
 branding:
   icon: 'eye'
@@ -39,7 +39,7 @@ inputs:
     default: 'json'
   
   config-path:
-    description: 'Path to visor configuration file'
+    description: 'Path to visor configuration file (optional - uses bundled default config if not specified)'
     required: false
     default: ''
   
@@ -57,6 +57,16 @@ inputs:
     description: 'Add quality labels to PR'
     required: false
     default: 'true'
+
+  ai-model:
+    description: 'AI model to use (mock, google-gemini-pro, claude-sonnet, etc.)'
+    required: false
+    default: ''
+
+  ai-provider:
+    description: 'AI provider to use (mock, google, anthropic, openai)'
+    required: false
+    default: ''
   
   fail-on-critical:
     description: 'Fail the action if critical issues are found'
@@ -105,7 +115,16 @@ outputs:
   
   pr-action:
     description: 'The GitHub PR action that triggered this run (opened, synchronize, edited)'
-  
+
+  check-runs-created:
+    description: 'Number of GitHub check runs created'
+
+  check-runs-urls:
+    description: 'URLs of created GitHub check runs (comma-separated)'
+
+  checks-api-available:
+    description: 'Whether GitHub Checks API was available (true/false)'
+
   # Legacy outputs for backward compatibility
   repo-name:
     description: 'Name of the repository (legacy)'

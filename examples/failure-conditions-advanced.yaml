@@ -1,0 +1,142 @@
+version: "1.0"
+
+# Advanced failure conditions example
+# This shows complex JEXL expressions with metadata access and business logic
+
+# Global failure conditions with schema-based logic
+failure_conditions:
+  # Only apply critical issue limits to code-review schema checks
+  critical_code_review:
+    condition: "checkName.includes('code-review') && output.issues.some(i => i.severity === 'critical')"
+    message: "Critical issues found in code review - blocking merge"
+    severity: error
+
+  # Different thresholds for different check types
+  schema_based_limits:
+    condition: |
+      (checkName.includes('security') && output.issues.length > 2) ||
+      (checkName.includes('performance') && output.issues.some(i => i.severity === 'critical')) ||
+      (checkName.includes('plain') && output.issues.filter(i => i.severity === 'error').length > 5)
+    message: "Schema-specific quality gate failed"
+    severity: error
+
+  # Check execution health using GitHub Actions-like functions
+  execution_health:
+    condition: "failure() || debug.processingTime > 300000"
+    message: "Check execution failed or timed out"
+    severity: error
+    halt_execution: true
+
+checks:
+  # Security check with complex conditions
+  security-comprehensive:
+    type: ai
+    group: security-analysis
+    schema: security
+    prompt: "Comprehensive security analysis for authentication, authorization, data validation, and cryptography."
+    on: [pr_opened, pr_updated]
+
+    failure_conditions:
+      # Zero tolerance for SQL injection patterns (GitHub Actions-like syntax)
+      sql_injection_check:
+        condition: 'hasIssue(output.issues, "ruleId", "security/sql-injection")'
+        message: "SQL injection vulnerability detected - immediate fix required"
+        severity: error
+        halt_execution: true
+
+      # Count specific security issue types
+      critical_security_count:
+        condition: 'countIssues(output.issues, "severity", "critical") == 0'
+        message: "Critical security issues must be resolved"
+        severity: error
+
+      # File-based analysis using contains-like function
+      auth_file_issues:
+        condition: 'hasFileMatching(output.issues, "auth") && output.issues.some(i => i.severity === "critical")'
+        message: "Critical issues found in authentication-related files"
+        severity: error
+
+  # Performance check with business logic
+  performance-analysis:
+    type: ai
+    group: performance
+    schema: code-review
+    prompt: "Analyze for performance bottlenecks, database query optimization, and resource usage."
+    on: [pr_opened, pr_updated]
+
+    failure_conditions:
+      # Complex performance criteria
+      performance_quality_gate:
+        condition: |
+          !output.issues.some(i => i.severity === "critical") &&
+          output.issues.filter(i => i.severity === "error").length <= 2 &&
+          !hasFileWith(output.issues, "database") || countIssues(output.issues, "category", "performance") <= 3
+        message: "Performance quality gate failed"
+        severity: warning
+
+      # Database-specific rules
+      database_performance:
+        condition: 'hasFileWith(output.issues, "db") && countIssues(output.issues, "severity", "critical") > 0'
+        message: "Critical database performance issues found"
+        severity: error
+
+  # Architecture check with metadata conditions
+  architecture-review:
+    type: ai
+    group: architecture
+    schema: plain
+    prompt: "Review architectural patterns, dependencies, and design principles."
+    on: [pr_opened]
+
+    failure_conditions:
+      # Only fail for large changes
+      architecture_impact:
+        condition: "output.issues.length > 5 && output.issues.filter(i => i.severity === 'critical').length > 1"
+        message: "Significant architectural concerns identified"
+        severity: warning
+
+      # Provider-specific conditions
+      ai_provider_health:
+        condition: 'debug.provider == "anthropic" && debug.processingTime < 60000'
+        message: "AI analysis completed within acceptable time"
+        severity: info
+
+  # Style check with suggestion analysis
+  code-style:
+    type: ai
+    group: style
+    schema: code-review
+    prompt: "Check code style, formatting, naming conventions, and documentation."
+    on: [pr_opened, pr_updated]
+
+    failure_conditions:
+      # Suggestion-based conditions
+      missing_docs:
+        condition: 'hasSuggestion(output.suggestions, "documentation")'
+        message: "Documentation improvements suggested"
+        severity: warning
+
+      # Complex style rules
+      style_quality:
+        condition: |
+          output.issues.filter(i => i.severity === "warning").length <= 10 &&
+          !hasIssueWith(output.issues, "category", "documentation") ||
+          output.issues.length <= 15
+        message: "Code style within acceptable limits"
+        severity: info
+
+# Multiple output configurations
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+    debug:
+      enabled: true
+      includeTiming: true
+      includeProviderInfo: true
+
+# Global environment for all checks
+env:
+  VISOR_TIMEOUT: 300000
+  VISOR_MAX_ISSUES: 20

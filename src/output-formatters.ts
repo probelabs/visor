@@ -8,6 +8,7 @@ import {
   convertIssuesToComments,
 } from './reviewer';
 import { GitRepositoryInfo } from './git-repository-analyzer';
+import { FailureConditionResult } from './types/config';
 
 export interface AnalysisResult {
   repositoryInfo: GitRepositoryInfo;
@@ -16,6 +17,7 @@ export interface AnalysisResult {
   timestamp: string;
   checksExecuted: string[];
   debug?: DebugInfo; // Optional debug information when debug mode is enabled
+  failureConditions?: FailureConditionResult[]; // Optional failure condition results
 }
 
 export interface DebugInfo {
@@ -268,6 +270,7 @@ export class OutputFormatters {
       suggestions: result.reviewSummary.suggestions,
       files: options.includeFiles ? result.repositoryInfo.files : undefined,
       debug: result.debug, // Include debug information when available
+      failureConditions: result.failureConditions || [], // Include failure condition results
     };
 
     return JSON.stringify(jsonResult, null, 2);

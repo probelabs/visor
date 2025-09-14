@@ -92,7 +92,13 @@ export class ConfigManager {
       }
     }
 
-    // Return default config if no file found
+    // Try to load bundled default config
+    const bundledConfig = this.loadBundledDefaultConfig();
+    if (bundledConfig) {
+      return bundledConfig;
+    }
+
+    // Return minimal default config if no bundled config found
     return this.getDefaultConfig();
   }
 
@@ -131,6 +137,67 @@ export class ConfigManager {
         },
       },
     };
+  }
+
+  /**
+   * Load bundled default configuration from the package
+   */
+  public loadBundledDefaultConfig(): VisorConfig | null {
+    try {
+      // Find the package root by looking for package.json
+      const packageRoot = this.findPackageRoot();
+      if (!packageRoot) {
+        return null;
+      }
+
+      const bundledConfigPath = path.join(packageRoot, 'defaults', '.visor.yaml');
+      if (fs.existsSync(bundledConfigPath)) {
+        const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
+        const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+
+        if (!parsedConfig || typeof parsedConfig !== 'object') {
+          return null;
+        }
+
+        // Validate and merge with defaults
+        this.validateConfig(parsedConfig);
+        return this.mergeWithDefaults(parsedConfig) as VisorConfig;
+      }
+    } catch (error) {
+      // Silently fail and return null - will fall back to minimal default
+      console.warn(
+        'Failed to load bundled default config:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    return null;
+  }
+
+  /**
+   * Find the root directory of the Visor package
+   */
+  private findPackageRoot(): string | null {
+    let currentDir = __dirname;
+
+    // Walk up the directory tree to find package.json
+    while (currentDir !== path.dirname(currentDir)) {
+      const packageJsonPath = path.join(currentDir, 'package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        try {
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          // Check if this is the Visor package
+          if (packageJson.name === '@probelabs/visor') {
+            return currentDir;
+          }
+        } catch {
+          // Continue searching if package.json is invalid
+        }
+      }
+      currentDir = path.dirname(currentDir);
+    }
+
+    return null;
   }
 
   /**
