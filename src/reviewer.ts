@@ -139,7 +139,7 @@ export class PRReviewer {
     // Group issues by their group property
     const issuesByGroup = this.groupIssuesByGroup(summary.issues);
 
-    // If no groups or only one group, use the original single comment approach
+    // If no groups or only one group, still use consistent group-based comment IDs
     if (Object.keys(issuesByGroup).length <= 1) {
       const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
         owner,
@@ -148,8 +148,13 @@ export class PRReviewer {
         commitSha: options.commitSha,
       });
 
+      // Use consistent group-based comment ID even for single group
+      const baseCommentId = options.commentId || 'visor-review';
+      const groupName = Object.keys(issuesByGroup)[0] || 'default';
+      const consistentCommentId = `${baseCommentId}-${groupName}`;
+
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-        commentId: options.commentId,
+        commentId: consistentCommentId,
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,
         commitSha: options.commitSha,
@@ -176,9 +181,9 @@ export class PRReviewer {
       };
 
       // Use group name in comment ID to create separate comments
-      const groupCommentId = options.commentId
-        ? `${options.commentId}-${groupName}`
-        : `visor-${groupName}`;
+      // Always include the group name suffix to ensure uniqueness
+      const baseCommentId = options.commentId || 'visor-review';
+      const groupCommentId = `${baseCommentId}-${groupName}`;
 
       const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
         owner,
