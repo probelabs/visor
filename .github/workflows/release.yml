@@ -187,27 +187,24 @@ jobs:
             "main": "index.js"
           }' > action-dist/package.json
 
-      - name: Create action branch
+      - name: Commit bundled files to tag
         run: |
           # Configure git
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          # Create orphan branch for action dist
-          git checkout --orphan action-dist
+          # Copy bundled files to dist/ directory
+          mkdir -p dist
+          cp action-dist/index.js dist/
+          cp action-dist/licenses.txt dist/ 2>/dev/null || true
 
-          # Remove all files
-          git rm -rf .
+          # Add bundled files to the current branch
+          git add dist/ action.yml
+          git commit -m "Add bundled dist files for ${GITHUB_REF_NAME}" || echo "No changes to commit"
 
-          # Copy only action dist files
-          cp -r action-dist/* .
+          # Update the tag to point to this commit
+          git tag -f ${GITHUB_REF_NAME}
+          git push origin ${GITHUB_REF_NAME} --force
 
-          # Add and commit
-          git add .
-          git commit -m "Release action dist for ${GITHUB_REF_NAME}"
-
-          # Force push to action-dist branch
-          git push origin action-dist --force
-
-          echo "✅ Action dist pushed to action-dist branch"
-          echo "📦 Users can now use: uses: ${{ github.repository }}@action-dist"
+          echo "✅ Bundled files committed to tag ${GITHUB_REF_NAME}"
+          echo "📦 Users can now use: uses: ${{ github.repository }}@${GITHUB_REF_NAME}"
