@@ -1,0 +1,142 @@
+name: 'Visor AI Code Review'
+description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues. Works out-of-the-box without configuration.'
+author: 'Visor Team'
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access (use this OR app-id/private-key)'
+    required: false
+    default: ${{ github.token }}
+  
+  app-id:
+    description: 'GitHub App ID for authentication (optional, use with private-key)'
+    required: false
+  
+  private-key:
+    description: 'GitHub App private key for authentication (optional, use with app-id)'
+    required: false
+  
+  installation-id:
+    description: 'GitHub App installation ID (optional, auto-detected if not provided)'
+    required: false
+  
+  auto-review:
+    description: 'Enable automatic review on PR open/update'
+    required: false
+    default: 'true'
+  
+  checks:
+    description: 'Comma-separated list of checks to run (security,performance,style,architecture,all)'
+    required: false
+    default: 'all'
+  
+  output-format:
+    description: 'Output format for analysis results (table,json,markdown,sarif)'
+    required: false
+    default: 'json'
+  
+  config-path:
+    description: 'Path to visor configuration file (optional - uses bundled default config if not specified)'
+    required: false
+    default: ''
+  
+  comment-on-pr:
+    description: 'Post review results as PR comment'
+    required: false
+    default: 'true'
+  
+  create-check:
+    description: 'Create GitHub check run with results'
+    required: false
+    default: 'true'
+  
+  add-labels:
+    description: 'Add quality labels to PR'
+    required: false
+    default: 'true'
+
+  ai-model:
+    description: 'AI model to use (mock, google-gemini-pro, claude-sonnet, etc.)'
+    required: false
+    default: ''
+
+  ai-provider:
+    description: 'AI provider to use (mock, google, anthropic, openai)'
+    required: false
+    default: ''
+  
+  fail-on-critical:
+    description: 'Fail the action if critical issues are found'
+    required: false
+    default: 'false'
+  
+  fail-on-api-error:
+    description: 'Fail the action if API authentication or rate limit errors occur'
+    required: false
+    default: 'false'
+  
+  debug:
+    description: 'Enable debug mode for detailed output in comments'
+    required: false
+    default: 'false'
+  
+  # Legacy inputs for backward compatibility
+  owner:
+    description: 'Repository owner (legacy)'
+    required: false
+  repo:
+    description: 'Repository name (legacy)'
+    required: false
+  visor-config-path:
+    description: 'Path to Visor configuration file (legacy, use config-path)'
+    required: false
+  visor-checks:
+    description: 'Checks to run (legacy, use checks)'
+    required: false
+
+outputs:
+  total-issues:
+    description: 'Total number of issues found'
+  
+  critical-issues:
+    description: 'Number of critical issues found'
+  
+  review-url:
+    description: 'URL to the detailed review comment'
+  
+  sarif-report:
+    description: 'SARIF format report (if output-format includes sarif)'
+  
+  incremental-analysis:
+    description: 'Whether incremental analysis was performed (true for synchronize events)'
+  
+  pr-action:
+    description: 'The GitHub PR action that triggered this run (opened, synchronize, edited)'
+
+  check-runs-created:
+    description: 'Number of GitHub check runs created'
+
+  check-runs-urls:
+    description: 'URLs of created GitHub check runs (comma-separated)'
+
+  checks-api-available:
+    description: 'Whether GitHub Checks API was available (true/false)'
+
+  # Legacy outputs for backward compatibility
+  repo-name:
+    description: 'Name of the repository (legacy)'
+  repo-description:
+    description: 'Description of the repository (legacy)'
+  repo-stars:
+    description: 'Number of stars on the repository (legacy)'
+  issues-found:
+    description: 'Number of issues found (legacy, use total-issues)'
+  auto-review-completed:
+    description: 'Whether automatic PR review was completed (legacy)'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
