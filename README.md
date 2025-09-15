@@ -76,6 +76,29 @@ jobs:
 
 That's it! Visor will automatically review your PRs with AI-powered analysis.
 
+#### Advanced Configuration Options
+
+For more control over execution behavior:
+
+```yaml
+name: Code Review with Performance Tuning
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./  # or: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          max-parallelism: '5'      # Run up to 5 checks in parallel
+          fail-fast: 'true'         # Stop on first failure
+          checks: 'security,performance'  # Run specific checks only
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+```
+
 ### As CLI Tool
 
 ```bash
@@ -119,19 +142,29 @@ Add comments to your PR to trigger Visor:
 visor [options]
 
 Options:
-  -c, --check <type>    Check type: security, performance, style, architecture, all
-                        Can be used multiple times: --check security --check style
-  -o, --output <format> Output format: table, json, markdown, sarif
-                        Default: table
-  --config <path>       Path to configuration file
-                        Default: visor.config.yaml
-  --version            Show version
-  --help               Show help
+  -c, --check <type>         Check type: security, performance, style, architecture, all
+                             Can be used multiple times: --check security --check style
+  -o, --output <format>      Output format: table, json, markdown, sarif
+                             Default: table
+  --config <path>            Path to configuration file
+                             Default: visor.config.yaml
+  --max-parallelism <count>  Maximum number of checks to run in parallel
+                             Default: 3
+  --fail-fast                Stop execution when any check fails
+                             Default: false
+  --timeout <ms>             Timeout for check operations in milliseconds
+                             Default: 600000ms (10 minutes)
+  --debug                    Enable debug mode for detailed output
+  --version                  Show version
+  --help                     Show help
 
 Examples:
-  visor --check all                    # Run all checks
-  visor --check security --output json # Security check with JSON output
-  visor --check style --check performance # Multiple specific checks
+  visor --check all                           # Run all checks
+  visor --check security --output json        # Security check with JSON output
+  visor --check style --check performance     # Multiple specific checks
+  visor --check all --max-parallelism 5       # Run up to 5 checks in parallel
+  visor --check all --fail-fast               # Stop on first failure
+  visor --check all --timeout 300000 --debug  # 5 minute timeout with debug output
 ```
 
 ## 🤖 AI Configuration
@@ -1040,6 +1073,8 @@ reporting:
 | `checks` | Checks to run (comma-separated) | `all` | No |
 | `output-format` | Output format | `markdown` | No |
 | `config-path` | Path to config file | `visor.config.yaml` | No |
+| `max-parallelism` | Maximum number of checks to run in parallel | `3` | No |
+| `fail-fast` | Stop execution when any check fails | `false` | No |
 | `comment-on-pr` | Post review as PR comment | `true` | No |
 | `create-check` | Create GitHub check run | `true` | No |
 | `add-labels` | Add quality labels to PR | `true` | No |

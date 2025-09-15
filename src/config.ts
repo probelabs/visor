@@ -135,6 +135,7 @@ export class ConfigManager {
     return {
       version: '1.0',
       checks: {},
+      max_parallelism: 3,
       output: {
         pr_comment: {
           format: 'markdown',
@@ -210,8 +211,21 @@ export class ConfigManager {
    * Merge configuration with CLI options
    */
   public mergeWithCliOptions(config: Partial<VisorConfig>, cliOptions: CliOptions): MergedConfig {
+    // Apply CLI overrides to the config
+    const mergedConfig = { ...config };
+
+    // Override max_parallelism if specified in CLI
+    if (cliOptions.maxParallelism !== undefined) {
+      mergedConfig.max_parallelism = cliOptions.maxParallelism;
+    }
+
+    // Override fail_fast if specified in CLI
+    if (cliOptions.failFast !== undefined) {
+      mergedConfig.fail_fast = cliOptions.failFast;
+    }
+
     return {
-      config,
+      config: mergedConfig,
       cliChecks: cliOptions.checks || [],
       cliOutput: cliOptions.output || 'table',
     };
@@ -279,6 +293,21 @@ export class ConfigManager {
     // Validate output configuration if present
     if (config.output) {
       this.validateOutputConfig(config.output as unknown as Record<string, unknown>, errors);
+    }
+
+    // Validate max_parallelism if present
+    if (config.max_parallelism !== undefined) {
+      if (
+        typeof config.max_parallelism !== 'number' ||
+        config.max_parallelism < 1 ||
+        !Number.isInteger(config.max_parallelism)
+      ) {
+        errors.push({
+          field: 'max_parallelism',
+          message: 'max_parallelism must be a positive integer (minimum 1)',
+          value: config.max_parallelism,
+        });
+      }
     }
 
     if (errors.length > 0) {
@@ -377,6 +406,7 @@ export class ConfigManager {
     const defaultConfig = {
       version: '1.0',
       checks: {},
+      max_parallelism: 3,
       output: {
         pr_comment: {
           format: 'markdown' as ConfigOutputFormat,

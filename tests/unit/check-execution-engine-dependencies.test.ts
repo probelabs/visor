@@ -373,7 +373,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
       expect(containsExecutionCompleted).toBe(true);
 
       const containsExecutionLevels = result.reviewSummary.suggestions.some(suggestion =>
-        suggestion.includes('2 checks in 2 execution levels')
+        suggestion.includes('Execution levels: 2')
       );
       expect(containsExecutionLevels).toBe(true);
 

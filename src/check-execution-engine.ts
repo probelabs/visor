@@ -72,6 +72,8 @@ export interface CheckExecutionOptions {
   workingDirectory?: string;
   showDetails?: boolean;
   timeout?: number;
+  maxParallelism?: number; // Maximum number of checks to run in parallel (default: 3)
+  failFast?: boolean; // Stop execution when any check fails (default: false)
   outputFormat?: string;
   config?: import('./types/config').VisorConfig;
   debug?: boolean; // Enable debug mode to collect AI execution details
@@ -161,7 +163,9 @@ export class CheckExecutionEngine {
         options.timeout,
         options.config,
         options.outputFormat,
-        options.debug
+        options.debug,
+        options.maxParallelism,
+        options.failFast
       );
 
       // Complete GitHub checks with results
@@ -226,6 +230,67 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Execute tasks with controlled parallelism using a pool pattern
+   */
+  private async executeWithLimitedParallelism<T>(
+    tasks: (() => Promise<T>)[],
+    maxParallelism: number,
+    failFast?: boolean
+  ): Promise<PromiseSettledResult<T>[]> {
+    if (maxParallelism <= 0) {
+      throw new Error('Max parallelism must be greater than 0');
+    }
+
+    if (tasks.length === 0) {
+      return [];
+    }
+
+    const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+    let currentIndex = 0;
+    let shouldStop = false;
+
+    // Worker function that processes tasks
+    const worker = async (): Promise<void> => {
+      while (currentIndex < tasks.length && !shouldStop) {
+        const taskIndex = currentIndex++;
+        if (taskIndex >= tasks.length) break;
+
+        try {
+          const result = await tasks[taskIndex]();
+          results[taskIndex] = { status: 'fulfilled', value: result };
+
+          // Check if we should stop due to fail-fast
+          if (failFast && this.shouldFailFast(result)) {
+            shouldStop = true;
+            break;
+          }
+        } catch (error) {
+          results[taskIndex] = { status: 'rejected', reason: error };
+
+          // If fail-fast is enabled and we have an error, stop execution
+          if (failFast) {
+            shouldStop = true;
+            break;
+          }
+        }
+      }
+    };
+
+    // Create workers up to the parallelism limit
+    const workers: Promise<void>[] = [];
+    const workerCount = Math.min(maxParallelism, tasks.length);
+
+    for (let i = 0; i < workerCount; i++) {
+      workers.push(worker());
+    }
+
+    // Wait for all workers to complete
+    await Promise.all(workers);
+
+    return results;
+  }
+
+  /**
    * Execute review checks using parallel execution for multiple AI checks
    */
   private async executeReviewChecks(
@@ -234,7 +299,9 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     outputFormat?: string,
-    debug?: boolean
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
   ): Promise<ReviewSummary> {
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
@@ -255,7 +322,16 @@ export class CheckExecutionEngine {
       logFn(
         `🔧 Debug: Using dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
       );
-      return await this.executeDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug);
+      return await this.executeDependencyAwareChecks(
+        prInfo,
+        checks,
+        timeout,
+        config,
+        logFn,
+        debug,
+        maxParallelism,
+        failFast
+      );
     }
 
     // Single check execution (existing logic)
@@ -361,7 +437,9 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
-    debug?: boolean
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
     log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
@@ -369,6 +447,13 @@ export class CheckExecutionEngine {
     if (!config?.checks) {
       throw new Error('Config with check definitions required for dependency-aware execution');
     }
+
+    // Determine effective max parallelism (CLI > config > default)
+    const effectiveMaxParallelism = maxParallelism ?? config.max_parallelism ?? 3;
+    // Determine effective fail-fast setting (CLI > config > default)
+    const effectiveFailFast = failFast ?? config.fail_fast ?? false;
+    log(`🔧 Debug: Using max parallelism: ${effectiveMaxParallelism}`);
+    log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
 
     // Build dependency graph
     const dependencies: Record<string, string[]> = {};
@@ -427,15 +512,21 @@ export class CheckExecutionEngine {
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    let shouldStopExecution = false;
 
-    for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length; levelIndex++) {
+    for (
+      let levelIndex = 0;
+      levelIndex < dependencyGraph.executionOrder.length && !shouldStopExecution;
+      levelIndex++
+    ) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
+      const actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
       log(
-        `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks in parallel`
+        `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
       );
 
-      // Execute all checks in this level in parallel
-      const levelTasks = executionGroup.parallel.map(async checkName => {
+      // Create task functions for checks in this level
+      const levelTaskFunctions = executionGroup.parallel.map(checkName => async () => {
         const checkConfig = config.checks[checkName];
         if (!checkConfig) {
           return {
@@ -534,8 +625,12 @@ export class CheckExecutionEngine {
         }
       });
 
-      // Wait for all checks in this level to complete
-      const levelResults = await Promise.allSettled(levelTasks);
+      // Execute checks in this level with controlled parallelism
+      const levelResults = await this.executeWithLimitedParallelism(
+        levelTaskFunctions,
+        actualParallelism,
+        effectiveFailFast
+      );
 
       // Process results and store them for next level
       for (let i = 0; i < levelResults.length; i++) {
@@ -568,16 +663,60 @@ export class CheckExecutionEngine {
             suggestions: [],
           };
           results.set(checkName, errorSummary);
+
+          // Check if we should stop execution due to fail-fast
+          if (effectiveFailFast) {
+            log(`🛑 Check "${checkName}" failed and fail-fast is enabled - stopping execution`);
+            shouldStopExecution = true;
+            break;
+          }
+        }
+      }
+
+      // If fail-fast is enabled, check if any successful checks have failure conditions
+      if (effectiveFailFast && !shouldStopExecution) {
+        for (let i = 0; i < levelResults.length; i++) {
+          const checkName = executionGroup.parallel[i];
+          const result = levelResults[i];
+
+          if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
+            // Check for issues that should trigger fail-fast
+            const hasFailuresToReport = result.value.result.issues.some(
+              issue => issue.severity === 'error' || issue.severity === 'critical'
+            );
+
+            if (hasFailuresToReport) {
+              log(
+                `🛑 Check "${checkName}" found critical/error issues and fail-fast is enabled - stopping execution`
+              );
+              shouldStopExecution = true;
+              break;
+            }
+          }
         }
       }
     }
 
+    // Log final execution status
+    if (shouldStopExecution) {
+      log(
+        `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
+      );
+    } else {
+      log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
+    }
+
     // Aggregate all results
-    return this.aggregateDependencyAwareResults(results, dependencyGraph, debug);
+    return this.aggregateDependencyAwareResults(
+      results,
+      dependencyGraph,
+      debug,
+      shouldStopExecution
+    );
   }
 
   /**
-   * Execute multiple checks in parallel using Promise.allSettled (legacy method)
+   * Execute multiple checks in parallel using controlled parallelism (legacy method)
    */
   private async executeParallelChecks(
     prInfo: PRInfo,
@@ -585,7 +724,9 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
-    debug?: boolean
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
     log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
@@ -594,10 +735,17 @@ export class CheckExecutionEngine {
       throw new Error('Config with check definitions required for parallel execution');
     }
 
+    // Determine effective max parallelism (CLI > config > default)
+    const effectiveMaxParallelism = maxParallelism ?? config.max_parallelism ?? 3;
+    // Determine effective fail-fast setting (CLI > config > default)
+    const effectiveFailFast = failFast ?? config.fail_fast ?? false;
+    log(`🔧 Debug: Using max parallelism: ${effectiveMaxParallelism}`);
+    log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
+
     const provider = this.providerRegistry.getProviderOrThrow('ai');
 
-    // Create individual check tasks
-    const checkTasks = checks.map(async checkName => {
+    // Create individual check task functions
+    const checkTaskFunctions = checks.map(checkName => async () => {
       const checkConfig = config.checks[checkName];
       if (!checkConfig) {
         log(`🔧 Debug: No config found for check: ${checkName}`);
@@ -694,12 +842,32 @@ export class CheckExecutionEngine {
       }
     });
 
-    // Execute all checks in parallel using Promise.allSettled
-    log(`🔧 Debug: Executing ${checkTasks.length} checks in parallel`);
-    const results = await Promise.allSettled(checkTasks);
+    // Execute all checks with controlled parallelism
+    log(
+      `🔧 Debug: Executing ${checkTaskFunctions.length} checks with max parallelism: ${effectiveMaxParallelism}`
+    );
+    const results = await this.executeWithLimitedParallelism(
+      checkTaskFunctions,
+      effectiveMaxParallelism,
+      effectiveFailFast
+    );
+
+    // Check if execution was stopped early
+    const completedChecks = results.filter(
+      r => r.status === 'fulfilled' || r.status === 'rejected'
+    ).length;
+    const stoppedEarly = completedChecks < checks.length;
+
+    if (stoppedEarly && effectiveFailFast) {
+      log(
+        `🛑 Parallel execution stopped early due to fail-fast after processing ${completedChecks} of ${checks.length} checks`
+      );
+    } else {
+      log(`✅ Parallel execution completed for all ${completedChecks} checks`);
+    }
 
     // Aggregate results from all checks
-    return this.aggregateParallelResults(results, checks, debug);
+    return this.aggregateParallelResults(results, checks, debug, stoppedEarly);
   }
 
   /**
@@ -772,7 +940,8 @@ export class CheckExecutionEngine {
   private aggregateDependencyAwareResults(
     results: Map<string, ReviewSummary>,
     dependencyGraph: DependencyGraph,
-    debug?: boolean
+    debug?: boolean,
+    stoppedEarly?: boolean
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const aggregatedSuggestions: string[] = [];
@@ -780,13 +949,19 @@ export class CheckExecutionEngine {
 
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
-    debugInfo.push(
-      `🔍 Dependency-aware execution completed:`,
-      `  - ${stats.totalChecks} checks in ${stats.parallelLevels} execution levels`,
+    const executionInfo = [
+      stoppedEarly
+        ? `🛑 Dependency-aware execution stopped early (fail-fast):`
+        : `🔍 Dependency-aware execution completed:`,
+      `  - ${results.size} of ${stats.totalChecks} checks processed`,
+      `  - Execution levels: ${stats.parallelLevels}`,
       `  - Maximum parallelism: ${stats.maxParallelism}`,
       `  - Average parallelism: ${stats.averageParallelism.toFixed(1)}`,
-      `  - Checks with dependencies: ${stats.checksWithDependencies}`
-    );
+      `  - Checks with dependencies: ${stats.checksWithDependencies}`,
+      stoppedEarly ? `  - Stopped early due to fail-fast behavior` : ``,
+    ].filter(Boolean);
+
+    debugInfo.push(...executionInfo);
 
     // Process results in dependency order for better output organization
     for (const executionGroup of dependencyGraph.executionOrder) {
@@ -895,7 +1070,8 @@ export class CheckExecutionEngine {
       result: ReviewSummary | null;
     }>[],
     checkNames: string[],
-    debug?: boolean
+    debug?: boolean,
+    stoppedEarly?: boolean
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const aggregatedSuggestions: string[] = [];
@@ -990,7 +1166,9 @@ export class CheckExecutionEngine {
 
     // Add summary information
     debugInfo.unshift(
-      `🔍 Parallel execution completed: ${successfulChecks} successful, ${failedChecks} failed`
+      stoppedEarly
+        ? `🛑 Parallel execution stopped early (fail-fast): ${successfulChecks} successful, ${failedChecks} failed`
+        : `🔍 Parallel execution completed: ${successfulChecks} successful, ${failedChecks} failed`
     );
     aggregatedSuggestions.unshift(...debugInfo);
 
@@ -1240,6 +1418,25 @@ export class CheckExecutionEngine {
       timestamp,
       checksExecuted,
     };
+  }
+
+  /**
+   * Check if a task result should trigger fail-fast behavior
+   */
+  private shouldFailFast(result: any): boolean {
+    // If the result has an error property, it's a failed check
+    if (result?.error) {
+      return true;
+    }
+
+    // If the result has a result with critical or error issues, it should fail fast
+    if (result?.result?.issues) {
+      return result.result.issues.some(
+        (issue: any) => issue.severity === 'error' || issue.severity === 'critical'
+      );
+    }
+
+    return false;
   }
 
   /**

@@ -22,6 +22,8 @@ export interface GitHubActionInputs {
   'fail-on-critical'?: string;
   'fail-on-api-error'?: string;
   'min-score'?: string;
+  'max-parallelism'?: string;
+  'fail-fast'?: string;
   debug?: string;
   // Legacy inputs for backward compatibility
   'visor-config-path'?: string;
@@ -122,6 +124,16 @@ export class ActionCliBridge {
     // Add debug flag if enabled
     if (inputs.debug === 'true') {
       args.push('--debug');
+    }
+
+    // Add max parallelism if specified
+    if (inputs['max-parallelism']) {
+      args.push('--max-parallelism', inputs['max-parallelism']);
+    }
+
+    // Add fail-fast flag if enabled
+    if (inputs['fail-fast'] === 'true') {
+      args.push('--fail-fast');
     }
 
     return args;

@@ -293,6 +293,10 @@ export interface VisorConfig {
   ai_model?: string;
   /** Global AI provider setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  /** Maximum number of checks to run in parallel (default: 3) */
+  max_parallelism?: number;
+  /** Stop execution when any check fails (default: false) */
+  fail_fast?: boolean;
   /** Simple global fail condition - fails if expression evaluates to true */
   fail_if?: string;
   /** Global failure conditions - optional (deprecated, use fail_if) */

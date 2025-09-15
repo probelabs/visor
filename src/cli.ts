@@ -37,6 +37,11 @@ export class CLI {
         'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
         value => parseInt(value, 10)
       )
+      .option(
+        '--max-parallelism <count>',
+        'Maximum number of checks to run in parallel (default: 3)',
+        value => parseInt(value, 10)
+      )
       .option('--debug', 'Enable debug mode for detailed output')
       .option('--fail-fast', 'Stop execution on first failure condition')
       .addHelpText('after', this.getExamplesText())
@@ -80,6 +85,11 @@ export class CLI {
           'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
           value => parseInt(value, 10)
         )
+        .option(
+          '--max-parallelism <count>',
+          'Maximum number of checks to run in parallel (default: 3)',
+          value => parseInt(value, 10)
+        )
         .option('--debug', 'Enable debug mode for detailed output')
         .option('--fail-fast', 'Stop execution on first failure condition')
         .allowUnknownOption(false)
@@ -101,6 +111,7 @@ export class CLI {
         output: options.output as OutputFormat,
         configPath: options.config,
         timeout: options.timeout,
+        maxParallelism: options.maxParallelism,
         debug: options.debug,
         failFast: options.failFast,
         help: options.help,
@@ -157,6 +168,19 @@ export class CLI {
         );
       }
     }
+
+    // Validate max parallelism
+    if (options.maxParallelism !== undefined) {
+      if (
+        typeof options.maxParallelism !== 'number' ||
+        isNaN(options.maxParallelism) ||
+        options.maxParallelism < 1
+      ) {
+        throw new Error(
+          `Invalid max parallelism value: ${options.maxParallelism}. Max parallelism must be a positive integer (minimum 1).`
+        );
+      }
+    }
   }
 
   /**
@@ -180,6 +204,11 @@ export class CLI {
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        value => parseInt(value, 10)
+      )
+      .option(
+        '--max-parallelism <count>',
+        'Maximum number of checks to run in parallel (default: 3)',
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
@@ -218,9 +247,10 @@ Examples:
   visor --check all --output json
   visor --check architecture --check security --output markdown
   visor --check security --output sarif > results.sarif
-  visor --check all --timeout 300000 --output json   # 5 minute timeout
-  visor --check all --debug --output markdown        # Enable debug mode
-  visor --check all --fail-fast --output json        # Stop on first failure`;
+  visor --check all --timeout 300000 --output json           # 5 minute timeout
+  visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
+  visor --check all --debug --output markdown                # Enable debug mode
+  visor --check all --fail-fast --output json                # Stop on first failure`;
   }
 
   /**
