@@ -35,8 +35,8 @@ describe('AIReviewService Session Reuse', () => {
     jest.clearAllMocks();
 
     service = new AIReviewService({
-      provider: 'mock',
-      model: 'mock',
+      provider: 'google', // Use non-mock provider to enable real session behavior
+      model: 'test-model',
       debug: true,
     });
 
@@ -72,6 +72,9 @@ describe('AIReviewService Session Reuse', () => {
 
       await service.executeReview(mockPRInfo, 'Test prompt', undefined, checkName);
 
+      // Since we're using a non-mock provider, the ProbeAgent should be called
+      expect(mockProbeAgent.answer).toHaveBeenCalled();
+      // Session should be registered with the checkName
       expect(mockSessionRegistry.registerSession).toHaveBeenCalledWith(
         expect.stringContaining(checkName),
         expect.any(Object)
@@ -187,11 +190,12 @@ describe('AIReviewService Session Reuse', () => {
 
       mockSessionRegistry.getSession.mockReturnValue(existingAgent);
 
+      // Test should pass schema parameter to enable debug mode explicitly
       const result = await service.executeReviewWithSessionReuse(
         mockPRInfo,
         'Test prompt',
         parentSessionId,
-        undefined,
+        'code-review', // Pass schema to ensure debug path is taken
         'dependent-check'
       );
 
@@ -231,8 +235,14 @@ describe('AIReviewService Session Reuse', () => {
 
       mockSessionRegistry.getSession.mockReturnValue(existingAgent);
 
-      // Service is configured with mock provider
-      const result = await service.executeReviewWithSessionReuse(
+      // Create a service with mock provider for this test
+      const mockService = new AIReviewService({
+        provider: 'mock',
+        model: 'mock',
+        debug: true,
+      });
+
+      const result = await mockService.executeReviewWithSessionReuse(
         mockPRInfo,
         'Test prompt',
         parentSessionId,

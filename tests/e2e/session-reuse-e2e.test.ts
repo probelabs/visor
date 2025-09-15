@@ -89,8 +89,8 @@ checks:
     on:
       - pr_opened
     ai:
-      provider: mock
-      model: mock
+      provider: google
+      model: test-model
 
   security-remediation:
     type: ai
@@ -104,8 +104,8 @@ checks:
       - security-analysis
     reuse_ai_session: true
     ai:
-      provider: mock
-      model: mock
+      provider: google
+      model: test-model
 
   performance-analysis:
     type: ai
@@ -118,8 +118,8 @@ checks:
     on:
       - pr_opened
     ai:
-      provider: mock
-      model: mock
+      provider: google
+      model: test-model
 
 output:
   pr_comment:
@@ -283,8 +283,8 @@ checks:
     on:
       - pr_opened
     ai:
-      provider: mock
-      model: mock
+      provider: google
+      model: test-model
 
   context-aware-security:
     type: ai

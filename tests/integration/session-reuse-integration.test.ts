@@ -102,6 +102,7 @@ describe('Session Reuse Integration', () => {
             type: 'ai',
             prompt: 'Analyze code for security vulnerabilities',
             on: ['pr_opened'],
+            ai_provider: 'google',
           },
           'security-follow-up': {
             type: 'ai',
@@ -109,6 +110,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['security-scan'],
             reuse_ai_session: true,
+            ai_provider: 'google',
           },
         },
         output: {
@@ -156,6 +158,7 @@ describe('Session Reuse Integration', () => {
             type: 'ai',
             prompt: 'Base analysis',
             on: ['pr_opened'],
+            ai_provider: 'google',
           },
           'reuse-check-1': {
             type: 'ai',
@@ -163,6 +166,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['base-check'],
             reuse_ai_session: true,
+            ai_provider: 'google',
           },
           'reuse-check-2': {
             type: 'ai',
@@ -170,6 +174,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['base-check'],
             reuse_ai_session: true,
+            ai_provider: 'google',
           },
         },
         output: {
