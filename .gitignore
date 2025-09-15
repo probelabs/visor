@@ -43,3 +43,10 @@ coverage/
 .vow-challenge
 .vow-consent
 .vow-cooldown
+traces/
+
+# Test files and traces
+test-*.js
+test-*.json
+cli-traces/
+debug-trace.js
