@@ -129,6 +129,7 @@ describe('AICheckProvider', () => {
         mockPRInfo,
         'all',
         undefined,
+        undefined,
         undefined
       );
     });
@@ -158,6 +159,7 @@ describe('AICheckProvider', () => {
       expect(mockService.executeReview).toHaveBeenCalledWith(
         mockPRInfo,
         'security',
+        undefined,
         undefined,
         undefined
       );

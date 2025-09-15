@@ -657,6 +657,9 @@ export class CheckExecutionEngine {
             currentSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName}`;
             sessionIds.set(checkName, currentSessionId);
             log(`🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+
+            // Add session ID to provider config
+            providerConfig.sessionId = currentSessionId;
           }
 
           const result = await provider.execute(

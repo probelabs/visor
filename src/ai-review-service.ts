@@ -122,7 +122,8 @@ export class AIReviewService {
     prInfo: PRInfo,
     customPrompt: string,
     schema?: string,
-    _checkName?: string
+    _checkName?: string,
+    sessionId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -194,7 +195,7 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeAgent(prompt, schema, debugInfo, _checkName);
+      const response = await this.callProbeAgent(prompt, schema, debugInfo, _checkName, sessionId);
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -552,7 +553,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     prompt: string,
     schema?: string,
     debugInfo?: AIDebugInfo,
-    _checkName?: string
+    _checkName?: string,
+    providedSessionId?: string
   ): Promise<string> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
@@ -562,8 +564,12 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
     // Create ProbeAgent instance with proper options
     // For plain schema, use a simpler approach without tools
-    const timestamp = new Date().toISOString();
-    const sessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
+    const sessionId =
+      providedSessionId ||
+      (() => {
+        const timestamp = new Date().toISOString();
+        return `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
+      })();
 
     log('🤖 Creating ProbeAgent for AI review...');
     log(`🆔 Session ID: ${sessionId}`);
@@ -680,9 +686,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Register the session for potential reuse by dependent checks
       if (_checkName) {
-        const finalSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName}`;
-        this.registerSession(finalSessionId, agent);
-        log(`🔧 Debug: Registered AI session for potential reuse: ${finalSessionId}`);
+        this.registerSession(sessionId, agent);
+        log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
 
       return response;

@@ -34,6 +34,8 @@ export interface CheckProviderConfig {
   ai_provider?: 'google' | 'anthropic' | 'openai' | string;
   /** Check name for sessionID and logging purposes */
   checkName?: string;
+  /** Session ID for AI session management */
+  sessionId?: string;
   [key: string]: unknown;
 }
 

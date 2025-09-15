@@ -24,6 +24,9 @@ describe('Session Reuse Integration', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    // Set mock API key for Google provider
+    process.env.GOOGLE_API_KEY = 'mock-api-key-for-testing';
+
     // Create temporary directory for test git repo
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-session-test-'));
 
@@ -91,6 +94,9 @@ describe('Session Reuse Integration', () => {
     }
 
     sessionRegistry.clearAllSessions();
+
+    // Clean up environment
+    delete process.env.GOOGLE_API_KEY;
   });
 
   describe('session reuse execution', () => {

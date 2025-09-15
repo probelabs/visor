@@ -480,7 +480,13 @@ export class AICheckProvider extends CheckProvider {
         );
       } else {
         console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
-        return await service.executeReview(prInfo, processedPrompt, schema, config.checkName);
+        return await service.executeReview(
+          prInfo,
+          processedPrompt,
+          schema,
+          config.checkName,
+          config.sessionId
+        );
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
