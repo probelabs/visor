@@ -79,9 +79,9 @@ inputs:
     default: 'false'
   
   max-parallelism:
-    description: 'Maximum number of checks to run in parallel (default: 3)'
+    description: 'Maximum number of checks to run in parallel (default: 1)'
     required: false
-    default: '3'
+    default: '1'
 
   fail-fast:
     description: 'Stop execution when any check fails (default: false)'
