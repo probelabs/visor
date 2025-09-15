@@ -1,0 +1,249 @@
+import { AIReviewService } from '../../src/ai-review-service';
+import { PRInfo } from '../../src/pr-analyzer';
+
+// Mock ProbeAgent
+const mockProbeAgent = {
+  answer: jest.fn(),
+};
+
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn().mockImplementation(() => mockProbeAgent),
+}));
+
+// Mock SessionRegistry
+const mockSessionRegistry = {
+  getInstance: jest.fn(),
+  registerSession: jest.fn(),
+  getSession: jest.fn(),
+  unregisterSession: jest.fn(),
+  hasSession: jest.fn(),
+  clearAllSessions: jest.fn(),
+  getActiveSessionIds: jest.fn(),
+};
+
+jest.mock('../../src/session-registry', () => ({
+  SessionRegistry: {
+    getInstance: () => mockSessionRegistry,
+  },
+}));
+
+describe('AIReviewService Session Reuse', () => {
+  let service: AIReviewService;
+  let mockPRInfo: PRInfo;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    service = new AIReviewService({
+      provider: 'mock',
+      model: 'mock',
+      debug: true,
+    });
+
+    mockPRInfo = {
+      number: 123,
+      title: 'Test PR',
+      body: 'Test PR body',
+      author: 'test-user',
+      base: 'main',
+      head: 'feature-branch',
+      files: [],
+      fullDiff: 'mock diff',
+      totalAdditions: 10,
+      totalDeletions: 5,
+      isIncremental: false,
+    };
+
+    // Reset mock implementations
+    mockProbeAgent.answer.mockResolvedValue(
+      JSON.stringify({
+        issues: [],
+        suggestions: ['Mock suggestion'],
+      })
+    );
+
+    mockSessionRegistry.getSession.mockReturnValue(undefined);
+    mockSessionRegistry.hasSession.mockReturnValue(false);
+  });
+
+  describe('executeReview', () => {
+    it('should register session when checkName is provided', async () => {
+      const checkName = 'test-check';
+
+      await service.executeReview(mockPRInfo, 'Test prompt', undefined, checkName);
+
+      expect(mockSessionRegistry.registerSession).toHaveBeenCalledWith(
+        expect.stringContaining(checkName),
+        expect.any(Object)
+      );
+    });
+
+    it('should not register session when checkName is not provided', async () => {
+      await service.executeReview(mockPRInfo, 'Test prompt');
+
+      expect(mockSessionRegistry.registerSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('executeReviewWithSessionReuse', () => {
+    it('should reuse existing session successfully', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            issues: [
+              {
+                file: 'test.js',
+                line: 1,
+                ruleId: 'test-rule',
+                message: 'Test issue',
+                severity: 'warning',
+                category: 'style',
+              },
+            ],
+            suggestions: ['Reused session suggestion'],
+          })
+        ),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      const result = await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Reuse session prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check'
+      );
+
+      expect(mockSessionRegistry.getSession).toHaveBeenCalledWith(parentSessionId);
+      expect(existingAgent.answer).toHaveBeenCalledWith(
+        expect.stringContaining('Reuse session prompt'),
+        undefined,
+        undefined
+      );
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.suggestions).toContain('Reused session suggestion');
+    });
+
+    it('should throw error when parent session not found', async () => {
+      const parentSessionId = 'non-existent-session';
+
+      mockSessionRegistry.getSession.mockReturnValue(undefined);
+
+      await expect(
+        service.executeReviewWithSessionReuse(
+          mockPRInfo,
+          'Reuse session prompt',
+          parentSessionId,
+          undefined,
+          'dependent-check'
+        )
+      ).rejects.toThrow(`Session not found for reuse: ${parentSessionId}`);
+
+      expect(mockSessionRegistry.getSession).toHaveBeenCalledWith(parentSessionId);
+    });
+
+    it('should handle schema parameter in session reuse', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            content: 'Plain schema response',
+          })
+        ),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      // Mock loadSchemaContent method
+      const mockLoadSchemaContent = jest.spyOn(service as any, 'loadSchemaContent');
+      mockLoadSchemaContent.mockResolvedValue('{"type": "object"}');
+
+      const result = await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        'plain',
+        'dependent-check'
+      );
+
+      expect(existingAgent.answer).toHaveBeenCalledWith(
+        expect.stringContaining('Test prompt'),
+        undefined,
+        { schema: '{"type": "object"}' }
+      );
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].message).toBe('Plain schema response');
+
+      mockLoadSchemaContent.mockRestore();
+    });
+
+    it('should return error in debug mode when session reuse fails', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = { answer: jest.fn().mockRejectedValue(new Error('AI service error')) };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      const result = await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check'
+      );
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].ruleId).toBe('system/ai-session-reuse-error');
+      expect(result.issues[0].message).toContain('AI service error');
+      expect(result.suggestions).toContain(
+        'Check session reuse configuration and ensure parent check completed successfully'
+      );
+      expect(result.debug).toBeDefined();
+    });
+  });
+
+  describe('session management methods', () => {
+    it('should register session correctly', () => {
+      const sessionId = 'test-session-123';
+      const mockAgent = { answer: jest.fn() } as any;
+
+      service.registerSession(sessionId, mockAgent);
+
+      expect(mockSessionRegistry.registerSession).toHaveBeenCalledWith(sessionId, mockAgent);
+    });
+
+    it('should cleanup session correctly', () => {
+      const sessionId = 'test-session-123';
+
+      service.cleanupSession(sessionId);
+
+      expect(mockSessionRegistry.unregisterSession).toHaveBeenCalledWith(sessionId);
+    });
+  });
+
+  describe('mock provider integration', () => {
+    it('should use mock provider for session reuse when configured', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = { answer: jest.fn() };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      // Service is configured with mock provider
+      const result = await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check'
+      );
+
+      // Should use mock response, not call the existing agent
+      expect(existingAgent.answer).not.toHaveBeenCalled();
+      expect(result.issues).toBeDefined();
+      expect(result.suggestions).toBeDefined();
+    });
+  });
+});

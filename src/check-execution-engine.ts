@@ -455,15 +455,35 @@ export class CheckExecutionEngine {
     log(`🔧 Debug: Using max parallelism: ${effectiveMaxParallelism}`);
     log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
 
-    // Build dependency graph
+    // Build dependency graph and check for session reuse requirements
     const dependencies: Record<string, string[]> = {};
+    const sessionReuseChecks = new Set<string>();
+    const sessionProviders = new Map<string, string>(); // checkName -> parent session provider
+
     for (const checkName of checks) {
       const checkConfig = config.checks[checkName];
       if (checkConfig) {
         dependencies[checkName] = checkConfig.depends_on || [];
+
+        // Track checks that need session reuse
+        if (checkConfig.reuse_ai_session === true) {
+          sessionReuseChecks.add(checkName);
+
+          // Find the parent check that will provide the session
+          // For now, use the first dependency as the session provider
+          if (checkConfig.depends_on && checkConfig.depends_on.length > 0) {
+            sessionProviders.set(checkName, checkConfig.depends_on[0]);
+          }
+        }
       } else {
         dependencies[checkName] = [];
       }
+    }
+
+    if (sessionReuseChecks.size > 0) {
+      log(
+        `🔄 Debug: Found ${sessionReuseChecks.size} checks requiring session reuse: ${Array.from(sessionReuseChecks).join(', ')}`
+      );
     }
 
     // Validate dependencies
@@ -511,7 +531,9 @@ export class CheckExecutionEngine {
 
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
+    const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    const sessionIds = new Map<string, string>(); // checkName -> sessionId
     let shouldStopExecution = false;
 
     for (
@@ -520,7 +542,22 @@ export class CheckExecutionEngine {
       levelIndex++
     ) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
-      const actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
+
+      // Check if any checks in this level require session reuse - if so, force sequential execution
+      const checksInLevel = executionGroup.parallel;
+      const hasSessionReuseInLevel = checksInLevel.some(checkName =>
+        sessionReuseChecks.has(checkName)
+      );
+
+      let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
+      if (hasSessionReuseInLevel) {
+        // Force sequential execution when session reuse is involved
+        actualParallelism = 1;
+        log(
+          `🔄 Debug: Level ${executionGroup.level} contains session reuse checks - forcing sequential execution (parallelism: 1)`
+        );
+      }
+
       log(
         `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
       );
@@ -590,7 +627,44 @@ export class CheckExecutionEngine {
             }
           }
 
-          const result = await provider.execute(prInfo, providerConfig, dependencyResults);
+          // Determine if we should use session reuse
+          let sessionInfo: { parentSessionId?: string; reuseSession?: boolean } | undefined =
+            undefined;
+          if (sessionReuseChecks.has(checkName)) {
+            const parentCheckName = sessionProviders.get(checkName);
+            if (parentCheckName && sessionIds.has(parentCheckName)) {
+              const parentSessionId = sessionIds.get(parentCheckName)!;
+
+              sessionInfo = {
+                parentSessionId: parentSessionId,
+                reuseSession: true,
+              };
+
+              log(
+                `🔄 Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
+              );
+            } else {
+              log(
+                `⚠️ Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
+              );
+            }
+          }
+
+          // For checks that create new sessions, generate a session ID
+          let currentSessionId: string | undefined = undefined;
+          if (!sessionInfo?.reuseSession) {
+            const timestamp = new Date().toISOString();
+            currentSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName}`;
+            sessionIds.set(checkName, currentSessionId);
+            log(`🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+          }
+
+          const result = await provider.execute(
+            prInfo,
+            providerConfig,
+            dependencyResults,
+            sessionInfo
+          );
           log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
 
           // Add group, schema, template info and timestamp to issues from config
@@ -704,6 +778,19 @@ export class CheckExecutionEngine {
       );
     } else {
       log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
+    }
+
+    // Cleanup sessions after execution
+    if (sessionIds.size > 0) {
+      log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
+      for (const [checkName, sessionId] of sessionIds) {
+        try {
+          sessionRegistry.unregisterSession(sessionId);
+          log(`🗑️ Cleaned up session for check ${checkName}: ${sessionId}`);
+        } catch (error) {
+          log(`⚠️ Failed to cleanup session for check ${checkName}: ${error}`);
+        }
+      }
     }
 
     // Aggregate all results

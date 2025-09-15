@@ -363,6 +363,30 @@ export class ConfigManager {
         }
       }
     }
+
+    // Validate reuse_ai_session configuration
+    if (checkConfig.reuse_ai_session !== undefined) {
+      if (typeof checkConfig.reuse_ai_session !== 'boolean') {
+        errors.push({
+          field: `checks.${checkName}.reuse_ai_session`,
+          message: `Invalid reuse_ai_session value for "${checkName}": must be boolean`,
+          value: checkConfig.reuse_ai_session,
+        });
+      } else if (checkConfig.reuse_ai_session === true) {
+        // When reuse_ai_session is true, depends_on must be specified and non-empty
+        if (
+          !checkConfig.depends_on ||
+          !Array.isArray(checkConfig.depends_on) ||
+          checkConfig.depends_on.length === 0
+        ) {
+          errors.push({
+            field: `checks.${checkName}.reuse_ai_session`,
+            message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
+            value: checkConfig.reuse_ai_session,
+          });
+        }
+      }
+    }
   }
 
   /**

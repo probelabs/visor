@@ -357,6 +357,104 @@ checks:
 - **Graceful Failures**: Failed checks don't prevent independent checks from running
 - **Dependency Results**: Results from dependency checks are available to dependent checks
 
+## 🔄 AI Session Reuse
+
+Visor supports AI session reuse for dependent checks, allowing follow-up analysis to maintain conversation context with the AI. This creates more intelligent, contextual analysis workflows.
+
+### How It Works
+
+When `reuse_ai_session: true` is set on a dependent check, Visor:
+1. **Reuses the ProbeAgent session** from the parent check
+2. **Maintains conversation context** - the AI remembers the previous discussion
+3. **Forces sequential execution** - dependent checks with session reuse run sequentially to preserve context
+4. **Provides intelligent follow-ups** - the AI can reference previous findings
+
+### Configuration
+
+```yaml
+version: "1.0"
+
+checks:
+  security:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: "Analyze code for security vulnerabilities..."
+    on: [pr_opened, pr_updated]
+
+  security-remediation:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+      Based on our previous security analysis discussion,
+      provide detailed remediation guidance for the issues we identified.
+    depends_on: [security]
+    reuse_ai_session: true  # 🔄 Reuses security check's AI session
+    on: [pr_opened, pr_updated]
+```
+
+### Key Benefits
+
+- **Context Continuity**: AI remembers previous analysis and can reference it
+- **Cost Efficiency**: Reuses existing AI sessions instead of creating new ones
+- **Better Analysis**: Follow-up prompts build on previous discussion
+- **Natural Conversation Flow**: Creates multi-turn conversations with AI
+
+### Validation Rules
+
+- **Requires Dependencies**: `reuse_ai_session: true` can only be used with `depends_on`
+- **Sequential Execution**: Checks with session reuse are automatically scheduled sequentially
+- **AI Checks Only**: Only works with `type: ai` checks
+- **Clear Error Messages**: Invalid configurations provide helpful guidance
+
+### Example Use Cases
+
+#### Security Analysis + Remediation
+```yaml
+security:
+  type: ai
+  prompt: "Identify security vulnerabilities..."
+
+security-fixes:
+  type: ai
+  prompt: "Based on our security discussion, provide step-by-step fix instructions..."
+  depends_on: [security]
+  reuse_ai_session: true
+```
+
+#### Performance Analysis + Optimization
+```yaml
+performance:
+  type: ai
+  prompt: "Analyze performance issues..."
+
+performance-optimization:
+  type: ai
+  prompt: "Building on our performance analysis, create an optimization roadmap..."
+  depends_on: [performance]
+  reuse_ai_session: true
+```
+
+#### Multi-step Code Review
+```yaml
+initial-review:
+  type: ai
+  prompt: "Perform comprehensive code review..."
+
+clarification:
+  type: ai
+  prompt: "Let's dive deeper into the most critical issues we identified..."
+  depends_on: [initial-review]
+  reuse_ai_session: true
+
+final-recommendations:
+  type: ai
+  prompt: "Summarize our discussion with prioritized action items..."
+  depends_on: [clarification]
+  reuse_ai_session: true
+```
+
 ## 📋 Schema-Template System
 
 Visor's new schema-template system provides structured output validation and customizable rendering, replacing the previous category-based approach with a more flexible, configuration-driven system.

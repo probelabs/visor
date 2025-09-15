@@ -64,12 +64,14 @@ export abstract class CheckProvider {
    * @param prInfo Information about the pull request
    * @param config Provider-specific configuration
    * @param dependencyResults Optional results from dependency checks that this check depends on
+   * @param sessionInfo Optional session information for AI session reuse
    * @returns Review summary with scores, issues, and comments
    */
   abstract execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary>;
 
   /**

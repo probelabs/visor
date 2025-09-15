@@ -187,6 +187,8 @@ export interface CheckConfig {
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */
   if?: string;
+  /** Whether to reuse AI session from dependency checks (only works with depends_on) */
+  reuse_ai_session?: boolean;
   /** Simple fail condition - fails check if expression evaluates to true */
   fail_if?: string;
   /** Check-specific failure conditions - optional (deprecated, use fail_if) */

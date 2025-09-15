@@ -378,13 +378,14 @@ export class AICheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     // Apply environment configuration if present
     if (config.env) {
       const result = EnvironmentResolver.withTemporaryEnv(config.env, () => {
         // This will be executed with the temporary environment
-        return this.executeWithConfig(prInfo, config, _dependencyResults);
+        return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
       });
 
       if (result instanceof Promise) {
@@ -393,13 +394,14 @@ export class AICheckProvider extends CheckProvider {
       return result;
     }
 
-    return this.executeWithConfig(prInfo, config, _dependencyResults);
+    return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
   }
 
   private async executeWithConfig(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
@@ -463,7 +465,23 @@ export class AICheckProvider extends CheckProvider {
 
     try {
       console.error(`🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`);
-      return await service.executeReview(prInfo, processedPrompt, schema, config.checkName);
+
+      // Check if we should use session reuse
+      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+        console.error(
+          `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
+        );
+        return await service.executeReviewWithSessionReuse(
+          prInfo,
+          processedPrompt,
+          sessionInfo.parentSessionId,
+          schema,
+          config.checkName
+        );
+      } else {
+        console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
+        return await service.executeReview(prInfo, processedPrompt, schema, config.checkName);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

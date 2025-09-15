@@ -7,6 +7,14 @@ version: "1.0"
 # Global AI provider settings - users should configure their preferred provider
 # For CI testing, use --provider mock CLI flag instead
 
+# 🔄 AI Session Reuse Feature:
+# This configuration demonstrates the new 'reuse_ai_session' feature that allows
+# dependent checks to continue conversations with the same AI session, providing
+# context continuity and more intelligent follow-up analysis.
+#
+# Example: security-remediation reuses the session from the security check,
+# allowing the AI to reference the previous security analysis discussion.
+
 # Global fail condition - fail if critical issues are found
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
 
@@ -60,7 +68,7 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Review the code changes for performance issues:
+        Building on our security analysis, now review the code changes for performance issues:
 
         ## Files to Analyze
         {% for file in files %}
@@ -91,7 +99,9 @@ checks:
         - Race conditions and deadlocks
         - Inefficient parallel processing
 
-        Identify specific performance issues and provide optimization recommendations.
+        Building on our security analysis, identify performance issues and provide optimization recommendations that complement our security findings.
+    depends_on: [security]
+    reuse_ai_session: true  # 🔄 Reuses the security check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Code quality and maintainability
@@ -100,7 +110,7 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Evaluate the code quality and maintainability of the changes:
+        Building on our previous security and performance discussions, evaluate the code quality and maintainability:
 
         ## Quality Assessment Areas
         **Code Structure & Design:**
@@ -132,7 +142,9 @@ checks:
         - Framework/library best practices
         - Type safety (if applicable)
 
-        Focus on actionable improvements that enhance code maintainability.
+        Focus on actionable improvements that enhance code maintainability while considering the security and performance findings we've already discussed.
+    depends_on: [performance]
+    reuse_ai_session: true  # 🔄 Reuses the performance check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # PR overview with intelligent analysis

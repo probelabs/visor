@@ -2,6 +2,7 @@ import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
+import { SessionRegistry } from './session-registry';
 
 /**
  * Helper function to log messages respecting JSON/SARIF output format
@@ -84,12 +85,15 @@ interface AIResponseFormat {
 
 export class AIReviewService {
   private config: AIReviewConfig;
+  private sessionRegistry: SessionRegistry;
 
   constructor(config: AIReviewConfig = {}) {
     this.config = {
       timeout: 600000, // Increased timeout to 10 minutes for AI responses
       ...config,
     };
+
+    this.sessionRegistry = SessionRegistry.getInstance();
 
     // Auto-detect provider and API key from environment
     if (!this.config.apiKey) {
@@ -232,6 +236,121 @@ export class AIReviewService {
   }
 
   /**
+   * Execute AI review using session reuse - reuses an existing ProbeAgent session
+   */
+  async executeReviewWithSessionReuse(
+    prInfo: PRInfo,
+    customPrompt: string,
+    parentSessionId: string,
+    schema?: string,
+    checkName?: string
+  ): Promise<ReviewSummary> {
+    const startTime = Date.now();
+    const timestamp = new Date().toISOString();
+
+    // Get the existing session
+    const existingAgent = this.sessionRegistry.getSession(parentSessionId);
+    if (!existingAgent) {
+      throw new Error(
+        `Session not found for reuse: ${parentSessionId}. Ensure the parent check completed successfully.`
+      );
+    }
+
+    // Build prompt from custom instructions
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+
+    log(`🔄 Reusing AI session ${parentSessionId} for review...`);
+    log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
+    log(`Schema type: ${schema || 'default (code-review)'}`);
+    if (schema === 'plain') {
+      log('Using plain schema - expecting JSON with content field');
+    }
+
+    let debugInfo: AIDebugInfo | undefined;
+    if (this.config.debug) {
+      debugInfo = {
+        prompt,
+        rawResponse: '',
+        provider: this.config.provider || 'unknown',
+        model: this.config.model || 'default',
+        apiKeySource: this.getApiKeySource(),
+        processingTime: 0,
+        promptLength: prompt.length,
+        responseLength: 0,
+        errors: [],
+        jsonParseSuccess: false,
+        timestamp,
+        schemaName: schema,
+        schema: undefined, // Will be populated when schema is loaded
+      };
+    }
+
+    try {
+      // Use existing agent's answer method instead of creating new agent
+      const response = await this.callProbeAgentWithExistingSession(
+        existingAgent,
+        prompt,
+        schema,
+        debugInfo,
+        checkName
+      );
+      const processingTime = Date.now() - startTime;
+
+      if (debugInfo) {
+        debugInfo.rawResponse = response;
+        debugInfo.responseLength = response.length;
+        debugInfo.processingTime = processingTime;
+      }
+
+      const result = this.parseAIResponse(response, debugInfo, schema);
+
+      if (debugInfo) {
+        result.debug = debugInfo;
+      }
+
+      return result;
+    } catch (error) {
+      if (debugInfo) {
+        debugInfo.errors = [error instanceof Error ? error.message : String(error)];
+        debugInfo.processingTime = Date.now() - startTime;
+
+        // In debug mode, return a review with the error captured
+        return {
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'system/ai-session-reuse-error',
+              message: error instanceof Error ? error.message : String(error),
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+          suggestions: [
+            'Check session reuse configuration and ensure parent check completed successfully',
+          ],
+          debug: debugInfo,
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Register a new AI session in the session registry
+   */
+  registerSession(sessionId: string, agent: ProbeAgent): void {
+    this.sessionRegistry.registerSession(sessionId, agent);
+  }
+
+  /**
+   * Cleanup a session from the registry
+   */
+  cleanupSession(sessionId: string): void {
+    this.sessionRegistry.unregisterSession(sessionId);
+  }
+
+  /**
    * Build a custom prompt for AI review with XML-formatted data
    */
   private async buildCustomPrompt(
@@ -359,13 +478,81 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   }
 
   /**
+   * Call ProbeAgent with an existing session
+   */
+  private async callProbeAgentWithExistingSession(
+    agent: ProbeAgent,
+    prompt: string,
+    schema?: string,
+    debugInfo?: AIDebugInfo,
+    _checkName?: string
+  ): Promise<string> {
+    // Handle mock model/provider for testing
+    if (this.config.model === 'mock' || this.config.provider === 'mock') {
+      log('🎭 Using mock AI model/provider for testing (session reuse)');
+      return this.generateMockResponse(prompt);
+    }
+
+    log('🔄 Reusing existing ProbeAgent session for AI review...');
+    log(`📝 Prompt length: ${prompt.length} characters`);
+    log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
+
+    try {
+      log('🚀 Calling existing ProbeAgent with answer()...');
+
+      // Load and pass the actual schema content if provided
+      let schemaString: string | undefined = undefined;
+      if (schema) {
+        try {
+          schemaString = await this.loadSchemaContent(schema);
+          log(`📋 Loaded schema content for: ${schema}`);
+          log(`📄 Raw schema JSON:\n${schemaString}`);
+        } catch (error) {
+          log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
+          schemaString = undefined;
+          if (debugInfo && debugInfo.errors) {
+            debugInfo.errors.push(`Failed to load schema: ${error}`);
+          }
+        }
+      }
+
+      // Pass schema in options object with 'schema' property
+      const schemaOptions = schemaString ? { schema: schemaString } : undefined;
+
+      // Store the exact schema options being passed to ProbeAgent in debug info
+      if (debugInfo && schemaOptions) {
+        debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
+      }
+
+      // Log the schema options being passed to ProbeAgent
+      if (schemaOptions) {
+        log(`🎯 Schema options passed to ProbeAgent.answer() (session reuse):`);
+        log(JSON.stringify(schemaOptions, null, 2));
+      }
+
+      // Use existing agent's answer method - this reuses the conversation context
+      const response = await agent.answer(prompt, undefined, schemaOptions);
+
+      log('✅ ProbeAgent session reuse completed successfully');
+      log(`📤 Response length: ${response.length} characters`);
+
+      return response;
+    } catch (error) {
+      console.error('❌ ProbeAgent session reuse failed:', error);
+      throw new Error(
+        `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
    * Call ProbeAgent SDK with built-in schema validation
    */
   private async callProbeAgent(
     prompt: string,
     schema?: string,
     debugInfo?: AIDebugInfo,
-    checkName?: string
+    _checkName?: string
   ): Promise<string> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
@@ -376,7 +563,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     // Create ProbeAgent instance with proper options
     // For plain schema, use a simpler approach without tools
     const timestamp = new Date().toISOString();
-    const sessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName || 'unknown'}`;
+    const sessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
 
     log('🤖 Creating ProbeAgent for AI review...');
     log(`🆔 Session ID: ${sessionId}`);
@@ -490,6 +677,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Register the session for potential reuse by dependent checks
+      if (_checkName) {
+        const finalSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName}`;
+        this.registerSession(finalSessionId, agent);
+        log(`🔧 Debug: Registered AI session for potential reuse: ${finalSessionId}`);
+      }
 
       return response;
     } catch (error) {
