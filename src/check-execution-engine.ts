@@ -309,6 +309,15 @@ export class CheckExecutionEngine {
     logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
     logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
 
+    // Filter checks based on current event type to prevent execution of checks that shouldn't run
+    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
+    if (filteredChecks.length !== checks.length) {
+      logFn(`🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`);
+    }
+
+    // Use filtered checks for execution
+    checks = filteredChecks;
+
     // If we have a config with individual check definitions, use dependency-aware execution
     // Check if any of the checks have dependencies or if there are multiple checks
     const hasDependencies =
@@ -1856,5 +1865,70 @@ export class CheckExecutionEngine {
         console.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
       }
     }
+  }
+
+  /**
+   * Filter checks based on their event triggers to prevent execution of checks
+   * that shouldn't run for the current event type
+   */
+  private filterChecksByEvent(
+    checks: string[],
+    config?: import('./types/config').VisorConfig,
+    prInfo?: PRInfo,
+    logFn?: (message: string) => void
+  ): string[] {
+    if (!config?.checks) {
+      // No config available, return all checks (fallback behavior)
+      return checks;
+    }
+
+    // Determine current event type from PR info or default to pr_opened
+    const currentEvent = this.getCurrentEventType(prInfo);
+    logFn?.(`🔧 Debug: Current event type: ${currentEvent}`);
+
+    const filteredChecks: string[] = [];
+
+    for (const checkName of checks) {
+      const checkConfig = config.checks[checkName];
+      if (!checkConfig) {
+        // Check has no config, include it (fallback behavior)
+        filteredChecks.push(checkName);
+        continue;
+      }
+
+      // Check if this check should run for the current event
+      const eventTriggers = checkConfig.on || [];
+      if (eventTriggers.length === 0) {
+        // No event triggers specified, include it (fallback behavior)
+        filteredChecks.push(checkName);
+        logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
+      } else if (eventTriggers.includes(currentEvent)) {
+        // Check should run for current event
+        filteredChecks.push(checkName);
+        logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+      } else {
+        // Check should not run for current event
+        logFn?.(`🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`);
+      }
+    }
+
+    return filteredChecks;
+  }
+
+  /**
+   * Determine the current event type from PR info
+   */
+  private getCurrentEventType(prInfo?: PRInfo): import('./types/config').EventTrigger {
+    if (!prInfo) {
+      return 'pr_opened'; // Default fallback
+    }
+
+    // For now, assume all PR-related operations are 'pr_updated' since we don't have
+    // direct access to the original GitHub event here. This is a simplification.
+    // In the future, we could pass the actual event type through the call chain.
+
+    // The key insight is that issue-assistant should only run on issue_opened/issue_comment
+    // events, which don't generate PRInfo objects in the first place.
+    return 'pr_updated';
   }
 }
