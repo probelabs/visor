@@ -7799,7 +7799,7 @@ class PRReviewer {
             comment += '\n\n';
         }
         // Simple footer
-        comment += `---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+        comment += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
         return comment;
     }
     async renderWithSchemaTemplate(summary, githubContext) {
@@ -7946,7 +7946,7 @@ class PRReviewer {
             comment += '\n\n' + this.formatDebugSection(summary.debug);
             comment += '\n\n';
         }
-        comment += `---\n`;
+        comment += `\n---\n`;
         comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
         return comment;
     }
