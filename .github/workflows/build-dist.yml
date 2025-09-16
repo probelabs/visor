@@ -54,11 +54,14 @@ jobs:
 
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
-            git commit -m "build: update bundled dist files
+            git commit -m "$(cat <<'EOF'
+          build: update bundled dist files
 
-🤖 Generated with [Claude Code](https://claude.ai/code)
+          🤖 Generated with [Claude Code](https://claude.ai/code)
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          EOF
+          )"
             git push origin main
             echo "✅ Bundled files updated"
           else
