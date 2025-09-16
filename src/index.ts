@@ -456,7 +456,8 @@ async function postCliReviewComment(
       // Fallback to environment or event data
       latestCommitSha =
         eventContext.event?.pull_request?.head?.sha ||
-        (eventContext.payload as any)?.pull_request?.head?.sha ||
+        (eventContext.payload as { pull_request?: { head?: { sha?: string } } })?.pull_request?.head
+          ?.sha ||
         process.env.GITHUB_SHA;
     }
 
