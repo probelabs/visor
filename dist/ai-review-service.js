@@ -350,9 +350,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
         try {
             log('🚀 Calling existing ProbeAgent with answer()...');
-            // Load and pass the actual schema content if provided
+            // Load and pass the actual schema content if provided (skip for plain schema)
             let schemaString = undefined;
-            if (schema) {
+            if (schema && schema !== 'plain') {
                 try {
                     schemaString = await this.loadSchemaContent(schema);
                     log(`📋 Loaded schema content for: ${schema}`);
@@ -365,6 +365,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
                         debugInfo.errors.push(`Failed to load schema: ${error}`);
                     }
                 }
+            }
+            else if (schema === 'plain') {
+                log(`📋 Using plain schema - no JSON validation will be applied`);
             }
             // Pass schema in options object with 'schema' property
             const schemaOptions = schemaString ? { schema: schemaString } : undefined;
@@ -440,9 +443,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             }
             const agent = new probe_1.ProbeAgent(options);
             log('🚀 Calling ProbeAgent...');
-            // Load and pass the actual schema content if provided
+            // Load and pass the actual schema content if provided (skip for plain schema)
             let schemaString = undefined;
-            if (schema) {
+            if (schema && schema !== 'plain') {
                 try {
                     schemaString = await this.loadSchemaContent(schema);
                     log(`📋 Loaded schema content for: ${schema}`);
@@ -455,6 +458,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
                         debugInfo.errors.push(`Failed to load schema: ${error}`);
                     }
                 }
+            }
+            else if (schema === 'plain') {
+                log(`📋 Using plain schema - no JSON validation will be applied`);
             }
             // ProbeAgent now handles schema formatting internally!
             // Pass schema in options object with 'schema' property
@@ -561,6 +567,15 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         try {
             // Handle different schema types differently
             let reviewData;
+            // Handle plain schema - no JSON parsing, return response as-is
+            if (_schema === 'plain') {
+                log('📋 Plain schema detected - returning raw response without JSON parsing');
+                return {
+                    issues: [],
+                    suggestions: [response.trim()],
+                    debug: debugInfo
+                };
+            }
             {
                 // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
                 log('🔍 Extracting JSON from AI response...');
