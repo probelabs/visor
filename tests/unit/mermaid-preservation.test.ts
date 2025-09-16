@@ -244,7 +244,11 @@ The flow includes error handling and logging.`,
         isIncremental: false,
       };
 
-      const result = await aiService.executeReview(mockPrInfo, 'Document the process flow', 'code-review');
+      const result = await aiService.executeReview(
+        mockPrInfo,
+        'Document the process flow',
+        'code-review'
+      );
 
       const content = result.suggestions[0];
 
