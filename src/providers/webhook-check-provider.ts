@@ -86,9 +86,9 @@ export class WebhookCheckProvider extends CheckProvider {
     url: string,
     method: string,
     headers: Record<string, string>,
-    payload: any,
+    payload: Record<string, unknown>,
     timeout: number
-  ): Promise<any> {
+  ): Promise<Record<string, unknown>> {
     // Check if fetch is available (Node 18+)
     if (typeof fetch === 'undefined') {
       throw new Error('Webhook provider requires Node.js 18+ or node-fetch package');
@@ -105,7 +105,7 @@ export class WebhookCheckProvider extends CheckProvider {
           ...headers,
         },
         body: JSON.stringify(payload),
-        signal: controller.signal as any,
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
@@ -115,7 +115,7 @@ export class WebhookCheckProvider extends CheckProvider {
       }
 
       return await response.json();
-    } catch (error: any) {
+    } catch (error: unknown) {
       clearTimeout(timeoutId);
 
       if (error.name === 'AbortError') {
@@ -126,14 +126,14 @@ export class WebhookCheckProvider extends CheckProvider {
     }
   }
 
-  private parseWebhookResponse(response: any, url: string): ReviewSummary {
+  private parseWebhookResponse(response: Record<string, unknown>, url: string): ReviewSummary {
     // Validate and normalize the webhook response
     if (!response || typeof response !== 'object') {
       return this.createErrorResult(url, new Error('Invalid webhook response format'));
     }
 
     const issues: ReviewIssue[] = Array.isArray(response.comments)
-      ? response.comments.map((c: any) => ({
+      ? (response.comments as Array<Record<string, unknown>>).map(c => ({
           file: c.file || 'unknown',
           line: c.line || 0,
           endLine: c.endLine,

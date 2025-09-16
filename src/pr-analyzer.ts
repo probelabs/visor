@@ -1,5 +1,14 @@
 import { Octokit } from '@octokit/rest';
 
+export interface PRFile {
+  filename: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed';
+}
+
 export interface PRDiff {
   filename: string;
   additions: number;

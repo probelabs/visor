@@ -694,7 +694,7 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
         const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
           focus,
           format,
-          config: config as any,
+          config: config as import('./types/config').VisorConfig,
           checks: checkIds,
           parallelExecution: false,
         });
@@ -794,13 +794,18 @@ async function handlePullRequestEvent(
   // Create review options, including debug if enabled
   const reviewOptions = {
     debug: inputs?.debug === 'true',
-    config: config as any,
+    config: config as import('./types/config').VisorConfig,
     checks: ['auto-review'],
     parallelExecution: false,
   };
 
   // Create GitHub check runs for legacy auto-review
-  let checkResults: any = null;
+  let checkResults: {
+    checkRunMap: Map<string, { id: number; url: string }> | null;
+    checksApiAvailable: boolean;
+    checkRunsCreated: number;
+    checkRunUrls: string[];
+  } | null = null;
   if (inputs && inputs['github-token']) {
     checkResults = await createGitHubChecks(
       octokit,
@@ -917,7 +922,7 @@ async function createGitHubChecks(
   repo: string,
   headSha: string,
   checksToRun: string[],
-  config: any
+  config: import('./types/config').VisorConfig
 ): Promise<{
   checkRunMap: Map<string, { id: number; url: string }> | null;
   checksApiAvailable: boolean;
@@ -1076,8 +1081,8 @@ async function completeGitHubChecks(
   owner: string,
   repo: string,
   checkRunMap: Map<string, { id: number; url: string }> | null,
-  reviewSummary: any,
-  config: any
+  reviewSummary: import('./reviewer').ReviewSummary,
+  config: import('./types/config').VisorConfig
 ): Promise<void> {
   if (!checkRunMap) return;
 
@@ -1103,11 +1108,11 @@ async function completeIndividualChecks(
   owner: string,
   repo: string,
   checkRunMap: Map<string, { id: number; url: string }>,
-  reviewSummary: any,
-  config: any
+  reviewSummary: import('./reviewer').ReviewSummary,
+  config: import('./types/config').VisorConfig
 ): Promise<void> {
   // Group issues by check name
-  const issuesByCheck = new Map<string, any[]>();
+  const issuesByCheck = new Map<string, import('./types/config').Issue[]>();
 
   // Initialize empty arrays for all checks
   for (const checkName of checkRunMap.keys()) {
@@ -1162,8 +1167,8 @@ async function completeCombinedCheck(
   owner: string,
   repo: string,
   checkRunMap: Map<string, { id: number; url: string }>,
-  reviewSummary: any,
-  config: any
+  reviewSummary: import('./reviewer').ReviewSummary,
+  config: import('./types/config').VisorConfig
 ): Promise<void> {
   const combinedCheckRun = checkRunMap.get('combined');
   if (!combinedCheckRun) return;
@@ -1195,12 +1200,12 @@ async function completeCombinedCheck(
  * Evaluate failure conditions for a specific check
  */
 async function evaluateCheckFailureConditions(
-  config: any,
-  checkConfig: any,
+  config: import('./types/config').VisorConfig,
+  checkConfig: import('./types/config').CheckConfig | undefined,
   checkName: string,
-  checkIssues: any[]
-): Promise<any[]> {
-  const failureResults: any[] = [];
+  checkIssues: import('./types/config').Issue[]
+): Promise<import('./types/config').FailureConditionResult[]> {
+  const failureResults: import('./types/config').FailureConditionResult[] = [];
   const criticalIssues = checkIssues.filter(issue => issue.severity === 'critical').length;
   const errorIssues = checkIssues.filter(issue => issue.severity === 'error').length;
 
@@ -1290,8 +1295,11 @@ async function evaluateCheckFailureConditions(
 /**
  * Evaluate global failure conditions for combined check
  */
-async function evaluateGlobalFailureConditions(config: any, allIssues: any[]): Promise<any[]> {
-  const failureResults: any[] = [];
+async function evaluateGlobalFailureConditions(
+  config: import('./types/config').VisorConfig,
+  allIssues: import('./types/config').Issue[]
+): Promise<import('./types/config').FailureConditionResult[]> {
+  const failureResults: import('./types/config').FailureConditionResult[] = [];
   const criticalIssues = allIssues.filter(issue => issue.severity === 'critical').length;
   const errorIssues = allIssues.filter(issue => issue.severity === 'error').length;
 
@@ -1504,8 +1512,8 @@ async function handlePullRequestVisorMode(
 
     // Update the review summary to show correct checks executed
     if (review.debug) {
-      (review.debug as any).checksExecuted = checksToRun;
-      (review.debug as any).parallelExecution = true;
+      (review.debug as import('./ai-review-service').AIDebugInfo).checksExecuted = checksToRun;
+      (review.debug as import('./ai-review-service').AIDebugInfo).parallelExecution = true;
     }
 
     // Complete GitHub check runs with results

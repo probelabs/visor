@@ -12,7 +12,7 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 /**
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
-function getSafeEnvironmentVariables(): Record<string, any> {
+function getSafeEnvironmentVariables(): Record<string, string> {
   const safeEnvVars = [
     'CI',
     'GITHUB_EVENT_NAME',
@@ -28,7 +28,7 @@ function getSafeEnvironmentVariables(): Record<string, any> {
     'NODE_ENV',
   ];
 
-  const safeEnv: Record<string, any> = {};
+  const safeEnv: Record<string, string> = {};
 
   for (const key of safeEnvVars) {
     if (process.env[key]) {
@@ -260,7 +260,8 @@ export class CheckExecutionEngine {
           results[taskIndex] = { status: 'fulfilled', value: result };
 
           // Check if we should stop due to fail-fast
-          if (failFast && this.shouldFailFast(result)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (failFast && this.shouldFailFast(result as any)) {
             shouldStop = true;
             break;
           }
@@ -1524,7 +1525,10 @@ export class CheckExecutionEngine {
   /**
    * Check if a task result should trigger fail-fast behavior
    */
-  private shouldFailFast(result: any): boolean {
+  private shouldFailFast(result: {
+    error?: string;
+    result?: { issues?: Array<{ severity: string }> };
+  }): boolean {
     // If the result has an error property, it's a failed check
     if (result?.error) {
       return true;
@@ -1533,7 +1537,7 @@ export class CheckExecutionEngine {
     // If the result has a result with critical or error issues, it should fail fast
     if (result?.result?.issues) {
       return result.result.issues.some(
-        (issue: any) => issue.severity === 'error' || issue.severity === 'critical'
+        (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
       );
     }
 
@@ -1780,7 +1784,7 @@ export class CheckExecutionEngine {
     }
 
     // Group issues by check name
-    const issuesByCheck = new Map<string, any[]>();
+    const issuesByCheck = new Map<string, import('./reviewer').ReviewIssue[]>();
 
     // Initialize empty arrays for all checks
     for (const checkName of this.checkRunMap.keys()) {

@@ -123,7 +123,7 @@ export class ScriptCheckProvider extends CheckProvider {
 
       // Convert to ReviewIssue format
       const issues: ReviewIssue[] = Array.isArray(result.comments)
-        ? result.comments.map((c: any) => ({
+        ? (result.comments as Array<Record<string, unknown>>).map(c => ({
             file: c.file || 'unknown',
             line: c.line || 0,
             endLine: c.endLine,

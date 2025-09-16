@@ -15,14 +15,14 @@ export interface GitHubEventContext {
   };
   event?: {
     pull_request?: { number: number; head?: { sha: string } };
-    issue?: { number: number; pull_request?: any };
-    comment?: any;
+    issue?: { number: number; pull_request?: { url: string } };
+    comment?: { body: string; user: { login: string } };
     action?: string;
-    commits?: any[];
+    commits?: Array<{ id: string; message: string }>;
     head_commit?: { id: string };
     ref?: string;
   };
-  payload?: any;
+  payload?: Record<string, unknown>;
 }
 
 /**
@@ -37,7 +37,7 @@ export class PRDetector {
     this.debug = debug;
   }
 
-  private log(message: string, ...args: any[]): void {
+  private log(message: string, ...args: unknown[]): void {
     if (this.debug) {
       console.error(`[PR Detector] ${message}`, ...args);
     }

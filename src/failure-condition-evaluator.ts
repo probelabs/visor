@@ -95,7 +95,7 @@ export class FailureConditionEvaluator {
     checkGroup: string,
     reviewSummary: ReviewSummary,
     expression: string,
-    previousOutputs?: Record<string, any>
+    previousOutputs?: Record<string, ReviewSummary>
   ): Promise<boolean> {
     const context = this.buildEvaluationContext(
       checkName,
@@ -124,7 +124,7 @@ export class FailureConditionEvaluator {
       baseBranch?: string;
       filesChanged?: string[];
       event?: string;
-      environment?: Record<string, any>;
+      environment?: Record<string, string>;
       previousResults?: Map<string, ReviewSummary>;
     }
   ): Promise<boolean> {
@@ -178,7 +178,7 @@ export class FailureConditionEvaluator {
     reviewSummary: ReviewSummary,
     globalConditions?: FailureConditions,
     checkConditions?: FailureConditions,
-    previousOutputs?: Record<string, any>
+    previousOutputs?: Record<string, ReviewSummary>
   ): Promise<FailureConditionResult[]> {
     const context = this.buildEvaluationContext(
       checkName,
@@ -278,7 +278,7 @@ export class FailureConditionEvaluator {
    * Secure expression evaluation using SandboxJS
    * Supports the same GitHub Actions-style functions as the previous implementation
    */
-  private evaluateExpression(condition: string, context: any): boolean {
+  private evaluateExpression(condition: string, context: FailureConditionContext): boolean {
     try {
       // Helper functions for GitHub Actions-style expressions
       const contains = (searchString: string, searchValue: string): boolean =>
@@ -290,7 +290,7 @@ export class FailureConditionEvaluator {
       const endsWith = (searchString: string, searchValue: string): boolean =>
         String(searchString).toLowerCase().endsWith(String(searchValue).toLowerCase());
 
-      const length = (value: any): number => {
+      const length = (value: string | unknown[] | Record<string, unknown>): number => {
         if (typeof value === 'string' || Array.isArray(value)) {
           return value.length;
         }
@@ -305,19 +305,19 @@ export class FailureConditionEvaluator {
       const failure = (): boolean => false;
 
       // Helper functions for array operations
-      const hasIssue = (issues: any[], field: string, value: any): boolean => {
+      const hasIssue = (issues: unknown[], field: string, value: unknown): boolean => {
         if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue[field] === value);
+        return issues.some(issue => (issue as Record<string, unknown>)[field] === value);
       };
 
-      const countIssues = (issues: any[], field: string, value: any): number => {
+      const countIssues = (issues: unknown[], field: string, value: unknown): number => {
         if (!Array.isArray(issues)) return 0;
-        return issues.filter(issue => issue[field] === value).length;
+        return issues.filter(issue => (issue as Record<string, unknown>)[field] === value).length;
       };
 
-      const hasFileMatching = (issues: any[], pattern: string): boolean => {
+      const hasFileMatching = (issues: unknown[], pattern: string): boolean => {
         if (!Array.isArray(issues)) return false;
-        return issues.some(issue => issue.file && issue.file.includes(pattern));
+        return issues.some(issue => (issue as { file?: string }).file?.includes(pattern));
       };
 
       const hasSuggestion = (suggestions: string[], text: string): boolean => {
@@ -340,10 +340,11 @@ export class FailureConditionEvaluator {
         checkName: context.checkName || '',
         schema: context.schema || '',
         group: context.group || '',
-        criticalIssues: issues.filter((i: any) => i.severity === 'critical').length,
-        errorIssues: issues.filter((i: any) => i.severity === 'error').length,
-        warningIssues: issues.filter((i: any) => i.severity === 'warning').length,
-        infoIssues: issues.filter((i: any) => i.severity === 'info').length,
+        criticalIssues: issues.filter((i: { severity?: string }) => i.severity === 'critical')
+          .length,
+        errorIssues: issues.filter((i: { severity?: string }) => i.severity === 'error').length,
+        warningIssues: issues.filter((i: { severity?: string }) => i.severity === 'warning').length,
+        infoIssues: issues.filter((i: { severity?: string }) => i.severity === 'info').length,
         totalIssues: issues.length,
         hasChanges: context.hasChanges || false,
       };
@@ -458,7 +459,7 @@ export class FailureConditionEvaluator {
     checkSchema: string,
     checkGroup: string,
     reviewSummary: ReviewSummary,
-    previousOutputs?: Record<string, any>
+    previousOutputs?: Record<string, ReviewSummary>
   ): FailureConditionContext {
     const { issues, suggestions, debug } = reviewSummary;
 
@@ -479,6 +480,7 @@ export class FailureConditionEvaluator {
         })),
         suggestions,
         // Include additional schema-specific data from reviewSummary
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(reviewSummary as any), // Pass through any additional fields
       },
       outputs: previousOutputs || {},

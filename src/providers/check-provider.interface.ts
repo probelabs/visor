@@ -8,7 +8,7 @@ import { EnvConfig } from '../types/config';
 export interface CheckProviderConfig {
   type: string;
   prompt?: string;
-  eventContext?: any;
+  eventContext?: Record<string, unknown>;
   focus?: string;
   command?: string;
   args?: string[];

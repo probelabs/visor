@@ -67,8 +67,10 @@ export class AICheckProvider extends CheckProvider {
   /**
    * Group files by their file extension for template context
    */
-  private groupFilesByExtension(files: any[]): Record<string, any[]> {
-    const grouped: Record<string, any[]> = {};
+  private groupFilesByExtension(
+    files: import('../pr-analyzer').PRFile[]
+  ): Record<string, import('../pr-analyzer').PRFile[]> {
+    const grouped: Record<string, import('../pr-analyzer').PRFile[]> = {};
 
     files.forEach(file => {
       const parts = file.filename.split('.');
@@ -88,7 +90,7 @@ export class AICheckProvider extends CheckProvider {
   private async processPrompt(
     promptConfig: string,
     prInfo: PRInfo,
-    eventContext?: any,
+    eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<string> {
     let promptContent: string;
@@ -223,7 +225,7 @@ export class AICheckProvider extends CheckProvider {
   private async renderPromptTemplate(
     promptContent: string,
     prInfo: PRInfo,
-    eventContext?: any,
+    eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<string> {
     // Create comprehensive template context with PR and event information
@@ -283,7 +285,10 @@ export class AICheckProvider extends CheckProvider {
                   state: eventContext.issue.state,
                   author: eventContext.issue.user?.login,
                   labels: eventContext.issue.labels || [],
-                  assignees: eventContext.issue.assignees?.map((a: any) => a.login) || [],
+                  assignees:
+                    (
+                      eventContext as { issue?: { assignees?: Array<{ login: string }> } }
+                    )?.issue?.assignees?.map(a => a.login) || [],
                   createdAt: eventContext.issue.created_at,
                   updatedAt: eventContext.issue.updated_at,
                   isPullRequest: !!eventContext.issue.pull_request,

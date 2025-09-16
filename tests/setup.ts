@@ -5,9 +5,13 @@ jest.mock('child_process', () => ({
   spawn: jest.fn().mockImplementation(() => {
     const { EventEmitter } = require('events');
     const mockChild = new EventEmitter();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mockChild as any).stdin = { write: jest.fn(), end: jest.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mockChild as any).stdout = new EventEmitter();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mockChild as any).stderr = new EventEmitter();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mockChild as any).kill = jest.fn();
 
     // Immediately resolve with success for tests
@@ -57,4 +61,4 @@ global.console = {
   warn: jest.fn(),
   error: jest.fn(),
   debug: jest.fn(),
-} as any;
+} as Console;

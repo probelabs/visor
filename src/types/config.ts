@@ -2,6 +2,9 @@
  * Types for Visor configuration system
  */
 
+// Import ReviewSummary for type definitions
+import type { ReviewSummary } from '../reviewer';
+
 /**
  * Failure condition severity levels
  */
@@ -63,11 +66,11 @@ export interface FailureConditionContext {
     suggestions?: string[];
 
     /** Any additional fields provided by the check/schema */
-    [key: string]: any;
+    [key: string]: unknown;
   };
 
   /** Previous check outputs for dependencies - keyed by check name */
-  outputs?: Record<string, any>;
+  outputs?: Record<string, ReviewSummary>;
 
   /** Check context information */
   checkName?: string;
