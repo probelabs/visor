@@ -138,26 +138,29 @@ jobs:
           fi
 
           # Generate release notes with Visor AI
-          RELEASE_NOTES=$(TAG_NAME=${{ env.TAG_NAME }} \
+          echo "🔍 Running Visor AI to generate release notes..."
+          VISOR_OUTPUT=$(TAG_NAME=${{ env.TAG_NAME }} \
             GIT_LOG="$GIT_LOG" \
             GIT_DIFF_STAT="$GIT_DIFF_STAT" \
-            timeout 300 ./dist/cli-main.js --check release-notes --config .visor.yaml --output json 2>/dev/null | \
-            jq -r '.checks[] | select(.checkName == "release-notes") | .output // empty')
+            timeout 300 ./dist/cli-main.js --check release-notes --config .visor.yaml --output json 2>&1 || true)
+
+          echo "📋 Visor output:"
+          echo "$VISOR_OUTPUT"
+
+          # Extract release notes from JSON output
+          RELEASE_NOTES=$(echo "$VISOR_OUTPUT" | jq -r '.checks[]? | select(.checkName == "release-notes") | .suggestions[]? // empty' 2>/dev/null || echo "")
 
           # Fallback if AI generation fails
           if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "null" ]; then
             echo "⚠️ AI release notes generation failed, creating fallback notes"
-            RELEASE_NOTES=$(cat << 'END_NOTES'
-            ## 🚀 What's New in ${{ env.TAG_NAME }}
+            RELEASE_NOTES="## 🚀 What's New in ${{ env.TAG_NAME }}
 
-            ### 📝 Changes
-            $(echo "$GIT_LOG" | sed 's/^/- /')
+### 📝 Changes
+$(echo "$GIT_LOG" | sed 's/^/- /')
 
-            ### 📊 Statistics
-            - $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
-            - Generated automatically from git history
-            END_NOTES
-            )
+### 📊 Statistics
+- $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
+- Generated automatically from git history"
           else
             echo "✅ Successfully generated AI release notes"
           fi
