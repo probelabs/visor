@@ -1884,13 +1884,17 @@ export class CheckExecutionEngine {
       return checks;
     }
 
-    // If we have event context from GitHub (prInfo.eventType), apply strict filtering
+    // If we have event context from GitHub (prInfo with eventType), apply strict filtering
     // Otherwise (CLI, tests), use conservative filtering
-    const hasEventContext = prInfo && 'eventType' in prInfo;
+    const prInfoWithEvent = prInfo as PRInfo & {
+      eventType?: import('./types/config').EventTrigger;
+    };
+    const hasEventContext =
+      prInfoWithEvent && 'eventType' in prInfoWithEvent && prInfoWithEvent.eventType;
 
     if (hasEventContext) {
       // GitHub Action context - apply strict event filtering
-      const currentEvent = (prInfo as any).eventType as import('./types/config').EventTrigger;
+      const currentEvent = prInfoWithEvent.eventType!;
       logFn?.(`🔧 Debug: GitHub Action context, current event: ${currentEvent}`);
 
       const filteredChecks: string[] = [];
