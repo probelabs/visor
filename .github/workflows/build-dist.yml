@@ -58,6 +58,12 @@ jobs:
           cp bundled/index.js dist/
           cp bundled/licenses.txt dist/ 2>/dev/null || true
 
+          # Copy tiktoken WASM file if it exists
+          if [ -f bundled/tiktoken_bg.wasm ]; then
+            cp bundled/tiktoken_bg.wasm dist/tiktoken_bg.wasm
+            echo "✅ Copied tiktoken_bg.wasm to dist/"
+          fi
+
           # Add bundled files to git (force add since dist/ is in .gitignore)
           git add -f dist/
 
