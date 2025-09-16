@@ -48,6 +48,15 @@ jobs:
             echo "⚠️  Warning: tiktoken_bg.wasm not found - token counting may fail"
           fi
 
+          # Copy schema files to the bundled directory
+          # ncc doesn't automatically include JSON schema files
+          if [ -d output ]; then
+            cp -r output bundled/
+            echo "✅ Copied output schemas to bundle"
+          else
+            echo "⚠️  Warning: output schemas not found - validation may fail"
+          fi
+
       - name: Update dist files
         run: |
           # Configure git
@@ -62,6 +71,12 @@ jobs:
           if [ -f bundled/tiktoken_bg.wasm ]; then
             cp bundled/tiktoken_bg.wasm dist/tiktoken_bg.wasm
             echo "✅ Copied tiktoken_bg.wasm to dist/"
+          fi
+
+          # Copy schema files if they exist
+          if [ -d bundled/output ]; then
+            cp -r bundled/output dist/
+            echo "✅ Copied output schemas to dist/"
           fi
 
           # Add bundled files to git (force add since dist/ is in .gitignore)
