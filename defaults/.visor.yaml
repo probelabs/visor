@@ -7,6 +7,9 @@ version: "1.0"
 # Global AI provider settings - users should configure their preferred provider
 # For CI testing, use --provider mock CLI flag instead
 
+# Run checks sequentially to ensure session reuse works correctly
+max_parallelism: 1
+
 # 🔄 AI Session Reuse Feature:
 # This configuration demonstrates the new 'reuse_ai_session' feature that allows
 # dependent checks to continue conversations with the same AI session, providing
