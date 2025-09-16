@@ -78,11 +78,21 @@ inputs:
     required: false
     default: 'false'
   
+  max-parallelism:
+    description: 'Maximum number of checks to run in parallel (default: 1)'
+    required: false
+    default: '1'
+
+  fail-fast:
+    description: 'Stop execution when any check fails (default: false)'
+    required: false
+    default: 'false'
+
   debug:
     description: 'Enable debug mode for detailed output in comments'
     required: false
     default: 'false'
-  
+
   # Legacy inputs for backward compatibility
   owner:
     description: 'Repository owner (legacy)'

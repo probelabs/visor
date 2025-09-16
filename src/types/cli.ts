@@ -20,6 +20,8 @@ export interface CliOptions {
   configPath?: string;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
+  /** Maximum number of checks to run in parallel (default: 3) */
+  maxParallelism?: number;
   /** Enable debug mode for detailed output */
   debug?: boolean;
   /** Stop execution on first failure condition */

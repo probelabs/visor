@@ -38,7 +38,8 @@ export class ToolCheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     const command = config.command as string;
     const args = (config.args as string[]) || [];

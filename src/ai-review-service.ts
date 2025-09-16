@@ -2,6 +2,7 @@ import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
+import { SessionRegistry } from './session-registry';
 
 /**
  * Helper function to log messages respecting JSON/SARIF output format
@@ -43,6 +44,10 @@ export interface AIDebugInfo {
   errors?: string[];
   /** Whether JSON parsing succeeded */
   jsonParseSuccess: boolean;
+  /** Schema used for response validation */
+  schema?: string;
+  /** Schema name/type requested */
+  schemaName?: string;
   /** Timestamp when request was made */
   timestamp: string;
   /** Total API calls made */
@@ -60,7 +65,7 @@ export interface AIDebugInfo {
 // REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
-  // For code-review schema - array of issues
+  // Array of issues for code review
   issues?: Array<{
     file: string;
     line: number;
@@ -73,19 +78,19 @@ interface AIResponseFormat {
     replacement?: string;
   }>;
   suggestions?: string[];
-
-  // For plain schema - just content field
-  content?: string;
 }
 
 export class AIReviewService {
   private config: AIReviewConfig;
+  private sessionRegistry: SessionRegistry;
 
   constructor(config: AIReviewConfig = {}) {
     this.config = {
       timeout: 600000, // Increased timeout to 10 minutes for AI responses
       ...config,
     };
+
+    this.sessionRegistry = SessionRegistry.getInstance();
 
     // Auto-detect provider and API key from environment
     if (!this.config.apiKey) {
@@ -113,7 +118,9 @@ export class AIReviewService {
   async executeReview(
     prInfo: PRInfo,
     customPrompt: string,
-    schema?: string
+    schema?: string,
+    _checkName?: string,
+    sessionId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -123,10 +130,7 @@ export class AIReviewService {
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
-    log(`Schema type: ${schema || 'default (code-review)'}`);
-    if (schema === 'plain') {
-      log('Using plain schema - expecting JSON with content field');
-    }
+    log(`Schema type: ${schema || 'none (no schema)'}`);
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -142,6 +146,8 @@ export class AIReviewService {
         errors: [],
         jsonParseSuccess: false,
         timestamp,
+        schemaName: schema,
+        schema: undefined, // Will be populated when schema is loaded
       };
     }
 
@@ -183,7 +189,7 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeAgent(prompt, schema);
+      const response = await this.callProbeAgent(prompt, schema, debugInfo, _checkName, sessionId);
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -222,6 +228,118 @@ export class AIReviewService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Execute AI review using session reuse - reuses an existing ProbeAgent session
+   */
+  async executeReviewWithSessionReuse(
+    prInfo: PRInfo,
+    customPrompt: string,
+    parentSessionId: string,
+    schema?: string,
+    checkName?: string
+  ): Promise<ReviewSummary> {
+    const startTime = Date.now();
+    const timestamp = new Date().toISOString();
+
+    // Get the existing session
+    const existingAgent = this.sessionRegistry.getSession(parentSessionId);
+    if (!existingAgent) {
+      throw new Error(
+        `Session not found for reuse: ${parentSessionId}. Ensure the parent check completed successfully.`
+      );
+    }
+
+    // Build prompt from custom instructions
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+
+    log(`🔄 Reusing AI session ${parentSessionId} for review...`);
+    log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
+    log(`Schema type: ${schema || 'none (no schema)'}`);
+
+    let debugInfo: AIDebugInfo | undefined;
+    if (this.config.debug) {
+      debugInfo = {
+        prompt,
+        rawResponse: '',
+        provider: this.config.provider || 'unknown',
+        model: this.config.model || 'default',
+        apiKeySource: this.getApiKeySource(),
+        processingTime: 0,
+        promptLength: prompt.length,
+        responseLength: 0,
+        errors: [],
+        jsonParseSuccess: false,
+        timestamp,
+        schemaName: schema,
+        schema: undefined, // Will be populated when schema is loaded
+      };
+    }
+
+    try {
+      // Use existing agent's answer method instead of creating new agent
+      const response = await this.callProbeAgentWithExistingSession(
+        existingAgent,
+        prompt,
+        schema,
+        debugInfo,
+        checkName
+      );
+      const processingTime = Date.now() - startTime;
+
+      if (debugInfo) {
+        debugInfo.rawResponse = response;
+        debugInfo.responseLength = response.length;
+        debugInfo.processingTime = processingTime;
+      }
+
+      const result = this.parseAIResponse(response, debugInfo, schema);
+
+      if (debugInfo) {
+        result.debug = debugInfo;
+      }
+
+      return result;
+    } catch (error) {
+      if (debugInfo) {
+        debugInfo.errors = [error instanceof Error ? error.message : String(error)];
+        debugInfo.processingTime = Date.now() - startTime;
+
+        // In debug mode, return a review with the error captured
+        return {
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'system/ai-session-reuse-error',
+              message: error instanceof Error ? error.message : String(error),
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+          suggestions: [
+            'Check session reuse configuration and ensure parent check completed successfully',
+          ],
+          debug: debugInfo,
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Register a new AI session in the session registry
+   */
+  registerSession(sessionId: string, agent: ProbeAgent): void {
+    this.sessionRegistry.registerSession(sessionId, agent);
+  }
+
+  /**
+   * Cleanup a session from the registry
+   */
+  cleanupSession(sessionId: string): void {
+    this.sessionRegistry.unregisterSession(sessionId);
   }
 
   /**
@@ -345,28 +463,106 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   }
 
   /**
-   * Escape XML special characters
+   * No longer escaping XML - returning text as-is
    */
   private escapeXml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
+    return text;
+  }
+
+  /**
+   * Call ProbeAgent with an existing session
+   */
+  private async callProbeAgentWithExistingSession(
+    agent: ProbeAgent,
+    prompt: string,
+    schema?: string,
+    debugInfo?: AIDebugInfo,
+    _checkName?: string
+  ): Promise<string> {
+    // Handle mock model/provider for testing
+    if (this.config.model === 'mock' || this.config.provider === 'mock') {
+      log('🎭 Using mock AI model/provider for testing (session reuse)');
+      return this.generateMockResponse(prompt);
+    }
+
+    log('🔄 Reusing existing ProbeAgent session for AI review...');
+    log(`📝 Prompt length: ${prompt.length} characters`);
+    log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
+
+    try {
+      log('🚀 Calling existing ProbeAgent with answer()...');
+
+      // Load and pass the actual schema content if provided
+      let schemaString: string | undefined = undefined;
+      if (schema) {
+        try {
+          schemaString = await this.loadSchemaContent(schema);
+          log(`📋 Loaded schema content for: ${schema}`);
+          log(`📄 Raw schema JSON:\n${schemaString}`);
+        } catch (error) {
+          log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
+          schemaString = undefined;
+          if (debugInfo && debugInfo.errors) {
+            debugInfo.errors.push(`Failed to load schema: ${error}`);
+          }
+        }
+      }
+
+      // Pass schema in options object with 'schema' property
+      const schemaOptions = schemaString ? { schema: schemaString } : undefined;
+
+      // Store the exact schema options being passed to ProbeAgent in debug info
+      if (debugInfo && schemaOptions) {
+        debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
+      }
+
+      // Log the schema options being passed to ProbeAgent
+      if (schemaOptions) {
+        log(`🎯 Schema options passed to ProbeAgent.answer() (session reuse):`);
+        log(JSON.stringify(schemaOptions, null, 2));
+      }
+
+      // Use existing agent's answer method - this reuses the conversation context
+      const response = await agent.answer(prompt, undefined, schemaOptions);
+
+      log('✅ ProbeAgent session reuse completed successfully');
+      log(`📤 Response length: ${response.length} characters`);
+
+      return response;
+    } catch (error) {
+      console.error('❌ ProbeAgent session reuse failed:', error);
+      throw new Error(
+        `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   /**
    * Call ProbeAgent SDK with built-in schema validation
    */
-  private async callProbeAgent(prompt: string, schema?: string): Promise<string> {
+  private async callProbeAgent(
+    prompt: string,
+    schema?: string,
+    debugInfo?: AIDebugInfo,
+    _checkName?: string,
+    providedSessionId?: string
+  ): Promise<string> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing');
       return this.generateMockResponse(prompt);
     }
 
+    // Create ProbeAgent instance with proper options
+    const sessionId =
+      providedSessionId ||
+      (() => {
+        const timestamp = new Date().toISOString();
+        return `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
+      })();
+
     log('🤖 Creating ProbeAgent for AI review...');
+    log(`🆔 Session ID: ${sessionId}`);
     log(`📝 Prompt length: ${prompt.length} characters`);
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
@@ -387,15 +583,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       } else if (this.config.provider === 'openai' && this.config.apiKey) {
         process.env.OPENAI_API_KEY = this.config.apiKey;
       }
-
-      // Create ProbeAgent instance with proper options
-      // For plain schema, use a simpler approach without tools
       const options: ProbeAgentOptions = {
-        promptType: schema === 'plain' ? undefined : ('code-review-template' as 'code-review'),
-        customPrompt:
-          schema === 'plain'
-            ? 'You are a helpful AI assistant. Respond only with valid JSON matching the provided schema. Do not use any tools or commands.'
-            : undefined,
+        sessionId: sessionId,
+        promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
@@ -417,21 +607,74 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         try {
           schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
+          log(`📄 Raw schema JSON:\n${schemaString}`);
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
+          if (debugInfo && debugInfo.errors) {
+            debugInfo.errors.push(`Failed to load schema: ${error}`);
+          }
         }
       }
 
       // ProbeAgent now handles schema formatting internally!
-      const response = await agent.answer(
-        prompt,
-        undefined,
-        schemaString ? { schema: schemaString } : undefined
-      );
+      // Pass schema in options object with 'schema' property
+      const schemaOptions = schemaString ? { schema: schemaString } : undefined;
+
+      // Store the exact schema options being passed to ProbeAgent in debug info
+      if (debugInfo && schemaOptions) {
+        debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
+      }
+
+      // Log the schema options being passed to ProbeAgent
+      if (schemaOptions) {
+        log(`🎯 Schema options passed to ProbeAgent.answer():`);
+        log(JSON.stringify(schemaOptions, null, 2));
+      }
+
+      // Log the equivalent CLI command for local reproduction
+      const provider = this.config.provider || 'auto';
+      const model = this.config.model || 'default';
+
+      // Save prompt to a temp file for easier reproduction
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        const tempDir = os.tmpdir();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+
+        fs.writeFileSync(promptFile, prompt, 'utf-8');
+        log(`\n💾 Prompt saved to: ${promptFile}`);
+
+        log(`\n📝 To reproduce locally, run:`);
+
+        let cliCommand = `npx @probelabs/probe@latest agent`;
+        cliCommand += ` --provider ${provider}`;
+        if (model !== 'default') {
+          cliCommand += ` --model ${model}`;
+        }
+        if (schema) {
+          cliCommand += ` --schema output/${schema}/schema.json`;
+        }
+        cliCommand += ` "${promptFile}"`;
+
+        log(`\n$ ${cliCommand}\n`);
+      } catch (error) {
+        log(`⚠️ Could not save prompt file: ${error}`);
+      }
+
+      const response = await agent.answer(prompt, undefined, schemaOptions);
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Register the session for potential reuse by dependent checks
+      if (_checkName) {
+        this.registerSession(sessionId, agent);
+        log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
+      }
 
       return response;
     } catch (error) {
@@ -484,7 +727,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   private parseAIResponse(
     response: string,
     debugInfo?: AIDebugInfo,
-    schema?: string
+    _schema?: string
   ): ReviewSummary {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
@@ -501,59 +744,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Handle different schema types differently
       let reviewData: AIResponseFormat;
 
-      if (schema === 'plain') {
-        // For plain schema, ProbeAgent returns JSON with a content field
-        log('📝 Processing plain schema response (expect JSON with content field)');
-
-        // Extract JSON using the same logic as other schemas
-        // ProbeAgent's cleanSchemaResponse now strips code blocks, so we need to find JSON boundaries
-        const trimmed = response.trim();
-        const firstBrace = trimmed.indexOf('{');
-        const firstBracket = trimmed.indexOf('[');
-        const lastBrace = trimmed.lastIndexOf('}');
-        const lastBracket = trimmed.lastIndexOf(']');
-
-        let jsonStr = trimmed;
-        let startIdx = -1;
-        let endIdx = -1;
-
-        // Prioritize {} if both exist
-        if (firstBrace !== -1 && lastBrace !== -1) {
-          if (
-            firstBracket === -1 ||
-            firstBrace < firstBracket ||
-            (firstBrace < firstBracket && lastBrace > lastBracket)
-          ) {
-            startIdx = firstBrace;
-            endIdx = lastBrace;
-          }
-        }
-
-        // Fall back to [] if no valid {} or [] is better
-        if (startIdx === -1 && firstBracket !== -1 && lastBracket !== -1) {
-          startIdx = firstBracket;
-          endIdx = lastBracket;
-        }
-
-        // If we found valid JSON boundaries, extract it
-        if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
-          jsonStr = trimmed.substring(startIdx, endIdx + 1);
-          log(`🔍 Extracted JSON from response (chars ${startIdx} to ${endIdx + 1})`);
-        }
-
-        try {
-          reviewData = JSON.parse(jsonStr);
-          log('✅ Successfully parsed plain schema JSON response');
-          if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } catch {
-          // If JSON parsing fails, treat the entire response as content
-          log('🔧 Plain schema fallback - treating entire response as content');
-          reviewData = {
-            content: response.trim(),
-          };
-          if (debugInfo) debugInfo.jsonParseSuccess = true;
-        }
-      } else {
+      {
         // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
         log('🔍 Extracting JSON from AI response...');
 
@@ -641,37 +832,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             }
           }
         }
-      }
-
-      // Handle different schemas
-      if (schema === 'plain') {
-        // For plain schema, we expect a content field with text (usually markdown)
-        log('📝 Processing plain schema response');
-
-        if (!reviewData.content) {
-          console.error('❌ Plain schema response missing content field');
-          console.error('🔍 Available fields:', Object.keys(reviewData));
-          throw new Error('Invalid plain response: missing content field');
-        }
-
-        // Return a single "issue" that contains the text content
-        // This will be rendered using the text template
-        const result: ReviewSummary = {
-          issues: [
-            {
-              file: 'PR',
-              line: 1,
-              ruleId: 'full-review/overview',
-              message: reviewData.content,
-              severity: 'info',
-              category: 'documentation',
-            },
-          ],
-          suggestions: [],
-        };
-
-        log('✅ Successfully created text ReviewSummary');
-        return result;
       }
 
       // Standard code-review schema processing

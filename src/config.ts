@@ -21,7 +21,13 @@ import { CliOptions } from './types/cli';
  */
 export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = ['ai'];
-  private validEventTriggers: EventTrigger[] = ['pr_opened', 'pr_updated', 'pr_closed'];
+  private validEventTriggers: EventTrigger[] = [
+    'pr_opened',
+    'pr_updated',
+    'pr_closed',
+    'issue_opened',
+    'issue_comment',
+  ];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
 
@@ -129,6 +135,7 @@ export class ConfigManager {
     return {
       version: '1.0',
       checks: {},
+      max_parallelism: 3,
       output: {
         pr_comment: {
           format: 'markdown',
@@ -204,8 +211,21 @@ export class ConfigManager {
    * Merge configuration with CLI options
    */
   public mergeWithCliOptions(config: Partial<VisorConfig>, cliOptions: CliOptions): MergedConfig {
+    // Apply CLI overrides to the config
+    const mergedConfig = { ...config };
+
+    // Override max_parallelism if specified in CLI
+    if (cliOptions.maxParallelism !== undefined) {
+      mergedConfig.max_parallelism = cliOptions.maxParallelism;
+    }
+
+    // Override fail_fast if specified in CLI
+    if (cliOptions.failFast !== undefined) {
+      mergedConfig.fail_fast = cliOptions.failFast;
+    }
+
     return {
-      config,
+      config: mergedConfig,
       cliChecks: cliOptions.checks || [],
       cliOutput: cliOptions.output || 'table',
     };
@@ -275,6 +295,21 @@ export class ConfigManager {
       this.validateOutputConfig(config.output as unknown as Record<string, unknown>, errors);
     }
 
+    // Validate max_parallelism if present
+    if (config.max_parallelism !== undefined) {
+      if (
+        typeof config.max_parallelism !== 'number' ||
+        config.max_parallelism < 1 ||
+        !Number.isInteger(config.max_parallelism)
+      ) {
+        errors.push({
+          field: 'max_parallelism',
+          message: 'max_parallelism must be a positive integer (minimum 1)',
+          value: config.max_parallelism,
+        });
+      }
+    }
+
     if (errors.length > 0) {
       throw new Error(errors[0].message);
     }
@@ -328,6 +363,30 @@ export class ConfigManager {
         }
       }
     }
+
+    // Validate reuse_ai_session configuration
+    if (checkConfig.reuse_ai_session !== undefined) {
+      if (typeof checkConfig.reuse_ai_session !== 'boolean') {
+        errors.push({
+          field: `checks.${checkName}.reuse_ai_session`,
+          message: `Invalid reuse_ai_session value for "${checkName}": must be boolean`,
+          value: checkConfig.reuse_ai_session,
+        });
+      } else if (checkConfig.reuse_ai_session === true) {
+        // When reuse_ai_session is true, depends_on must be specified and non-empty
+        if (
+          !checkConfig.depends_on ||
+          !Array.isArray(checkConfig.depends_on) ||
+          checkConfig.depends_on.length === 0
+        ) {
+          errors.push({
+            field: `checks.${checkName}.reuse_ai_session`,
+            message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
+            value: checkConfig.reuse_ai_session,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -371,6 +430,7 @@ export class ConfigManager {
     const defaultConfig = {
       version: '1.0',
       checks: {},
+      max_parallelism: 3,
       output: {
         pr_comment: {
           format: 'markdown' as ConfigOutputFormat,

@@ -278,6 +278,14 @@ export class AICheckProvider extends CheckProvider {
             issue: eventContext.issue
               ? {
                   number: eventContext.issue.number,
+                  title: eventContext.issue.title,
+                  body: eventContext.issue.body,
+                  state: eventContext.issue.state,
+                  author: eventContext.issue.user?.login,
+                  labels: eventContext.issue.labels || [],
+                  assignees: eventContext.issue.assignees?.map((a: any) => a.login) || [],
+                  createdAt: eventContext.issue.created_at,
+                  updatedAt: eventContext.issue.updated_at,
                   isPullRequest: !!eventContext.issue.pull_request,
                 }
               : undefined,
@@ -370,13 +378,14 @@ export class AICheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     // Apply environment configuration if present
     if (config.env) {
       const result = EnvironmentResolver.withTemporaryEnv(config.env, () => {
         // This will be executed with the temporary environment
-        return this.executeWithConfig(prInfo, config, _dependencyResults);
+        return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
       });
 
       if (result instanceof Promise) {
@@ -385,13 +394,14 @@ export class AICheckProvider extends CheckProvider {
       return result;
     }
 
-    return this.executeWithConfig(prInfo, config, _dependencyResults);
+    return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
   }
 
   private async executeWithConfig(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
@@ -454,7 +464,30 @@ export class AICheckProvider extends CheckProvider {
     console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
 
     try {
-      return await service.executeReview(prInfo, processedPrompt, schema);
+      console.error(`🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`);
+
+      // Check if we should use session reuse
+      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+        console.error(
+          `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
+        );
+        return await service.executeReviewWithSessionReuse(
+          prInfo,
+          processedPrompt,
+          sessionInfo.parentSessionId,
+          schema,
+          config.checkName
+        );
+      } else {
+        console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
+        return await service.executeReview(
+          prInfo,
+          processedPrompt,
+          schema,
+          config.checkName,
+          config.sessionId
+        );
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

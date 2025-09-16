@@ -32,6 +32,10 @@ export interface CheckProviderConfig {
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | string;
+  /** Check name for sessionID and logging purposes */
+  checkName?: string;
+  /** Session ID for AI session management */
+  sessionId?: string;
   [key: string]: unknown;
 }
 
@@ -62,12 +66,14 @@ export abstract class CheckProvider {
    * @param prInfo Information about the pull request
    * @param config Provider-specific configuration
    * @param dependencyResults Optional results from dependency checks that this check depends on
+   * @param sessionInfo Optional session information for AI session reuse
    * @returns Review summary with scores, issues, and comments
    */
   abstract execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary>;
 
   /**

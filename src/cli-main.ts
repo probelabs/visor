@@ -141,6 +141,8 @@ export async function main(): Promise<void> {
         workingDirectory: process.cwd(),
         showDetails: cliOptions.output !== 'json', // Show details for non-JSON output
         timeout: cliOptions.timeout, // Pass timeout from CLI options
+        maxParallelism: cliOptions.maxParallelism, // Pass max parallelism from CLI options
+        failFast: cliOptions.failFast, // Pass fail-fast from CLI options
         outputFormat: mergedConfig.cliOutput,
         config: config, // Pass the full config so engine can access check definitions
         debug: cliOptions.debug, // Pass debug flag from CLI options

@@ -166,6 +166,7 @@ export async function run(): Promise<void> {
       'fail-on-critical': getInput('fail-on-critical') || undefined,
       'fail-on-api-error': getInput('fail-on-api-error') || undefined,
       'min-score': getInput('min-score') || undefined,
+      'max-parallelism': getInput('max-parallelism') || undefined,
       // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path') || undefined,
       'visor-checks': getInput('visor-checks') || undefined,

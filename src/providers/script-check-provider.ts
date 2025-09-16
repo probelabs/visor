@@ -39,7 +39,8 @@ export class ScriptCheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    _dependencyResults?: Map<string, ReviewSummary>,
+    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
     const scriptPath = config.script as string;
     const interpreter = (config.interpreter as string) || 'bash';

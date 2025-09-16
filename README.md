@@ -76,6 +76,29 @@ jobs:
 
 That's it! Visor will automatically review your PRs with AI-powered analysis.
 
+#### Advanced Configuration Options
+
+For more control over execution behavior:
+
+```yaml
+name: Code Review with Performance Tuning
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./  # or: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          max-parallelism: '5'      # Run up to 5 checks in parallel
+          fail-fast: 'true'         # Stop on first failure
+          checks: 'security,performance'  # Run specific checks only
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+```
+
 ### As CLI Tool
 
 ```bash
@@ -119,19 +142,29 @@ Add comments to your PR to trigger Visor:
 visor [options]
 
 Options:
-  -c, --check <type>    Check type: security, performance, style, architecture, all
-                        Can be used multiple times: --check security --check style
-  -o, --output <format> Output format: table, json, markdown, sarif
-                        Default: table
-  --config <path>       Path to configuration file
-                        Default: visor.config.yaml
-  --version            Show version
-  --help               Show help
+  -c, --check <type>         Check type: security, performance, style, architecture, all
+                             Can be used multiple times: --check security --check style
+  -o, --output <format>      Output format: table, json, markdown, sarif
+                             Default: table
+  --config <path>            Path to configuration file
+                             Default: visor.config.yaml
+  --max-parallelism <count>  Maximum number of checks to run in parallel
+                             Default: 3
+  --fail-fast                Stop execution when any check fails
+                             Default: false
+  --timeout <ms>             Timeout for check operations in milliseconds
+                             Default: 600000ms (10 minutes)
+  --debug                    Enable debug mode for detailed output
+  --version                  Show version
+  --help                     Show help
 
 Examples:
-  visor --check all                    # Run all checks
-  visor --check security --output json # Security check with JSON output
-  visor --check style --check performance # Multiple specific checks
+  visor --check all                           # Run all checks
+  visor --check security --output json        # Security check with JSON output
+  visor --check style --check performance     # Multiple specific checks
+  visor --check all --max-parallelism 5       # Run up to 5 checks in parallel
+  visor --check all --fail-fast               # Stop on first failure
+  visor --check all --timeout 300000 --debug  # 5 minute timeout with debug output
 ```
 
 ## 🤖 AI Configuration
@@ -323,6 +356,104 @@ checks:
 - **Missing Dependencies**: References to non-existent checks are validated
 - **Graceful Failures**: Failed checks don't prevent independent checks from running
 - **Dependency Results**: Results from dependency checks are available to dependent checks
+
+## 🔄 AI Session Reuse
+
+Visor supports AI session reuse for dependent checks, allowing follow-up analysis to maintain conversation context with the AI. This creates more intelligent, contextual analysis workflows.
+
+### How It Works
+
+When `reuse_ai_session: true` is set on a dependent check, Visor:
+1. **Reuses the ProbeAgent session** from the parent check
+2. **Maintains conversation context** - the AI remembers the previous discussion
+3. **Forces sequential execution** - dependent checks with session reuse run sequentially to preserve context
+4. **Provides intelligent follow-ups** - the AI can reference previous findings
+
+### Configuration
+
+```yaml
+version: "1.0"
+
+checks:
+  security:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: "Analyze code for security vulnerabilities..."
+    on: [pr_opened, pr_updated]
+
+  security-remediation:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+      Based on our previous security analysis discussion,
+      provide detailed remediation guidance for the issues we identified.
+    depends_on: [security]
+    reuse_ai_session: true  # 🔄 Reuses security check's AI session
+    on: [pr_opened, pr_updated]
+```
+
+### Key Benefits
+
+- **Context Continuity**: AI remembers previous analysis and can reference it
+- **Cost Efficiency**: Reuses existing AI sessions instead of creating new ones
+- **Better Analysis**: Follow-up prompts build on previous discussion
+- **Natural Conversation Flow**: Creates multi-turn conversations with AI
+
+### Validation Rules
+
+- **Requires Dependencies**: `reuse_ai_session: true` can only be used with `depends_on`
+- **Sequential Execution**: Checks with session reuse are automatically scheduled sequentially
+- **AI Checks Only**: Only works with `type: ai` checks
+- **Clear Error Messages**: Invalid configurations provide helpful guidance
+
+### Example Use Cases
+
+#### Security Analysis + Remediation
+```yaml
+security:
+  type: ai
+  prompt: "Identify security vulnerabilities..."
+
+security-fixes:
+  type: ai
+  prompt: "Based on our security discussion, provide step-by-step fix instructions..."
+  depends_on: [security]
+  reuse_ai_session: true
+```
+
+#### Performance Analysis + Optimization
+```yaml
+performance:
+  type: ai
+  prompt: "Analyze performance issues..."
+
+performance-optimization:
+  type: ai
+  prompt: "Building on our performance analysis, create an optimization roadmap..."
+  depends_on: [performance]
+  reuse_ai_session: true
+```
+
+#### Multi-step Code Review
+```yaml
+initial-review:
+  type: ai
+  prompt: "Perform comprehensive code review..."
+
+clarification:
+  type: ai
+  prompt: "Let's dive deeper into the most critical issues we identified..."
+  depends_on: [initial-review]
+  reuse_ai_session: true
+
+final-recommendations:
+  type: ai
+  prompt: "Summarize our discussion with prioritized action items..."
+  depends_on: [clarification]
+  reuse_ai_session: true
+```
 
 ## 📋 Schema-Template System
 
@@ -1040,6 +1171,8 @@ reporting:
 | `checks` | Checks to run (comma-separated) | `all` | No |
 | `output-format` | Output format | `markdown` | No |
 | `config-path` | Path to config file | `visor.config.yaml` | No |
+| `max-parallelism` | Maximum number of checks to run in parallel | `3` | No |
+| `fail-fast` | Stop execution when any check fails | `false` | No |
 | `comment-on-pr` | Post review as PR comment | `true` | No |
 | `create-check` | Create GitHub check run | `true` | No |
 | `add-labels` | Add quality labels to PR | `true` | No |

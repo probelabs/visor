@@ -115,7 +115,12 @@ export type ConfigCheckType = 'ai';
 /**
  * Valid event triggers for checks
  */
-export type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed';
+export type EventTrigger =
+  | 'pr_opened'
+  | 'pr_updated'
+  | 'pr_closed'
+  | 'issue_opened'
+  | 'issue_comment';
 
 /**
  * Valid output formats
@@ -182,6 +187,8 @@ export interface CheckConfig {
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */
   if?: string;
+  /** Whether to reuse AI session from dependency checks (only works with depends_on) */
+  reuse_ai_session?: boolean;
   /** Simple fail condition - fails check if expression evaluates to true */
   fail_if?: string;
   /** Check-specific failure conditions - optional (deprecated, use fail_if) */
@@ -288,6 +295,10 @@ export interface VisorConfig {
   ai_model?: string;
   /** Global AI provider setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  /** Maximum number of checks to run in parallel (default: 3) */
+  max_parallelism?: number;
+  /** Stop execution when any check fails (default: false) */
+  fail_fast?: boolean;
   /** Simple global fail condition - fails if expression evaluates to true */
   fail_if?: string;
   /** Global failure conditions - optional (deprecated, use fail_if) */

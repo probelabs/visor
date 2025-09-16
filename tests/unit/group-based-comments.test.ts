@@ -92,7 +92,7 @@ describe('Group-based Comments', () => {
     expect(prOverviewComment.body).not.toContain('SQL injection vulnerability');
   });
 
-  test('should use correct schema/template per group', async () => {
+  test('should use correct template per group', async () => {
     const mockReviewWithOverview = {
       issues: [
         {
@@ -103,7 +103,6 @@ describe('Group-based Comments', () => {
           severity: 'info' as const,
           category: 'documentation' as const,
           group: 'pr-overview',
-          schema: 'plain',
         },
       ],
       suggestions: [],
@@ -115,9 +114,9 @@ describe('Group-based Comments', () => {
 
     const call = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
-    // Should render as markdown content, not as table
+    // Should render using standard code-review template (with table)
     expect(call.body).toContain('## PR Overview');
     expect(call.body).toContain('This PR adds new features.');
-    expect(call.body).not.toContain('<table>'); // No table for plain schema
+    expect(call.body).toContain('<table>'); // Uses standard template with table
   });
 });

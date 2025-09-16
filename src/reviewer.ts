@@ -337,34 +337,12 @@ export class PRReviewer {
     // Enhance issues with GitHub links if context is available
     const enhancedIssues = this.enhanceIssuesWithGitHubLinks(issues, githubContext);
 
-    let templateData: {
-      content?: string;
-      issues?: any[];
-      checkName: string;
-      github?: {
-        owner: string;
-        repo: string;
-        prNumber: number;
-        commitSha?: string;
-        branch?: string;
-      };
+    // Pass enhanced issues with GitHub links
+    const templateData = {
+      issues: enhancedIssues,
+      checkName: checkName,
+      github: githubContext,
     };
-
-    if (schema === 'plain') {
-      // For plain schema, pass the message content directly
-      templateData = {
-        content: issues.length > 0 ? issues[0].message : 'No content available',
-        checkName: checkName,
-        github: githubContext,
-      };
-    } else {
-      // For code-review schema, pass enhanced issues with GitHub links
-      templateData = {
-        issues: enhancedIssues,
-        checkName: checkName,
-        github: githubContext,
-      };
-    }
 
     // Render with Liquid template and trim any extra whitespace at the start/end
     const rendered = await liquid.parseAndRender(templateContent, templateData);
@@ -627,6 +605,7 @@ export class PRReviewer {
       `**Provider:** ${debug.provider}`,
       `**Model:** ${debug.model}`,
       `**API Key Source:** ${debug.apiKeySource}`,
+      `**Schema Type:** ${debug.schemaName || 'default (code-review)'}`,
       `**Total Processing Time:** ${debug.processingTime}ms`,
       `**Total Prompt Length:** ${debug.promptLength} characters`,
       `**Total Response Length:** ${debug.responseLength} characters`,
@@ -639,6 +618,15 @@ export class PRReviewer {
       debug.errors.forEach(error => {
         lines.push(`- ${error}`);
       });
+      lines.push('');
+    }
+
+    // Add schema information if available
+    if (debug.schema) {
+      lines.push('## 📋 Schema Options Passed to ProbeAgent');
+      lines.push('```json');
+      lines.push(debug.schema);
+      lines.push('```');
       lines.push('');
     }
 
@@ -681,6 +669,21 @@ export class PRReviewer {
       lines.push('---');
       lines.push('');
     });
+
+    // Add raw unprocessed prompt and response at the end for complete transparency
+    lines.push('## 📄 Raw Prompt (Complete)');
+    lines.push('');
+    lines.push('```');
+    lines.push(debug.prompt);
+    lines.push('```');
+    lines.push('');
+
+    lines.push('## 📄 Raw Response (Complete)');
+    lines.push('');
+    lines.push('```');
+    lines.push(debug.rawResponse);
+    lines.push('```');
+    lines.push('');
 
     return lines.join('\n');
   }
