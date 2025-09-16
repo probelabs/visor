@@ -139,13 +139,17 @@ class CLI {
      * Validate parsed options
      */
     validateOptions(options) {
-        // Validate check types
+        // Validate check types - but allow custom checks when config is provided
         if (Array.isArray(options.check) && options.check.length > 0) {
-            for (const check of options.check) {
-                if (!this.validChecks.includes(check)) {
-                    throw new Error(`Invalid check type: ${check}. Available options: ${this.validChecks.join(', ')}`);
+            // If no custom config provided, validate against built-in checks
+            if (!options.config) {
+                for (const check of options.check) {
+                    if (!this.validChecks.includes(check)) {
+                        throw new Error(`Invalid check type: ${check}. Available options: ${this.validChecks.join(', ')}`);
+                    }
                 }
             }
+            // If custom config is provided, allow any check names (will be validated against config later)
         }
         // Validate output format
         if (options.output && !this.validOutputs.includes(options.output)) {
