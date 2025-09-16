@@ -63,6 +63,12 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
+          # Clean dist directory (preserve git tracking)
+          echo "🧹 Cleaning dist directory..."
+          find dist -type f -not -path 'dist/.git*' -delete 2>/dev/null || true
+          find dist -type d -empty -not -path 'dist/.git*' -delete 2>/dev/null || true
+          echo "✅ Cleaned dist directory"
+
           # Copy bundled files to dist/ directory
           cp bundled/index.js dist/
           cp bundled/licenses.txt dist/ 2>/dev/null || true
