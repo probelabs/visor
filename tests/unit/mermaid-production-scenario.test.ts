@@ -42,8 +42,15 @@ describe('Mermaid Production Scenario - Exact Replication', () => {
   test('should replicate exact production scenario - ProbeAgent returns JSON with Mermaid in markdown format', async () => {
     // This is EXACTLY what ProbeAgent should return based on the production logs
     // ProbeAgent returns a JSON-encoded string containing another JSON object
+    // Updated to use issues array instead of content field since plain schema was removed
+    // Put the mermaid content as an issue so it gets rendered by the template
     const productionLikeResponse = JSON.stringify({
-      content: `## 📋 Pull Request Overview
+      issues: [
+        {
+          file: 'PR_OVERVIEW',
+          line: 1,
+          ruleId: 'full-review/overview',
+          message: `## 📋 Pull Request Overview
 
 ### 1. Summary
 
@@ -82,6 +89,11 @@ graph TD
 \`\`\`
 
 The new approach reduces complexity and improves error handling.`,
+          severity: 'info',
+          category: 'documentation',
+        },
+      ],
+      suggestions: [],
     });
 
     // Mock ProbeAgent to return the response
@@ -111,15 +123,15 @@ The new approach reduces complexity and improves error handling.`,
       isIncremental: false,
     };
 
-    // Execute AI review with plain schema (as in production)
+    // Execute AI review without schema (since plain schema was removed)
     const result = await aiService.executeReview(
       mockPrInfo,
-      'Create a comprehensive pull request overview with architecture diagram',
-      'plain'
+      'Create a comprehensive pull request overview with architecture diagram'
     );
 
     // Verify the AI response was parsed correctly
     expect(result.issues).toHaveLength(1);
+    expect(result.suggestions).toHaveLength(0);
     const content = result.issues[0].message;
 
     // THE KEY TEST: Verify Mermaid blocks are preserved with proper formatting
@@ -142,11 +154,13 @@ The new approach reduces complexity and improves error handling.`,
     expect(content).toMatch(mermaidBlockRegex);
 
     // Test template rendering (what goes to GitHub comment)
-    const templatePath = path.join(__dirname, '../../output/plain/template.liquid');
+    // Since plain schema was removed, use code-review template
+    const templatePath = path.join(__dirname, '../../output/code-review/template.liquid');
     const templateContent = await fs.readFile(templatePath, 'utf-8');
 
     const templateData = {
-      content: content,
+      issues: result.issues, // Mermaid content is in issues[0].message
+      suggestions: result.suggestions,
       checkName: 'full-review',
     };
 
@@ -206,11 +220,12 @@ This shows the architecture.`;
       isIncremental: false,
     };
 
-    const result = await aiService.executeReview(mockPrInfo, 'Test prompt', 'plain');
+    const result = await aiService.executeReview(mockPrInfo, 'Test prompt');
 
-    // When raw response is given, it should be wrapped in content field
-    expect(result.issues).toHaveLength(1);
-    const content = result.issues[0].message;
+    // When raw response is given, it should be put in suggestions since it can't be parsed as JSON
+    expect(result.issues).toHaveLength(0);
+    expect(result.suggestions).toHaveLength(1);
+    const content = result.suggestions[0];
 
     // Even with fallback, Mermaid blocks should be preserved
     expect(content).toContain('```mermaid');
@@ -221,7 +236,12 @@ This shows the architecture.`;
   test('should detect if backticks are being escaped or corrupted', async () => {
     // Test various edge cases with backticks
     const responseWithVariousBackticks = JSON.stringify({
-      content: `# Test Content
+      issues: [
+        {
+          file: 'TEST_BACKTICKS',
+          line: 1,
+          ruleId: 'test/backticks',
+          message: `# Test Content
 
 Regular code block:
 \`\`\`javascript
@@ -237,6 +257,11 @@ graph TD
 \`\`\`
 
 Triple backticks in text: \\\`\\\`\\\` should be escaped`,
+          severity: 'info',
+          category: 'documentation',
+        },
+      ],
+      suggestions: [],
     });
 
     mockProbeAgent.answer.mockResolvedValue(responseWithVariousBackticks);
@@ -264,8 +289,9 @@ Triple backticks in text: \\\`\\\`\\\` should be escaped`,
       isIncremental: false,
     };
 
-    const result = await aiService.executeReview(mockPrInfo, 'Test backticks', 'plain');
+    const result = await aiService.executeReview(mockPrInfo, 'Test backticks');
 
+    expect(result.issues).toHaveLength(1);
     const content = result.issues[0].message;
 
     // Verify all different types of backticks are preserved

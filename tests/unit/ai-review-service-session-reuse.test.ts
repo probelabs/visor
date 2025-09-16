@@ -153,7 +153,17 @@ describe('AIReviewService Session Reuse', () => {
       const existingAgent = {
         answer: jest.fn().mockResolvedValue(
           JSON.stringify({
-            content: 'Plain schema response',
+            issues: [
+              {
+                file: 'test.js',
+                line: 1,
+                ruleId: 'test-rule',
+                message: 'Schema test response',
+                severity: 'warning',
+                category: 'style',
+              },
+            ],
+            suggestions: ['Schema-based suggestion'],
           })
         ),
       };
@@ -168,7 +178,7 @@ describe('AIReviewService Session Reuse', () => {
         mockPRInfo,
         'Test prompt',
         parentSessionId,
-        'plain',
+        'code-review',
         'dependent-check'
       );
 
@@ -179,7 +189,7 @@ describe('AIReviewService Session Reuse', () => {
       );
 
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toBe('Plain schema response');
+      expect(result.issues[0].message).toBe('Schema test response');
 
       mockLoadSchemaContent.mockRestore();
     });

@@ -337,34 +337,12 @@ export class PRReviewer {
     // Enhance issues with GitHub links if context is available
     const enhancedIssues = this.enhanceIssuesWithGitHubLinks(issues, githubContext);
 
-    let templateData: {
-      content?: string;
-      issues?: any[];
-      checkName: string;
-      github?: {
-        owner: string;
-        repo: string;
-        prNumber: number;
-        commitSha?: string;
-        branch?: string;
-      };
+    // Pass enhanced issues with GitHub links
+    const templateData = {
+      issues: enhancedIssues,
+      checkName: checkName,
+      github: githubContext,
     };
-
-    if (schema === 'plain') {
-      // For plain schema, pass the message content directly
-      templateData = {
-        content: issues.length > 0 ? issues[0].message : 'No content available',
-        checkName: checkName,
-        github: githubContext,
-      };
-    } else {
-      // For code-review schema, pass enhanced issues with GitHub links
-      templateData = {
-        issues: enhancedIssues,
-        checkName: checkName,
-        github: githubContext,
-      };
-    }
 
     // Render with Liquid template and trim any extra whitespace at the start/end
     const rendered = await liquid.parseAndRender(templateContent, templateData);

@@ -1,8 +1,5 @@
 import { AIReviewService } from '../../src/ai-review-service';
 import { PRInfo } from '../../src/pr-analyzer';
-import { Liquid } from 'liquidjs';
-import * as path from 'path';
-import * as fs from 'fs/promises';
 
 // Mock ProbeAgent to return specific responses
 jest.mock('@probelabs/probe', () => ({
@@ -14,7 +11,6 @@ jest.mock('@probelabs/probe', () => ({
 describe('Mermaid Diagram Preservation', () => {
   let aiService: AIReviewService;
   let mockProbeAgent: any;
-  let liquid: Liquid;
 
   beforeEach(() => {
     // Set up ProbeAgent mock
@@ -29,9 +25,6 @@ describe('Mermaid Diagram Preservation', () => {
     aiService = new AIReviewService({
       debug: false,
     });
-
-    // Set up Liquid template engine
-    liquid = new Liquid();
   });
 
   afterEach(() => {
@@ -41,9 +34,11 @@ describe('Mermaid Diagram Preservation', () => {
 
   describe('Plain Schema with Mermaid Diagrams', () => {
     test('should preserve mermaid diagrams from AI response to GitHub comment', async () => {
-      // Mock AI response with Mermaid diagram
+      // Mock AI response with Mermaid diagram in suggestions
       const aiResponseWithMermaid = JSON.stringify({
-        content: `# Pull Request Analysis
+        issues: [],
+        suggestions: [
+          `# Pull Request Analysis
 
 ## Overview
 This PR introduces authentication improvements with JWT tokens.
@@ -60,6 +55,7 @@ graph TD
 
 ## Summary
 The implementation follows security best practices and includes proper error handling.`,
+        ],
       });
 
       // Mock ProbeAgent to return the response with Mermaid
@@ -89,45 +85,35 @@ The implementation follows security best practices and includes proper error han
         isIncremental: false,
       };
 
-      // Execute AI review with plain schema
+      // Execute AI review without schema
       const result = await aiService.executeReview(
         mockPrInfo,
-        'Analyze this PR and create an overview with architecture diagram',
-        'plain'
+        'Analyze this PR and create an overview with architecture diagram'
       );
 
-      // Verify the AI response was parsed correctly
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toContain('```mermaid');
-      expect(result.issues[0].message).toContain('graph TD');
-      expect(result.issues[0].message).toContain('A[Client Request] --> B[Auth Middleware]');
+      // Verify the AI response was parsed correctly (should have no issues since no schema)
+      expect(result.issues).toHaveLength(0);
+      expect(result.suggestions).toHaveLength(1);
+      expect(result.suggestions[0]).toContain('```mermaid');
+      expect(result.suggestions[0]).toContain('graph TD');
+      expect(result.suggestions[0]).toContain('A[Client Request] --> B[Auth Middleware]');
 
-      // Test template rendering (what goes to GitHub comment)
-      const templatePath = path.join(__dirname, '../../output/plain/template.liquid');
-      const templateContent = await fs.readFile(templatePath, 'utf-8');
-
-      const templateData = {
-        content: result.issues[0].message,
-        checkName: 'full-review',
-      };
-
-      const renderedComment = await liquid.parseAndRender(templateContent, templateData);
-
-      // Verify Mermaid diagram is preserved in final GitHub comment
-      expect(renderedComment).toContain('```mermaid');
-      expect(renderedComment).toContain('graph TD');
-      expect(renderedComment).toContain('A[Client Request] --> B[Auth Middleware]');
-      expect(renderedComment).toContain('B --> C[JWT Validation]');
-      expect(renderedComment).toContain('```');
+      // Verify Mermaid diagram is preserved in the suggestion content
+      const suggestionContent = result.suggestions[0];
+      expect(suggestionContent).toContain('```mermaid');
+      expect(suggestionContent).toContain('graph TD');
+      expect(suggestionContent).toContain('A[Client Request] --> B[Auth Middleware]');
+      expect(suggestionContent).toContain('B --> C[JWT Validation]');
+      expect(suggestionContent).toContain('```');
 
       // Verify no code block stripping occurred
-      const mermaidBlockStart = renderedComment.indexOf('```mermaid');
-      const mermaidBlockEnd = renderedComment.indexOf('```', mermaidBlockStart + 3);
+      const mermaidBlockStart = suggestionContent.indexOf('```mermaid');
+      const mermaidBlockEnd = suggestionContent.indexOf('```', mermaidBlockStart + 3);
       expect(mermaidBlockStart).toBeGreaterThan(-1);
       expect(mermaidBlockEnd).toBeGreaterThan(mermaidBlockStart);
 
       // Extract the full mermaid block content
-      const mermaidBlock = renderedComment.substring(mermaidBlockStart, mermaidBlockEnd + 3);
+      const mermaidBlock = suggestionContent.substring(mermaidBlockStart, mermaidBlockEnd + 3);
       expect(mermaidBlock).toContain('graph TD');
       expect(mermaidBlock).toContain('A[Client Request]');
       expect(mermaidBlock).toContain('--> B[Auth Middleware]');
@@ -135,7 +121,9 @@ The implementation follows security best practices and includes proper error han
 
     test('should handle multiple mermaid diagrams in AI response', async () => {
       const aiResponseWithMultipleMermaid = JSON.stringify({
-        content: `# System Architecture
+        issues: [],
+        suggestions: [
+          `# System Architecture
 
 ## Component Overview
 \`\`\`mermaid
@@ -160,6 +148,7 @@ erDiagram
 \`\`\`
 
 Both diagrams show the system architecture and data relationships.`,
+        ],
       });
 
       mockProbeAgent.answer.mockResolvedValue(aiResponseWithMultipleMermaid);
@@ -189,12 +178,11 @@ Both diagrams show the system architecture and data relationships.`,
 
       const result = await aiService.executeReview(
         mockPrInfo,
-        'Analyze system architecture changes',
-        'plain'
+        'Analyze system architecture changes'
       );
 
       // Verify both Mermaid diagrams are preserved
-      const content = result.issues[0].message;
+      const content = result.suggestions[0];
       const mermaidBlocks = content.match(/```mermaid[\s\S]*?```/g);
       expect(mermaidBlocks).toHaveLength(2);
 
@@ -206,7 +194,9 @@ Both diagrams show the system architecture and data relationships.`,
 
     test('should preserve mermaid diagrams with complex syntax', async () => {
       const complexMermaidResponse = JSON.stringify({
-        content: `# Flow Analysis
+        issues: [],
+        suggestions: [
+          `# Flow Analysis
 
 ## Process Flow
 \`\`\`mermaid
@@ -217,13 +207,14 @@ flowchart TB
     C --> E["📊 Log Activity"]
     D --> E
     E --> F["📤 Send Response"]
-    
+
     style A fill:#e1f5fe
     style C fill:#e8f5e8
     style D fill:#ffebee
 \`\`\`
 
 The flow includes error handling and logging.`,
+        ],
       });
 
       mockProbeAgent.answer.mockResolvedValue(complexMermaidResponse);
@@ -251,13 +242,9 @@ The flow includes error handling and logging.`,
         isIncremental: false,
       };
 
-      const result = await aiService.executeReview(
-        mockPrInfo,
-        'Document the process flow',
-        'plain'
-      );
+      const result = await aiService.executeReview(mockPrInfo, 'Document the process flow');
 
-      const content = result.issues[0].message;
+      const content = result.suggestions[0];
 
       // Verify complex Mermaid syntax is preserved
       expect(content).toContain('```mermaid');

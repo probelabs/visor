@@ -162,7 +162,6 @@ describe('AIReviewService', () => {
           sessionId: expect.stringMatching(
             /^visor-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-unknown$/
           ),
-          customPrompt: undefined,
         })
       );
     });
@@ -205,14 +204,13 @@ describe('AIReviewService', () => {
 
       expect(MockedProbeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          promptType: 'code-review-template',
+          promptType: undefined,
           allowEdit: false,
           debug: false,
           provider: 'google',
           sessionId: expect.stringMatching(
             /^visor-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-unknown$/
           ),
-          customPrompt: undefined,
         })
       );
     });

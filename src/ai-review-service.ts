@@ -65,7 +65,7 @@ export interface AIDebugInfo {
 // REMOVED: ReviewFocus type - only use custom prompts from .visor.yaml
 
 interface AIResponseFormat {
-  // For code-review schema - array of issues
+  // Array of issues for code review
   issues?: Array<{
     file: string;
     line: number;
@@ -78,9 +78,6 @@ interface AIResponseFormat {
     replacement?: string;
   }>;
   suggestions?: string[];
-
-  // For plain schema - just content field
-  content?: string;
 }
 
 export class AIReviewService {
@@ -133,10 +130,7 @@ export class AIReviewService {
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
-    log(`Schema type: ${schema || 'default (code-review)'}`);
-    if (schema === 'plain') {
-      log('Using plain schema - expecting JSON with content field');
-    }
+    log(`Schema type: ${schema || 'none (no schema)'}`);
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -262,10 +256,7 @@ export class AIReviewService {
 
     log(`🔄 Reusing AI session ${parentSessionId} for review...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
-    log(`Schema type: ${schema || 'default (code-review)'}`);
-    if (schema === 'plain') {
-      log('Using plain schema - expecting JSON with content field');
-    }
+    log(`Schema type: ${schema || 'none (no schema)'}`);
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -563,7 +554,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     // Create ProbeAgent instance with proper options
-    // For plain schema, use a simpler approach without tools
     const sessionId =
       providedSessionId ||
       (() => {
@@ -595,11 +585,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       }
       const options: ProbeAgentOptions = {
         sessionId: sessionId,
-        promptType: schema === 'plain' ? undefined : ('code-review-template' as 'code-review'),
-        customPrompt:
-          schema === 'plain'
-            ? 'You are a helpful AI assistant. Respond only with valid JSON matching the provided schema. Do not use any tools or commands.'
-            : undefined,
+        promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
@@ -741,7 +727,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   private parseAIResponse(
     response: string,
     debugInfo?: AIDebugInfo,
-    schema?: string
+    _schema?: string
   ): ReviewSummary {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
@@ -758,59 +744,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Handle different schema types differently
       let reviewData: AIResponseFormat;
 
-      if (schema === 'plain') {
-        // For plain schema, ProbeAgent returns JSON with a content field
-        log('📝 Processing plain schema response (expect JSON with content field)');
-
-        // Extract JSON using the same logic as other schemas
-        // ProbeAgent's cleanSchemaResponse now strips code blocks, so we need to find JSON boundaries
-        const trimmed = response.trim();
-        const firstBrace = trimmed.indexOf('{');
-        const firstBracket = trimmed.indexOf('[');
-        const lastBrace = trimmed.lastIndexOf('}');
-        const lastBracket = trimmed.lastIndexOf(']');
-
-        let jsonStr = trimmed;
-        let startIdx = -1;
-        let endIdx = -1;
-
-        // Prioritize {} if both exist
-        if (firstBrace !== -1 && lastBrace !== -1) {
-          if (
-            firstBracket === -1 ||
-            firstBrace < firstBracket ||
-            (firstBrace < firstBracket && lastBrace > lastBracket)
-          ) {
-            startIdx = firstBrace;
-            endIdx = lastBrace;
-          }
-        }
-
-        // Fall back to [] if no valid {} or [] is better
-        if (startIdx === -1 && firstBracket !== -1 && lastBracket !== -1) {
-          startIdx = firstBracket;
-          endIdx = lastBracket;
-        }
-
-        // If we found valid JSON boundaries, extract it
-        if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
-          jsonStr = trimmed.substring(startIdx, endIdx + 1);
-          log(`🔍 Extracted JSON from response (chars ${startIdx} to ${endIdx + 1})`);
-        }
-
-        try {
-          reviewData = JSON.parse(jsonStr);
-          log('✅ Successfully parsed plain schema JSON response');
-          if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } catch {
-          // If JSON parsing fails, treat the entire response as content
-          log('🔧 Plain schema fallback - treating entire response as content');
-          reviewData = {
-            content: response.trim(),
-          };
-          if (debugInfo) debugInfo.jsonParseSuccess = true;
-        }
-      } else {
+      {
         // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
         log('🔍 Extracting JSON from AI response...');
 
@@ -898,37 +832,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             }
           }
         }
-      }
-
-      // Handle different schemas
-      if (schema === 'plain') {
-        // For plain schema, we expect a content field with text (usually markdown)
-        log('📝 Processing plain schema response');
-
-        if (!reviewData.content) {
-          console.error('❌ Plain schema response missing content field');
-          console.error('🔍 Available fields:', Object.keys(reviewData));
-          throw new Error('Invalid plain response: missing content field');
-        }
-
-        // Return a single "issue" that contains the text content
-        // This will be rendered using the text template
-        const result: ReviewSummary = {
-          issues: [
-            {
-              file: 'PR',
-              line: 1,
-              ruleId: 'full-review/overview',
-              message: reviewData.content,
-              severity: 'info',
-              category: 'documentation',
-            },
-          ],
-          suggestions: [],
-        };
-
-        log('✅ Successfully created text ReviewSummary');
-        return result;
       }
 
       // Standard code-review schema processing
