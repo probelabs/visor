@@ -227,7 +227,7 @@ export class PRReviewer {
     }
 
     // Simple footer
-    comment += `---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    comment += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
     return comment;
   }
@@ -431,7 +431,7 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
-    comment += `---\n`;
+    comment += `\n---\n`;
     comment += `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
     return comment;
