@@ -39,6 +39,15 @@ jobs:
           # Bundle the main action file with all dependencies
           ncc build dist/index.js -o bundled --license licenses.txt
 
+          # Copy the tiktoken WASM file to the bundled directory
+          # This is needed because ncc doesn't automatically include WASM files
+          if [ -f node_modules/tiktoken/tiktoken_bg.wasm ]; then
+            cp node_modules/tiktoken/tiktoken_bg.wasm bundled/tiktoken_bg.wasm
+            echo "✅ Copied tiktoken_bg.wasm to bundle"
+          else
+            echo "⚠️  Warning: tiktoken_bg.wasm not found - token counting may fail"
+          fi
+
       - name: Update dist files
         run: |
           # Configure git
