@@ -74,7 +74,7 @@ export class AICheckProvider extends CheckProvider {
 
     files.forEach(file => {
       const parts = file.filename.split('.');
-      const ext = parts.length > 1 ? parts.pop()?.toLowerCase() : 'noext';
+      const ext = parts.length > 1 ? parts.pop()?.toLowerCase() || 'noext' : 'noext';
       if (!grouped[ext]) {
         grouped[ext] = [];
       }
@@ -260,10 +260,10 @@ export class AICheckProvider extends CheckProvider {
             // Repository Info
             repository: eventContext.repository
               ? {
-                  owner: eventContext.repository.owner?.login,
-                  name: eventContext.repository.name,
+                  owner: (eventContext.repository as any)?.owner?.login,
+                  name: (eventContext.repository as any)?.name,
                   fullName: eventContext.repository
-                    ? `${eventContext.repository.owner?.login}/${eventContext.repository.name}`
+                    ? `${(eventContext.repository as any)?.owner?.login}/${(eventContext.repository as any)?.name}`
                     : undefined,
                 }
               : undefined,
@@ -271,40 +271,40 @@ export class AICheckProvider extends CheckProvider {
             // Comment Data (for comment events)
             comment: eventContext.comment
               ? {
-                  body: eventContext.comment.body,
-                  author: eventContext.comment.user?.login,
+                  body: (eventContext.comment as any)?.body,
+                  author: (eventContext.comment as any)?.user?.login,
                 }
               : undefined,
 
             // Issue Data (for issue events)
             issue: eventContext.issue
               ? {
-                  number: eventContext.issue.number,
-                  title: eventContext.issue.title,
-                  body: eventContext.issue.body,
-                  state: eventContext.issue.state,
-                  author: eventContext.issue.user?.login,
-                  labels: eventContext.issue.labels || [],
+                  number: (eventContext.issue as any)?.number,
+                  title: (eventContext.issue as any)?.title,
+                  body: (eventContext.issue as any)?.body,
+                  state: (eventContext.issue as any)?.state,
+                  author: (eventContext.issue as any)?.user?.login,
+                  labels: (eventContext.issue as any)?.labels || [],
                   assignees:
                     (
                       eventContext as { issue?: { assignees?: Array<{ login: string }> } }
                     )?.issue?.assignees?.map(a => a.login) || [],
-                  createdAt: eventContext.issue.created_at,
-                  updatedAt: eventContext.issue.updated_at,
-                  isPullRequest: !!eventContext.issue.pull_request,
+                  createdAt: (eventContext.issue as any)?.created_at,
+                  updatedAt: (eventContext.issue as any)?.updated_at,
+                  isPullRequest: !!(eventContext.issue as any)?.pull_request,
                 }
               : undefined,
 
             // Pull Request Event Data
             pullRequest: eventContext.pull_request
               ? {
-                  number: eventContext.pull_request.number,
-                  state: eventContext.pull_request.state,
-                  draft: eventContext.pull_request.draft,
-                  headSha: eventContext.pull_request.head?.sha,
-                  headRef: eventContext.pull_request.head?.ref,
-                  baseSha: eventContext.pull_request.base?.sha,
-                  baseRef: eventContext.pull_request.base?.ref,
+                  number: (eventContext.pull_request as any)?.number,
+                  state: (eventContext.pull_request as any)?.state,
+                  draft: (eventContext.pull_request as any)?.draft,
+                  headSha: (eventContext.pull_request as any)?.head?.sha,
+                  headRef: (eventContext.pull_request as any)?.head?.ref,
+                  baseSha: (eventContext.pull_request as any)?.base?.sha,
+                  baseRef: (eventContext.pull_request as any)?.base?.ref,
                 }
               : undefined,
 

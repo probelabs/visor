@@ -3,7 +3,10 @@
  */
 
 // Import ReviewSummary for type definitions
-import type { ReviewSummary } from '../reviewer';
+import type { ReviewSummary, ReviewIssue } from '../reviewer';
+
+// Export Issue type for backward compatibility
+export type Issue = ReviewIssue;
 
 /**
  * Failure condition severity levels
@@ -76,6 +79,34 @@ export interface FailureConditionContext {
   checkName?: string;
   schema?: string;
   group?: string;
+
+  /** Git context for if conditions */
+  branch?: string;
+  baseBranch?: string;
+  filesChanged?: string[];
+  filesCount?: number;
+  hasChanges?: boolean;
+
+  /** Event context */
+  event?: string;
+
+  /** Environment variables */
+  env?: Record<string, string>;
+
+  /** Utility metadata for backward compatibility */
+  metadata?: {
+    checkName: string;
+    schema: string;
+    group: string;
+    criticalIssues: number;
+    errorIssues: number;
+    warningIssues: number;
+    infoIssues: number;
+    totalIssues: number;
+    hasChanges: boolean;
+    branch: string;
+    event: string;
+  };
 
   /** Debug information (if available) */
   debug?: {

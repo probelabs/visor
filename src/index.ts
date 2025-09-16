@@ -456,7 +456,7 @@ async function postCliReviewComment(
       // Fallback to environment or event data
       latestCommitSha =
         eventContext.event?.pull_request?.head?.sha ||
-        eventContext.payload?.event?.pull_request?.head?.sha ||
+        (eventContext.payload as any)?.pull_request?.head?.sha ||
         process.env.GITHUB_SHA;
     }
 
@@ -780,11 +780,17 @@ async function handlePullRequestEvent(
     // Fall back to a basic configuration for PR auto-review
     config = {
       version: '1.0',
-      output: {},
+      output: {
+        pr_comment: {
+          format: 'markdown' as const,
+          group_by: 'check' as const,
+          collapse: false,
+        },
+      },
       checks: {
         'auto-review': {
           type: 'ai' as const,
-          on: ['pr_opened', 'pr_updated'],
+          on: ['pr_opened', 'pr_updated'] as import('./types/config').EventTrigger[],
           prompt: `Review this pull request comprehensively. Look for security issues, performance problems, code quality, bugs, and suggest improvements. Action: ${action}`,
         },
       },
@@ -892,9 +898,9 @@ async function handlePullRequestEvent(
   setOutput('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
 
   // Set GitHub check run outputs
-  setOutput('checks-api-available', checkResults.checksApiAvailable.toString());
-  setOutput('check-runs-created', checkResults.checkRunsCreated.toString());
-  setOutput('check-runs-urls', checkResults.checkRunUrls.join(','));
+  setOutput('checks-api-available', checkResults?.checksApiAvailable.toString() || 'false');
+  setOutput('check-runs-created', checkResults?.checkRunsCreated.toString() || '0');
+  setOutput('check-runs-urls', checkResults?.checkRunUrls.join(',') || '');
 }
 
 async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Promise<void> {
@@ -1240,6 +1246,7 @@ async function evaluateCheckFailureConditions(
           severity: 'error',
           expression: config.fail_if,
           message: 'Global failure condition met',
+          haltExecution: false,
         });
       }
     } catch (error) {
@@ -1278,6 +1285,7 @@ async function evaluateCheckFailureConditions(
           severity: 'error',
           expression: checkConfig.fail_if,
           message: `Check ${checkName} failure condition met`,
+          haltExecution: false,
         });
       }
     } catch (error) {
@@ -1334,6 +1342,7 @@ async function evaluateGlobalFailureConditions(
           severity: 'error',
           expression: config.fail_if,
           message: 'Global failure condition met',
+          haltExecution: false,
         });
       }
     } catch (error) {

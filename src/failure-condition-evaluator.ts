@@ -150,9 +150,22 @@ export class FailureConditionEvaluator {
         ? Object.fromEntries(Array.from(contextData.previousResults.entries()))
         : {},
 
+      // Required output property (empty for if conditions)
+      output: {
+        issues: [],
+        suggestions: [],
+      },
+
       // Utility metadata
       metadata: {
         checkName,
+        schema: '',
+        group: '',
+        criticalIssues: 0,
+        errorIssues: 0,
+        warningIssues: 0,
+        infoIssues: 0,
+        totalIssues: 0,
         hasChanges: (contextData?.filesChanged?.length || 0) > 0,
         branch: contextData?.branch || 'unknown',
         event: contextData?.event || 'manual',

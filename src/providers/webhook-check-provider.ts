@@ -114,11 +114,11 @@ export class WebhookCheckProvider extends CheckProvider {
         throw new Error(`Webhook returned ${response.status}: ${response.statusText}`);
       }
 
-      return await response.json();
+      return (await response.json()) as Record<string, unknown>;
     } catch (error: unknown) {
       clearTimeout(timeoutId);
 
-      if (error.name === 'AbortError') {
+      if ((error as any)?.name === 'AbortError') {
         throw new Error(`Webhook request timed out after ${timeout}ms`);
       }
 
@@ -134,15 +134,15 @@ export class WebhookCheckProvider extends CheckProvider {
 
     const issues: ReviewIssue[] = Array.isArray(response.comments)
       ? (response.comments as Array<Record<string, unknown>>).map(c => ({
-          file: c.file || 'unknown',
-          line: c.line || 0,
-          endLine: c.endLine,
-          ruleId: c.ruleId || `webhook/${this.validateCategory(c.category)}`,
-          message: c.message || '',
+          file: (c.file as string) || 'unknown',
+          line: (c.line as number) || 0,
+          endLine: c.endLine as number | undefined,
+          ruleId: (c.ruleId as string) || `webhook/${this.validateCategory(c.category)}`,
+          message: (c.message as string) || '',
           severity: this.validateSeverity(c.severity),
           category: this.validateCategory(c.category),
-          suggestion: c.suggestion,
-          replacement: c.replacement,
+          suggestion: c.suggestion as string | undefined,
+          replacement: c.replacement as string | undefined,
         }))
       : [];
 
@@ -173,18 +173,18 @@ export class WebhookCheckProvider extends CheckProvider {
     };
   }
 
-  private validateSeverity(severity: string): 'info' | 'warning' | 'error' | 'critical' {
+  private validateSeverity(severity: unknown): 'info' | 'warning' | 'error' | 'critical' {
     const valid = ['info', 'warning', 'error', 'critical'];
-    return valid.includes(severity)
+    return valid.includes(severity as string)
       ? (severity as 'info' | 'warning' | 'error' | 'critical')
       : 'info';
   }
 
   private validateCategory(
-    category: string
+    category: unknown
   ): 'security' | 'performance' | 'style' | 'logic' | 'documentation' {
     const valid = ['security', 'performance', 'style', 'logic', 'documentation'];
-    return valid.includes(category)
+    return valid.includes(category as string)
       ? (category as 'security' | 'performance' | 'style' | 'logic' | 'documentation')
       : 'logic';
   }

@@ -48,6 +48,10 @@ export interface AIDebugInfo {
   schema?: string;
   /** Schema name/type requested */
   schemaName?: string;
+  /** Checks executed during this review */
+  checksExecuted?: string[];
+  /** Whether parallel execution was used */
+  parallelExecution?: boolean;
   /** Timestamp when request was made */
   timestamp: string;
   /** Total API calls made */
