@@ -156,8 +156,8 @@ jobs:
             ### 📊 Statistics
             - $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
             - Generated automatically from git history
-END_NOTES
-)
+            END_NOTES
+            )
           else
             echo "✅ Successfully generated AI release notes"
           fi
