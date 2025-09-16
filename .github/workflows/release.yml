@@ -82,7 +82,7 @@ jobs:
           echo "🎉 Successfully published @probelabs/visor@${GITHUB_REF#refs/tags/v} to npm!"
           echo "📦 Install with: npx -y @probelabs/visor"
 
-  # GitHub Release creation - runs on tags or manual dispatch
+  # GitHub Release creation with AI-generated notes
   create-release:
     runs-on: ubuntu-latest
     permissions:
@@ -91,6 +91,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0  # Need full history for git log
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies and build
+        run: |
+          npm ci
+          npm run build
 
       - name: Set version variables
         run: |
@@ -103,6 +116,57 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "📋 Processing release for ${TAG_NAME}"
+
+      - name: Generate AI release notes
+        id: release-notes
+        run: |
+          echo "🤖 Generating AI-powered release notes..."
+
+          # Get previous tag for comparison
+          PREV_TAG=$(git describe --tags --abbrev=0 ${TAG_NAME}^ 2>/dev/null || echo "")
+
+          # Get commits and diff stats since last tag
+          if [ -n "$PREV_TAG" ]; then
+            GIT_LOG=$(git log --oneline --no-merges ${PREV_TAG}..${TAG_NAME} 2>/dev/null || git log --oneline --no-merges ${TAG_NAME})
+            GIT_DIFF_STAT=$(git diff --stat ${PREV_TAG}..${TAG_NAME} 2>/dev/null || git diff --stat $(git hash-object -t tree /dev/null)..${TAG_NAME})
+            echo "📊 Found $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG}"
+          else
+            GIT_LOG=$(git log --oneline --no-merges ${TAG_NAME})
+            GIT_DIFF_STAT=$(git diff --stat $(git hash-object -t tree /dev/null)..${TAG_NAME})
+            echo "📊 Found $(echo "$GIT_LOG" | wc -l) commits (first release)"
+          fi
+
+          # Generate release notes with Visor AI
+          RELEASE_NOTES=$(TAG_NAME=${{ env.TAG_NAME }} \
+            GIT_LOG="$GIT_LOG" \
+            GIT_DIFF_STAT="$GIT_DIFF_STAT" \
+            timeout 300 ./dist/cli-main.js --check release-notes --config .visor.yaml --output json 2>/dev/null | \
+            jq -r '.checks[] | select(.checkName == "release-notes") | .output // empty')
+
+          # Fallback if AI generation fails
+          if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "null" ]; then
+            echo "⚠️ AI release notes generation failed, creating fallback notes"
+            RELEASE_NOTES="## 🚀 What's New in ${{ env.TAG_NAME }}
+
+### 📝 Changes
+$(echo "$GIT_LOG" | sed 's/^/- /')
+
+### 📊 Statistics
+- $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
+- Generated automatically from git history"
+          else
+            echo "✅ Successfully generated AI release notes"
+          fi
+
+          # Save to GitHub output (handle multiline properly)
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2.3.3
@@ -113,18 +177,18 @@ jobs:
           draft: false
           prerelease: ${{ github.event.inputs.prerelease || contains(env.VERSION, '-beta') || contains(env.VERSION, '-alpha') || contains(env.VERSION, '-rc') }}
           body: |
-            ## What's Changed
+            ${{ steps.release-notes.outputs.RELEASE_NOTES }}
 
-            See auto-generated release notes below.
+            ---
+
+            ## 📋 Installation & Usage
 
             ### Using Visor as a GitHub Action
-
             ```yaml
             - uses: ${{ github.repository }}@${{ env.TAG_NAME }}
             ```
 
             ### Using Visor CLI
-
             ```bash
             npx -y @probelabs/visor --check all
             ```
