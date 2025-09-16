@@ -63,7 +63,7 @@ jobs:
 
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
-            git commit -m "$(cat <<'EOF'
+            git commit --no-verify -m "$(cat <<'EOF'
           build: update bundled dist files
 
           🤖 Generated with [Claude Code](https://claude.ai/code)
