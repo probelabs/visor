@@ -123,10 +123,11 @@ The new approach reduces complexity and improves error handling.`,
       isIncremental: false,
     };
 
-    // Execute AI review without schema (since plain schema was removed)
+    // Execute AI review with schema to enable JSON parsing
     const result = await aiService.executeReview(
       mockPrInfo,
-      'Create a comprehensive pull request overview with architecture diagram'
+      'Create a comprehensive pull request overview with architecture diagram',
+      'code-review'
     );
 
     // Verify the AI response was parsed correctly
@@ -289,7 +290,7 @@ Triple backticks in text: \\\`\\\`\\\` should be escaped`,
       isIncremental: false,
     };
 
-    const result = await aiService.executeReview(mockPrInfo, 'Test backticks');
+    const result = await aiService.executeReview(mockPrInfo, 'Test backticks', 'code-review');
 
     expect(result.issues).toHaveLength(1);
     const content = result.issues[0].message;

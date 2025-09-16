@@ -238,7 +238,7 @@ describe('AIReviewService', () => {
         suggestions: ['Add tests'],
       });
 
-      const result = (service as any).parseAIResponse(response);
+      const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(1);
       expect(result.suggestions).toContain('Add tests');
@@ -257,7 +257,7 @@ describe('AIReviewService', () => {
         }) +
         '\n```';
 
-      const result = (service as any).parseAIResponse(response);
+      const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(0);
       expect(result.suggestions).toContain('Code looks good overall');
@@ -293,7 +293,7 @@ describe('AIReviewService', () => {
         suggestions: ['Add input validation', 'Consider adding tests'],
       });
 
-      const result = (service as any).parseAIResponse(response);
+      const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(2);
       expect(result.suggestions).toHaveLength(2);
@@ -332,7 +332,7 @@ describe('AIReviewService', () => {
         ],
       });
 
-      const result = (service as any).parseAIResponse(response);
+      const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues[0].severity).toBe('critical'); // critical preserved
       expect(result.issues[1].severity).toBe('major'); // major preserved as-is
@@ -349,7 +349,7 @@ describe('AIReviewService', () => {
         ],
       });
 
-      const result = (service as any).parseAIResponse(response);
+      const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues[0].category).toBe('bug'); // bug preserved as-is
       expect(result.issues[1].category).toBe('docs'); // docs preserved as-is
@@ -365,7 +365,7 @@ describe('AIReviewService', () => {
       expect(result).toHaveProperty('issues');
       expect(result).toHaveProperty('suggestions');
       expect(result.issues).toEqual([]);
-      expect(result.suggestions[0]).toContain('AI response: Not a JSON response');
+      expect(result.suggestions[0]).toBe('Not a JSON response');
     });
   });
 
