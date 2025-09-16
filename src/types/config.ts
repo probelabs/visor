@@ -120,7 +120,8 @@ export type EventTrigger =
   | 'pr_updated'
   | 'pr_closed'
   | 'issue_opened'
-  | 'issue_comment';
+  | 'issue_comment'
+  | 'manual';
 
 /**
  * Valid output formats

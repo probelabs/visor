@@ -27,6 +27,7 @@ export class ConfigManager {
     'pr_closed',
     'issue_opened',
     'issue_comment',
+    'manual',
   ];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];

@@ -134,12 +134,7 @@ export class EventMapper {
         break;
 
       case 'issue_comment':
-        // Handle both PR comments and issue comments
-        if (eventContext.issue?.pull_request) {
-          return 'pr_updated'; // Treat PR comments as PR updates
-        } else {
-          return 'issue_comment'; // Handle issue comments
-        }
+        return 'issue_comment'; // All issue_comment events remain issue_comment
         break;
 
       case 'pull_request_review':
