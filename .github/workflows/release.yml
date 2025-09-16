@@ -150,8 +150,8 @@ jobs:
           cp action-dist/index.js dist/
           cp action-dist/licenses.txt dist/ 2>/dev/null || true
 
-          # Add bundled files to git
-          git add dist/ action.yml
+          # Add bundled files to git (force add since dist/ is in .gitignore)
+          git add -f dist/ action.yml
 
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
