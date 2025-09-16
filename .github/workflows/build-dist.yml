@@ -1,0 +1,66 @@
+name: Build and Update Dist
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'dist/**'
+  workflow_dispatch:
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Bundle action
+        run: |
+          # Install ncc to bundle the action
+          npm install -g @vercel/ncc
+
+          # Bundle the main action file with all dependencies
+          ncc build dist/index.js -o bundled --license licenses.txt
+
+      - name: Update dist files
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # Copy bundled files to dist/ directory
+          cp bundled/index.js dist/
+          cp bundled/licenses.txt dist/ 2>/dev/null || true
+
+          # Add bundled files to git (force add since dist/ is in .gitignore)
+          git add -f dist/
+
+          # Check if there are changes to commit
+          if ! git diff --cached --quiet; then
+            git commit -m "build: update bundled dist files
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+            git push origin main
+            echo "✅ Bundled files updated"
+          else
+            echo "ℹ️ No changes to dist files"
+          fi
