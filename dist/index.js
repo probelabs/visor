@@ -7783,16 +7783,11 @@ class PRReviewer {
     async formatReviewCommentWithVisorFormat(summary, _options, githubContext) {
         const totalIssues = calculateTotalIssues(summary.issues);
         let comment = '';
-        // Add main header
-        if (totalIssues === 0) {
-            comment += `## ✅ All Checks Passed\n\n**No issues found – changes LGTM.**\n\n`;
-        }
-        else {
-            comment += `## 🔍 Code Analysis Results\n\n`;
-            // Use new schema-template system for content generation
-            const templateContent = await this.renderWithSchemaTemplate(summary, githubContext);
-            comment += templateContent;
-        }
+        // Simple header - let templates handle the content logic
+        comment += `## 🔍 Code Analysis Results\n\n`;
+        // Use template system for all content generation
+        const templateContent = await this.renderWithSchemaTemplate(summary, githubContext);
+        comment += templateContent;
         // Add debug section if available
         if (summary.debug) {
             comment += '\n\n' + this.formatDebugSection(summary.debug);
@@ -7804,20 +7799,24 @@ class PRReviewer {
     }
     async renderWithSchemaTemplate(summary, githubContext) {
         try {
-            // Group issues by check name and render each check separately
-            const issuesByCheck = this.groupIssuesByCheck(summary.issues);
-            if (Object.keys(issuesByCheck).length === 0) {
-                return 'No issues found in this group.';
+            // If we have plain text suggestions (no schema/failed schema), render them directly
+            if (summary.issues.length === 0 && summary.suggestions.length > 0) {
+                return summary.suggestions.join('\n\n');
             }
-            const renderedSections = [];
-            for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
-                const checkSchema = checkIssues[0]?.schema || 'code-review';
-                const customTemplate = checkIssues[0]?.template;
-                const renderedSection = await this.renderSingleCheckTemplate(checkName, checkIssues, checkSchema, customTemplate, githubContext);
-                renderedSections.push(renderedSection);
+            // If we have issues, use templates to render them
+            if (summary.issues.length > 0) {
+                const issuesByCheck = this.groupIssuesByCheck(summary.issues);
+                const renderedSections = [];
+                for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
+                    const checkSchema = checkIssues[0]?.schema || 'code-review';
+                    const customTemplate = checkIssues[0]?.template;
+                    const renderedSection = await this.renderSingleCheckTemplate(checkName, checkIssues, checkSchema, customTemplate, githubContext);
+                    renderedSections.push(renderedSection);
+                }
+                return renderedSections.join('\n\n');
             }
-            // Combine all check sections with proper spacing
-            return renderedSections.join('\n\n');
+            // No issues, no suggestions - let template handle this
+            return await this.renderSingleCheckTemplate('review', [], 'code-review', undefined, githubContext);
         }
         catch (error) {
             console.warn('Failed to render with schema-template system, falling back to old system:', error);
