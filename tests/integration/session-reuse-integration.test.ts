@@ -109,6 +109,7 @@ describe('Session Reuse Integration', () => {
             prompt: 'Analyze code for security vulnerabilities',
             on: ['pr_opened'],
             ai_provider: 'google',
+            schema: 'code-review',
           },
           'security-follow-up': {
             type: 'ai',
@@ -117,6 +118,7 @@ describe('Session Reuse Integration', () => {
             depends_on: ['security-scan'],
             reuse_ai_session: true,
             ai_provider: 'google',
+            schema: 'code-review',
           },
         },
         output: {
@@ -165,6 +167,7 @@ describe('Session Reuse Integration', () => {
             prompt: 'Base analysis',
             on: ['pr_opened'],
             ai_provider: 'google',
+            schema: 'code-review',
           },
           'reuse-check-1': {
             type: 'ai',
@@ -173,6 +176,7 @@ describe('Session Reuse Integration', () => {
             depends_on: ['base-check'],
             reuse_ai_session: true,
             ai_provider: 'google',
+            schema: 'code-review',
           },
           'reuse-check-2': {
             type: 'ai',
@@ -181,6 +185,7 @@ describe('Session Reuse Integration', () => {
             depends_on: ['base-check'],
             reuse_ai_session: true,
             ai_provider: 'google',
+            schema: 'code-review',
           },
         },
         output: {
@@ -269,6 +274,7 @@ describe('Session Reuse Integration', () => {
             type: 'ai',
             prompt: 'Parent check that creates session',
             on: ['pr_opened'],
+            schema: 'code-review',
           },
           'child-check': {
             type: 'ai',
@@ -276,6 +282,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['parent-check'],
             reuse_ai_session: true,
+            schema: 'code-review',
           },
         },
         output: {
@@ -315,6 +322,7 @@ describe('Session Reuse Integration', () => {
             type: 'ai',
             prompt: 'Level 1 analysis',
             on: ['pr_opened'],
+            schema: 'code-review',
           },
           'level-2': {
             type: 'ai',
@@ -322,6 +330,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['level-1'],
             reuse_ai_session: true,
+            schema: 'code-review',
           },
           'level-3': {
             type: 'ai',
@@ -329,6 +338,7 @@ describe('Session Reuse Integration', () => {
             on: ['pr_opened'],
             depends_on: ['level-2'],
             reuse_ai_session: true,
+            schema: 'code-review',
           },
         },
         output: {
