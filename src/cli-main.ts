@@ -99,9 +99,9 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Only validate check types if they came from CLI
-    // Config checks are already valid by definition
-    if (!isUsingConfigChecks) {
+    // Only validate check types if they came from CLI and no custom config is provided
+    // Config checks are already valid by definition, and custom configs may have their own check types
+    if (!isUsingConfigChecks && !cliOptions.configPath) {
       const { invalid: invalidChecks } = CheckExecutionEngine.validateCheckTypes(checksToRun);
 
       if (invalidChecks.length > 0) {
