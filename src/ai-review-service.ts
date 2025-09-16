@@ -189,7 +189,13 @@ export class AIReviewService {
     }
 
     try {
-      const response = await this.callProbeAgent(prompt, schema, debugInfo, _checkName, sessionId);
+      const { response, effectiveSchema } = await this.callProbeAgent(
+        prompt,
+        schema,
+        debugInfo,
+        _checkName,
+        sessionId
+      );
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -198,7 +204,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, schema);
+      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
 
       if (debugInfo) {
         result.debug = debugInfo;
@@ -279,7 +285,7 @@ export class AIReviewService {
 
     try {
       // Use existing agent's answer method instead of creating new agent
-      const response = await this.callProbeAgentWithExistingSession(
+      const { response, effectiveSchema } = await this.callProbeAgentWithExistingSession(
         existingAgent,
         prompt,
         schema,
@@ -294,7 +300,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, schema);
+      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
 
       if (debugInfo) {
         result.debug = debugInfo;
@@ -478,11 +484,12 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     schema?: string,
     debugInfo?: AIDebugInfo,
     _checkName?: string
-  ): Promise<string> {
+  ): Promise<{ response: string; effectiveSchema?: string }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
-      return this.generateMockResponse(prompt);
+      const response = await this.generateMockResponse(prompt);
+      return { response, effectiveSchema: schema };
     }
 
     log('🔄 Reusing existing ProbeAgent session for AI review...');
@@ -494,6 +501,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
+      let effectiveSchema = schema;
+
       if (schema && schema !== 'plain') {
         try {
           schemaString = await this.loadSchemaContent(schema);
@@ -502,6 +511,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
+          effectiveSchema = undefined; // Schema loading failed, treat as no schema
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -530,7 +540,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
-      return response;
+      return { response, effectiveSchema };
     } catch (error) {
       console.error('❌ ProbeAgent session reuse failed:', error);
       throw new Error(
@@ -548,11 +558,12 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     providedSessionId?: string
-  ): Promise<string> {
+  ): Promise<{ response: string; effectiveSchema?: string }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing');
-      return this.generateMockResponse(prompt);
+      const response = await this.generateMockResponse(prompt);
+      return { response, effectiveSchema: schema };
     }
 
     // Create ProbeAgent instance with proper options
@@ -605,6 +616,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
+      let effectiveSchema = schema;
+
       if (schema && schema !== 'plain') {
         try {
           schemaString = await this.loadSchemaContent(schema);
@@ -613,6 +626,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
+          effectiveSchema = undefined; // Schema loading failed, treat as no schema
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -680,7 +694,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
 
-      return response;
+      return { response, effectiveSchema };
     } catch (error) {
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(
@@ -748,13 +762,15 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Handle different schema types differently
       let reviewData: AIResponseFormat;
 
-      // Handle plain schema - no JSON parsing, return response as-is
-      if (_schema === 'plain') {
-        log('📋 Plain schema detected - returning raw response without JSON parsing');
+      // Handle plain schema or no schema - no JSON parsing, return response as-is
+      if (_schema === 'plain' || !_schema) {
+        log(
+          `📋 ${_schema === 'plain' ? 'Plain' : 'No'} schema detected - returning raw response without JSON parsing`
+        );
         return {
           issues: [],
           suggestions: [response.trim()],
-          debug: debugInfo
+          debug: debugInfo,
         };
       }
 
@@ -762,42 +778,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
         log('🔍 Extracting JSON from AI response...');
 
-        // Simple JSON extraction: find first { or [ and last } or ], with {} taking priority
-        let jsonString = response.trim();
-
-        // Find the first occurrence of { or [
-        const firstBrace = jsonString.indexOf('{');
-        const firstBracket = jsonString.indexOf('[');
-
-        let startIndex = -1;
-        let endChar = '';
-
-        // Determine which comes first (or if only one exists), {} takes priority
-        if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-          // Object comes first or only objects exist
-          startIndex = firstBrace;
-          endChar = '}';
-        } else if (firstBracket !== -1) {
-          // Array comes first or only arrays exist
-          startIndex = firstBracket;
-          endChar = ']';
-        }
-
-        if (startIndex !== -1) {
-          // Find the last occurrence of the matching end character
-          const lastEndIndex = jsonString.lastIndexOf(endChar);
-          if (lastEndIndex !== -1 && lastEndIndex > startIndex) {
-            jsonString = jsonString.substring(startIndex, lastEndIndex + 1);
-          }
-        }
-
-        // Parse the extracted JSON
+        // Try direct parsing first - if AI returned pure JSON
         try {
-          reviewData = JSON.parse(jsonString);
-          log('✅ Successfully parsed probe agent JSON response');
+          reviewData = JSON.parse(response.trim());
+          log('✅ Successfully parsed direct JSON response');
           if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } catch (initialError) {
-          log('🔍 Initial parsing failed, trying to extract JSON from response...');
+        } catch {
+          log('🔍 Direct parsing failed, trying to extract JSON from response...');
 
           // If the response starts with "I cannot" or similar, it's likely a refusal
           if (
@@ -813,37 +800,50 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             };
           }
 
-          // Try to find JSON within the response
-          const jsonMatches = response.match(/\{[\s\S]*\}/g);
-          if (jsonMatches && jsonMatches.length > 0) {
-            log('🔧 Found potential JSON in response, attempting to parse...');
-            // Try the largest JSON-like string (likely the complete response)
-            const largestJson = jsonMatches.reduce((a, b) => (a.length > b.length ? a : b));
-            log('🔧 Attempting to parse extracted JSON...');
-            reviewData = JSON.parse(largestJson);
-            log('✅ Successfully parsed extracted JSON');
-            if (debugInfo) debugInfo.jsonParseSuccess = true;
-          } else {
-            // Check if response is plain text and doesn't contain structured data
-            if (!response.includes('{') && !response.includes('}')) {
-              log('🔧 Plain text response detected, creating structured fallback...');
+          // Try to extract JSON using improved method with proper bracket matching
+          const jsonString = this.extractJsonFromResponse(response);
 
-              const isNoChanges =
-                response.toLowerCase().includes('no') &&
-                (response.toLowerCase().includes('changes') ||
-                  response.toLowerCase().includes('code'));
+          if (jsonString) {
+            try {
+              reviewData = JSON.parse(jsonString);
+              log('✅ Successfully parsed extracted JSON');
+              if (debugInfo) debugInfo.jsonParseSuccess = true;
+            } catch {
+              log('🔧 Extracted JSON parsing failed, falling back to plain text handling...');
 
-              reviewData = {
-                issues: [],
-                suggestions: isNoChanges
-                  ? ['No code changes detected in this analysis']
-                  : [
-                      `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
-                    ],
-              };
-            } else {
-              throw initialError;
+              // Check if response is plain text and doesn't contain structured data
+              if (!response.includes('{') && !response.includes('}')) {
+                log('🔧 Plain text response detected, creating structured fallback...');
+
+                const isNoChanges =
+                  response.toLowerCase().includes('no') &&
+                  (response.toLowerCase().includes('changes') ||
+                    response.toLowerCase().includes('code'));
+
+                reviewData = {
+                  issues: [],
+                  suggestions: isNoChanges
+                    ? ['No code changes detected in this analysis']
+                    : [
+                        `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
+                      ],
+                };
+              } else {
+                // Fallback: treat the entire response as a suggestion
+                log('🔧 Creating fallback response from non-JSON content...');
+                reviewData = {
+                  issues: [],
+                  suggestions: [response.trim()],
+                };
+              }
             }
+          } else {
+            // No JSON found at all - treat as plain text response
+            log('🔧 No JSON found in response, treating as plain text...');
+            reviewData = {
+              issues: [],
+              suggestions: [response.trim()],
+            };
           }
         }
       }
@@ -935,6 +935,80 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         `Invalid AI response format: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Extract JSON from a response that might contain surrounding text
+   * Uses proper bracket matching to find valid JSON objects or arrays
+   */
+  private extractJsonFromResponse(response: string): string | null {
+    const text = response.trim();
+
+    // Try to find JSON objects first (higher priority)
+    let bestJson = this.findJsonWithBracketMatching(text, '{', '}');
+
+    // If no object found, try arrays
+    if (!bestJson) {
+      bestJson = this.findJsonWithBracketMatching(text, '[', ']');
+    }
+
+    return bestJson;
+  }
+
+  /**
+   * Find JSON with proper bracket matching to avoid false positives
+   */
+  private findJsonWithBracketMatching(
+    text: string,
+    openChar: string,
+    closeChar: string
+  ): string | null {
+    const firstIndex = text.indexOf(openChar);
+    if (firstIndex === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+
+    for (let i = firstIndex; i < text.length; i++) {
+      const char = text[i];
+
+      if (escaping) {
+        escaping = false;
+        continue;
+      }
+
+      if (char === '\\' && inString) {
+        escaping = true;
+        continue;
+      }
+
+      if (char === '"' && !escaping) {
+        inString = !inString;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === openChar) {
+          depth++;
+        } else if (char === closeChar) {
+          depth--;
+          if (depth === 0) {
+            // Found matching closing bracket
+            const candidate = text.substring(firstIndex, i + 1);
+            try {
+              JSON.parse(candidate); // Validate it's actually valid JSON
+              return candidate;
+            } catch {
+              // This wasn't valid JSON, keep looking
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
