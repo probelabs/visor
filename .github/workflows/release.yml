@@ -148,14 +148,14 @@ jobs:
           if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "null" ]; then
             echo "⚠️ AI release notes generation failed, creating fallback notes"
             RELEASE_NOTES=$(cat << 'END_NOTES'
-## 🚀 What's New in ${{ env.TAG_NAME }}
+            ## 🚀 What's New in ${{ env.TAG_NAME }}
 
-### 📝 Changes
-$(echo "$GIT_LOG" | sed 's/^/- /')
+            ### 📝 Changes
+            $(echo "$GIT_LOG" | sed 's/^/- /')
 
-### 📊 Statistics
-- $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
-- Generated automatically from git history
+            ### 📊 Statistics
+            - $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
+            - Generated automatically from git history
 END_NOTES
 )
           else
