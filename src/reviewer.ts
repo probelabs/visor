@@ -138,9 +138,10 @@ export class PRReviewer {
   ): Promise<void> {
     // Group issues by their group property
     const issuesByGroup = this.groupIssuesByGroup(summary.issues);
+    const groupNames = Object.keys(issuesByGroup);
 
     // If no groups or only one group, still use consistent group-based comment IDs
-    if (Object.keys(issuesByGroup).length <= 1) {
+    if (groupNames.length <= 1) {
       const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
         owner,
         repo,
@@ -150,7 +151,7 @@ export class PRReviewer {
 
       // Use consistent group-based comment ID even for single group
       const baseCommentId = options.commentId || 'visor-review';
-      const groupName = Object.keys(issuesByGroup)[0] || 'default';
+      const groupName = groupNames[0] || 'default';
       const consistentCommentId = `${baseCommentId}-${groupName}`;
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
@@ -243,16 +244,41 @@ export class PRReviewer {
         const renderedSections: string[] = [];
 
         for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
-          const checkSchema = checkIssues[0]?.schema || 'code-review';
+          // Check for explicit schema first
+          const checkSchema = checkIssues[0]?.schema;
           const customTemplate = checkIssues[0]?.template;
-          const renderedSection = await this.renderSingleCheckTemplate(
-            checkName,
-            checkIssues,
-            checkSchema,
-            customTemplate,
-            githubContext
-          );
-          renderedSections.push(renderedSection);
+
+          if (checkSchema) {
+            const renderedSection = await this.renderSingleCheckTemplate(
+              checkName,
+              checkIssues,
+              checkSchema,
+              customTemplate,
+              githubContext
+            );
+            renderedSections.push(renderedSection);
+          } else {
+            // No schema defined - check if this is a raw content response (single info issue with no file)
+            const isRawContent = checkIssues.length === 1 &&
+                                checkIssues[0].severity === 'info' &&
+                                !checkIssues[0].file &&
+                                checkIssues[0].message;
+
+            if (isRawContent) {
+              const rawContent = checkIssues[0].message;
+              renderedSections.push(rawContent);
+            } else {
+              // Regular structured issues without schema - use code-review template as fallback
+              const renderedSection = await this.renderSingleCheckTemplate(
+                checkName,
+                checkIssues,
+                'code-review',
+                customTemplate,
+                githubContext
+              );
+              renderedSections.push(renderedSection);
+            }
+          }
         }
 
         return renderedSections.join('\n\n');
