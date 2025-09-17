@@ -292,7 +292,9 @@ describe('PRReviewer', () => {
         parallelExecution: false,
       });
 
-      expect((detailedReview.issues || []).length).toBeGreaterThanOrEqual((summaryReview.issues || []).length);
+      expect((detailedReview.issues || []).length).toBeGreaterThanOrEqual(
+        (summaryReview.issues || []).length
+      );
     });
 
     test('should detect large file changes', async () => {
@@ -375,7 +377,9 @@ describe('PRReviewer', () => {
         parallelExecution: false,
       });
 
-      const testSuggestion = (review.suggestions || []).find(s => s.includes('Great job including tests'));
+      const testSuggestion = (review.suggestions || []).find(s =>
+        s.includes('Great job including tests')
+      );
       expect(testSuggestion).toBeDefined();
     });
   });

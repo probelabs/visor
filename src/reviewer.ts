@@ -126,21 +126,56 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
-    const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
-      owner,
-      repo,
-      prNumber,
-      commitSha: options.commitSha,
-    });
+    // Group issues by group field if present
+    const issuesByGroup = this.groupIssuesByGroup(summary.issues || []);
 
-    const commentId = options.commentId || 'visor-review-default';
+    // If there are multiple groups, create separate comments for each
+    if (Object.keys(issuesByGroup).length > 1) {
+      for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
+        const groupSummary: ReviewSummary = {
+          ...summary,
+          issues: groupIssues,
+          // Only include suggestions for the default group
+          suggestions: groupName === 'default' ? summary.suggestions : undefined,
+        };
 
-    await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-      commentId,
-      triggeredBy: options.triggeredBy || 'unknown',
-      allowConcurrentUpdates: false,
-      commitSha: options.commitSha,
-    });
+        const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
+          owner,
+          repo,
+          prNumber,
+          commitSha: options.commitSha,
+        });
+
+        const commentId =
+          groupName === 'default'
+            ? options.commentId || 'visor-review-default'
+            : `visor-review-${groupName}`;
+
+        await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+          commentId,
+          triggeredBy: options.triggeredBy || 'unknown',
+          allowConcurrentUpdates: false,
+          commitSha: options.commitSha,
+        });
+      }
+    } else {
+      // Single group or no groups - create one comment
+      const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
+        owner,
+        repo,
+        prNumber,
+        commitSha: options.commitSha,
+      });
+
+      const commentId = options.commentId || 'visor-review-default';
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
+      });
+    }
   }
 
   private async formatReviewCommentWithVisorFormat(
@@ -273,6 +308,18 @@ export class PRReviewer {
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     return rendered.trim();
+  }
+
+  private groupIssuesByGroup(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
+    const grouped: Record<string, ReviewIssue[]> = {};
+    for (const issue of issues) {
+      const groupName = issue.group || 'default';
+      if (!grouped[groupName]) {
+        grouped[groupName] = [];
+      }
+      grouped[groupName].push(issue);
+    }
+    return grouped;
   }
 
   private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
@@ -422,9 +469,27 @@ export class PRReviewer {
     if (config.content) {
       return config.content;
     } else if (config.file) {
-      return await fs.readFile(config.file, 'utf-8');
+      // Security validation for file paths - normalize and check for traversal
+      const normalizedPath = path.normalize(config.file);
+      if (
+        normalizedPath.includes('..') ||
+        normalizedPath.startsWith('../') ||
+        normalizedPath.includes('/../')
+      ) {
+        throw new Error('path traversal detected');
+      }
+
+      if (!config.file.endsWith('.liquid')) {
+        throw new Error('must have .liquid extension');
+      }
+
+      try {
+        return await fs.readFile(config.file, 'utf-8');
+      } catch (error) {
+        throw new Error(`Failed to load custom template: ${(error as Error).message}`);
+      }
     } else {
-      throw new Error('Custom template must specify either content or file path');
+      throw new Error('Custom template must specify either "file" or "content"');
     }
   }
 }
