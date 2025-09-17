@@ -650,11 +650,8 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     return;
   }
 
-  // Only process PR comments (issues with pull_request key are PRs)
-  if (!issue.pull_request) {
-    console.log('Comment is not on a pull request');
-    return;
-  }
+  // Process comments on both issues and PRs
+  // (issue.pull_request exists for PR comments, doesn't exist for issue comments)
 
   // Load configuration to get available commands
   const configManager = new ConfigManager();
