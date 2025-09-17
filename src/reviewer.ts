@@ -244,11 +244,18 @@ export class PRReviewer {
         const renderedSections: string[] = [];
 
         for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
-          // Check for explicit schema first
           const checkSchema = checkIssues[0]?.schema;
           const customTemplate = checkIssues[0]?.template;
 
-          if (checkSchema) {
+          // Handle plain schema or no schema - render raw content directly
+          if (!checkSchema || checkSchema === 'plain') {
+            // For plain schema or no schema, render the first issue's message as raw content
+            const rawContent = checkIssues[0]?.message || '';
+            if (rawContent) {
+              renderedSections.push(rawContent);
+            }
+          } else {
+            // Use the specified schema template
             const renderedSection = await this.renderSingleCheckTemplate(
               checkName,
               checkIssues,
@@ -257,27 +264,6 @@ export class PRReviewer {
               githubContext
             );
             renderedSections.push(renderedSection);
-          } else {
-            // No schema defined - check if this is a raw content response (single info issue with no file)
-            const isRawContent = checkIssues.length === 1 &&
-                                checkIssues[0].severity === 'info' &&
-                                !checkIssues[0].file &&
-                                checkIssues[0].message;
-
-            if (isRawContent) {
-              const rawContent = checkIssues[0].message;
-              renderedSections.push(rawContent);
-            } else {
-              // Regular structured issues without schema - use code-review template as fallback
-              const renderedSection = await this.renderSingleCheckTemplate(
-                checkName,
-                checkIssues,
-                'code-review',
-                customTemplate,
-                githubContext
-              );
-              renderedSections.push(renderedSection);
-            }
           }
         }
 
