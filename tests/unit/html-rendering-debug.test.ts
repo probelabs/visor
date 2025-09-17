@@ -130,30 +130,34 @@ describe('HTML Rendering Debug', () => {
           message: '## PR Overview\n\nThis PR adds new security features.',
           severity: 'info' as const,
           category: 'documentation' as const,
-          group: 'pr-overview',
+          group: 'overview',
           schema: 'plain',
         },
       ],
       suggestions: [
-        '[security] Consider adding input validation',
-        '[full-review] Update documentation',
+        '[overview] This is overview analysis with detailed insights about the PR',
       ],
     };
 
     await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
-    // Should create 1 single comment with all content combined
-    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(1);
+    // Should create 2 separate comments for different groups
+    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(2);
 
-    const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
+    const call1 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
+    const call2 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[1][0];
 
-    console.log('=== COMBINED COMMENT (should have both code-review table and pr-overview) ===');
-    console.log(callArgs.body);
+    console.log('=== FIRST COMMENT (should be code-review) ===');
+    console.log(call1.body);
+    console.log('=== SECOND COMMENT (should be overview) ===');
+    console.log(call2.body);
     console.log('=== END ===');
 
-    // Should have both table format and markdown overview
-    const hasTable = callArgs.body.includes('<table>');
-    const hasMarkdown = callArgs.body.includes('## PR Overview');
+    // One should be table format, other should be markdown
+    const hasTable = call1.body.includes('<table>') || call2.body.includes('<table>');
+    const hasMarkdown =
+      call1.body.includes('## PR Overview') || call2.body.includes('## PR Overview') ||
+      call1.body.includes('overview analysis') || call2.body.includes('overview analysis');
 
     expect(hasTable).toBe(true);
     expect(hasMarkdown).toBe(true);

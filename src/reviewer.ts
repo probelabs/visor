@@ -126,23 +126,29 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
-    // For now, create a single comment with all content
-    // TODO: Implement proper group-based comment separation when needed
-    const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
-      owner,
-      repo,
-      prNumber,
-      commitSha: options.commitSha,
-    });
+    // Group issues and suggestions by their group property
+    const groupedResults = this.groupResultsByGroup(summary);
 
-    const commentId = options.commentId || 'visor-review-default';
+    // Post separate comments for each group
+    for (const [groupName, groupSummary] of Object.entries(groupedResults)) {
+      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
+        owner,
+        repo,
+        prNumber,
+        commitSha: options.commitSha,
+      });
 
-    await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-      commentId,
-      triggeredBy: options.triggeredBy || 'unknown',
-      allowConcurrentUpdates: false,
-      commitSha: options.commitSha,
-    });
+      const commentId = options.commentId
+        ? `${options.commentId}-${groupName}`
+        : `visor-review-${groupName}`;
+
+      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+        commentId,
+        triggeredBy: options.triggeredBy || 'unknown',
+        allowConcurrentUpdates: false,
+        commitSha: options.commitSha,
+      });
+    }
   }
 
   private async formatReviewCommentWithVisorFormat(
@@ -289,6 +295,58 @@ export class PRReviewer {
       }
       grouped[groupName].push(issue);
     }
+    return grouped;
+  }
+
+  private groupResultsByGroup(summary: ReviewSummary): Record<string, ReviewSummary> {
+    const grouped: Record<string, ReviewSummary> = {};
+
+    // Group issues by their group property
+    if (summary.issues && summary.issues.length > 0) {
+      for (const issue of summary.issues) {
+        const groupName = issue.group || 'code-review';
+        if (!grouped[groupName]) {
+          grouped[groupName] = { issues: [], suggestions: [] };
+        }
+        grouped[groupName].issues!.push(issue);
+      }
+    }
+
+    // Group suggestions by checking if they have group prefixes
+    if (summary.suggestions && summary.suggestions.length > 0) {
+      for (const suggestion of summary.suggestions) {
+        // Check if suggestion has a group prefix like "[overview] content"
+        const groupMatch = suggestion.match(/^\[([^\]]+)\]\s*(.*)/s);
+        if (groupMatch) {
+          const groupName = groupMatch[1];
+          const content = groupMatch[2];
+          if (!grouped[groupName]) {
+            grouped[groupName] = { issues: [], suggestions: [] };
+          }
+          grouped[groupName].suggestions!.push(content);
+        } else {
+          // No group prefix, put in default group
+          const groupName = 'code-review';
+          if (!grouped[groupName]) {
+            grouped[groupName] = { issues: [], suggestions: [] };
+          }
+          grouped[groupName].suggestions!.push(suggestion);
+        }
+      }
+    }
+
+    // Include debug info in all groups (if present)
+    if (summary.debug) {
+      for (const groupSummary of Object.values(grouped)) {
+        groupSummary.debug = summary.debug;
+      }
+    }
+
+    // If no groups were created, create a default one
+    if (Object.keys(grouped).length === 0) {
+      grouped['code-review'] = { issues: [], suggestions: [] };
+    }
+
     return grouped;
   }
 
