@@ -49,7 +49,6 @@ checks:
 
       Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
       Use present tense and action-oriented language. Group similar changes together.
-    on: [pr_opened]
 
   # Security analysis - Critical for all projects
   security:
