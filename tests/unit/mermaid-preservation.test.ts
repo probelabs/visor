@@ -95,12 +95,12 @@ The implementation follows security best practices and includes proper error han
       // Verify the AI response was parsed correctly (should have no issues since no schema)
       expect(result.issues).toHaveLength(0);
       expect(result.suggestions).toHaveLength(1);
-      expect(result.suggestions[0]).toContain('```mermaid');
-      expect(result.suggestions[0]).toContain('graph TD');
-      expect(result.suggestions[0]).toContain('A[Client Request] --> B[Auth Middleware]');
+      expect(result.suggestions![0]).toContain('```mermaid');
+      expect(result.suggestions![0]).toContain('graph TD');
+      expect(result.suggestions![0]).toContain('A[Client Request] --> B[Auth Middleware]');
 
       // Verify Mermaid diagram is preserved in the suggestion content
-      const suggestionContent = result.suggestions[0];
+      const suggestionContent = result.suggestions![0];
       expect(suggestionContent).toContain('```mermaid');
       expect(suggestionContent).toContain('graph TD');
       expect(suggestionContent).toContain('A[Client Request] --> B[Auth Middleware]');
@@ -184,7 +184,7 @@ Both diagrams show the system architecture and data relationships.`,
       );
 
       // Verify both Mermaid diagrams are preserved
-      const content = result.suggestions[0];
+      const content = result.suggestions![0];
       const mermaidBlocks = content.match(/```mermaid[\s\S]*?```/g);
       expect(mermaidBlocks).toHaveLength(2);
 
@@ -250,7 +250,7 @@ The flow includes error handling and logging.`,
         'code-review'
       );
 
-      const content = result.suggestions[0];
+      const content = result.suggestions![0];
 
       // Verify complex Mermaid syntax is preserved (now in structured response)
       expect(content).toContain('```mermaid');
@@ -320,9 +320,9 @@ The flow includes error handling and logging.`,
 
       // Verify Mermaid diagrams in issue messages are preserved
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toContain('```mermaid');
-      expect(result.issues[0].message).toContain('graph TD');
-      expect(result.issues[0].message).toContain('A --> B');
+      expect(result.issues![0].message).toContain('```mermaid');
+      expect(result.issues![0].message).toContain('graph TD');
+      expect(result.issues![0].message).toContain('A --> B');
     });
   });
 });

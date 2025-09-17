@@ -150,9 +150,9 @@ describe('AIReviewService', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.suggestions).toContain('Fix SQL injection vulnerability');
-      expect(result.issues[0].message).toBe('SQL injection risk');
-      expect(result.issues[0].suggestion).toBe('Use parameterized queries');
-      expect(result.issues[0].replacement).toContain('db.query');
+      expect(result.issues![0].message).toBe('SQL injection risk');
+      expect(result.issues![0].suggestion).toBe('Use parameterized queries');
+      expect(result.issues![0].replacement).toContain('db.query');
       expect(MockedProbeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           promptType: 'code-review-template',

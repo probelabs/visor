@@ -502,7 +502,7 @@ export class FailureConditionEvaluator {
 
     const context: FailureConditionContext = {
       output: {
-        issues: issues.map(issue => ({
+        issues: (issues || []).map(issue => ({
           file: issue.file,
           line: issue.line,
           endLine: issue.endLine,

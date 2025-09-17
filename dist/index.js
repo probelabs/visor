@@ -1203,7 +1203,7 @@ async function handlePullRequestVisorMode(inputs, _context, octokit, _authType) 
         });
         console.log('✅ Posted Visor config-based review comment');
         // Check for API errors in the review issues
-        const apiErrors = review.issues.filter(issue => issue.file === 'system' &&
+        const apiErrors = (review.issues || []).filter(issue => issue.file === 'system' &&
             issue.severity === 'critical' &&
             (issue.message.includes('API rate limit') ||
                 issue.message.includes('403') ||

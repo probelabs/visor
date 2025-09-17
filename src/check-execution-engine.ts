@@ -366,7 +366,7 @@ export class CheckExecutionEngine {
         const result = await provider.execute(prInfo, providerConfig);
 
         // Prefix issues with check name for consistent grouping
-        const prefixedIssues = result.issues.map(issue => ({
+        const prefixedIssues = (result.issues || []).map(issue => ({
           ...issue,
           ruleId: `${checks[0]}/${issue.ruleId}`,
         }));
@@ -408,7 +408,7 @@ export class CheckExecutionEngine {
       const result = await provider.execute(prInfo, providerConfig);
 
       // Prefix issues with check name for consistent grouping
-      const prefixedIssues = result.issues.map(issue => ({
+      const prefixedIssues = (result.issues || []).map(issue => ({
         ...issue,
         ruleId: `${checkName}/${issue.ruleId}`,
       }));
@@ -680,10 +680,12 @@ export class CheckExecutionEngine {
             dependencyResults,
             sessionInfo
           );
-          log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
+          log(
+            `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
+          );
 
           // Add group, schema, template info and timestamp to issues from config
-          const enrichedIssues = result.issues.map(issue => ({
+          const enrichedIssues = (result.issues || []).map(issue => ({
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
@@ -770,7 +772,7 @@ export class CheckExecutionEngine {
 
           if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
             // Check for issues that should trigger fail-fast
-            const hasFailuresToReport = result.value.result.issues.some(
+            const hasFailuresToReport = (result.value.result.issues || []).some(
               issue => issue.severity === 'error' || issue.severity === 'critical'
             );
 
@@ -909,11 +911,11 @@ export class CheckExecutionEngine {
 
         const result = await provider.execute(prInfo, providerConfig);
         console.error(
-          `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
+          `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
         );
 
         // Add group, schema info and timestamp to issues from config
-        const enrichedIssues = result.issues.map(issue => ({
+        const enrichedIssues = (result.issues || []).map(issue => ({
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
           group: checkConfig.group,
@@ -1007,7 +1009,7 @@ export class CheckExecutionEngine {
     const result = await provider.execute(prInfo, providerConfig);
 
     // Prefix issues with check name and add group/schema info and timestamp from config
-    const prefixedIssues = result.issues.map(issue => ({
+    const prefixedIssues = (result.issues || []).map(issue => ({
       ...issue,
       ruleId: `${checkName}/${issue.ruleId}`,
       group: checkConfig.group,
@@ -1076,7 +1078,7 @@ export class CheckExecutionEngine {
         }
 
         // Check if this was a successful result
-        const hasErrors = result.issues.some(
+        const hasErrors = (result.issues || []).some(
           issue => issue.ruleId?.includes('/error') || issue.ruleId?.includes('/promise-error')
         );
 
@@ -1084,15 +1086,15 @@ export class CheckExecutionEngine {
           debugInfo.push(`❌ Check "${checkName}" failed with errors`);
         } else {
           debugInfo.push(
-            `✅ Check "${checkName}" completed: ${result.issues.length} issues found (level ${executionGroup.level})`
+            `✅ Check "${checkName}" completed: ${(result.issues || []).length} issues found (level ${executionGroup.level})`
           );
         }
 
         // Issues are already prefixed and enriched with group/schema info
-        aggregatedIssues.push(...result.issues);
+        aggregatedIssues.push(...(result.issues || []));
 
         // Add suggestions with check name prefix
-        const prefixedSuggestions = result.suggestions.map(
+        const prefixedSuggestions = (result.suggestions || []).map(
           suggestion => `[${checkName}] ${suggestion}`
         );
         aggregatedSuggestions.push(...prefixedSuggestions);
@@ -1219,17 +1221,17 @@ export class CheckExecutionEngine {
         } else if (checkResult.result) {
           successfulChecks++;
           console.error(
-            `🔧 Debug: Check ${checkName} succeeded with ${checkResult.result.issues.length} issues`
+            `🔧 Debug: Check ${checkName} succeeded with ${(checkResult.result.issues || []).length} issues`
           );
           debugInfo.push(
-            `✅ Check "${checkName}" completed: ${checkResult.result.issues.length} issues found`
+            `✅ Check "${checkName}" completed: ${(checkResult.result.issues || []).length} issues found`
           );
 
           // Issues are already prefixed and enriched with group/schema info
-          aggregatedIssues.push(...checkResult.result.issues);
+          aggregatedIssues.push(...(checkResult.result.issues || []));
 
           // Add suggestions with check name prefix
-          const prefixedSuggestions = checkResult.result.suggestions.map(
+          const prefixedSuggestions = (checkResult.result.suggestions || []).map(
             suggestion => `[${checkName}] ${suggestion}`
           );
           aggregatedSuggestions.push(...prefixedSuggestions);
@@ -1536,7 +1538,7 @@ export class CheckExecutionEngine {
 
     // If the result has a result with critical or error issues, it should fail fast
     if (result?.result?.issues) {
-      return result.result.issues.some(
+      return (result.result.issues || []).some(
         (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
       );
     }

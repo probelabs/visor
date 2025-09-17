@@ -191,7 +191,7 @@ describe('AIReviewService Session Reuse', () => {
       );
 
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toBe('Schema test response');
+      expect(result.issues![0].message).toBe('Schema test response');
 
       mockLoadSchemaContent.mockRestore();
     });
@@ -212,8 +212,8 @@ describe('AIReviewService Session Reuse', () => {
       );
 
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].ruleId).toBe('system/ai-session-reuse-error');
-      expect(result.issues[0].message).toContain('AI service error');
+      expect(result.issues![0].ruleId).toBe('system/ai-session-reuse-error');
+      expect(result.issues![0].message).toContain('AI service error');
       expect(result.suggestions).toContain(
         'Check session reuse configuration and ensure parent check completed successfully'
       );

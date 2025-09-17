@@ -219,7 +219,7 @@ import {
           // Use the data briefly
           JSON.stringify({
             cycle,
-            issues: review.issues.length,
+            issues: (review.issues || []).length,
             dataSize: tempAnalysis.largeBuffer.length,
           });
         } catch (error) {

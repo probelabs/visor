@@ -187,7 +187,9 @@ describe('fail_if Integration Tests', () => {
       });
 
       // The result will have issues enriched with check name prefix
-      const criticalIssues = result.reviewSummary.issues.filter(i => i.severity === 'critical');
+      const criticalIssues = (result.reviewSummary.issues || []).filter(
+        i => i.severity === 'critical'
+      );
       expect(criticalIssues.length).toBeGreaterThan(0);
 
       // Evaluate failure conditions
@@ -241,9 +243,11 @@ describe('fail_if Integration Tests', () => {
       });
 
       // Verify we have warning issues
-      const warningIssues = result.reviewSummary.issues.filter(i => i.severity === 'warning');
+      const warningIssues = (result.reviewSummary.issues || []).filter(
+        i => i.severity === 'warning'
+      );
       expect(warningIssues.length).toBeGreaterThan(0);
-      const errorIssues = result.reviewSummary.issues.filter(i => i.severity === 'error');
+      const errorIssues = (result.reviewSummary.issues || []).filter(i => i.severity === 'error');
       expect(errorIssues.length).toBe(0);
 
       // Evaluate failure conditions
@@ -636,7 +640,9 @@ describe('fail_if Integration Tests', () => {
 
       // Combined check should have run after dependencies
       // Since security check has critical issues, combined check should detect them
-      const criticalIssues = result.reviewSummary.issues.filter(i => i.severity === 'critical');
+      const criticalIssues = (result.reviewSummary.issues || []).filter(
+        i => i.severity === 'critical'
+      );
       expect(criticalIssues.length).toBeGreaterThan(0);
 
       // At least we should have the security issue

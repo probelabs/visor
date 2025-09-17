@@ -74,7 +74,7 @@ This is the system design.`,
 
     const result = await aiService.executeReview(mockPrInfo, 'Test', 'plain');
 
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
     console.log('Content with escaped backticks:', content);
 
     // Check if backticks are still escaped (they shouldn't be)
@@ -128,7 +128,7 @@ This is the system design.`,
 
     const result = await aiService.executeReview(mockPrInfo, 'Test', 'plain');
 
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
     console.log('Content after double-decoding:', content);
 
     // Check if content is properly decoded
@@ -177,7 +177,7 @@ This is the system design.`,
 
     const result = await aiService.executeReview(mockPrInfo, 'Test', 'plain');
 
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
     console.log('Content without backticks:', content);
 
     // This would fail as expected - no backticks
@@ -239,7 +239,7 @@ The new approach reduces complexity.`,
 
     const result = await aiService.executeReview(mockPrInfo, 'Create overview', 'plain');
 
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
 
     console.log('=== CRITICAL TEST OUTPUT ===');
     console.log('Raw content from parsing:');

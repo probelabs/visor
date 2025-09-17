@@ -1592,7 +1592,7 @@ async function handlePullRequestVisorMode(
     console.log('✅ Posted Visor config-based review comment');
 
     // Check for API errors in the review issues
-    const apiErrors = review.issues.filter(
+    const apiErrors = (review.issues || []).filter(
       issue =>
         issue.file === 'system' &&
         issue.severity === 'critical' &&

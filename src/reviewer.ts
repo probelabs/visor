@@ -167,15 +167,8 @@ export class PRReviewer {
     summary: ReviewSummary,
     githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    // For suggestions (typically no-schema/plain responses from AI)
-    if (summary.suggestions) {
-      return Array.isArray(summary.suggestions)
-        ? summary.suggestions.join('\n\n')
-        : String(summary.suggestions);
-    }
-
-    // For structured issues response
-    if (summary.issues) {
+    // For structured issues response (prioritize issues over suggestions)
+    if (summary.issues && (summary.issues || []).length > 0) {
       const issues = Array.isArray(summary.issues) ? summary.issues : [];
       const issuesByCheck = this.groupIssuesByCheck(issues);
       const renderedSections: string[] = [];
@@ -205,6 +198,13 @@ export class PRReviewer {
       }
 
       return renderedSections.join('\n\n');
+    }
+
+    // For suggestions (typically no-schema/plain responses from AI)
+    if (summary.suggestions) {
+      return Array.isArray(summary.suggestions)
+        ? summary.suggestions.join('\n\n')
+        : String(summary.suggestions);
     }
 
     // No content to render

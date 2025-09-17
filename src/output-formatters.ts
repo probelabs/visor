@@ -102,7 +102,9 @@ export class OutputFormatters {
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
-            const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+            const issue = (issues || []).find(
+              i => i.file === comment.file && i.line === comment.line
+            );
 
             let messageContent = this.wrapText(comment.message, 55);
 
@@ -184,7 +186,7 @@ export class OutputFormatters {
     }
 
     // Suggestions table
-    if (result.reviewSummary.suggestions.length > 0) {
+    if ((result.reviewSummary.suggestions || []).length > 0) {
       const suggestionsTable = new CliTable3({
         head: ['#', 'Suggestion'],
         colWidths: [5, 70],
@@ -196,7 +198,7 @@ export class OutputFormatters {
 
       output += 'Suggestions\n';
 
-      result.reviewSummary.suggestions.forEach((suggestion, index) => {
+      (result.reviewSummary.suggestions || []).forEach((suggestion, index) => {
         suggestionsTable.push([(index + 1).toString(), this.wrapText(suggestion, 65)]);
       });
 
@@ -265,9 +267,9 @@ export class OutputFormatters {
         totalDeletions: result.repositoryInfo.totalDeletions,
       },
       issues: options.groupByCategory
-        ? this.groupCommentsByCategory(convertIssuesToComments(issues))
-        : issues,
-      suggestions: result.reviewSummary.suggestions,
+        ? this.groupCommentsByCategory(convertIssuesToComments(issues || []))
+        : issues || [],
+      suggestions: result.reviewSummary.suggestions || [],
       files: options.includeFiles ? result.repositoryInfo.files : undefined,
       debug: result.debug, // Include debug information when available
       failureConditions: result.failureConditions || [], // Include failure condition results
@@ -360,7 +362,7 @@ export class OutputFormatters {
     };
 
     // Convert ReviewIssues to SARIF results
-    const sarifResults = issues.map((issue: ReviewIssue, _index: number) => {
+    const sarifResults = (issues || []).map((issue: ReviewIssue, _index: number) => {
       const ruleId = categoryToRuleId[issue.category] || 'visor-logic-complexity';
       const ruleIndex = rules.findIndex(rule => rule.id === ruleId);
 
@@ -442,9 +444,9 @@ export class OutputFormatters {
     output += `- **Changes**: +${result.repositoryInfo.totalAdditions}/-${result.repositoryInfo.totalDeletions}\n\n`;
 
     // Issues
-    if (issues.length > 0) {
+    if ((issues || []).length > 0) {
       if (groupByCategory) {
-        const groupedComments = this.groupCommentsByCategory(convertIssuesToComments(issues));
+        const groupedComments = this.groupCommentsByCategory(convertIssuesToComments(issues || []));
 
         for (const [category, comments] of Object.entries(groupedComments)) {
           if (comments.length === 0) continue;
@@ -454,7 +456,9 @@ export class OutputFormatters {
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
-            const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+            const issue = (issues || []).find(
+              i => i.file === comment.file && i.line === comment.line
+            );
 
             output += `### \`${comment.file}:${comment.line}\`\n`;
             output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
@@ -504,7 +508,9 @@ export class OutputFormatters {
 
             for (const comment of comments.slice(5)) {
               // Convert comment back to issue to access suggestion/replacement fields
-              const issue = issues.find(i => i.file === comment.file && i.line === comment.line);
+              const issue = (issues || []).find(
+                i => i.file === comment.file && i.line === comment.line
+              );
 
               output += `### \`${comment.file}:${comment.line}\`\n`;
               output += `**Severity**: ${comment.severity.toUpperCase()}  \n`;
@@ -554,7 +560,7 @@ export class OutputFormatters {
       } else {
         output += `## All Issues\n\n`;
 
-        for (const issue of issues) {
+        for (const issue of issues || []) {
           output += `### \`${issue.file}:${issue.line}\` (${issue.category})\n`;
           output += `**Severity**: ${issue.severity.toUpperCase()}  \n`;
           output += `**Message**: ${issue.message}  \n`;
@@ -603,10 +609,10 @@ export class OutputFormatters {
     }
 
     // Suggestions
-    if (result.reviewSummary.suggestions.length > 0) {
+    if ((result.reviewSummary.suggestions || []).length > 0) {
       output += `## Recommendations\n\n`;
 
-      result.reviewSummary.suggestions.forEach((suggestion, index) => {
+      (result.reviewSummary.suggestions || []).forEach((suggestion, index) => {
         output += `${index + 1}. ${suggestion}\n`;
       });
       output += '\n';

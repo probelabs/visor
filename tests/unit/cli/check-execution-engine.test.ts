@@ -324,7 +324,7 @@ describe('CheckExecutionEngine', () => {
 
       expect(result.repositoryInfo.isGitRepository).toBe(false);
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues[0].message).toContain('Not a git repository');
+      expect(result.reviewSummary.issues![0].message).toContain('Not a git repository');
       expect(mockReviewer.reviewPR).not.toHaveBeenCalled();
     });
 
@@ -338,9 +338,9 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues[0].message).toBe('Git command failed');
-      expect(result.reviewSummary.issues[0].severity).toBe('error');
-      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
+      expect(result.reviewSummary.issues![0].message).toBe('Git command failed');
+      expect(result.reviewSummary.issues![0].severity).toBe('error');
+      expect(result.reviewSummary.issues![0].ruleId).toBe('system/error');
     });
 
     it('should handle reviewer errors', async () => {
@@ -353,8 +353,8 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues[0].message).toBe('Review failed');
-      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
+      expect(result.reviewSummary.issues![0].message).toBe('Review failed');
+      expect(result.reviewSummary.issues![0].ruleId).toBe('system/error');
     });
 
     it('should measure execution time correctly', async () => {
@@ -501,11 +501,11 @@ describe('CheckExecutionEngine', () => {
 
       expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.suggestions).toEqual([`Error: ${errorMessage}`]);
-      expect(result.reviewSummary.issues[0].severity).toBe('error');
-      expect(result.reviewSummary.issues[0].category).toBe('logic');
-      expect(result.reviewSummary.issues[0].file).toBe('system');
-      expect(result.reviewSummary.issues[0].line).toBe(0);
-      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
+      expect(result.reviewSummary.issues![0].severity).toBe('error');
+      expect(result.reviewSummary.issues![0].category).toBe('logic');
+      expect(result.reviewSummary.issues![0].file).toBe('system');
+      expect(result.reviewSummary.issues![0].line).toBe(0);
+      expect(result.reviewSummary.issues![0].ruleId).toBe('system/error');
     });
 
     it('should handle non-Error exceptions', async () => {
@@ -517,8 +517,8 @@ describe('CheckExecutionEngine', () => {
 
       const result = await checkEngine.executeChecks(options);
 
-      expect(result.reviewSummary.issues[0].message).toBe('Unknown error occurred');
-      expect(result.reviewSummary.issues[0].ruleId).toBe('system/error');
+      expect(result.reviewSummary.issues![0].message).toBe('Unknown error occurred');
+      expect(result.reviewSummary.issues![0].ruleId).toBe('system/error');
     });
 
     it('should handle timeout scenarios', async () => {

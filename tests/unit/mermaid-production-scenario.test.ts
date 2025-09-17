@@ -133,7 +133,7 @@ The new approach reduces complexity and improves error handling.`,
     // Verify the AI response was parsed correctly
     expect(result.issues).toHaveLength(1);
     expect(result.suggestions).toHaveLength(0);
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
 
     // THE KEY TEST: Verify Mermaid blocks are preserved with proper formatting
     console.log('=== PARSED CONTENT ===');
@@ -226,7 +226,7 @@ This shows the architecture.`;
     // When raw response is given, it should be put in suggestions since it can't be parsed as JSON
     expect(result.issues).toHaveLength(0);
     expect(result.suggestions).toHaveLength(1);
-    const content = result.suggestions[0];
+    const content = result.suggestions![0];
 
     // Even with fallback, Mermaid blocks should be preserved
     expect(content).toContain('```mermaid');
@@ -293,7 +293,7 @@ Triple backticks in text: \\\`\\\`\\\` should be escaped`,
     const result = await aiService.executeReview(mockPrInfo, 'Test backticks', 'code-review');
 
     expect(result.issues).toHaveLength(1);
-    const content = result.issues[0].message;
+    const content = result.issues![0].message;
 
     // Verify all different types of backticks are preserved
     expect(content).toContain('```javascript');
