@@ -635,7 +635,7 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
   const commandRegistry: CommandRegistry = {};
 
   try {
-    config = await configManager.loadConfig('.visor.yaml');
+    config = await configManager.findAndLoadConfig();
     // Build command registry from config
     if (config.checks) {
       // Add 'review' command that runs all checks
@@ -825,7 +825,7 @@ async function handlePullRequestEvent(
   const configManager = new ConfigManager();
   let config;
   try {
-    config = await configManager.loadConfig('.visor.yaml');
+    config = await configManager.findAndLoadConfig();
   } catch {
     // Fall back to a basic configuration for PR auto-review
     config = {

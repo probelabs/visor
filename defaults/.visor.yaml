@@ -364,7 +364,7 @@ checks:
 
         ### Response Format
         Provide a well-structured markdown response with clear sections and helpful guidance.
-    on: [issues, issue_comment]
+    on: [issue_opened, issue_comment]
 
 # Output configuration
 output:
