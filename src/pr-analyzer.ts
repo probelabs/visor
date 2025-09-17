@@ -28,6 +28,7 @@ export interface PRInfo {
   files: PRDiff[];
   totalAdditions: number;
   totalDeletions: number;
+  eventType?: import('./types/config').EventTrigger;
   fullDiff?: string;
   commitDiff?: string;
   isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
@@ -86,7 +87,8 @@ export class PRAnalyzer {
     owner: string,
     repo: string,
     prNumber: number,
-    commitSha?: string
+    commitSha?: string,
+    eventType?: import('./types/config').EventTrigger
   ): Promise<PRInfo> {
     const [prData, filesData] = await Promise.all([
       this.withRetry(() =>
@@ -166,6 +168,7 @@ export class PRAnalyzer {
       totalAdditions: validFiles.reduce((sum, file) => sum + file.additions, 0),
       totalDeletions: validFiles.reduce((sum, file) => sum + file.deletions, 0),
       fullDiff: this.generateFullDiff(validFiles),
+      eventType,
     };
 
     // Add commit diff for incremental analysis

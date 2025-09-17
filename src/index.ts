@@ -498,6 +498,27 @@ function groupIssuesByCategory(issues: CliReviewIssue[]): Record<string, CliRevi
 /**
  * Group issues by the check that found them (extracted from ruleId prefix)
  */
+function mapGitHubEventToTrigger(
+  eventName?: string,
+  action?: string
+): import('./types/config').EventTrigger {
+  if (!eventName) return 'pr_updated';
+
+  switch (eventName) {
+    case 'pull_request':
+      if (action === 'opened') return 'pr_opened';
+      if (action === 'synchronize' || action === 'edited') return 'pr_updated';
+      return 'pr_updated';
+    case 'issues':
+      if (action === 'opened') return 'issue_opened';
+      return 'issue_opened';
+    case 'issue_comment':
+      return 'issue_comment';
+    default:
+      return 'pr_updated';
+  }
+}
+
 function groupIssuesByCheck(issues: CliReviewIssue[]): Record<string, CliReviewIssue[]> {
   const grouped: Record<string, CliReviewIssue[]> = {};
 
@@ -623,6 +644,12 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     return;
   }
 
+  // Prevent recursion: skip if comment is from visor itself
+  if (comment.body && (comment.body.includes('<!-- visor-comment-id:') || comment.body.includes('*Powered by [Visor]'))) {
+    console.log('Skipping visor comment to prevent recursion');
+    return;
+  }
+
   // Only process PR comments (issues with pull_request key are PRs)
   if (!issue.pull_request) {
     console.log('Comment is not on a pull request');
@@ -677,7 +704,7 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
 
   switch (command.type) {
     case 'status':
-      const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+      const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
       const statusComment =
         `## 📊 PR Status\n\n` +
         `**Title:** ${statusPrInfo.title}\n` +
@@ -716,7 +743,7 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
         );
 
-        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
 
         // Extract common arguments
         const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
@@ -796,22 +823,25 @@ async function handlePullRequestEvent(
   let prInfo;
   let reviewContext = '';
 
+  // Map the action to event type
+  const eventType = mapGitHubEventToTrigger('pull_request', action);
+
   // For synchronize (new commits), get the latest commit SHA for incremental analysis
   if (action === 'synchronize') {
     const latestCommitSha = pullRequest.head?.sha;
     if (latestCommitSha) {
       console.log(`Analyzing incremental changes from commit: ${latestCommitSha}`);
-      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha);
+      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha, eventType);
       reviewContext =
         '## 🔄 Updated PR Analysis\n\nThis review has been updated to include the latest changes.\n\n';
     } else {
       // Fallback to full analysis if no commit SHA available
-      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+      prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
       reviewContext = '## 🔄 Updated PR Analysis\n\nAnalyzing all changes in this PR.\n\n';
     }
   } else {
     // For opened and edited events, do full PR analysis
-    prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+    prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
     if (action === 'opened') {
       reviewContext =
         '## 🚀 Welcome to Automated PR Review!\n\nThis PR has been automatically analyzed. Use `/help` to see available commands.\n\n';
@@ -1521,8 +1551,11 @@ async function handlePullRequestVisorMode(
       configChecks.length > 0 ? configChecks : ['security', 'performance', 'style', 'architecture'];
     console.log(`🔧 Running checks: ${checksToRun.join(', ')}`);
 
+    // Map GitHub event name to our EventTrigger format
+    const eventType = mapGitHubEventToTrigger(process.env.GITHUB_EVENT_NAME, action);
+
     // Fetch PR diff using GitHub API
-    const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+    const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
     console.log(`📄 Found ${prInfo.files.length} changed files`);
 
     if (prInfo.files.length === 0) {
