@@ -247,19 +247,20 @@ export class PRReviewer {
           const checkSchema = checkIssues[0]?.schema;
           const customTemplate = checkIssues[0]?.template;
 
-          // Handle plain schema or no schema - render raw content directly
-          if (!checkSchema || checkSchema === 'plain') {
-            // For plain schema or no schema, render the first issue's message as raw content
+          // Handle plain schema - render raw content directly
+          if (checkSchema === 'plain') {
+            // For plain schema, render the first issue's message as raw content
             const rawContent = checkIssues[0]?.message || '';
             if (rawContent) {
               renderedSections.push(rawContent);
             }
           } else {
-            // Use the specified schema template
+            // Use the specified schema template, default to 'code-review' if no schema
+            const schemaToUse = checkSchema || 'code-review';
             const renderedSection = await this.renderSingleCheckTemplate(
               checkName,
               checkIssues,
-              checkSchema,
+              schemaToUse,
               customTemplate,
               githubContext
             );
