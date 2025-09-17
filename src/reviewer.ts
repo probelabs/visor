@@ -126,56 +126,23 @@ export class PRReviewer {
     summary: ReviewSummary,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
-    // Group issues by group field if present
-    const issuesByGroup = this.groupIssuesByGroup(summary.issues || []);
+    // For now, create a single comment with all content
+    // TODO: Implement proper group-based comment separation when needed
+    const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
+      owner,
+      repo,
+      prNumber,
+      commitSha: options.commitSha,
+    });
 
-    // If there are multiple groups, create separate comments for each
-    if (Object.keys(issuesByGroup).length > 1) {
-      for (const [groupName, groupIssues] of Object.entries(issuesByGroup)) {
-        const groupSummary: ReviewSummary = {
-          ...summary,
-          issues: groupIssues,
-          // Only include suggestions for the default group
-          suggestions: groupName === 'default' ? summary.suggestions : undefined,
-        };
+    const commentId = options.commentId || 'visor-review-default';
 
-        const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
-          owner,
-          repo,
-          prNumber,
-          commitSha: options.commitSha,
-        });
-
-        const commentId =
-          groupName === 'default'
-            ? options.commentId || 'visor-review-default'
-            : `visor-review-${groupName}`;
-
-        await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-          commentId,
-          triggeredBy: options.triggeredBy || 'unknown',
-          allowConcurrentUpdates: false,
-          commitSha: options.commitSha,
-        });
-      }
-    } else {
-      // Single group or no groups - create one comment
-      const comment = await this.formatReviewCommentWithVisorFormat(summary, options, {
-        owner,
-        repo,
-        prNumber,
-        commitSha: options.commitSha,
-      });
-
-      const commentId = options.commentId || 'visor-review-default';
-
-      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
-        commentId,
-        triggeredBy: options.triggeredBy || 'unknown',
-        allowConcurrentUpdates: false,
-        commitSha: options.commitSha,
-      });
-    }
+    await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+      commentId,
+      triggeredBy: options.triggeredBy || 'unknown',
+      allowConcurrentUpdates: false,
+      commitSha: options.commitSha,
+    });
   }
 
   private async formatReviewCommentWithVisorFormat(
