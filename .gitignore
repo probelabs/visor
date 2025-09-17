@@ -50,3 +50,4 @@ test-*.js
 test-*.json
 cli-traces/
 debug-trace.js
+.claude/settings.local.json

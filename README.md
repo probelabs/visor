@@ -1011,6 +1011,84 @@ checks:
 - **Structured Output**: JSON Schema validation ensures consistent data
 - **Flexible Rendering**: Different templates for different output types
 
+### GitHub Integration Schema Requirements
+
+Visor is **fully schema-agnostic** - checks can return any structure and templates handle all formatting logic. However, for GitHub Checks API integration (status checks, outputs), specific structure may be required:
+
+#### Unstructured Checks (No Schema / Plain Schema)
+```yaml
+# ✅ No-schema and plain schema behave identically
+overview:
+  type: ai
+  # No schema - returns raw markdown directly to PR comments
+  prompt: "Analyze this PR and provide an overview"
+
+documentation:
+  type: ai
+  schema: plain  # Equivalent to no schema
+  prompt: "Generate documentation for these changes"
+```
+
+**Behavior**: AI returns raw text/markdown → Posted as-is to PR comments → GitHub integration reports 0 issues
+
+#### Structured Checks (GitHub Checks API Compatible)
+```yaml
+security:
+  type: ai
+  schema: code-review  # Built-in schema, works out of the box
+  prompt: "Review for security issues and return findings as JSON"
+
+# Custom schema example
+custom-check:
+  type: ai
+  schema: |
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "required": ["issues"],
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "line", "message", "severity"],
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "ruleId": { "type": "string" },
+              "message": { "type": "string" },
+              "severity": { "enum": ["critical", "error", "warning", "info"] },
+              "category": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  prompt: "Review the code and return JSON matching the schema"
+```
+
+**Required Structure for GitHub Checks API Integration**:
+- `issues`: Array of issue objects (required for GitHub status checks)
+- `issues[].severity`: Must be `"critical"`, `"error"`, `"warning"`, or `"info"`
+- `issues[].file`: File path (required for GitHub annotations)
+- `issues[].line`: Line number (required for GitHub annotations)
+- `issues[].message`: Issue description (required for GitHub annotations)
+
+#### GitHub Checks API Features
+When checks return the structured format above:
+- ✅ **GitHub Status Checks**: Pass/fail based on severity thresholds
+- ✅ **GitHub Annotations**: Issues appear as file annotations in PR
+- ✅ **Action Outputs**: `issues-found`, `critical-issues-found` outputs
+- ✅ **PR Comments**: Structured table format with issue details
+
+#### Schema Behavior Summary
+| Schema Type | AI Output | Comment Rendering | GitHub Checks API |
+|-------------|-----------|-------------------|-------------------|
+| **None/Plain** | Raw text/markdown | ✅ Posted as-is | ❌ No status checks, 0 issues |
+| **Structured** | JSON with `issues[]` | ✅ Table format | ✅ Full GitHub integration |
+
+**Key Design**: Use unstructured (none/plain) for narrative content like overviews and documentation. Use structured schemas for actionable code review findings that integrate with GitHub's checking system.
+
 ## 🧠 Advanced AI Features
 
 ### XML-Formatted Analysis
