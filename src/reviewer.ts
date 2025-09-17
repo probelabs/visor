@@ -206,8 +206,6 @@ export class PRReviewer {
     _options: ReviewOptions,
     githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    // const totalIssues = calculateTotalIssues(summary.issues); // TODO: Use this for summary stats
-
     let comment = '';
 
     // Simple header - let templates handle the content logic

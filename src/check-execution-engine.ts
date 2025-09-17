@@ -597,7 +597,7 @@ export class CheckExecutionEngine {
                 branch: prInfo.head,
                 baseBranch: prInfo.base,
                 filesChanged: prInfo.files.map(f => f.filename),
-                event: 'manual', // TODO: Get actual event from context
+                event: 'issue_comment', // Command triggered from comment
                 environment: getSafeEnvironmentVariables(),
                 previousResults: results,
               }
@@ -872,7 +872,7 @@ export class CheckExecutionEngine {
               branch: prInfo.head,
               baseBranch: prInfo.base,
               filesChanged: prInfo.files.map(f => f.filename),
-              event: 'manual', // TODO: Get actual event from context
+              event: 'issue_comment', // Command triggered from comment
               environment: getSafeEnvironmentVariables(),
               previousResults: new Map(), // No previous results in parallel execution
             }

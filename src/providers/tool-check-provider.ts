@@ -2,11 +2,22 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewComment, ReviewIssue } from '../reviewer';
 import { spawn } from 'child_process';
+import { Liquid } from 'liquidjs';
 
 /**
- * Check provider that executes external tools (linters, analyzers, etc.)
+ * Check provider that executes external tools and commands with Liquid template support
+ * Supports both simple commands and complex templated execution with stdin
  */
 export class ToolCheckProvider extends CheckProvider {
+  private liquid: Liquid;
+
+  constructor() {
+    super();
+    this.liquid = new Liquid({
+      strictVariables: false,
+      strictFilters: false,
+    });
+  }
   getName(): string {
     return 'tool';
   }
@@ -27,8 +38,8 @@ export class ToolCheckProvider extends CheckProvider {
       return false;
     }
 
-    // Must have command specified
-    if (typeof cfg.command !== 'string' || !cfg.command) {
+    // Must have exec specified for tool execution
+    if (typeof cfg.exec !== 'string' || !cfg.exec) {
       return false;
     }
 
@@ -41,21 +52,54 @@ export class ToolCheckProvider extends CheckProvider {
     _dependencyResults?: Map<string, ReviewSummary>,
     _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
-    const command = config.command as string;
-    const args = (config.args as string[]) || [];
-    const files = prInfo.files.map(f => f.filename);
+    const execTemplate = config.exec as string;
+    const stdinTemplate = config.stdin as string | undefined;
+
+    // Prepare template context
+    const templateContext = {
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        body: prInfo.body,
+        author: prInfo.author,
+        base: prInfo.base,
+        head: prInfo.head,
+        totalAdditions: prInfo.totalAdditions,
+        totalDeletions: prInfo.totalDeletions,
+      },
+      files: prInfo.files.map(f => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch,
+      })),
+      // Add convenience arrays for common use cases
+      filenames: prInfo.files.map(f => f.filename),
+      config: config, // Allow access to config values in templates
+    };
+
+    // Render the command template
+    const renderedCommand = await this.liquid.parseAndRender(execTemplate, templateContext);
+
+    // Render stdin if provided
+    let renderedStdin: string | undefined;
+    if (stdinTemplate) {
+      renderedStdin = await this.liquid.parseAndRender(stdinTemplate, templateContext);
+    }
 
     // Execute the tool
-    const output = await this.executeCommand(command, args, files);
+    const output = await this.executeCommand(renderedCommand.trim(), renderedStdin);
 
     // Parse tool output (this would be customized per tool)
-    const comments = this.parseToolOutput(output, command);
+    const comments = this.parseToolOutput(output, renderedCommand);
 
     const issues: ReviewIssue[] = comments.map(comment => ({
       file: comment.file,
       line: comment.line,
       endLine: undefined,
-      ruleId: `${command}/${comment.category}`,
+      ruleId: `tool/${comment.category}`,
       message: comment.message,
       severity: comment.severity,
       category: comment.category,
@@ -65,13 +109,18 @@ export class ToolCheckProvider extends CheckProvider {
 
     return {
       issues,
-      suggestions: this.generateSuggestions(comments, command),
+      suggestions: this.generateSuggestions(comments, renderedCommand),
     };
   }
 
-  private async executeCommand(command: string, args: string[], files: string[]): Promise<string> {
+  private async executeCommand(command: string, stdin?: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(command, [...args, ...files], {
+      // Parse command and arguments (handle quoted arguments)
+      const parts = command.match(/(?:[^\s"]+|"[^"]*")+/g) || [command];
+      const cmd = parts[0];
+      const args = parts.slice(1).map(arg => arg.replace(/^"(.*)"$/, '$1'));
+
+      const child = spawn(cmd, args, {
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -87,13 +136,19 @@ export class ToolCheckProvider extends CheckProvider {
         error += data.toString();
       });
 
+      // Send stdin data if provided
+      if (stdin) {
+        child.stdin.write(stdin);
+        child.stdin.end();
+      }
+
       child.on('close', _code => {
-        // Many linters return non-zero on issues found
+        // Many tools return non-zero on issues found
         resolve(output || error);
       });
 
       child.on('error', err => {
-        reject(new Error(`Failed to execute ${command}: ${err.message}`));
+        reject(new Error(`Failed to execute ${cmd}: ${err.message}`));
       });
     });
   }
@@ -136,7 +191,7 @@ export class ToolCheckProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['type', 'command', 'args', 'timeout', 'workingDirectory'];
+    return ['type', 'exec', 'command', 'stdin', 'timeout', 'workingDirectory'];
   }
 
   async isAvailable(): Promise<boolean> {

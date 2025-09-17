@@ -20,7 +20,7 @@ import { CliOptions } from './types/cli';
  * Configuration manager for Visor
  */
 export class ConfigManager {
-  private validCheckTypes: ConfigCheckType[] = ['ai'];
+  private validCheckTypes: ConfigCheckType[] = ['ai', 'tool', 'webhook', 'noop'];
   private validEventTriggers: EventTrigger[] = [
     'pr_opened',
     'pr_updated',
@@ -340,10 +340,27 @@ export class ConfigManager {
       });
     }
 
-    if (!checkConfig.prompt) {
+    // Only AI checks require prompts
+    if (checkConfig.type === 'ai' && !checkConfig.prompt) {
       errors.push({
         field: `checks.${checkName}.prompt`,
-        message: `Invalid check configuration for "${checkName}": missing prompt`,
+        message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`,
+      });
+    }
+
+    // Tool checks require exec field
+    if (checkConfig.type === 'tool' && !checkConfig.exec) {
+      errors.push({
+        field: `checks.${checkName}.exec`,
+        message: `Invalid check configuration for "${checkName}": missing exec field (required for tool checks)`,
+      });
+    }
+
+    // Webhook checks require url field
+    if (checkConfig.type === 'webhook' && !checkConfig.url) {
+      errors.push({
+        field: `checks.${checkName}.url`,
+        message: `Invalid check configuration for "${checkName}": missing url field (required for webhook checks)`,
       });
     }
 
