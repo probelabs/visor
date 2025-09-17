@@ -99,24 +99,12 @@ describe('CheckExecutionEngine', () => {
   });
 
   describe('executeChecks', () => {
-    const mockReviewSummary = {
-      suggestions: ['Add input validation', 'Improve error handling'],
-      issues: [
+    const mockGroupedResults = {
+      default: [
         {
-          file: 'src/test.ts',
-          line: 10,
-          ruleId: 'security/potential-vulnerability',
-          message: 'Potential security issue',
-          severity: 'error' as const,
-          category: 'security' as const,
-        },
-        {
-          file: 'src/test.ts',
-          line: 15,
-          ruleId: 'style/improvement',
-          message: 'Style improvement needed',
-          severity: 'info' as const,
-          category: 'style' as const,
+          checkName: 'security',
+          content: `## Security Issues Found\n\n- **ERROR**: Potential security issue (src/test.ts:10)\n\n## Style Issues Found\n\n- **INFO**: Style improvement needed (src/test.ts:15)\n\n## Suggestions\n\n- Add input validation\n- Improve error handling`,
+          group: 'default',
         },
       ],
     };
@@ -124,7 +112,7 @@ describe('CheckExecutionEngine', () => {
     beforeEach(() => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue(mockRepositoryInfo);
       mockGitAnalyzer.toPRInfo.mockReturnValue(mockPRInfo);
-      mockReviewer.reviewPR.mockResolvedValue(mockReviewSummary);
+      mockReviewer.reviewPR.mockResolvedValue(mockGroupedResults);
     });
 
     it('should execute checks successfully', async () => {

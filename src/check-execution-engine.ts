@@ -1,4 +1,10 @@
-import { PRReviewer, ReviewSummary, ReviewOptions } from './reviewer';
+import {
+  PRReviewer,
+  ReviewSummary,
+  ReviewOptions,
+  GroupedCheckResults,
+  CheckResult,
+} from './reviewer';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
@@ -438,6 +444,273 @@ export class CheckExecutionEngine {
       focus,
       format: 'table',
     });
+  }
+
+  /**
+   * Execute review checks and return grouped results for new architecture
+   */
+  public async executeGroupedChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    outputFormat?: string,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
+  ): Promise<GroupedCheckResults> {
+    // Determine where to send log messages based on output format
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+
+    logFn(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
+    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+
+    // Filter checks based on current event type to prevent execution of checks that shouldn't run
+    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
+    if (filteredChecks.length !== checks.length) {
+      logFn(
+        `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
+      );
+    }
+
+    // Use filtered checks for execution
+    checks = filteredChecks;
+
+    if (!config?.checks) {
+      throw new Error('Config with check definitions required for grouped execution');
+    }
+
+    // If we have a config with individual check definitions, use dependency-aware execution
+    const hasDependencies = checks.some(checkName => {
+      const checkConfig = config.checks[checkName];
+      return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
+    });
+
+    if (checks.length > 1 || hasDependencies) {
+      logFn(
+        `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+      );
+      return await this.executeGroupedDependencyAwareChecks(
+        prInfo,
+        checks,
+        timeout,
+        config,
+        logFn,
+        debug,
+        maxParallelism,
+        failFast
+      );
+    }
+
+    // Single check execution
+    if (checks.length === 1) {
+      logFn(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
+      const checkResult = await this.executeSingleGroupedCheck(
+        prInfo,
+        checks[0],
+        timeout,
+        config,
+        logFn,
+        debug
+      );
+
+      const groupedResults: GroupedCheckResults = {};
+      groupedResults[checkResult.group] = [checkResult];
+      return groupedResults;
+    }
+
+    // No checks to execute
+    return {};
+  }
+
+  /**
+   * Execute single check and return grouped result
+   */
+  private async executeSingleGroupedCheck(
+    prInfo: PRInfo,
+    checkName: string,
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean
+  ): Promise<CheckResult> {
+    if (!config?.checks?.[checkName]) {
+      throw new Error(`No configuration found for check: ${checkName}`);
+    }
+
+    const checkConfig = config.checks[checkName];
+    const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+    const providerConfig = {
+      type: 'ai' as const,
+      prompt: checkConfig.prompt,
+      focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      ai: {
+        timeout: timeout || 600000,
+        debug: debug,
+        ...(checkConfig.ai || {}),
+      },
+      ai_provider: checkConfig.ai_provider || config.ai_provider,
+      ai_model: checkConfig.ai_model || config.ai_model,
+    };
+
+    const result = await provider.execute(prInfo, providerConfig);
+
+    // Render the check content using the appropriate template
+    const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
+
+    return {
+      checkName,
+      content,
+      group: checkConfig.group || 'default',
+      debug: result.debug,
+    };
+  }
+
+  /**
+   * Execute multiple checks with dependency awareness - return grouped results
+   */
+  private async executeGroupedDependencyAwareChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
+  ): Promise<GroupedCheckResults> {
+    // Use the existing dependency-aware execution logic
+    const reviewSummary = await this.executeDependencyAwareChecks(
+      prInfo,
+      checks,
+      timeout,
+      config,
+      logFn,
+      debug,
+      maxParallelism,
+      failFast
+    );
+
+    // Convert the flat ReviewSummary to grouped CheckResults
+    return await this.convertReviewSummaryToGroupedResults(reviewSummary, checks, config, prInfo);
+  }
+
+  /**
+   * Convert ReviewSummary to GroupedCheckResults
+   */
+  private async convertReviewSummaryToGroupedResults(
+    reviewSummary: ReviewSummary,
+    checks: string[],
+    config?: import('./types/config').VisorConfig,
+    prInfo?: PRInfo
+  ): Promise<GroupedCheckResults> {
+    const groupedResults: GroupedCheckResults = {};
+
+    // Process each check individually
+    for (const checkName of checks) {
+      const checkConfig = config?.checks?.[checkName];
+      if (!checkConfig) continue;
+
+      // Extract issues for this check
+      const checkIssues = (reviewSummary.issues || []).filter(issue =>
+        issue.ruleId?.startsWith(`${checkName}/`)
+      );
+
+      // Extract suggestions for this check
+      const checkSuggestions = (reviewSummary.suggestions || []).filter(suggestion =>
+        suggestion.startsWith(`[${checkName}]`)
+      );
+
+      // Create a mini ReviewSummary for this check
+      const checkSummary: ReviewSummary = {
+        issues: checkIssues,
+        suggestions: checkSuggestions,
+        debug: reviewSummary.debug,
+      };
+
+      // Render content for this check
+      const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+
+      const checkResult: CheckResult = {
+        checkName,
+        content,
+        group: checkConfig.group || 'default',
+        debug: reviewSummary.debug,
+      };
+
+      // Add to appropriate group
+      const group = checkResult.group;
+      if (!groupedResults[group]) {
+        groupedResults[group] = [];
+      }
+      groupedResults[group].push(checkResult);
+    }
+
+    return groupedResults;
+  }
+
+  /**
+   * Render check content using the appropriate template
+   */
+  private async renderCheckContent(
+    checkName: string,
+    reviewSummary: ReviewSummary,
+    checkConfig: any,
+    _prInfo?: PRInfo
+  ): Promise<string> {
+    // Import the liquid template system
+    const { Liquid } = await import('liquidjs');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const liquid = new Liquid({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false,
+    });
+
+    // Determine template to use
+    const schema = checkConfig.schema || 'code-review';
+    let templateContent: string;
+
+    if (checkConfig.template) {
+      // Custom template
+      if (checkConfig.template.content) {
+        templateContent = checkConfig.template.content;
+      } else if (checkConfig.template.file) {
+        templateContent = await fs.readFile(checkConfig.template.file, 'utf-8');
+      } else {
+        throw new Error('Custom template must specify either "file" or "content"');
+      }
+    } else if (schema === 'plain') {
+      // Plain schema - return raw content directly
+      return (
+        (reviewSummary.issues?.[0]?.message || '') + (reviewSummary.suggestions?.join('\n\n') || '')
+      );
+    } else {
+      // Use built-in schema template
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchema) {
+        throw new Error('Invalid schema name');
+      }
+      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs.readFile(templatePath, 'utf-8');
+    }
+
+    // Prepare template data
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName: checkName,
+      suggestions: reviewSummary.suggestions || [],
+    };
+
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
   }
 
   /**

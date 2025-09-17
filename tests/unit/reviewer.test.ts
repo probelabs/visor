@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { PRReviewer, ReviewIssue, ReviewSummary } from '../../src/reviewer';
+import {
+  PRReviewer,
+  ReviewIssue,
+  ReviewSummary,
+  convertReviewSummaryToGroupedResults,
+} from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
 // Mock CheckExecutionEngine
@@ -412,7 +417,8 @@ describe('PRReviewer', () => {
         suggestions: ['Add unit tests', 'Consider performance optimization'],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       expect(mockOctokit.rest.issues.listComments).toHaveBeenCalled();
       expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
@@ -479,7 +485,8 @@ describe('PRReviewer', () => {
         suggestions: [],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
       expect(callArgs.body).toContain('Critical security issue');
@@ -534,7 +541,8 @@ describe('PRReviewer', () => {
         },
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
@@ -579,7 +587,8 @@ describe('PRReviewer', () => {
         // No debug field
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
@@ -631,7 +640,8 @@ describe('PRReviewer', () => {
         suggestions: ['Consider using semantic HTML'],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
@@ -723,7 +733,8 @@ describe('PRReviewer', () => {
         suggestions: [],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 
@@ -784,7 +795,8 @@ describe('PRReviewer', () => {
       };
 
       // Pass commit SHA in options
-      await reviewer.postReviewComment('owner', 'repo', 1, summary, {
+      const groupedResults = convertReviewSummaryToGroupedResults(summary);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults, {
         commitSha: 'abc123def456',
       });
 
@@ -826,7 +838,8 @@ describe('PRReviewer', () => {
         suggestions: [],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, summary, {});
+      const groupedResults = convertReviewSummaryToGroupedResults(summary);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults, {});
 
       expect(mockOctokit.rest.issues.createComment).toHaveBeenCalled();
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
@@ -880,7 +893,8 @@ describe('PRReviewer', () => {
         suggestions: [],
       };
 
-      await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+      const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+      await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
       const callArgs = mockOctokit.rest.issues.createComment.mock.calls[0][0];
 

@@ -1,4 +1,4 @@
-import { PRReviewer } from '../../src/reviewer';
+import { PRReviewer, convertReviewSummaryToGroupedResults } from '../../src/reviewer';
 
 // Mock Octokit
 const mockOctokit = {
@@ -50,7 +50,8 @@ describe('HTML Rendering Debug', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     console.log('=== GENERATED COMMENT ===');
@@ -92,7 +93,8 @@ describe('HTML Rendering Debug', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     console.log('=== SUGGESTION RENDERING ===');
@@ -134,12 +136,11 @@ describe('HTML Rendering Debug', () => {
           schema: 'plain',
         },
       ],
-      suggestions: [
-        '[overview] This is overview analysis with detailed insights about the PR',
-      ],
+      suggestions: ['[overview] This is overview analysis with detailed insights about the PR'],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     // Should create 2 separate comments for different groups
     expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(2);
@@ -156,8 +157,10 @@ describe('HTML Rendering Debug', () => {
     // One should be table format, other should be markdown
     const hasTable = call1.body.includes('<table>') || call2.body.includes('<table>');
     const hasMarkdown =
-      call1.body.includes('## PR Overview') || call2.body.includes('## PR Overview') ||
-      call1.body.includes('overview analysis') || call2.body.includes('overview analysis');
+      call1.body.includes('## PR Overview') ||
+      call2.body.includes('## PR Overview') ||
+      call1.body.includes('overview analysis') ||
+      call2.body.includes('overview analysis');
 
     expect(hasTable).toBe(true);
     expect(hasMarkdown).toBe(true);
@@ -180,7 +183,8 @@ describe('HTML Rendering Debug', () => {
       suggestions: [], // Empty suggestions
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 

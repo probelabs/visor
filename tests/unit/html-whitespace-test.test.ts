@@ -1,4 +1,4 @@
-import { PRReviewer } from '../../src/reviewer';
+import { PRReviewer, convertReviewSummaryToGroupedResults } from '../../src/reviewer';
 
 // Mock Octokit
 const mockOctokit = {
@@ -48,7 +48,8 @@ describe('HTML Whitespace Fix Test', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     const comment = callArgs.body;
@@ -104,7 +105,8 @@ describe('HTML Whitespace Fix Test', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     const comment = callArgs.body;

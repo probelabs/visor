@@ -2,11 +2,6 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
-import { Liquid } from 'liquidjs';
-import fs from 'fs/promises';
-import path from 'path';
-import { CustomTemplateConfig } from './types/config';
-import * as crypto from 'crypto';
 
 export interface ReviewIssue {
   // Location
@@ -23,8 +18,6 @@ export interface ReviewIssue {
   schema?: string;
   // Timestamp when the issue was created (for ordering)
   timestamp?: number;
-  // Custom template configuration
-  template?: CustomTemplateConfig;
   // Optional enhancement
   suggestion?: string;
   replacement?: string;
@@ -42,10 +35,66 @@ export interface ReviewComment {
   ruleId?: string;
 }
 
+// Individual check result - each check produces one of these
+export interface CheckResult {
+  checkName: string;
+  content: string; // Rendered output for this specific check
+  group: string; // Which group this check belongs to
+  debug?: AIDebugInfo;
+}
+
+// Results grouped by group name
+export interface GroupedCheckResults {
+  [groupName: string]: CheckResult[];
+}
+
+// Legacy interface - only for backward compatibility
 export interface ReviewSummary {
   issues?: ReviewIssue[];
   suggestions?: string[];
   debug?: AIDebugInfo;
+}
+
+// Test utility function - Convert old ReviewSummary to new GroupedCheckResults format
+// This is for backward compatibility with tests only
+export function convertReviewSummaryToGroupedResults(
+  reviewSummary: ReviewSummary,
+  checkName: string = 'test-check',
+  groupName: string = 'default'
+): GroupedCheckResults {
+  // Create a simple content string from issues and suggestions
+  let content = '';
+
+  if (reviewSummary.issues && reviewSummary.issues.length > 0) {
+    content += `## Issues Found (${reviewSummary.issues.length})\n\n`;
+    reviewSummary.issues.forEach(issue => {
+      content += `- **${issue.severity.toUpperCase()}**: ${issue.message} (${issue.file}:${issue.line})\n`;
+    });
+    content += '\n';
+  }
+
+  if (reviewSummary.suggestions && reviewSummary.suggestions.length > 0) {
+    content += `## Suggestions\n\n`;
+    reviewSummary.suggestions.forEach(suggestion => {
+      content += `- ${suggestion}\n`;
+    });
+  }
+
+  if (!content) {
+    content = 'No issues found.';
+  }
+
+  const checkResult: CheckResult = {
+    checkName,
+    content: content.trim(),
+    group: groupName,
+    debug: reviewSummary.debug,
+  };
+
+  const groupedResults: GroupedCheckResults = {};
+  groupedResults[groupName] = [checkResult];
+
+  return groupedResults;
 }
 
 // Helper functions for GitHub checks - ONLY for structured schemas that have issues
@@ -96,13 +145,13 @@ export class PRReviewer {
     prNumber: number,
     prInfo: PRInfo,
     options: ReviewOptions = {}
-  ): Promise<ReviewSummary> {
+  ): Promise<GroupedCheckResults> {
     const { debug = false, config, checks } = options;
 
     if (config && checks && checks.length > 0) {
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
-      const reviewSummary = await engine['executeReviewChecks'](
+      const groupedResults = await engine.executeGroupedChecks(
         prInfo,
         checks,
         undefined,
@@ -110,7 +159,7 @@ export class PRReviewer {
         undefined,
         debug
       );
-      return reviewSummary;
+      return groupedResults;
     }
 
     throw new Error(
@@ -123,15 +172,12 @@ export class PRReviewer {
     owner: string,
     repo: string,
     prNumber: number,
-    summary: ReviewSummary,
+    groupedResults: GroupedCheckResults,
     options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
   ): Promise<void> {
-    // Group issues and suggestions by their group property
-    const groupedResults = this.groupResultsByGroup(summary);
-
     // Post separate comments for each group
-    for (const [groupName, groupSummary] of Object.entries(groupedResults)) {
-      const comment = await this.formatReviewCommentWithVisorFormat(groupSummary, options, {
+    for (const [groupName, checkResults] of Object.entries(groupedResults)) {
+      const comment = await this.formatGroupComment(checkResults, options, {
         owner,
         repo,
         prNumber,
@@ -151,226 +197,29 @@ export class PRReviewer {
     }
   }
 
-  private async formatReviewCommentWithVisorFormat(
-    summary: ReviewSummary,
+  private async formatGroupComment(
+    checkResults: CheckResult[],
     _options: ReviewOptions,
-    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
+    _githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
     let comment = '';
     comment += `## 🔍 Code Analysis Results\n\n`;
 
-    const templateContent = await this.renderWithSchemaTemplate(summary, githubContext);
-    comment += templateContent;
+    // Simple concatenation of all check outputs in this group
+    const checkContents = checkResults
+      .map(result => result.content)
+      .filter(content => content.trim());
+    comment += checkContents.join('\n\n');
 
-    if (summary.debug) {
-      comment += '\n\n' + this.formatDebugSection(summary.debug);
+    // Add debug info if any check has it
+    const debugInfo = checkResults.find(result => result.debug)?.debug;
+    if (debugInfo) {
+      comment += '\n\n' + this.formatDebugSection(debugInfo);
       comment += '\n\n';
     }
 
     comment += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
     return comment;
-  }
-
-  private async renderWithSchemaTemplate(
-    summary: ReviewSummary,
-    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
-  ): Promise<string> {
-    const renderedSections: string[] = [];
-
-    // Render structured issues if present
-    if (summary.issues && (summary.issues || []).length > 0) {
-      const issues = Array.isArray(summary.issues) ? summary.issues : [];
-      const issuesByCheck = this.groupIssuesByCheck(issues);
-
-      for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
-        const checkSchema = checkIssues[0]?.schema;
-        const customTemplate = checkIssues[0]?.template;
-
-        // Handle plain schema - render raw content directly
-        if (checkSchema === 'plain') {
-          const rawContent = checkIssues[0]?.message || '';
-          if (rawContent) {
-            renderedSections.push(rawContent);
-          }
-        } else {
-          // Use the specified schema template, default to 'code-review' if no schema
-          const schemaToUse = checkSchema || 'code-review';
-          const renderedSection = await this.renderSingleCheckTemplate(
-            checkName,
-            checkIssues,
-            schemaToUse,
-            customTemplate,
-            githubContext
-          );
-          renderedSections.push(renderedSection);
-        }
-      }
-    }
-
-    // Also render suggestions if present (typically no-schema/plain responses from AI)
-    if (summary.suggestions && (summary.suggestions || []).length > 0) {
-      const suggestionsContent = Array.isArray(summary.suggestions)
-        ? summary.suggestions.join('\n\n')
-        : String(summary.suggestions);
-
-      if (suggestionsContent.trim()) {
-        renderedSections.push(suggestionsContent);
-      }
-    }
-
-    // Return all rendered sections or empty string if none
-    return renderedSections.join('\n\n');
-  }
-
-  private generateGitHubDiffHash(filePath: string): string {
-    return crypto.createHash('sha256').update(filePath).digest('hex');
-  }
-
-  private enhanceIssuesWithGitHubLinks(
-    issues: ReviewIssue[],
-    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
-  ): Array<ReviewIssue & { githubUrl?: string; fileHash?: string }> {
-    if (!githubContext) {
-      return issues;
-    }
-
-    const baseUrl = githubContext.commitSha
-      ? `https://github.com/${githubContext.owner}/${githubContext.repo}/blob/${githubContext.commitSha}`
-      : `https://github.com/${githubContext.owner}/${githubContext.repo}/pull/${githubContext.prNumber}/files`;
-
-    return issues.map(issue => ({
-      ...issue,
-      githubUrl:
-        githubContext.commitSha && issue.line
-          ? `${baseUrl}/${issue.file}#L${issue.line}${issue.endLine && issue.endLine !== issue.line ? `-L${issue.endLine}` : ''}`
-          : baseUrl,
-      fileHash: this.generateGitHubDiffHash(issue.file),
-    }));
-  }
-
-  private async renderSingleCheckTemplate(
-    checkName: string,
-    issues: ReviewIssue[],
-    schema: string,
-    customTemplate?: CustomTemplateConfig,
-    githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
-  ): Promise<string> {
-    const liquid = new Liquid({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false,
-    });
-
-    let templateContent: string;
-    if (customTemplate) {
-      templateContent = await this.loadCustomTemplate(customTemplate);
-    } else {
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
-      if (!sanitizedSchema) {
-        throw new Error('Invalid schema name');
-      }
-      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs.readFile(templatePath, 'utf-8');
-    }
-
-    const enhancedIssues = this.enhanceIssuesWithGitHubLinks(issues, githubContext);
-    const templateData = {
-      issues: enhancedIssues,
-      checkName: checkName,
-      github: githubContext,
-    };
-
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
-  }
-
-  private groupIssuesByGroup(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
-    const grouped: Record<string, ReviewIssue[]> = {};
-    for (const issue of issues) {
-      const groupName = issue.group || 'default';
-      if (!grouped[groupName]) {
-        grouped[groupName] = [];
-      }
-      grouped[groupName].push(issue);
-    }
-    return grouped;
-  }
-
-  private groupResultsByGroup(summary: ReviewSummary): Record<string, ReviewSummary> {
-    const grouped: Record<string, ReviewSummary> = {};
-
-    // Group issues by their group property (issues from same group go together)
-    if (summary.issues && summary.issues.length > 0) {
-      for (const issue of summary.issues) {
-        const groupName = issue.group || 'review'; // Default to 'review' to match config
-        if (!grouped[groupName]) {
-          grouped[groupName] = { issues: [], suggestions: [] };
-        }
-        grouped[groupName].issues!.push(issue);
-      }
-    }
-
-    // Group suggestions by checking if they have group prefixes like "[checkName] content"
-    if (summary.suggestions && summary.suggestions.length > 0) {
-      for (const suggestion of summary.suggestions) {
-        // Check if suggestion has a group prefix like "[overview] content"
-        const groupMatch = suggestion.match(/^\[([^\]]+)\]\s*(.*)/s);
-        if (groupMatch) {
-          const checkName = groupMatch[1];
-          const content = groupMatch[2];
-
-          // Map check name to group name - overview check has group 'overview'
-          const groupName = checkName === 'overview' ? 'overview' : 'review';
-
-          if (!grouped[groupName]) {
-            grouped[groupName] = { issues: [], suggestions: [] };
-          }
-          grouped[groupName].suggestions!.push(content);
-        } else {
-          // No group prefix, put in default review group
-          const groupName = 'review';
-          if (!grouped[groupName]) {
-            grouped[groupName] = { issues: [], suggestions: [] };
-          }
-          grouped[groupName].suggestions!.push(suggestion);
-        }
-      }
-    }
-
-    // Include debug info in all groups (if present)
-    if (summary.debug) {
-      for (const groupSummary of Object.values(grouped)) {
-        groupSummary.debug = summary.debug;
-      }
-    }
-
-    // If no groups were created, create a default one
-    if (Object.keys(grouped).length === 0) {
-      grouped['review'] = { issues: [], suggestions: [] };
-    }
-
-    return grouped;
-  }
-
-  private groupIssuesByCheck(issues: ReviewIssue[]): Record<string, ReviewIssue[]> {
-    const grouped: Record<string, ReviewIssue[]> = {};
-    for (const issue of issues) {
-      const checkName = this.extractCheckNameFromRuleId(issue.ruleId || 'uncategorized');
-      if (!grouped[checkName]) {
-        grouped[checkName] = [];
-      }
-      grouped[checkName].push(issue);
-    }
-    return grouped;
-  }
-
-  private extractCheckNameFromRuleId(ruleId: string): string {
-    if (ruleId && ruleId.includes('/')) {
-      return ruleId.split('/')[0];
-    }
-    return 'uncategorized';
   }
 
   private formatDebugSection(debug: AIDebugInfo): string {
@@ -494,34 +343,6 @@ export class PRReviewer {
     } catch (error) {
       console.error('Failed to save debug artifact:', error);
       return null;
-    }
-  }
-
-  private async loadCustomTemplate(config: CustomTemplateConfig): Promise<string> {
-    if (config.content) {
-      return config.content;
-    } else if (config.file) {
-      // Security validation for file paths - normalize and check for traversal
-      const normalizedPath = path.normalize(config.file);
-      if (
-        normalizedPath.includes('..') ||
-        normalizedPath.startsWith('../') ||
-        normalizedPath.includes('/../')
-      ) {
-        throw new Error('path traversal detected');
-      }
-
-      if (!config.file.endsWith('.liquid')) {
-        throw new Error('must have .liquid extension');
-      }
-
-      try {
-        return await fs.readFile(config.file, 'utf-8');
-      } catch (error) {
-        throw new Error(`Failed to load custom template: ${(error as Error).message}`);
-      }
-    } else {
-      throw new Error('Custom template must specify either "file" or "content"');
     }
   }
 }
