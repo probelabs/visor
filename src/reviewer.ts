@@ -169,11 +169,12 @@ export class PRReviewer {
     summary: ReviewSummary,
     githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    // For structured issues response (prioritize issues over suggestions)
+    const renderedSections: string[] = [];
+
+    // Render structured issues if present
     if (summary.issues && (summary.issues || []).length > 0) {
       const issues = Array.isArray(summary.issues) ? summary.issues : [];
       const issuesByCheck = this.groupIssuesByCheck(issues);
-      const renderedSections: string[] = [];
 
       for (const [checkName, checkIssues] of Object.entries(issuesByCheck)) {
         const checkSchema = checkIssues[0]?.schema;
@@ -198,19 +199,21 @@ export class PRReviewer {
           renderedSections.push(renderedSection);
         }
       }
-
-      return renderedSections.join('\n\n');
     }
 
-    // For suggestions (typically no-schema/plain responses from AI)
-    if (summary.suggestions) {
-      return Array.isArray(summary.suggestions)
+    // Also render suggestions if present (typically no-schema/plain responses from AI)
+    if (summary.suggestions && (summary.suggestions || []).length > 0) {
+      const suggestionsContent = Array.isArray(summary.suggestions)
         ? summary.suggestions.join('\n\n')
         : String(summary.suggestions);
+
+      if (suggestionsContent.trim()) {
+        renderedSections.push(suggestionsContent);
+      }
     }
 
-    // No content to render
-    return '';
+    // Return all rendered sections or empty string if none
+    return renderedSections.join('\n\n');
   }
 
   private generateGitHubDiffHash(filePath: string): string {

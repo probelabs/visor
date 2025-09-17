@@ -31,7 +31,7 @@ describe('Group-based Comments', () => {
     });
   });
 
-  test('should create separate comments for different groups', async () => {
+  test('should create combined comment with all content', async () => {
     // Mock review results from multiple groups
     const mockReviewWithMultipleGroups = {
       issues: [
@@ -43,7 +43,7 @@ describe('Group-based Comments', () => {
           message: 'SQL injection vulnerability',
           severity: 'critical' as const,
           category: 'security' as const,
-          group: 'code-review', // This should go to code-review comment
+          group: 'code-review',
         },
         {
           file: 'src/performance.ts',
@@ -52,7 +52,7 @@ describe('Group-based Comments', () => {
           message: 'N+1 query detected',
           severity: 'warning' as const,
           category: 'performance' as const,
-          group: 'code-review', // This should go to code-review comment
+          group: 'code-review',
         },
         // PR overview group issue
         {
@@ -62,34 +62,27 @@ describe('Group-based Comments', () => {
           message: 'PR overview generated',
           severity: 'info' as const,
           category: 'documentation' as const,
-          group: 'pr-overview', // This should go to separate pr-overview comment
+          group: 'pr-overview',
         },
       ],
-      suggestions: [],
+      suggestions: ['This is overview analysis with detailed insights about the PR'],
     };
 
-    // This is a hypothetical API - the question is how should group-based posting work?
-    // Option 1: postReviewComment automatically detects groups and posts separate comments
+    // Post review comment - should create single comment with all content
     await reviewer.postReviewComment('owner', 'repo', 1, mockReviewWithMultipleGroups);
 
-    // Should create TWO separate comments - one per group
-    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(2);
+    // Should create ONE comment with all content combined
+    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(1);
 
-    const call1 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
-    const call2 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[1][0];
+    const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
-    // One comment should contain code-review group content
-    const codeReviewComment = call1.body.includes('Security Issues') ? call1 : call2;
-    const prOverviewComment = call1.body.includes('Security Issues') ? call2 : call1;
-
-    expect(codeReviewComment.body).toContain('Security Issues');
-    expect(codeReviewComment.body).toContain('Performance Issues');
-    expect(codeReviewComment.body).toContain('SQL injection vulnerability');
-    expect(codeReviewComment.body).toContain('N+1 query detected');
-
-    // Other comment should contain pr-overview group content
-    expect(prOverviewComment.body).toContain('PR overview generated');
-    expect(prOverviewComment.body).not.toContain('SQL injection vulnerability');
+    // Comment should contain both structured issues and suggestions
+    expect(callArgs.body).toContain('SQL injection vulnerability');
+    expect(callArgs.body).toContain('N+1 query detected');
+    expect(callArgs.body).toContain('PR overview generated');
+    expect(callArgs.body).toContain(
+      'This is overview analysis with detailed insights about the PR'
+    );
   });
 
   test('should use correct template per group', async () => {

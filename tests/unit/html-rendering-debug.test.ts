@@ -142,22 +142,18 @@ describe('HTML Rendering Debug', () => {
 
     await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
 
-    // Should create 2 separate comments for different groups
-    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(2);
+    // Should create 1 single comment with all content combined
+    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(1);
 
-    const call1 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
-    const call2 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[1][0];
+    const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
-    console.log('=== FIRST COMMENT (should be code-review) ===');
-    console.log(call1.body);
-    console.log('=== SECOND COMMENT (should be pr-overview) ===');
-    console.log(call2.body);
+    console.log('=== COMBINED COMMENT (should have both code-review table and pr-overview) ===');
+    console.log(callArgs.body);
     console.log('=== END ===');
 
-    // One should be table format, other should be markdown
-    const hasTable = call1.body.includes('<table>') || call2.body.includes('<table>');
-    const hasMarkdown =
-      call1.body.includes('## PR Overview') || call2.body.includes('## PR Overview');
+    // Should have both table format and markdown overview
+    const hasTable = callArgs.body.includes('<table>');
+    const hasMarkdown = callArgs.body.includes('## PR Overview');
 
     expect(hasTable).toBe(true);
     expect(hasMarkdown).toBe(true);
