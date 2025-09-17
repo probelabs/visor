@@ -22,6 +22,49 @@ max_parallelism: 1
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
 
 checks:
+  # AI-powered release notes generation - manual execution only for release workflows
+  release-notes:
+    type: ai
+    group: release
+    schema: plain
+    prompt: |
+      Generate professional release notes for version {{ env.TAG_NAME }} of this project.
+
+      Analyze the git commits since the last release:
+      ```
+      {{ env.GIT_LOG }}
+      ```
+
+      And the file changes summary:
+      ```
+      {{ env.GIT_DIFF_STAT }}
+      ```
+
+      Create release notes with these sections:
+
+      ## 🚀 What's New in {{ env.TAG_NAME }}
+
+      ### ✨ New Features
+      List any new features added (look for feat: commits)
+
+      ### 🐛 Bug Fixes
+      List any bugs fixed (look for fix: commits)
+
+      ### 📈 Improvements
+      List any improvements or refactoring (look for refactor:, perf:, chore:, build: commits)
+
+      ### 🔥 Breaking Changes
+      List any breaking changes if present (look for BREAKING CHANGE or ! in commits)
+
+      ### 📊 Statistics
+      - Number of commits since last release
+      - Number of contributors involved
+      - Number of files changed
+
+      Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
+      Use present tense and action-oriented language. Group similar changes together.
+    on: [manual]
+
   # PR overview with intelligent analysis - runs first to establish context
   overview:
     type: ai
@@ -321,7 +364,7 @@ checks:
 
         ### Response Format
         Provide a well-structured markdown response with clear sections and helpful guidance.
-    on: [manual]
+    on: [issues, issue_comment]
 
 # Output configuration
 output:
