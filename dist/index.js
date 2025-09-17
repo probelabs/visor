@@ -1412,6 +1412,7 @@ class CheckExecutionEngine {
                     const result = await tasks[taskIndex]();
                     results[taskIndex] = { status: 'fulfilled', value: result };
                     // Check if we should stop due to fail-fast
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     if (failFast && this.shouldFailFast(result)) {
                         shouldStop = true;
                         break;
@@ -2629,35 +2630,61 @@ class CheckExecutionEngine {
             // No config available, return all checks (fallback behavior)
             return checks;
         }
-        // Determine current event type from PR info or default to pr_opened
-        const currentEvent = this.getCurrentEventType(prInfo);
-        logFn?.(`🔧 Debug: Current event type: ${currentEvent}`);
-        const filteredChecks = [];
-        for (const checkName of checks) {
-            const checkConfig = config.checks[checkName];
-            if (!checkConfig) {
-                // Check has no config, include it (fallback behavior)
-                filteredChecks.push(checkName);
-                continue;
+        // If we have event context from GitHub (prInfo with eventType), apply strict filtering
+        // Otherwise (CLI, tests), use conservative filtering
+        const prInfoWithEvent = prInfo;
+        const hasEventContext = prInfoWithEvent && 'eventType' in prInfoWithEvent && prInfoWithEvent.eventType;
+        if (hasEventContext) {
+            // GitHub Action context - apply strict event filtering
+            const currentEvent = prInfoWithEvent.eventType;
+            logFn?.(`🔧 Debug: GitHub Action context, current event: ${currentEvent}`);
+            const filteredChecks = [];
+            for (const checkName of checks) {
+                const checkConfig = config.checks[checkName];
+                if (!checkConfig) {
+                    filteredChecks.push(checkName);
+                    continue;
+                }
+                const eventTriggers = checkConfig.on || [];
+                if (eventTriggers.length === 0) {
+                    // No triggers specified, include it
+                    filteredChecks.push(checkName);
+                    logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
+                }
+                else if (eventTriggers.includes(currentEvent)) {
+                    // Check matches current event
+                    filteredChecks.push(checkName);
+                    logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+                }
+                else {
+                    // Check doesn't match current event
+                    logFn?.(`🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`);
+                }
             }
-            // Check if this check should run for the current event
-            const eventTriggers = checkConfig.on || [];
-            if (eventTriggers.length === 0) {
-                // No event triggers specified, include it (fallback behavior)
-                filteredChecks.push(checkName);
-                logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
-            }
-            else if (eventTriggers.includes(currentEvent)) {
-                // Check should run for current event
-                filteredChecks.push(checkName);
-                logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
-            }
-            else {
-                // Check should not run for current event
-                logFn?.(`🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`);
-            }
+            return filteredChecks;
         }
-        return filteredChecks;
+        else {
+            // CLI/Test context - conservative filtering (only exclude manual-only checks)
+            logFn?.(`🔧 Debug: CLI/Test context, using conservative filtering`);
+            const filteredChecks = [];
+            for (const checkName of checks) {
+                const checkConfig = config.checks[checkName];
+                if (!checkConfig) {
+                    filteredChecks.push(checkName);
+                    continue;
+                }
+                const eventTriggers = checkConfig.on || [];
+                // Only exclude checks that are explicitly manual-only
+                if (eventTriggers.length === 1 && eventTriggers[0] === 'manual') {
+                    logFn?.(`🔧 Debug: Check '${checkName}' is manual-only, skipping`);
+                }
+                else {
+                    filteredChecks.push(checkName);
+                    logFn?.(`🔧 Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`);
+                }
+            }
+            return filteredChecks;
+        }
     }
     /**
      * Determine the current event type from PR info
@@ -2797,6 +2824,7 @@ class ConfigManager {
         'pr_closed',
         'issue_opened',
         'issue_comment',
+        'manual',
     ];
     validOutputFormats = ['table', 'json', 'markdown', 'sarif'];
     validGroupByOptions = ['check', 'file', 'severity'];
@@ -3451,9 +3479,21 @@ class FailureConditionEvaluator {
             outputs: contextData?.previousResults
                 ? Object.fromEntries(Array.from(contextData.previousResults.entries()))
                 : {},
+            // Required output property (empty for if conditions)
+            output: {
+                issues: [],
+                suggestions: [],
+            },
             // Utility metadata
             metadata: {
                 checkName,
+                schema: '',
+                group: '',
+                criticalIssues: 0,
+                errorIssues: 0,
+                warningIssues: 0,
+                infoIssues: 0,
+                totalIssues: 0,
                 hasChanges: (contextData?.filesChanged?.length || 0) > 0,
                 branch: contextData?.branch || 'unknown',
                 event: contextData?.event || 'manual',
@@ -3571,7 +3611,7 @@ class FailureConditionEvaluator {
             const hasFileMatching = (issues, pattern) => {
                 if (!Array.isArray(issues))
                     return false;
-                return issues.some(issue => issue.file && issue.file.includes(pattern));
+                return issues.some(issue => issue.file?.includes(pattern));
             };
             const hasSuggestion = (suggestions, text) => {
                 if (!Array.isArray(suggestions))
@@ -3591,7 +3631,8 @@ class FailureConditionEvaluator {
                 checkName: context.checkName || '',
                 schema: context.schema || '',
                 group: context.group || '',
-                criticalIssues: issues.filter((i) => i.severity === 'critical').length,
+                criticalIssues: issues.filter((i) => i.severity === 'critical')
+                    .length,
                 errorIssues: issues.filter((i) => i.severity === 'error').length,
                 warningIssues: issues.filter((i) => i.severity === 'warning').length,
                 infoIssues: issues.filter((i) => i.severity === 'info').length,
@@ -3712,6 +3753,7 @@ class FailureConditionEvaluator {
                 })),
                 suggestions,
                 // Include additional schema-specific data from reviewSummary
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ...reviewSummary, // Pass through any additional fields
             },
             outputs: previousOutputs || {},
@@ -5153,7 +5195,8 @@ async function postCliReviewComment(cliOutput, inputs, octokit) {
             // Fallback to environment or event data
             latestCommitSha =
                 eventContext.event?.pull_request?.head?.sha ||
-                    eventContext.payload?.event?.pull_request?.head?.sha ||
+                    eventContext.payload?.pull_request?.head
+                        ?.sha ||
                     process.env.GITHUB_SHA;
         }
         // Use smart comment updating with unique ID
@@ -5423,7 +5466,13 @@ async function handlePullRequestEvent(octokit, owner, repo, inputs) {
         // Fall back to a basic configuration for PR auto-review
         config = {
             version: '1.0',
-            output: {},
+            output: {
+                pr_comment: {
+                    format: 'markdown',
+                    group_by: 'check',
+                    collapse: false,
+                },
+            },
             checks: {
                 'auto-review': {
                     type: 'ai',
@@ -5506,9 +5555,9 @@ async function handlePullRequestEvent(octokit, owner, repo, inputs) {
     (0, core_1.setOutput)('pr-action', action);
     (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
     // Set GitHub check run outputs
-    (0, core_1.setOutput)('checks-api-available', checkResults.checksApiAvailable.toString());
-    (0, core_1.setOutput)('check-runs-created', checkResults.checkRunsCreated.toString());
-    (0, core_1.setOutput)('check-runs-urls', checkResults.checkRunUrls.join(','));
+    (0, core_1.setOutput)('checks-api-available', checkResults?.checksApiAvailable.toString() || 'false');
+    (0, core_1.setOutput)('check-runs-created', checkResults?.checkRunsCreated.toString() || '0');
+    (0, core_1.setOutput)('check-runs-urls', checkResults?.checkRunUrls.join(',') || '');
 }
 async function handleRepoInfo(octokit, owner, repo) {
     const { data: repoData } = await octokit.rest.repos.get({
@@ -5751,6 +5800,7 @@ async function evaluateCheckFailureConditions(config, checkConfig, checkName, ch
                     severity: 'error',
                     expression: config.fail_if,
                     message: 'Global failure condition met',
+                    haltExecution: false,
                 });
             }
         }
@@ -5781,6 +5831,7 @@ async function evaluateCheckFailureConditions(config, checkConfig, checkName, ch
                     severity: 'error',
                     expression: checkConfig.fail_if,
                     message: `Check ${checkName} failure condition met`,
+                    haltExecution: false,
                 });
             }
         }
@@ -5820,6 +5871,7 @@ async function evaluateGlobalFailureConditions(config, allIssues) {
                     severity: 'error',
                     expression: config.fail_if,
                     message: 'Global failure condition met',
+                    haltExecution: false,
                 });
             }
         }
@@ -6671,7 +6723,7 @@ class AICheckProvider extends check_provider_interface_1.CheckProvider {
         const grouped = {};
         files.forEach(file => {
             const parts = file.filename.split('.');
-            const ext = parts.length > 1 ? parts.pop()?.toLowerCase() : 'noext';
+            const ext = parts.length > 1 ? parts.pop()?.toLowerCase() || 'noext' : 'noext';
             if (!grouped[ext]) {
                 grouped[ext] = [];
             }
@@ -6826,45 +6878,45 @@ class AICheckProvider extends check_provider_interface_1.CheckProvider {
                     // Repository Info
                     repository: eventContext.repository
                         ? {
-                            owner: eventContext.repository.owner?.login,
-                            name: eventContext.repository.name,
+                            owner: eventContext.repository?.owner?.login,
+                            name: eventContext.repository?.name,
                             fullName: eventContext.repository
-                                ? `${eventContext.repository.owner?.login}/${eventContext.repository.name}`
+                                ? `${eventContext.repository?.owner?.login}/${eventContext.repository?.name}`
                                 : undefined,
                         }
                         : undefined,
                     // Comment Data (for comment events)
                     comment: eventContext.comment
                         ? {
-                            body: eventContext.comment.body,
-                            author: eventContext.comment.user?.login,
+                            body: eventContext.comment?.body,
+                            author: eventContext.comment?.user?.login,
                         }
                         : undefined,
                     // Issue Data (for issue events)
                     issue: eventContext.issue
                         ? {
-                            number: eventContext.issue.number,
-                            title: eventContext.issue.title,
-                            body: eventContext.issue.body,
-                            state: eventContext.issue.state,
-                            author: eventContext.issue.user?.login,
-                            labels: eventContext.issue.labels || [],
-                            assignees: eventContext.issue.assignees?.map((a) => a.login) || [],
-                            createdAt: eventContext.issue.created_at,
-                            updatedAt: eventContext.issue.updated_at,
-                            isPullRequest: !!eventContext.issue.pull_request,
+                            number: eventContext.issue?.number,
+                            title: eventContext.issue?.title,
+                            body: eventContext.issue?.body,
+                            state: eventContext.issue?.state,
+                            author: eventContext.issue?.user?.login,
+                            labels: eventContext.issue?.labels || [],
+                            assignees: eventContext?.issue?.assignees?.map(a => a.login) || [],
+                            createdAt: eventContext.issue?.created_at,
+                            updatedAt: eventContext.issue?.updated_at,
+                            isPullRequest: !!eventContext.issue?.pull_request,
                         }
                         : undefined,
                     // Pull Request Event Data
                     pullRequest: eventContext.pull_request
                         ? {
-                            number: eventContext.pull_request.number,
-                            state: eventContext.pull_request.state,
-                            draft: eventContext.pull_request.draft,
-                            headSha: eventContext.pull_request.head?.sha,
-                            headRef: eventContext.pull_request.head?.ref,
-                            baseSha: eventContext.pull_request.base?.sha,
-                            baseRef: eventContext.pull_request.base?.ref,
+                            number: eventContext.pull_request?.number,
+                            state: eventContext.pull_request?.state,
+                            draft: eventContext.pull_request?.draft,
+                            headSha: eventContext.pull_request?.head?.sha,
+                            headRef: eventContext.pull_request?.head?.ref,
+                            baseSha: eventContext.pull_request?.base?.sha,
+                            baseRef: eventContext.pull_request?.base?.ref,
                         }
                         : undefined,
                     // Raw event payload for advanced use cases
@@ -7307,7 +7359,7 @@ class ScriptCheckProvider extends check_provider_interface_1.CheckProvider {
             const result = JSON.parse(output);
             // Convert to ReviewIssue format
             const issues = Array.isArray(result.comments)
-                ? result.comments.map((c) => ({
+                ? result.comments.map(c => ({
                     file: c.file || 'unknown',
                     line: c.line || 0,
                     endLine: c.endLine,
@@ -7604,11 +7656,11 @@ class WebhookCheckProvider extends check_provider_interface_1.CheckProvider {
             if (!response.ok) {
                 throw new Error(`Webhook returned ${response.status}: ${response.statusText}`);
             }
-            return await response.json();
+            return (await response.json());
         }
         catch (error) {
             clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
+            if (error?.name === 'AbortError') {
                 throw new Error(`Webhook request timed out after ${timeout}ms`);
             }
             throw error;
@@ -7620,7 +7672,7 @@ class WebhookCheckProvider extends check_provider_interface_1.CheckProvider {
             return this.createErrorResult(url, new Error('Invalid webhook response format'));
         }
         const issues = Array.isArray(response.comments)
-            ? response.comments.map((c) => ({
+            ? response.comments.map(c => ({
                 file: c.file || 'unknown',
                 line: c.line || 0,
                 endLine: c.endLine,
@@ -7841,7 +7893,7 @@ class PRReviewer {
         }
     }
     async formatReviewCommentWithVisorFormat(summary, _options, githubContext) {
-        const totalIssues = calculateTotalIssues(summary.issues);
+        // const totalIssues = calculateTotalIssues(summary.issues); // TODO: Use this for summary stats
         let comment = '';
         // Simple header - let templates handle the content logic
         comment += `## 🔍 Code Analysis Results\n\n`;
@@ -7938,7 +7990,7 @@ class PRReviewer {
             checkName: checkName,
             github: githubContext,
         };
-        // Render with Liquid template and trim any extra whitespace at the start/end
+        // Render with Liquid template and trim extra whitespace at the start/end
         const rendered = await liquid.parseAndRender(templateContent, templateData);
         return rendered.trim();
     }
