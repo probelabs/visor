@@ -159,11 +159,11 @@ export class FailureConditionEvaluator {
       filesChanged: contextData?.filesChanged || [],
       filesCount: contextData?.filesChanged?.length || 0,
 
-      // Event context
+      // GitHub event context
       event: {
-        type: contextData?.event || 'manual',
-        isPullRequest: this.determineIfPullRequest(contextData?.event),
-        isIssue: this.determineIfIssue(contextData?.event),
+        event_name: contextData?.event || 'manual',
+        action: undefined, // Would be populated from actual GitHub context
+        repository: undefined, // Would be populated from actual GitHub context
       },
 
       // Environment variables
@@ -192,7 +192,7 @@ export class FailureConditionEvaluator {
         totalIssues: 0,
         hasChanges: (contextData?.filesChanged?.length || 0) > 0,
         branch: contextData?.branch || 'unknown',
-        eventType: contextData?.event || 'manual',
+        event: contextData?.event || 'manual',
       },
     };
 

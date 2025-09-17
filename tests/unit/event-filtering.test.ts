@@ -10,47 +10,62 @@ describe('Event Filtering', () => {
 
   describe('PR vs Issue Detection', () => {
     it('should identify pull request events', async () => {
-      const result = await evaluator.evaluateIfCondition('test-check', 'event.isPullRequest', {
-        event: 'pr_opened',
-        branch: 'feature/test',
-        baseBranch: 'main',
-        filesChanged: ['test.js'],
-      });
+      const result = await evaluator.evaluateIfCondition(
+        'test-check',
+        'event.event_name === "pull_request"',
+        {
+          event: 'pull_request',
+          branch: 'feature/test',
+          baseBranch: 'main',
+          filesChanged: ['test.js'],
+        }
+      );
 
       expect(result).toBe(true);
     });
 
     it('should identify pull request comment events', async () => {
-      const result = await evaluator.evaluateIfCondition('test-check', 'event.isPullRequest', {
-        event: 'issue_comment', // Comments on PRs are still issue_comment events
-        branch: 'feature/test',
-        baseBranch: 'main',
-        filesChanged: ['test.js'],
-      });
+      const result = await evaluator.evaluateIfCondition(
+        'test-check',
+        'event.event_name === "issue_comment"',
+        {
+          event: 'issue_comment', // Comments on PRs are still issue_comment events
+          branch: 'feature/test',
+          baseBranch: 'main',
+          filesChanged: ['test.js'],
+        }
+      );
 
-      // Note: issue_comment doesn't automatically indicate a PR
-      // In real usage, the context would need to determine if the comment is on a PR
-      expect(result).toBe(false);
+      // issue_comment event name matches
+      expect(result).toBe(true);
     });
 
     it('should identify issue events', async () => {
-      const result = await evaluator.evaluateIfCondition('test-check', 'event.isIssue', {
-        event: 'issue_opened',
-        branch: 'main',
-        baseBranch: 'main',
-        filesChanged: [],
-      });
+      const result = await evaluator.evaluateIfCondition(
+        'test-check',
+        'event.event_name === "issues"',
+        {
+          event: 'issues',
+          branch: 'main',
+          baseBranch: 'main',
+          filesChanged: [],
+        }
+      );
 
       expect(result).toBe(true);
     });
 
     it('should identify issue comment events', async () => {
-      const result = await evaluator.evaluateIfCondition('test-check', 'event.isIssue', {
-        event: 'issue_comment',
-        branch: 'main',
-        baseBranch: 'main',
-        filesChanged: [],
-      });
+      const result = await evaluator.evaluateIfCondition(
+        'test-check',
+        'event.event_name === "issue_comment"',
+        {
+          event: 'issue_comment',
+          branch: 'main',
+          baseBranch: 'main',
+          filesChanged: [],
+        }
+      );
 
       expect(result).toBe(true);
     });
@@ -58,7 +73,7 @@ describe('Event Filtering', () => {
     it('should handle unknown events', async () => {
       const result = await evaluator.evaluateIfCondition(
         'test-check',
-        'event.isPullRequest || event.isIssue',
+        'event.event_name === "pull_request" || event.event_name === "issues"',
         {
           event: 'unknown_event',
           branch: 'main',
@@ -71,12 +86,16 @@ describe('Event Filtering', () => {
     });
 
     it('should handle manual events', async () => {
-      const result = await evaluator.evaluateIfCondition('test-check', 'event.type === "manual"', {
-        event: 'manual',
-        branch: 'main',
-        baseBranch: 'main',
-        filesChanged: [],
-      });
+      const result = await evaluator.evaluateIfCondition(
+        'test-check',
+        'event.event_name === "manual"',
+        {
+          event: 'manual',
+          branch: 'main',
+          baseBranch: 'main',
+          filesChanged: [],
+        }
+      );
 
       expect(result).toBe(true);
     });
@@ -84,11 +103,11 @@ describe('Event Filtering', () => {
 
   describe('Complex Event Conditions', () => {
     it('should handle PR-only conditions', async () => {
-      const condition = 'event.isPullRequest && filesChanged.length > 0';
+      const condition = 'event.event_name === "pull_request" && filesChanged.length > 0';
 
       // PR with files changed
       const prResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'pr_opened',
+        event: 'pull_request',
         branch: 'feature/test',
         baseBranch: 'main',
         filesChanged: ['test.js', 'docs.md'],
@@ -98,7 +117,7 @@ describe('Event Filtering', () => {
 
       // Issue with files (shouldn't happen but tests the logic)
       const issueResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'issue_opened',
+        event: 'issues',
         branch: 'main',
         baseBranch: 'main',
         filesChanged: ['test.js'],
@@ -108,10 +127,10 @@ describe('Event Filtering', () => {
     });
 
     it('should handle issue-only conditions', async () => {
-      const condition = 'event.isIssue && !event.isPullRequest';
+      const condition = 'event.event_name === "issues" && event.event_name !== "pull_request"';
 
       const issueResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'issue_opened',
+        event: 'issues',
         branch: 'main',
         baseBranch: 'main',
         filesChanged: [],
@@ -120,7 +139,7 @@ describe('Event Filtering', () => {
       expect(issueResult).toBe(true);
 
       const prResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'pr_opened',
+        event: 'pull_request',
         branch: 'feature/test',
         baseBranch: 'main',
         filesChanged: ['test.js'],
@@ -130,7 +149,7 @@ describe('Event Filtering', () => {
     });
 
     it('should handle event type checking', async () => {
-      const condition = 'event.type === "issue_comment"';
+      const condition = 'event.event_name === "issue_comment"';
 
       const result = await evaluator.evaluateIfCondition('test-check', condition, {
         event: 'issue_comment',
@@ -144,11 +163,11 @@ describe('Event Filtering', () => {
 
     it('should handle combined conditions', async () => {
       const condition =
-        '(event.isPullRequest && filesCount > 5) || (event.isIssue && event.type === "issue_opened")';
+        '(event.event_name === "pull_request" && filesCount > 5) || (event.event_name === "issues" && event.event_name === "issues")';
 
       // Large PR
       const largePrResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'pr_opened',
+        event: 'pull_request',
         branch: 'feature/large',
         baseBranch: 'main',
         filesChanged: ['a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'f.js'],
@@ -158,7 +177,7 @@ describe('Event Filtering', () => {
 
       // New issue
       const newIssueResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'issue_opened',
+        event: 'issues',
         branch: 'main',
         baseBranch: 'main',
         filesChanged: [],
@@ -168,7 +187,7 @@ describe('Event Filtering', () => {
 
       // Small PR
       const smallPrResult = await evaluator.evaluateIfCondition('test-check', condition, {
-        event: 'pr_opened',
+        event: 'pull_request',
         branch: 'feature/small',
         baseBranch: 'main',
         filesChanged: ['test.js'],

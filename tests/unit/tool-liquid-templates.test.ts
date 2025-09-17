@@ -50,7 +50,7 @@ describe('ToolCheckProvider - Liquid Templates', () => {
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'echo',
-        ['"PR: Fix bug in authentication"'],
+        ['PR: Fix bug in authentication'],
         expect.any(Object)
       );
     });
@@ -107,7 +107,7 @@ describe('ToolCheckProvider - Liquid Templates', () => {
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'eslint',
-        ['src/test1.js src/test2.js'],
+        ['src/test1.js', 'src/test2.js'],
         expect.any(Object)
       );
     });

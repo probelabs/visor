@@ -87,8 +87,37 @@ export interface FailureConditionContext {
   filesCount?: number;
   hasChanges?: boolean;
 
-  /** Event context */
-  event?: string;
+  /** GitHub event context */
+  event?: {
+    /** GitHub event name (e.g., 'pull_request', 'issues', 'push') */
+    event_name: string;
+    /** Action that triggered the event (e.g., 'opened', 'closed', 'synchronize') */
+    action?: string;
+    /** Repository information */
+    repository?: {
+      owner: { login: string };
+      name: string;
+    };
+    /** Pull request data (for PR events) */
+    pull_request?: {
+      number: number;
+      state: string;
+      head: { sha: string; ref: string };
+      base: { sha: string; ref: string };
+    };
+    /** Issue data (for issue events) */
+    issue?: {
+      number: number;
+      pull_request?: { url: string };
+    };
+    /** Comment data (for comment events) */
+    comment?: {
+      body: string;
+      user: { login: string };
+    };
+    /** Additional webhook payload data */
+    [key: string]: unknown;
+  };
 
   /** Environment variables */
   env?: Record<string, string>;
