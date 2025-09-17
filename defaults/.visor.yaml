@@ -202,6 +202,8 @@ checks:
   issue-assistant:
     type: ai
     group: issue-support
+    command: "ask"
+    if: "event.name === 'issues' && event.action === 'opened' || (event.name === 'issue_comment' && event.comment && event.comment.body && event.comment.body.trim().startsWith('/ask'))"
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance based on the trigger event.
 
@@ -310,7 +312,7 @@ checks:
 
         ### Response Format
         Provide a well-structured markdown response with clear sections and helpful guidance.
-    on: [issue_opened, issue_comment]
+    on: [manual]
 
 # Output configuration
 output:

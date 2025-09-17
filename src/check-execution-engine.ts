@@ -12,7 +12,7 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 /**
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
-function getSafeEnvironmentVariables(): Record<string, any> {
+function getSafeEnvironmentVariables(): Record<string, string> {
   const safeEnvVars = [
     'CI',
     'GITHUB_EVENT_NAME',
@@ -28,7 +28,7 @@ function getSafeEnvironmentVariables(): Record<string, any> {
     'NODE_ENV',
   ];
 
-  const safeEnv: Record<string, any> = {};
+  const safeEnv: Record<string, string> = {};
 
   for (const key of safeEnvVars) {
     if (process.env[key]) {
@@ -260,7 +260,8 @@ export class CheckExecutionEngine {
           results[taskIndex] = { status: 'fulfilled', value: result };
 
           // Check if we should stop due to fail-fast
-          if (failFast && this.shouldFailFast(result)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (failFast && this.shouldFailFast(result as any)) {
             shouldStop = true;
             break;
           }
@@ -312,7 +313,9 @@ export class CheckExecutionEngine {
     // Filter checks based on current event type to prevent execution of checks that shouldn't run
     const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
     if (filteredChecks.length !== checks.length) {
-      logFn(`🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`);
+      logFn(
+        `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
+      );
     }
 
     // Use filtered checks for execution
@@ -1522,7 +1525,10 @@ export class CheckExecutionEngine {
   /**
    * Check if a task result should trigger fail-fast behavior
    */
-  private shouldFailFast(result: any): boolean {
+  private shouldFailFast(result: {
+    error?: string;
+    result?: { issues?: Array<{ severity: string }> };
+  }): boolean {
     // If the result has an error property, it's a failed check
     if (result?.error) {
       return true;
@@ -1531,7 +1537,7 @@ export class CheckExecutionEngine {
     // If the result has a result with critical or error issues, it should fail fast
     if (result?.result?.issues) {
       return result.result.issues.some(
-        (issue: any) => issue.severity === 'error' || issue.severity === 'critical'
+        (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
       );
     }
 
@@ -1778,7 +1784,7 @@ export class CheckExecutionEngine {
     }
 
     // Group issues by check name
-    const issuesByCheck = new Map<string, any[]>();
+    const issuesByCheck = new Map<string, import('./reviewer').ReviewIssue[]>();
 
     // Initialize empty arrays for all checks
     for (const checkName of this.checkRunMap.keys()) {
@@ -1882,37 +1888,70 @@ export class CheckExecutionEngine {
       return checks;
     }
 
-    // Determine current event type from PR info or default to pr_opened
-    const currentEvent = this.getCurrentEventType(prInfo);
-    logFn?.(`🔧 Debug: Current event type: ${currentEvent}`);
+    // If we have event context from GitHub (prInfo with eventType), apply strict filtering
+    // Otherwise (CLI, tests), use conservative filtering
+    const prInfoWithEvent = prInfo as PRInfo & {
+      eventType?: import('./types/config').EventTrigger;
+    };
+    const hasEventContext =
+      prInfoWithEvent && 'eventType' in prInfoWithEvent && prInfoWithEvent.eventType;
 
-    const filteredChecks: string[] = [];
+    if (hasEventContext) {
+      // GitHub Action context - apply strict event filtering
+      const currentEvent = prInfoWithEvent.eventType!;
+      logFn?.(`🔧 Debug: GitHub Action context, current event: ${currentEvent}`);
 
-    for (const checkName of checks) {
-      const checkConfig = config.checks[checkName];
-      if (!checkConfig) {
-        // Check has no config, include it (fallback behavior)
-        filteredChecks.push(checkName);
-        continue;
+      const filteredChecks: string[] = [];
+      for (const checkName of checks) {
+        const checkConfig = config.checks[checkName];
+        if (!checkConfig) {
+          filteredChecks.push(checkName);
+          continue;
+        }
+
+        const eventTriggers = checkConfig.on || [];
+        if (eventTriggers.length === 0) {
+          // No triggers specified, include it
+          filteredChecks.push(checkName);
+          logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
+        } else if (eventTriggers.includes(currentEvent)) {
+          // Check matches current event
+          filteredChecks.push(checkName);
+          logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+        } else {
+          // Check doesn't match current event
+          logFn?.(
+            `🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`
+          );
+        }
       }
+      return filteredChecks;
+    } else {
+      // CLI/Test context - conservative filtering (only exclude manual-only checks)
+      logFn?.(`🔧 Debug: CLI/Test context, using conservative filtering`);
 
-      // Check if this check should run for the current event
-      const eventTriggers = checkConfig.on || [];
-      if (eventTriggers.length === 0) {
-        // No event triggers specified, include it (fallback behavior)
-        filteredChecks.push(checkName);
-        logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
-      } else if (eventTriggers.includes(currentEvent)) {
-        // Check should run for current event
-        filteredChecks.push(checkName);
-        logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
-      } else {
-        // Check should not run for current event
-        logFn?.(`🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`);
+      const filteredChecks: string[] = [];
+      for (const checkName of checks) {
+        const checkConfig = config.checks[checkName];
+        if (!checkConfig) {
+          filteredChecks.push(checkName);
+          continue;
+        }
+
+        const eventTriggers = checkConfig.on || [];
+
+        // Only exclude checks that are explicitly manual-only
+        if (eventTriggers.length === 1 && eventTriggers[0] === 'manual') {
+          logFn?.(`🔧 Debug: Check '${checkName}' is manual-only, skipping`);
+        } else {
+          filteredChecks.push(checkName);
+          logFn?.(
+            `🔧 Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`
+          );
+        }
       }
+      return filteredChecks;
     }
-
-    return filteredChecks;
   }
 
   /**

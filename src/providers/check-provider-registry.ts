@@ -157,6 +157,6 @@ export class CheckProviderRegistry {
    * Clear singleton instance (for testing)
    */
   static clearInstance(): void {
-    CheckProviderRegistry.instance = undefined as any;
+    CheckProviderRegistry.instance = undefined!;
   }
 }

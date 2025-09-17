@@ -223,11 +223,12 @@ graph TD
 
       const rendered = await liquid.parseAndRender(templateContent, data);
 
-      // Should render the header for the check but no table for empty issues
-      expect(rendered).toContain('Security Issues (0)');
-      // Template should still render table structure even with empty issues
-      expect(rendered).toContain('<table');
-      expect(rendered).toContain('<tbody>');
+      // Should render a friendly "all checks passed" message for empty issues
+      expect(rendered).toContain('✅ **All Checks Passed**');
+      expect(rendered).toContain('**No issues found – changes LGTM.**');
+      // Template should NOT render table structure for empty issues
+      expect(rendered).not.toContain('<table');
+      expect(rendered).not.toContain('<tbody>');
     });
 
     test('should handle template rendering errors gracefully', async () => {

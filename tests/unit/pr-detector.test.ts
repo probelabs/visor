@@ -65,9 +65,9 @@ describe('PRDetector', () => {
         event: {
           issue: {
             number: 456,
-            pull_request: {},
+            pull_request: { url: 'https://api.github.com/repos/testowner/testrepo/pulls/456' },
           },
-          comment: {},
+          comment: { body: 'test comment', user: { login: 'testuser' } },
         },
       };
 
@@ -84,7 +84,7 @@ describe('PRDetector', () => {
         event_name: 'push',
         event: {
           ref: 'refs/heads/feature-branch',
-          commits: [{ id: 'abc123' }],
+          commits: [{ id: 'abc123', message: 'test commit message' }],
         },
       };
 
@@ -149,7 +149,7 @@ describe('PRDetector', () => {
         event_name: 'push',
         event: {
           head_commit: { id: 'commit123' },
-          commits: [{ id: 'commit123' }],
+          commits: [{ id: 'commit123', message: 'test commit message' }],
         },
       };
 

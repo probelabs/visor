@@ -115,7 +115,7 @@ describe('AIReviewService Session Reuse', () => {
         mockPRInfo,
         'Reuse session prompt',
         parentSessionId,
-        undefined,
+        'code-review',
         'dependent-check'
       );
 
@@ -123,7 +123,9 @@ describe('AIReviewService Session Reuse', () => {
       expect(existingAgent.answer).toHaveBeenCalledWith(
         expect.stringContaining('Reuse session prompt'),
         undefined,
-        undefined
+        expect.objectContaining({
+          schema: expect.stringContaining('code-review'),
+        })
       );
 
       expect(result.issues).toHaveLength(1);

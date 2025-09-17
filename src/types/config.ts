@@ -2,6 +2,12 @@
  * Types for Visor configuration system
  */
 
+// Import ReviewSummary for type definitions
+import type { ReviewSummary, ReviewIssue } from '../reviewer';
+
+// Export Issue type for backward compatibility
+export type Issue = ReviewIssue;
+
 /**
  * Failure condition severity levels
  */
@@ -63,16 +69,44 @@ export interface FailureConditionContext {
     suggestions?: string[];
 
     /** Any additional fields provided by the check/schema */
-    [key: string]: any;
+    [key: string]: unknown;
   };
 
   /** Previous check outputs for dependencies - keyed by check name */
-  outputs?: Record<string, any>;
+  outputs?: Record<string, ReviewSummary>;
 
   /** Check context information */
   checkName?: string;
   schema?: string;
   group?: string;
+
+  /** Git context for if conditions */
+  branch?: string;
+  baseBranch?: string;
+  filesChanged?: string[];
+  filesCount?: number;
+  hasChanges?: boolean;
+
+  /** Event context */
+  event?: string;
+
+  /** Environment variables */
+  env?: Record<string, string>;
+
+  /** Utility metadata for backward compatibility */
+  metadata?: {
+    checkName: string;
+    schema: string;
+    group: string;
+    criticalIssues: number;
+    errorIssues: number;
+    warningIssues: number;
+    infoIssues: number;
+    totalIssues: number;
+    hasChanges: boolean;
+    branch: string;
+    event: string;
+  };
 
   /** Debug information (if available) */
   debug?: {
@@ -120,7 +154,8 @@ export type EventTrigger =
   | 'pr_updated'
   | 'pr_closed'
   | 'issue_opened'
-  | 'issue_comment';
+  | 'issue_comment'
+  | 'manual';
 
 /**
  * Valid output formats

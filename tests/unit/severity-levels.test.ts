@@ -43,7 +43,7 @@ describe('Severity Levels', () => {
         suggestions: [],
       });
 
-      const result = (service as any).parseAIResponse(mockResponse);
+      const result = (service as any).parseAIResponse(mockResponse, undefined, 'code-review');
 
       // Should correctly process issues with critical severity
       expect(result.issues).toBeDefined();

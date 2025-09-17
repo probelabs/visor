@@ -85,10 +85,11 @@ The implementation follows security best practices and includes proper error han
         isIncremental: false,
       };
 
-      // Execute AI review without schema
+      // Execute AI review with code-review schema
       const result = await aiService.executeReview(
         mockPrInfo,
-        'Analyze this PR and create an overview with architecture diagram'
+        'Analyze this PR and create an overview with architecture diagram',
+        'code-review'
       );
 
       // Verify the AI response was parsed correctly (should have no issues since no schema)
@@ -178,7 +179,8 @@ Both diagrams show the system architecture and data relationships.`,
 
       const result = await aiService.executeReview(
         mockPrInfo,
-        'Analyze system architecture changes'
+        'Analyze system architecture changes',
+        'code-review'
       );
 
       // Verify both Mermaid diagrams are preserved
@@ -242,7 +244,11 @@ The flow includes error handling and logging.`,
         isIncremental: false,
       };
 
-      const result = await aiService.executeReview(mockPrInfo, 'Document the process flow');
+      const result = await aiService.executeReview(
+        mockPrInfo,
+        'Document the process flow',
+        'code-review'
+      );
 
       const content = result.suggestions[0];
 

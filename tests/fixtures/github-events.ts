@@ -136,7 +136,9 @@ export const ISSUE_COMMENT_ON_PR_EVENT = {
     action: 'created',
     issue: {
       number: MOCK_PR_DATA.number,
-      pull_request: {}, // Presence indicates this is a PR
+      pull_request: {
+        url: `https://api.github.com/repos/${MOCK_REPO_INFO.owner}/${MOCK_REPO_INFO.name}/pulls/${MOCK_PR_DATA.number}`,
+      }, // Presence indicates this is a PR
       state: 'open',
     },
     comment: {
@@ -150,7 +152,9 @@ export const ISSUE_COMMENT_ON_PR_EVENT = {
     action: 'created',
     issue: {
       number: MOCK_PR_DATA.number,
-      pull_request: {},
+      pull_request: {
+        url: `https://api.github.com/repos/${MOCK_REPO_INFO.owner}/${MOCK_REPO_INFO.name}/pulls/${MOCK_PR_DATA.number}`,
+      },
       state: 'open',
     },
     comment: {

@@ -206,7 +206,7 @@ export class PRReviewer {
     _options: ReviewOptions,
     githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    const totalIssues = calculateTotalIssues(summary.issues);
+    // const totalIssues = calculateTotalIssues(summary.issues); // TODO: Use this for summary stats
 
     let comment = '';
 
@@ -287,7 +287,7 @@ export class PRReviewer {
   private enhanceIssuesWithGitHubLinks(
     issues: ReviewIssue[],
     githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
-  ): any[] {
+  ): Array<ReviewIssue & { githubUrl?: string; fileHash?: string }> {
     if (!githubContext) {
       return issues;
     }
@@ -351,7 +351,7 @@ export class PRReviewer {
       github: githubContext,
     };
 
-    // Render with Liquid template and trim any extra whitespace at the start/end
+    // Render with Liquid template and trim extra whitespace at the start/end
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     return rendered.trim();
   }

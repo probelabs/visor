@@ -67,12 +67,14 @@ export class AICheckProvider extends CheckProvider {
   /**
    * Group files by their file extension for template context
    */
-  private groupFilesByExtension(files: any[]): Record<string, any[]> {
-    const grouped: Record<string, any[]> = {};
+  private groupFilesByExtension(
+    files: import('../pr-analyzer').PRFile[]
+  ): Record<string, import('../pr-analyzer').PRFile[]> {
+    const grouped: Record<string, import('../pr-analyzer').PRFile[]> = {};
 
     files.forEach(file => {
       const parts = file.filename.split('.');
-      const ext = parts.length > 1 ? parts.pop()?.toLowerCase() : 'noext';
+      const ext = parts.length > 1 ? parts.pop()?.toLowerCase() || 'noext' : 'noext';
       if (!grouped[ext]) {
         grouped[ext] = [];
       }
@@ -88,7 +90,7 @@ export class AICheckProvider extends CheckProvider {
   private async processPrompt(
     promptConfig: string,
     prInfo: PRInfo,
-    eventContext?: any,
+    eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<string> {
     let promptContent: string;
@@ -223,7 +225,7 @@ export class AICheckProvider extends CheckProvider {
   private async renderPromptTemplate(
     promptContent: string,
     prInfo: PRInfo,
-    eventContext?: any,
+    eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<string> {
     // Create comprehensive template context with PR and event information
@@ -258,10 +260,10 @@ export class AICheckProvider extends CheckProvider {
             // Repository Info
             repository: eventContext.repository
               ? {
-                  owner: eventContext.repository.owner?.login,
-                  name: eventContext.repository.name,
+                  owner: (eventContext.repository as { owner?: { login?: string } })?.owner?.login,
+                  name: (eventContext.repository as { name?: string })?.name,
                   fullName: eventContext.repository
-                    ? `${eventContext.repository.owner?.login}/${eventContext.repository.name}`
+                    ? `${(eventContext.repository as { owner?: { login?: string } })?.owner?.login}/${(eventContext.repository as { name?: string })?.name}`
                     : undefined,
                 }
               : undefined,
@@ -269,37 +271,40 @@ export class AICheckProvider extends CheckProvider {
             // Comment Data (for comment events)
             comment: eventContext.comment
               ? {
-                  body: eventContext.comment.body,
-                  author: eventContext.comment.user?.login,
+                  body: (eventContext.comment as { body?: string })?.body,
+                  author: (eventContext.comment as { user?: { login?: string } })?.user?.login,
                 }
               : undefined,
 
             // Issue Data (for issue events)
             issue: eventContext.issue
               ? {
-                  number: eventContext.issue.number,
-                  title: eventContext.issue.title,
-                  body: eventContext.issue.body,
-                  state: eventContext.issue.state,
-                  author: eventContext.issue.user?.login,
-                  labels: eventContext.issue.labels || [],
-                  assignees: eventContext.issue.assignees?.map((a: any) => a.login) || [],
-                  createdAt: eventContext.issue.created_at,
-                  updatedAt: eventContext.issue.updated_at,
-                  isPullRequest: !!eventContext.issue.pull_request,
+                  number: (eventContext.issue as { number?: number })?.number,
+                  title: (eventContext.issue as { title?: string })?.title,
+                  body: (eventContext.issue as { body?: string })?.body,
+                  state: (eventContext.issue as { state?: string })?.state,
+                  author: (eventContext.issue as { user?: { login?: string } })?.user?.login,
+                  labels: (eventContext.issue as { labels?: unknown[] })?.labels || [],
+                  assignees:
+                    (
+                      eventContext as { issue?: { assignees?: Array<{ login: string }> } }
+                    )?.issue?.assignees?.map(a => a.login) || [],
+                  createdAt: (eventContext.issue as { created_at?: string })?.created_at,
+                  updatedAt: (eventContext.issue as { updated_at?: string })?.updated_at,
+                  isPullRequest: !!(eventContext.issue as { pull_request?: unknown })?.pull_request,
                 }
               : undefined,
 
             // Pull Request Event Data
             pullRequest: eventContext.pull_request
               ? {
-                  number: eventContext.pull_request.number,
-                  state: eventContext.pull_request.state,
-                  draft: eventContext.pull_request.draft,
-                  headSha: eventContext.pull_request.head?.sha,
-                  headRef: eventContext.pull_request.head?.ref,
-                  baseSha: eventContext.pull_request.base?.sha,
-                  baseRef: eventContext.pull_request.base?.ref,
+                  number: (eventContext.pull_request as { number?: number })?.number,
+                  state: (eventContext.pull_request as { state?: string })?.state,
+                  draft: (eventContext.pull_request as { draft?: boolean })?.draft,
+                  headSha: (eventContext.pull_request as { head?: { sha?: string } })?.head?.sha,
+                  headRef: (eventContext.pull_request as { head?: { ref?: string } })?.head?.ref,
+                  baseSha: (eventContext.pull_request as { base?: { sha?: string } })?.base?.sha,
+                  baseRef: (eventContext.pull_request as { base?: { ref?: string } })?.base?.ref,
                 }
               : undefined,
 
