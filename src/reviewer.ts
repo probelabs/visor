@@ -301,10 +301,10 @@ export class PRReviewer {
   private groupResultsByGroup(summary: ReviewSummary): Record<string, ReviewSummary> {
     const grouped: Record<string, ReviewSummary> = {};
 
-    // Group issues by their group property
+    // Group issues by their group property (issues from same group go together)
     if (summary.issues && summary.issues.length > 0) {
       for (const issue of summary.issues) {
-        const groupName = issue.group || 'code-review';
+        const groupName = issue.group || 'review'; // Default to 'review' to match config
         if (!grouped[groupName]) {
           grouped[groupName] = { issues: [], suggestions: [] };
         }
@@ -312,21 +312,25 @@ export class PRReviewer {
       }
     }
 
-    // Group suggestions by checking if they have group prefixes
+    // Group suggestions by checking if they have group prefixes like "[checkName] content"
     if (summary.suggestions && summary.suggestions.length > 0) {
       for (const suggestion of summary.suggestions) {
         // Check if suggestion has a group prefix like "[overview] content"
         const groupMatch = suggestion.match(/^\[([^\]]+)\]\s*(.*)/s);
         if (groupMatch) {
-          const groupName = groupMatch[1];
+          const checkName = groupMatch[1];
           const content = groupMatch[2];
+
+          // Map check name to group name - overview check has group 'overview'
+          const groupName = checkName === 'overview' ? 'overview' : 'review';
+
           if (!grouped[groupName]) {
             grouped[groupName] = { issues: [], suggestions: [] };
           }
           grouped[groupName].suggestions!.push(content);
         } else {
-          // No group prefix, put in default group
-          const groupName = 'code-review';
+          // No group prefix, put in default review group
+          const groupName = 'review';
           if (!grouped[groupName]) {
             grouped[groupName] = { issues: [], suggestions: [] };
           }
@@ -344,7 +348,7 @@ export class PRReviewer {
 
     // If no groups were created, create a default one
     if (Object.keys(grouped).length === 0) {
-      grouped['code-review'] = { issues: [], suggestions: [] };
+      grouped['review'] = { issues: [], suggestions: [] };
     }
 
     return grouped;

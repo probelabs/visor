@@ -32,10 +32,10 @@ describe('Group-based Comments', () => {
   });
 
   test('should create separate comments for different groups', async () => {
-    // Mock review results from multiple groups
+    // Mock review results from multiple groups matching actual config
     const mockReviewWithMultipleGroups = {
       issues: [
-        // Code review group issues
+        // Review group issues (security, performance, quality all have group: review)
         {
           file: 'src/security.ts',
           line: 1,
@@ -43,7 +43,7 @@ describe('Group-based Comments', () => {
           message: 'SQL injection vulnerability',
           severity: 'critical' as const,
           category: 'security' as const,
-          group: 'code-review',
+          group: 'review', // This matches the actual config
         },
         {
           file: 'src/performance.ts',
@@ -52,13 +52,13 @@ describe('Group-based Comments', () => {
           message: 'N+1 query detected',
           severity: 'warning' as const,
           category: 'performance' as const,
-          group: 'code-review',
+          group: 'review', // This matches the actual config
         },
-        // PR overview group issue
+        // Overview group issue
         {
           file: 'README.md',
           line: 1,
-          ruleId: 'full-review/overview',
+          ruleId: 'overview/summary',
           message: 'PR overview generated',
           severity: 'info' as const,
           category: 'documentation' as const,
@@ -77,15 +77,16 @@ describe('Group-based Comments', () => {
     const call1 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     const call2 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[1][0];
 
-    // One comment should contain code-review group content
-    const codeReviewComment = call1.body.includes('SQL injection vulnerability') ? call1 : call2;
+    // One comment should contain review group content (security + performance combined)
+    const reviewComment = call1.body.includes('SQL injection vulnerability') ? call1 : call2;
     const overviewComment = call1.body.includes('SQL injection vulnerability') ? call2 : call1;
 
-    expect(codeReviewComment.body).toContain('SQL injection vulnerability');
-    expect(codeReviewComment.body).toContain('N+1 query detected');
-    expect(codeReviewComment.body).not.toContain('This is overview analysis');
+    // Review comment should have BOTH security and performance issues in one comment
+    expect(reviewComment.body).toContain('SQL injection vulnerability');
+    expect(reviewComment.body).toContain('N+1 query detected');
+    expect(reviewComment.body).not.toContain('This is overview analysis');
 
-    // Other comment should contain overview group content
+    // Overview comment should contain overview group content
     expect(overviewComment.body).toContain('PR overview generated');
     expect(overviewComment.body).toContain('This is overview analysis with detailed insights about the PR');
     expect(overviewComment.body).not.toContain('SQL injection vulnerability');
