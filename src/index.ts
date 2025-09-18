@@ -132,6 +132,18 @@ export async function run(): Promise<void> {
 
     const eventName = process.env.GITHUB_EVENT_NAME;
 
+    // Load GitHub event data from event file
+    let eventData: any = {};
+    if (process.env.GITHUB_EVENT_PATH) {
+      try {
+        const fs = await import('fs');
+        const eventContent = fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8');
+        eventData = JSON.parse(eventContent);
+      } catch (error) {
+        console.error('Failed to load GitHub event data:', error);
+      }
+    }
+
     // Create GitHub context for CLI bridge
     const context: GitHubContext = {
       event_name: eventName || 'unknown',
@@ -141,8 +153,8 @@ export async function run(): Promise<void> {
             name: process.env.GITHUB_REPOSITORY.split('/')[1],
           }
         : undefined,
-      event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : {},
-      payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
+      event: eventData,
+      payload: eventData,
     };
 
     // Debug logging for inputs
@@ -310,11 +322,11 @@ async function handleEvent(
   // Handle different GitHub events
   switch (eventName) {
     case 'issue_comment':
-      await handleIssueComment(octokit, owner, repo);
+      await handleIssueComment(octokit, owner, repo, context);
       break;
     case 'pull_request':
       // Run the checks that are configured for this event
-      await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun);
+      await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun, context);
       break;
     case 'push':
       // Could handle push events that are associated with PRs
@@ -373,10 +385,9 @@ function resolveDependencies(
   return result;
 }
 
-async function handleIssueComment(octokit: Octokit, owner: string, repo: string): Promise<void> {
-  const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
-  const comment = context.event?.comment;
-  const issue = context.event?.issue;
+async function handleIssueComment(octokit: Octokit, owner: string, repo: string, context: GitHubContext): Promise<void> {
+  const comment = context.event?.comment as any;
+  const issue = context.event?.issue as any;
 
   if (!comment || !issue) {
     console.log('No comment or issue found in context');
@@ -547,11 +558,11 @@ async function handlePullRequestWithConfig(
   repo: string,
   inputs: GitHubActionInputs,
   config: import('./types/config').VisorConfig,
-  checksToRun: string[]
+  checksToRun: string[],
+  context: GitHubContext
 ): Promise<void> {
-  const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
-  const pullRequest = context.event?.pull_request;
-  const action = context.event?.action;
+  const pullRequest = context.event?.pull_request as any;
+  const action = context.event?.action as string | undefined;
 
   if (!pullRequest) {
     console.log('No pull request found in context');
