@@ -737,7 +737,7 @@ async function filterChecksToExecute(
       filesCount: prInfo?.files.length || 0,
       additions: prInfo?.totalAdditions || 0,
       deletions: prInfo?.totalDeletions || 0,
-    }
+    },
   };
 
   for (const checkName of checksToRun) {
@@ -755,11 +755,7 @@ async function filterChecksToExecute(
         const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
         const evaluator = new FailureConditionEvaluator();
 
-        const shouldRun = await evaluator.evaluateIfCondition(
-          checkName,
-          checkConfig.if,
-          context
-        );
+        const shouldRun = await evaluator.evaluateIfCondition(checkName, checkConfig.if, context);
 
         if (shouldRun) {
           filteredChecks.push(checkName);
@@ -1019,7 +1015,6 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
 
   return issues;
 }
-
 
 /**
  * Complete individual GitHub check runs
