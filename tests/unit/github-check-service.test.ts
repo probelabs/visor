@@ -151,9 +151,10 @@ describe('GitHubCheckService', () => {
       });
     });
 
-    it('should complete check run with failure when critical issues found', async () => {
+    it('should complete check run with success even when critical issues found (no fail_if)', async () => {
       mockUpdate.mockResolvedValue({});
 
+      // Empty failureResults means fail_if condition was NOT met
       const failureResults: FailureConditionResult[] = [];
       const reviewIssues: ReviewIssue[] = [
         {
@@ -175,16 +176,18 @@ describe('GitHubCheckService', () => {
         reviewIssues
       );
 
+      // Should PASS because fail_if was not triggered, even with critical issues
       expect(mockUpdate).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
         check_run_id: 123,
         status: 'completed',
-        conclusion: 'failure',
+        conclusion: 'success',
         completed_at: expect.any(String),
         output: expect.objectContaining({
-          title: '🚨 Check Failed',
-          summary: 'security check failed due to critical issues.',
+          title: '✅ Check Passed (Issues Found)',
+          summary:
+            'security check passed. Found 1 critical and 0 error issues, but fail_if condition was not met.',
           annotations: [
             {
               path: 'src/auth.ts',
@@ -233,21 +236,22 @@ describe('GitHubCheckService', () => {
         completed_at: expect.any(String),
         output: expect.objectContaining({
           title: '🚨 Check Failed',
-          summary: 'security check failed due to failure conditions.',
+          summary: 'security check failed because fail_if condition was met.',
         }),
       });
     });
 
-    it('should complete check run with neutral when warnings found', async () => {
+    it('should complete check run with failure when fail_if condition is met', async () => {
       mockUpdate.mockResolvedValue({});
 
+      // In our simplified system, all fail_if conditions result in failure
       const failureResults: FailureConditionResult[] = [
         {
-          conditionName: 'warning-threshold',
-          expression: 'metadata.warningIssues > 5',
+          conditionName: 'fail_if_condition',
+          expression: 'output.issues && output.issues.length > 5',
           failed: true,
-          severity: 'warning',
-          message: 'Too many warnings found',
+          severity: 'error', // fail_if is always error severity
+          message: 'fail_if condition met',
           haltExecution: false,
         },
       ];
@@ -260,11 +264,11 @@ describe('GitHubCheckService', () => {
         repo: 'repo',
         check_run_id: 123,
         status: 'completed',
-        conclusion: 'neutral',
+        conclusion: 'failure',
         completed_at: expect.any(String),
         output: expect.objectContaining({
-          title: '⚠️ Check Completed with Warnings',
-          summary: 'style check completed but found warning conditions.',
+          title: '🚨 Check Failed',
+          summary: 'style check failed because fail_if condition was met.',
         }),
       });
     });

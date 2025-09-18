@@ -983,10 +983,27 @@ async function completeIndividualChecks(
   const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
   const failureEvaluator = new FailureConditionEvaluator();
 
+  // Extract all issues once and group by check name for O(N) complexity
+  const allIssues = extractIssuesFromGroupedResults(groupedResults);
+  const issuesByCheck = new Map<string, import('./reviewer').ReviewIssue[]>();
+
+  // Initialize empty arrays for all checks
+  for (const checkName of checkRunMap.keys()) {
+    issuesByCheck.set(checkName, []);
+  }
+
+  // Group issues by check name
+  for (const issue of allIssues) {
+    const checkName = issue.ruleId?.split('/')[0];
+    if (checkName && issuesByCheck.has(checkName)) {
+      issuesByCheck.get(checkName)!.push(issue);
+    }
+  }
+
   for (const [checkName, checkRun] of checkRunMap) {
     try {
-      // Extract issues for this specific check from the grouped results content
-      const checkIssues = extractIssuesForCheck(groupedResults, checkName);
+      // Get pre-grouped issues for this check - O(1) lookup
+      const checkIssues = issuesByCheck.get(checkName) || [];
 
       // Evaluate failure conditions based on fail_if configuration
       const failureResults: import('./types/config').FailureConditionResult[] = [];
