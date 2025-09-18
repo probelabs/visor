@@ -117,14 +117,6 @@ jest.mock('../../src/providers/tool-check-provider', () => ({
   })),
 }));
 
-jest.mock('../../src/providers/script-check-provider', () => ({
-  ScriptCheckProvider: jest.fn().mockImplementation(() => ({
-    getName: jest.fn().mockReturnValue('script'),
-    initialize: jest.fn().mockResolvedValue(undefined),
-    execute: jest.fn().mockResolvedValue({ issues: [], suggestions: [] }),
-  })),
-}));
-
 jest.mock('../../src/providers/webhook-check-provider', () => ({
   WebhookCheckProvider: jest.fn().mockImplementation(() => ({
     getName: jest.fn().mockReturnValue('webhook'),
@@ -172,7 +164,7 @@ describe('fail_if Integration Tests', () => {
           'security-check': {
             type: 'ai',
             prompt: 'Security analysis',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             fail_if: 'metadata.totalIssues > 0', // Check-specific condition
           },
         },
@@ -226,7 +218,7 @@ describe('fail_if Integration Tests', () => {
           'style-check': {
             type: 'ai',
             prompt: 'Style check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             fail_if: 'metadata.errorIssues > 0', // Only fail on errors, not warnings
           },
         },
@@ -281,21 +273,21 @@ describe('fail_if Integration Tests', () => {
           'security-check': {
             type: 'ai',
             prompt: 'Security analysis',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Using contains() function
             fail_if: 'contains(metadata.checkName, "security") && metadata.totalIssues > 0',
           },
           'api-check': {
             type: 'ai',
             prompt: 'API check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Using startsWith() function
             fail_if: 'startsWith(metadata.checkName, "api") && metadata.totalIssues > 0',
           },
           'always-fail': {
             type: 'ai',
             prompt: 'Always fail check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Using always() function
             fail_if: 'always()',
           },
@@ -353,14 +345,14 @@ describe('fail_if Integration Tests', () => {
           'quality-gate': {
             type: 'ai',
             prompt: 'Quality check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Using failure transform
             fail_if: 'criticalIssues > 0 || errorIssues > 0',
           },
           'info-only': {
             type: 'ai',
             prompt: 'Info check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Using success check with negation (fail if NOT successful - has critical/error issues)
             fail_if: 'criticalIssues > 0 || errorIssues > 0',
           },
@@ -380,7 +372,7 @@ describe('fail_if Integration Tests', () => {
         'security-check': {
           type: 'ai',
           prompt: 'Security check',
-          on: ['pr_opened'],
+          on: ['pr_updated'],
           fail_if: 'always()',
         },
       };
@@ -408,7 +400,7 @@ describe('fail_if Integration Tests', () => {
         'performance-check': {
           type: 'ai',
           prompt: 'Performance check',
-          on: ['pr_opened'],
+          on: ['pr_updated'],
           fail_if: '!always()',
         },
       };
@@ -438,7 +430,7 @@ describe('fail_if Integration Tests', () => {
           'complex-check': {
             type: 'ai',
             prompt: 'Complex analysis',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Complex condition combining multiple checks
             fail_if:
               '(metadata.errorIssues > 0 && metadata.warningIssues > 0) || metadata.criticalIssues > 0',
@@ -459,7 +451,7 @@ describe('fail_if Integration Tests', () => {
         'security-check': {
           type: 'ai',
           prompt: 'Security check',
-          on: ['pr_opened'],
+          on: ['pr_updated'],
           fail_if:
             '(metadata.errorIssues > 0 && metadata.warningIssues > 0) || metadata.criticalIssues > 0',
         },
@@ -490,7 +482,7 @@ describe('fail_if Integration Tests', () => {
           'auth-check': {
             type: 'ai',
             prompt: 'Auth check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             // Check for security issues in auth files
             fail_if: 'hasIssue(issues, "category", "security") && hasFileMatching(issues, "auth")',
           },
@@ -510,7 +502,7 @@ describe('fail_if Integration Tests', () => {
         'security-check': {
           type: 'ai',
           prompt: 'Security check',
-          on: ['pr_opened'],
+          on: ['pr_updated'],
           fail_if: 'hasIssue(issues, "category", "security") && hasFileMatching(issues, "auth")',
         },
       };
@@ -606,19 +598,19 @@ describe('fail_if Integration Tests', () => {
           'security-check': {
             type: 'ai',
             prompt: 'Security analysis',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             fail_if: 'metadata.criticalIssues > 0',
           },
           'performance-check': {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             fail_if: 'metadata.errorIssues > 0',
           },
           'combined-check': {
             type: 'ai',
             prompt: 'Combined check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security-check', 'performance-check'],
             // This would be evaluated with outputs available
             fail_if: 'metadata.totalIssues > 0',

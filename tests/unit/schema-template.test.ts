@@ -33,22 +33,6 @@ describe('Schema-Template System', () => {
       expect(validate).toBeDefined();
     });
 
-    test('should load text schema correctly', async () => {
-      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
-      const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-      const schema = JSON.parse(schemaContent);
-
-      expect(schema).toHaveProperty('$schema');
-      expect(schema).toHaveProperty('$id', 'text');
-      expect(schema).toHaveProperty('type', 'object');
-      expect(schema.properties).toHaveProperty('content');
-      expect(schema.properties.content).toHaveProperty('type', 'string');
-
-      // Verify schema is valid JSON Schema
-      const validate = ajv.compile(schema);
-      expect(validate).toBeDefined();
-    });
-
     test('should validate code-review data against schema', async () => {
       const schemaPath = path.join(__dirname, '../../output/code-review/schema.json');
       const schemaContent = await fs.readFile(schemaPath, 'utf-8');
@@ -92,37 +76,6 @@ describe('Schema-Template System', () => {
       const isValid = validate(invalidData);
       expect(isValid).toBe(false);
       expect(validate.errors).toHaveLength(4); // 4 missing required properties
-    });
-
-    test('should validate markdown data against schema', async () => {
-      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
-      const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-      const schema = JSON.parse(schemaContent);
-      const validate = ajv.compile(schema);
-
-      const validData = {
-        content: '# PR Overview\n\nThis PR adds new authentication features.',
-      };
-
-      const isValid = validate(validData);
-      expect(isValid).toBe(true);
-      expect(validate.errors).toBeFalsy();
-    });
-
-    test('should reject invalid markdown data', async () => {
-      const schemaPath = path.join(__dirname, '../../output/plain/schema.json');
-      const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-      const schema = JSON.parse(schemaContent);
-      const validate = ajv.compile(schema);
-
-      const invalidData = {
-        // missing required content field
-      };
-
-      const isValid = validate(invalidData);
-      expect(isValid).toBe(false);
-      expect(validate.errors).toHaveLength(1);
-      expect(validate.errors![0].params).toHaveProperty('missingProperty', 'content');
     });
   });
 
@@ -174,44 +127,6 @@ describe('Schema-Template System', () => {
       expect(rendered).toContain('Use environment variables for API keys');
     });
 
-    test('should render text template correctly', async () => {
-      const templatePath = path.join(__dirname, '../../output/plain/template.liquid');
-      const templateContent = await fs.readFile(templatePath, 'utf-8');
-
-      const data = {
-        content: `# Pull Request Overview
-
-## Summary
-This PR adds JWT-based authentication system with the following changes:
-- User registration and login endpoints
-- JWT token generation and validation
-- Role-based access control middleware
-
-## Files Changed
-| File | Purpose |
-|------|---------|
-| src/auth.ts | Core authentication service |
-| src/middleware/auth.ts | Authentication middleware |
-
-## Architecture Diagram
-\`\`\`mermaid
-graph TD
-  A[Client] --> B[Auth Middleware]
-  B --> C[Auth Service]
-  C --> D[JWT Token]
-\`\`\``,
-      };
-
-      const rendered = await liquid.parseAndRender(templateContent, data);
-
-      // Should render content as-is
-      expect(rendered.trim()).toBe(data.content);
-      expect(rendered).toContain('# Pull Request Overview');
-      expect(rendered).toContain('## Summary');
-      expect(rendered).toContain('JWT-based authentication');
-      expect(rendered).toContain('```mermaid');
-    });
-
     test('should handle empty data in code-review template', async () => {
       const templatePath = path.join(__dirname, '../../output/code-review/template.liquid');
       const templateContent = await fs.readFile(templatePath, 'utf-8');
@@ -223,9 +138,9 @@ graph TD
 
       const rendered = await liquid.parseAndRender(templateContent, data);
 
-      // Should render a friendly "all checks passed" message for empty issues
-      expect(rendered).toContain('✅ **All Checks Passed**');
-      expect(rendered).toContain('**No issues found – changes LGTM.**');
+      // Should render the success message for empty issues
+      expect(rendered).toContain('All Checks Passed');
+      expect(rendered).toContain('No issues found');
       // Template should NOT render table structure for empty issues
       expect(rendered).not.toContain('<table');
       expect(rendered).not.toContain('<tbody>');

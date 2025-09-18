@@ -198,6 +198,15 @@ checks:
     reuse_ai_session: true  # 🔄 Reuses the performance check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
+  # Command orchestrator - demonstrates noop type for triggering multiple checks
+  review-all:
+    type: noop
+    command: '/review'
+    depends_on: [overview, security, performance, quality]
+    on: [issue_comment]
+    if: "event.isPullRequest"  # Only trigger on PR comments, not issues
+    group: orchestrator
+
   # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
   issue-assistant:
     type: ai

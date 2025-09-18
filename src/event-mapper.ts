@@ -346,7 +346,8 @@ export class EventMapper {
   }> {
     return Object.entries(this.config.checks || {}).map(([name, config]) => ({
       name,
-      description: config.prompt.split('\n')[0] || 'No description available',
+      description:
+        config.prompt?.split('\n')[0] || config.exec?.split(' ')[0] || 'No description available',
       triggers: config.on,
     }));
   }

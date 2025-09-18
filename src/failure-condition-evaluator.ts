@@ -114,6 +114,26 @@ export class FailureConditionEvaluator {
   }
 
   /**
+   * Determine if the event is related to pull requests
+   */
+  private determineIfPullRequest(eventType?: string): boolean {
+    if (!eventType) return false;
+
+    const prEvents = ['pr_opened', 'pr_updated', 'pr_closed', 'pull_request'];
+    return prEvents.includes(eventType) || eventType.startsWith('pr_');
+  }
+
+  /**
+   * Determine if the event is related to issues
+   */
+  private determineIfIssue(eventType?: string): boolean {
+    if (!eventType) return false;
+
+    const issueEvents = ['issue_opened', 'issue_comment', 'issues'];
+    return issueEvents.includes(eventType) || eventType.startsWith('issue_');
+  }
+
+  /**
    * Evaluate if condition to determine whether a check should run
    */
   async evaluateIfCondition(
@@ -139,8 +159,12 @@ export class FailureConditionEvaluator {
       filesChanged: contextData?.filesChanged || [],
       filesCount: contextData?.filesChanged?.length || 0,
 
-      // Event context
-      event: contextData?.event || 'manual',
+      // GitHub event context
+      event: {
+        event_name: contextData?.event || 'manual',
+        action: undefined, // Would be populated from actual GitHub context
+        repository: undefined, // Would be populated from actual GitHub context
+      },
 
       // Environment variables
       env: contextData?.environment || {},

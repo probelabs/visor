@@ -25,8 +25,25 @@ describe('CheckExecutionEngine - Dependencies', () => {
     // Create mock registry
     mockRegistry = {
       getInstance: jest.fn(),
-      hasProvider: jest.fn().mockReturnValue(true),
-      getProviderOrThrow: jest.fn().mockReturnValue(mockProvider),
+      hasProvider: jest.fn((providerName: string) => providerName === 'ai'),
+      getProviderOrThrow: jest.fn((providerName: string) => {
+        if (providerName === 'ai') {
+          return mockProvider;
+        }
+        throw new Error(`Provider ${providerName} not found`);
+      }),
+      getProvider: jest.fn((providerName: string) => {
+        if (providerName === 'ai') {
+          return mockProvider;
+        }
+        return undefined;
+      }),
+      register: jest.fn(),
+      unregister: jest.fn(),
+      getAllProviders: jest.fn().mockReturnValue([]),
+      getActiveProviders: jest.fn().mockResolvedValue([]),
+      reset: jest.fn(),
+      clearInstance: jest.fn(),
       registerProvider: jest.fn(),
       getAvailableProviders: jest.fn().mockReturnValue(['ai']),
       listProviders: jest.fn(),
@@ -46,17 +63,17 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           style: {
             type: 'ai',
             prompt: 'Style check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
         },
         output: {
@@ -85,18 +102,18 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security'],
           },
           style: {
             type: 'ai',
             prompt: 'Style check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['performance'],
           },
         },
@@ -146,23 +163,23 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           style: {
             type: 'ai',
             prompt: 'Style check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security', 'performance'],
           },
           architecture: {
             type: 'ai',
             prompt: 'Architecture check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['style'],
           },
         },
@@ -219,13 +236,13 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['performance'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security'],
           },
         },
@@ -256,7 +273,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['nonexistent'],
           },
         },
@@ -287,12 +304,12 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security'],
           },
         },
@@ -343,12 +360,12 @@ describe('CheckExecutionEngine - Dependencies', () => {
           security: {
             type: 'ai',
             prompt: 'Security check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
           },
           performance: {
             type: 'ai',
             prompt: 'Performance check',
-            on: ['pr_opened'],
+            on: ['pr_updated'],
             depends_on: ['security'],
           },
         },

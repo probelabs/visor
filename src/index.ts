@@ -568,6 +568,51 @@ async function handleLegacyMode(
   }
 }
 
+/**
+ * Recursively resolve dependencies for a set of check IDs
+ */
+function resolveDependencies(
+  checkIds: string[],
+  config: any,
+  resolved: Set<string> = new Set(),
+  visiting: Set<string> = new Set()
+): string[] {
+  const result: string[] = [];
+
+  for (const checkId of checkIds) {
+    if (resolved.has(checkId)) {
+      continue;
+    }
+
+    if (visiting.has(checkId)) {
+      console.warn(`Circular dependency detected involving check: ${checkId}`);
+      continue;
+    }
+
+    visiting.add(checkId);
+
+    // Get dependencies for this check
+    const checkConfig = config?.checks?.[checkId];
+    const dependencies = checkConfig?.depends_on || [];
+
+    // Recursively resolve dependencies first
+    if (dependencies.length > 0) {
+      const resolvedDeps = resolveDependencies(dependencies, config, resolved, visiting);
+      result.push(...resolvedDeps.filter(dep => !result.includes(dep)));
+    }
+
+    // Add the current check if not already added
+    if (!result.includes(checkId)) {
+      result.push(checkId);
+    }
+
+    resolved.add(checkId);
+    visiting.delete(checkId);
+  }
+
+  return result;
+}
+
 async function handleIssueComment(octokit: Octokit, owner: string, repo: string): Promise<void> {
   const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
   const comment = context.event?.comment;
@@ -664,8 +709,12 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string)
     default:
       // Handle custom commands from config
       if (commandRegistry[command.type]) {
-        const checkIds = commandRegistry[command.type];
-        console.log(`Running checks for command /${command.type}: ${checkIds.join(', ')}`);
+        const initialCheckIds = commandRegistry[command.type];
+        // Resolve all dependencies recursively
+        const checkIds = resolveDependencies(initialCheckIds, config);
+        console.log(
+          `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
+        );
 
         const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
 

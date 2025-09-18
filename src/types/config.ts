@@ -87,8 +87,37 @@ export interface FailureConditionContext {
   filesCount?: number;
   hasChanges?: boolean;
 
-  /** Event context */
-  event?: string;
+  /** GitHub event context */
+  event?: {
+    /** GitHub event name (e.g., 'pull_request', 'issues', 'push') */
+    event_name: string;
+    /** Action that triggered the event (e.g., 'opened', 'closed', 'synchronize') */
+    action?: string;
+    /** Repository information */
+    repository?: {
+      owner: { login: string };
+      name: string;
+    };
+    /** Pull request data (for PR events) */
+    pull_request?: {
+      number: number;
+      state: string;
+      head: { sha: string; ref: string };
+      base: { sha: string; ref: string };
+    };
+    /** Issue data (for issue events) */
+    issue?: {
+      number: number;
+      pull_request?: { url: string };
+    };
+    /** Comment data (for comment events) */
+    comment?: {
+      body: string;
+      user: { login: string };
+    };
+    /** Additional webhook payload data */
+    [key: string]: unknown;
+  };
 
   /** Environment variables */
   env?: Record<string, string>;
@@ -144,7 +173,7 @@ export interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-export type ConfigCheckType = 'ai';
+export type ConfigCheckType = 'ai' | 'tool' | 'webhook' | 'noop';
 
 /**
  * Valid event triggers for checks
@@ -194,8 +223,14 @@ export interface AIProviderConfig {
 export interface CheckConfig {
   /** Type of check to perform */
   type: ConfigCheckType;
-  /** AI prompt for the check - can be inline string or file path (auto-detected) */
-  prompt: string;
+  /** AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks */
+  prompt?: string;
+  /** Tool execution command with Liquid template support - required for tool checks */
+  exec?: string;
+  /** Stdin input for tools with Liquid template support - optional for tool checks */
+  stdin?: string;
+  /** Webhook URL - required for webhook checks */
+  url?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
   focus?: string;
   /** Command that triggers this check (e.g., "review", "security-scan") - optional */

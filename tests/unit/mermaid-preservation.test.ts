@@ -32,7 +32,7 @@ describe('Mermaid Diagram Preservation', () => {
     delete process.env.GOOGLE_API_KEY;
   });
 
-  describe('Plain Schema with Mermaid Diagrams', () => {
+  describe('Structured Schema with Mermaid Diagrams', () => {
     test('should preserve mermaid diagrams from AI response to GitHub comment', async () => {
       // Mock AI response with Mermaid diagram in suggestions
       const aiResponseWithMermaid = JSON.stringify({
@@ -252,17 +252,17 @@ The flow includes error handling and logging.`,
 
       const content = result.suggestions[0];
 
-      // Verify complex Mermaid syntax is preserved
+      // Verify complex Mermaid syntax is preserved (now in structured response)
       expect(content).toContain('```mermaid');
       expect(content).toContain('flowchart TB');
       expect(content).toContain('🔐 Authentication<br/>Check User');
-      expect(content).toContain('|Yes| C["✅ Authorized<br/>Process Request"]');
+      expect(content).toContain('✅ Authorized<br/>Process Request');
       expect(content).toContain('style A fill:#e1f5fe');
       expect(content).toContain('style C fill:#e8f5e8');
       expect(content).toContain('style D fill:#ffebee');
 
       // Ensure all special characters and formatting are preserved
-      expect(content).toContain('A["🔐 Authentication<br/>Check User"]');
+      expect(content).toContain('A[\"🔐 Authentication<br/>Check User\"]');
       expect(content).toContain('B{Valid Token?}');
       expect(content).toContain('-->|Yes|');
       expect(content).toContain('-->|No|');

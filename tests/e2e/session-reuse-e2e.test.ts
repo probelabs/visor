@@ -87,7 +87,7 @@ checks:
       - Authentication issues
       Return your findings in the standard format.
     on:
-      - pr_opened
+      - pr_updated
     ai:
       provider: google
       model: test-model
@@ -99,7 +99,7 @@ checks:
       You should build upon the conversation context from the security analysis.
       Provide specific code examples and best practices.
     on:
-      - pr_opened
+      - pr_updated
     depends_on:
       - security-analysis
     reuse_ai_session: true
@@ -116,7 +116,7 @@ checks:
       - Inefficient algorithms
       - Resource leaks
     on:
-      - pr_opened
+      - pr_updated
     ai:
       provider: google
       model: test-model
@@ -177,7 +177,7 @@ checks:
     type: ai
     prompt: "This check has invalid session reuse configuration"
     on:
-      - pr_opened
+      - pr_updated
     reuse_ai_session: true
     # Missing depends_on!
 
@@ -208,7 +208,7 @@ checks:
     type: ai
     prompt: "Perform initial code analysis"
     on:
-      - pr_opened
+      - pr_updated
     ai:
       provider: mock
 
@@ -216,7 +216,7 @@ checks:
     type: ai
     prompt: "Detailed security analysis based on initial scan"
     on:
-      - pr_opened
+      - pr_updated
     depends_on:
       - initial-scan
     reuse_ai_session: true
@@ -225,7 +225,7 @@ checks:
     type: ai
     prompt: "Generate comprehensive security report"
     on:
-      - pr_opened
+      - pr_updated
     depends_on:
       - detailed-security
     reuse_ai_session: true
@@ -234,7 +234,7 @@ checks:
     type: ai
     prompt: "Independent performance analysis"
     on:
-      - pr_opened
+      - pr_updated
     ai:
       provider: mock
 
@@ -281,7 +281,7 @@ checks:
       Identify the main patterns, frameworks, and potential areas of concern.
       Remember this context for follow-up analysis.
     on:
-      - pr_opened
+      - pr_updated
     ai:
       provider: google
       model: test-model
@@ -293,7 +293,7 @@ checks:
       perform a targeted security analysis. Use the context we established
       to provide more relevant and specific security recommendations.
     on:
-      - pr_opened
+      - pr_updated
     depends_on:
       - context-builder
     reuse_ai_session: true
@@ -305,7 +305,7 @@ checks:
       Consider the architectural patterns we identified earlier
       and provide performance recommendations specific to this codebase.
     on:
-      - pr_opened
+      - pr_updated
     depends_on:
       - context-aware-security
     reuse_ai_session: true
