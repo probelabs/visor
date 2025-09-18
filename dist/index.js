@@ -610,7 +610,7 @@ async function filterChecksToExecute(checksToRun, config, prInfo) {
             filesCount: prInfo?.files.length || 0,
             additions: prInfo?.totalAdditions || 0,
             deletions: prInfo?.totalDeletions || 0,
-        }
+        },
     };
     for (const checkName of checksToRun) {
         const checkConfig = config?.checks?.[checkName];
