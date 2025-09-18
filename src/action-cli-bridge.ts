@@ -165,21 +165,29 @@ export class ActionCliBridge {
           : `${inputs.owner || ''}/${inputs.repo || ''}`,
       };
 
-      // Pass GitHub App credentials if they exist in inputs
+      // Pass GitHub App credentials if they exist in inputs (use GitHub Actions input format)
       if (inputs['app-id']) {
-        env.INPUT_APP_ID = inputs['app-id'];
+        env['INPUT_APP-ID'] = inputs['app-id'];
       }
       if (inputs['private-key']) {
-        env.INPUT_PRIVATE_KEY = inputs['private-key'];
+        env['INPUT_PRIVATE-KEY'] = inputs['private-key'];
       }
       if (inputs['installation-id']) {
-        env.INPUT_INSTALLATION_ID = inputs['installation-id'];
+        env['INPUT_INSTALLATION-ID'] = inputs['installation-id'];
       }
 
-      // Only set GITHUB_TOKEN if we're not using GitHub App authentication
+      // Pass GitHub token using GitHub Actions input format
       const isUsingGitHubApp = inputs['app-id'] && inputs['private-key'];
       if (this.githubToken && !isUsingGitHubApp) {
-        env.GITHUB_TOKEN = this.githubToken;
+        env['INPUT_GITHUB-TOKEN'] = this.githubToken;
+      }
+
+      // Also pass owner and repo as inputs
+      if (inputs.owner) {
+        env.INPUT_OWNER = inputs.owner;
+      }
+      if (inputs.repo) {
+        env.INPUT_REPO = inputs.repo;
       }
 
       console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);

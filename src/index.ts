@@ -159,7 +159,15 @@ export async function run(): Promise<void> {
 
     if (cliBridge.shouldUseVisor(inputs)) {
       console.log('🔍 Using Visor CLI mode');
-      await handleVisorMode(cliBridge, inputs, context, octokit);
+      // Instead of spawning subprocess, directly run CLI logic
+      const cliArgs = cliBridge.parseGitHubInputsToCliArgs(inputs);
+
+      // Set argv for CLI parsing
+      process.argv = ['node', 'visor', ...cliArgs];
+
+      // Import and run CLI directly
+      const { main } = await import('./cli-main');
+      await main();
       return;
     }
 
