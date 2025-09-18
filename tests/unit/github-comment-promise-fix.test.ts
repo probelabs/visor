@@ -1,4 +1,4 @@
-import { PRReviewer } from '../../src/reviewer';
+import { PRReviewer, convertReviewSummaryToGroupedResults } from '../../src/reviewer';
 
 // Mock Octokit
 const mockOctokit = {
@@ -48,7 +48,8 @@ describe('GitHub Comment Promise Fix', () => {
       suggestions: ['General suggestion'],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
@@ -57,8 +58,11 @@ describe('GitHub Comment Promise Fix', () => {
 
     // Should contain actual rendered content
     expect(callArgs.body).toContain('Test security issue');
-    expect(callArgs.body).toContain('Fix this issue');
-    expect(callArgs.body).toContain('fixed code');
+    expect(callArgs.body).toContain('General suggestion');
+
+    // Should have simple format
+    expect(callArgs.body).toContain('## Issues Found (1)');
+    expect(callArgs.body).toContain('## Suggestions');
   });
 
   test('should handle async template rendering correctly', async () => {
@@ -77,14 +81,18 @@ describe('GitHub Comment Promise Fix', () => {
     };
 
     // This should not throw and should return proper string content
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
     // Verify the comment body is a proper string, not a Promise
     expect(typeof callArgs.body).toBe('string');
     expect(callArgs.body).toContain('Async performance issue');
-    expect(callArgs.body).toContain('Performance Issues');
+    expect(callArgs.body).toContain('## Issues Found (1)');
+
+    // Should not have category-specific sections
+    expect(callArgs.body).not.toContain('Performance Issues');
   });
 
   test('should respect group property from .visor.yaml configuration', async () => {
@@ -110,19 +118,21 @@ describe('GitHub Comment Promise Fix', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     // For now, we should have one comment - but it should be grouped by check name
     expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(1);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
-    // Should have separate sections for Security and Performance
-    expect(callArgs.body).toContain('Security Issues');
-    expect(callArgs.body).toContain('Performance Issues');
+    // Should have all issues in the simple format
+    expect(callArgs.body).toContain('## Issues Found (2)');
+    expect(callArgs.body).toContain('SQL injection vulnerability');
+    expect(callArgs.body).toContain('N+1 query detected');
 
-    // Should not contain generic "Issues" or category-based grouping
-    expect(callArgs.body).not.toContain('Critical Issues');
-    expect(callArgs.body).not.toContain('Warning Issues');
+    // Should not have category-specific sections
+    expect(callArgs.body).not.toContain('Security Issues');
+    expect(callArgs.body).not.toContain('Performance Issues');
   });
 });

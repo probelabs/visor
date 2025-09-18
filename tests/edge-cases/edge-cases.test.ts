@@ -102,7 +102,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           console.log(
             `    PR Info: title="${prInfo.title}", author="${prInfo.author}", files=${prInfo.files.length}`
           );
-          console.log(`    Review: issues=${review.issues.length}`);
+          console.log(`    Review: issues=${(review.issues || []).length}`);
 
           // Should handle empty data without crashing
           expect(prInfo).toBeDefined();
@@ -110,7 +110,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           expect(typeof prInfo.author).toBe('string');
           expect(Array.isArray(prInfo.files)).toBe(true);
           expect(Array.isArray(review.issues)).toBe(true);
-          expect(review.issues.length).toBeGreaterThanOrEqual(0);
+          expect((review.issues || []).length).toBeGreaterThanOrEqual(0);
         } catch (error: unknown) {
           console.log(`    Error handling empty data: ${(error as Error).message}`);
           // Should either handle gracefully or provide clear error
@@ -284,14 +284,14 @@ describe('Edge Cases & Boundary Condition Tests', () => {
           largePRData.number,
           prInfo
         );
-        console.log(`    Review completed: issues=${review.issues.length}`);
+        console.log(`    Review completed: issues=${(review.issues || []).length}`);
 
         // Should handle large data without crashing
         expect(prInfo).toBeDefined();
         expect(prInfo.files.length).toBeGreaterThan(0);
         expect(prInfo.files.length).toBeLessThanOrEqual(1000);
         expect(Array.isArray(review.issues)).toBe(true);
-        expect(review.issues.length).toBeGreaterThanOrEqual(0);
+        expect((review.issues || []).length).toBeGreaterThanOrEqual(0);
       } catch (error: unknown) {
         console.log(`    Large PR processing error: ${(error as Error).message}`);
         // Should handle large data gracefully or provide resource limit error

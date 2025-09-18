@@ -1,4 +1,10 @@
-import { PRReviewer, ReviewSummary, ReviewOptions } from './reviewer';
+import {
+  PRReviewer,
+  ReviewSummary,
+  ReviewOptions,
+  GroupedCheckResults,
+  CheckResult,
+} from './reviewer';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
@@ -366,7 +372,7 @@ export class CheckExecutionEngine {
         const result = await provider.execute(prInfo, providerConfig);
 
         // Prefix issues with check name for consistent grouping
-        const prefixedIssues = result.issues.map(issue => ({
+        const prefixedIssues = (result.issues || []).map(issue => ({
           ...issue,
           ruleId: `${checks[0]}/${issue.ruleId}`,
         }));
@@ -408,7 +414,7 @@ export class CheckExecutionEngine {
       const result = await provider.execute(prInfo, providerConfig);
 
       // Prefix issues with check name for consistent grouping
-      const prefixedIssues = result.issues.map(issue => ({
+      const prefixedIssues = (result.issues || []).map(issue => ({
         ...issue,
         ruleId: `${checkName}/${issue.ruleId}`,
       }));
@@ -438,6 +444,358 @@ export class CheckExecutionEngine {
       focus,
       format: 'table',
     });
+  }
+
+  /**
+   * Execute review checks and return grouped results for new architecture
+   */
+  public async executeGroupedChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    outputFormat?: string,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
+  ): Promise<GroupedCheckResults> {
+    // Determine where to send log messages based on output format
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+
+    logFn(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
+    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+
+    // Filter checks based on current event type to prevent execution of checks that shouldn't run
+    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
+    if (filteredChecks.length !== checks.length) {
+      logFn(
+        `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
+      );
+    }
+
+    // Use filtered checks for execution
+    checks = filteredChecks;
+
+    if (!config?.checks) {
+      throw new Error('Config with check definitions required for grouped execution');
+    }
+
+    // If we have a config with individual check definitions, use dependency-aware execution
+    const hasDependencies = checks.some(checkName => {
+      const checkConfig = config.checks[checkName];
+      return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
+    });
+
+    if (checks.length > 1 || hasDependencies) {
+      logFn(
+        `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+      );
+      return await this.executeGroupedDependencyAwareChecks(
+        prInfo,
+        checks,
+        timeout,
+        config,
+        logFn,
+        debug,
+        maxParallelism,
+        failFast
+      );
+    }
+
+    // Single check execution
+    if (checks.length === 1) {
+      logFn(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
+      const checkResult = await this.executeSingleGroupedCheck(
+        prInfo,
+        checks[0],
+        timeout,
+        config,
+        logFn,
+        debug
+      );
+
+      const groupedResults: GroupedCheckResults = {};
+      groupedResults[checkResult.group] = [checkResult];
+      return groupedResults;
+    }
+
+    // No checks to execute
+    return {};
+  }
+
+  /**
+   * Execute single check and return grouped result
+   */
+  private async executeSingleGroupedCheck(
+    prInfo: PRInfo,
+    checkName: string,
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean
+  ): Promise<CheckResult> {
+    if (!config?.checks?.[checkName]) {
+      throw new Error(`No configuration found for check: ${checkName}`);
+    }
+
+    const checkConfig = config.checks[checkName];
+    const provider = this.providerRegistry.getProviderOrThrow('ai');
+
+    const providerConfig = {
+      type: 'ai' as const,
+      prompt: checkConfig.prompt,
+      focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      ai: {
+        timeout: timeout || 600000,
+        debug: debug,
+        ...(checkConfig.ai || {}),
+      },
+      ai_provider: checkConfig.ai_provider || config.ai_provider,
+      ai_model: checkConfig.ai_model || config.ai_model,
+    };
+
+    const result = await provider.execute(prInfo, providerConfig);
+
+    // Render the check content using the appropriate template
+    const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
+
+    return {
+      checkName,
+      content,
+      group: checkConfig.group || 'default',
+      debug: result.debug,
+      issues: result.issues, // Include structured issues
+    };
+  }
+
+  /**
+   * Execute multiple checks with dependency awareness - return grouped results
+   */
+  private async executeGroupedDependencyAwareChecks(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    logFn?: (message: string) => void,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean
+  ): Promise<GroupedCheckResults> {
+    // Use the existing dependency-aware execution logic
+    const reviewSummary = await this.executeDependencyAwareChecks(
+      prInfo,
+      checks,
+      timeout,
+      config,
+      logFn,
+      debug,
+      maxParallelism,
+      failFast
+    );
+
+    // Convert the flat ReviewSummary to grouped CheckResults
+    return await this.convertReviewSummaryToGroupedResults(reviewSummary, checks, config, prInfo);
+  }
+
+  /**
+   * Convert ReviewSummary to GroupedCheckResults
+   */
+  private async convertReviewSummaryToGroupedResults(
+    reviewSummary: ReviewSummary,
+    checks: string[],
+    config?: import('./types/config').VisorConfig,
+    prInfo?: PRInfo
+  ): Promise<GroupedCheckResults> {
+    const groupedResults: GroupedCheckResults = {};
+
+    // Process each check individually
+    for (const checkName of checks) {
+      const checkConfig = config?.checks?.[checkName];
+      if (!checkConfig) continue;
+
+      // Extract issues for this check
+      const checkIssues = (reviewSummary.issues || []).filter(issue =>
+        issue.ruleId?.startsWith(`${checkName}/`)
+      );
+
+      // Extract suggestions for this check
+      const checkSuggestions = (reviewSummary.suggestions || []).filter(suggestion =>
+        suggestion.startsWith(`[${checkName}]`)
+      );
+
+      // Create a mini ReviewSummary for this check
+      const checkSummary: ReviewSummary = {
+        issues: checkIssues,
+        suggestions: checkSuggestions,
+        debug: reviewSummary.debug,
+      };
+
+      // Render content for this check
+      const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+
+      const checkResult: CheckResult = {
+        checkName,
+        content,
+        group: checkConfig.group || 'default',
+        debug: reviewSummary.debug,
+        issues: checkIssues, // Include structured issues
+      };
+
+      // Add to appropriate group
+      const group = checkResult.group;
+      if (!groupedResults[group]) {
+        groupedResults[group] = [];
+      }
+      groupedResults[group].push(checkResult);
+    }
+
+    return groupedResults;
+  }
+
+  /**
+   * Validates that a file path is safe and within the project directory
+   * Prevents path traversal attacks by:
+   * - Blocking absolute paths
+   * - Blocking paths with ".." segments
+   * - Ensuring resolved path is within project directory
+   * - Blocking special characters and null bytes
+   * - Enforcing .liquid file extension
+   */
+  private async validateTemplatePath(templatePath: string): Promise<string> {
+    const path = await import('path');
+
+    // Validate input
+    if (!templatePath || typeof templatePath !== 'string' || templatePath.trim() === '') {
+      throw new Error('Template path must be a non-empty string');
+    }
+
+    // Block null bytes and other dangerous characters
+    if (templatePath.includes('\0') || templatePath.includes('\x00')) {
+      throw new Error('Template path contains invalid characters');
+    }
+
+    // Enforce .liquid file extension
+    if (!templatePath.endsWith('.liquid')) {
+      throw new Error('Template file must have .liquid extension');
+    }
+
+    // Block absolute paths
+    if (path.isAbsolute(templatePath)) {
+      throw new Error('Template path must be relative to project directory');
+    }
+
+    // Block paths with ".." segments
+    if (templatePath.includes('..')) {
+      throw new Error('Template path cannot contain ".." segments');
+    }
+
+    // Block paths starting with ~ (home directory)
+    if (templatePath.startsWith('~')) {
+      throw new Error('Template path cannot reference home directory');
+    }
+
+    // Get the project root directory from git analyzer
+    const repositoryInfo = await this.gitAnalyzer.analyzeRepository();
+    const projectRoot = repositoryInfo.workingDirectory;
+
+    // Validate project root
+    if (!projectRoot || typeof projectRoot !== 'string') {
+      throw new Error('Unable to determine project root directory');
+    }
+
+    // Resolve the template path relative to project root
+    const resolvedPath = path.resolve(projectRoot, templatePath);
+    const resolvedProjectRoot = path.resolve(projectRoot);
+
+    // Validate resolved paths
+    if (
+      !resolvedPath ||
+      !resolvedProjectRoot ||
+      resolvedPath === '' ||
+      resolvedProjectRoot === ''
+    ) {
+      throw new Error(
+        `Unable to resolve template path: projectRoot="${projectRoot}", templatePath="${templatePath}", resolvedPath="${resolvedPath}", resolvedProjectRoot="${resolvedProjectRoot}"`
+      );
+    }
+
+    // Ensure the resolved path is still within the project directory
+    if (
+      !resolvedPath.startsWith(resolvedProjectRoot + path.sep) &&
+      resolvedPath !== resolvedProjectRoot
+    ) {
+      throw new Error('Template path escapes project directory');
+    }
+
+    return resolvedPath;
+  }
+
+  /**
+   * Render check content using the appropriate template
+   */
+  private async renderCheckContent(
+    checkName: string,
+    reviewSummary: ReviewSummary,
+    checkConfig: any,
+    _prInfo?: PRInfo
+  ): Promise<string> {
+    // Import the liquid template system
+    const { Liquid } = await import('liquidjs');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const liquid = new Liquid({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false,
+    });
+
+    // Determine template to use
+    const schema = checkConfig.schema || 'plain';
+    let templateContent: string;
+
+    if (checkConfig.template) {
+      // Custom template
+      if (checkConfig.template.content) {
+        templateContent = checkConfig.template.content;
+      } else if (checkConfig.template.file) {
+        // Validate the template file path to prevent path traversal attacks
+        const validatedPath = await this.validateTemplatePath(checkConfig.template.file);
+        templateContent = await fs.readFile(validatedPath, 'utf-8');
+      } else {
+        throw new Error('Custom template must specify either "file" or "content"');
+      }
+    } else if (schema === 'plain') {
+      // Plain schema - return raw content directly
+      // Strip [checkName] prefixes from suggestions before joining
+      const cleanedSuggestions = (reviewSummary.suggestions || []).map(suggestion => {
+        // Remove [checkName] prefix if present
+        return suggestion.replace(/^\[[^\]]+\]\s*/, '');
+      });
+      return (reviewSummary.issues?.[0]?.message || '') + (cleanedSuggestions.join('\n\n') || '');
+    } else {
+      // Use built-in schema template
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+      if (!sanitizedSchema) {
+        throw new Error('Invalid schema name');
+      }
+      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs.readFile(templatePath, 'utf-8');
+    }
+
+    // Prepare template data
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName: checkName,
+      suggestions: reviewSummary.suggestions || [],
+    };
+
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
   }
 
   /**
@@ -680,10 +1038,12 @@ export class CheckExecutionEngine {
             dependencyResults,
             sessionInfo
           );
-          log(`🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`);
+          log(
+            `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
+          );
 
           // Add group, schema, template info and timestamp to issues from config
-          const enrichedIssues = result.issues.map(issue => ({
+          const enrichedIssues = (result.issues || []).map(issue => ({
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
@@ -770,7 +1130,7 @@ export class CheckExecutionEngine {
 
           if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
             // Check for issues that should trigger fail-fast
-            const hasFailuresToReport = result.value.result.issues.some(
+            const hasFailuresToReport = (result.value.result.issues || []).some(
               issue => issue.severity === 'error' || issue.severity === 'critical'
             );
 
@@ -909,11 +1269,11 @@ export class CheckExecutionEngine {
 
         const result = await provider.execute(prInfo, providerConfig);
         console.error(
-          `🔧 Debug: Completed check: ${checkName}, issues found: ${result.issues.length}`
+          `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
         );
 
         // Add group, schema info and timestamp to issues from config
-        const enrichedIssues = result.issues.map(issue => ({
+        const enrichedIssues = (result.issues || []).map(issue => ({
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
           group: checkConfig.group,
@@ -1007,7 +1367,7 @@ export class CheckExecutionEngine {
     const result = await provider.execute(prInfo, providerConfig);
 
     // Prefix issues with check name and add group/schema info and timestamp from config
-    const prefixedIssues = result.issues.map(issue => ({
+    const prefixedIssues = (result.issues || []).map(issue => ({
       ...issue,
       ruleId: `${checkName}/${issue.ruleId}`,
       group: checkConfig.group,
@@ -1076,7 +1436,7 @@ export class CheckExecutionEngine {
         }
 
         // Check if this was a successful result
-        const hasErrors = result.issues.some(
+        const hasErrors = (result.issues || []).some(
           issue => issue.ruleId?.includes('/error') || issue.ruleId?.includes('/promise-error')
         );
 
@@ -1084,15 +1444,15 @@ export class CheckExecutionEngine {
           debugInfo.push(`❌ Check "${checkName}" failed with errors`);
         } else {
           debugInfo.push(
-            `✅ Check "${checkName}" completed: ${result.issues.length} issues found (level ${executionGroup.level})`
+            `✅ Check "${checkName}" completed: ${(result.issues || []).length} issues found (level ${executionGroup.level})`
           );
         }
 
         // Issues are already prefixed and enriched with group/schema info
-        aggregatedIssues.push(...result.issues);
+        aggregatedIssues.push(...(result.issues || []));
 
         // Add suggestions with check name prefix
-        const prefixedSuggestions = result.suggestions.map(
+        const prefixedSuggestions = (result.suggestions || []).map(
           suggestion => `[${checkName}] ${suggestion}`
         );
         aggregatedSuggestions.push(...prefixedSuggestions);
@@ -1219,17 +1579,17 @@ export class CheckExecutionEngine {
         } else if (checkResult.result) {
           successfulChecks++;
           console.error(
-            `🔧 Debug: Check ${checkName} succeeded with ${checkResult.result.issues.length} issues`
+            `🔧 Debug: Check ${checkName} succeeded with ${(checkResult.result.issues || []).length} issues`
           );
           debugInfo.push(
-            `✅ Check "${checkName}" completed: ${checkResult.result.issues.length} issues found`
+            `✅ Check "${checkName}" completed: ${(checkResult.result.issues || []).length} issues found`
           );
 
           // Issues are already prefixed and enriched with group/schema info
-          aggregatedIssues.push(...checkResult.result.issues);
+          aggregatedIssues.push(...(checkResult.result.issues || []));
 
           // Add suggestions with check name prefix
-          const prefixedSuggestions = checkResult.result.suggestions.map(
+          const prefixedSuggestions = (checkResult.result.suggestions || []).map(
             suggestion => `[${checkName}] ${suggestion}`
           );
           aggregatedSuggestions.push(...prefixedSuggestions);
@@ -1536,7 +1896,7 @@ export class CheckExecutionEngine {
 
     // If the result has a result with critical or error issues, it should fail fast
     if (result?.result?.issues) {
-      return result.result.issues.some(
+      return (result.result.issues || []).some(
         (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
       );
     }

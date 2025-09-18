@@ -1,4 +1,4 @@
-import { PRReviewer } from '../../src/reviewer';
+import { PRReviewer, convertReviewSummaryToGroupedResults } from '../../src/reviewer';
 
 // Mock Octokit
 const mockOctokit = {
@@ -48,7 +48,8 @@ describe('HTML Whitespace Fix Test', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     const comment = callArgs.body;
@@ -57,24 +58,18 @@ describe('HTML Whitespace Fix Test', () => {
     console.log(comment);
     console.log('=== END ===');
 
-    // Should not have empty lines within the table structure that would break GitHub's HTML parsing
+    // Should have simple markdown format without HTML tables
+    expect(comment).toContain('## Issues Found (1)');
+    expect(comment).toContain('- **CRITICAL**: Test security issue');
 
-    // Check for problematic patterns
-    expect(comment).not.toMatch(/<tbody>\s*\n\s*\n/); // No double newlines after <tbody>
-    expect(comment).not.toMatch(/<tr>\s*\n\s*\n/); // No double newlines after <tr>
-    expect(comment).not.toMatch(/<td>\s*\n\s*\n/); // No double newlines after <td>
+    // Should not have HTML table structures
+    expect(comment).not.toContain('<tbody>');
+    expect(comment).not.toContain('<tr>');
+    expect(comment).not.toContain('<td>');
 
-    // Should have clean table structure
-    expect(comment).toContain('<tbody>');
-    expect(comment).toContain('<tr>');
-    expect(comment).toContain('<td>🔴 Critical</td>');
-
-    // Should NOT contain General Suggestions
+    // Should not have category-specific sections
+    expect(comment).not.toContain('Security Issues');
     expect(comment).not.toContain('General Suggestions');
-
-    // Should have proper content
-    expect(comment).toContain('Test security issue');
-    expect(comment).toContain('Security Issues');
   });
 
   test('should handle multiple checks with individual templates', async () => {
@@ -104,7 +99,8 @@ describe('HTML Whitespace Fix Test', () => {
       suggestions: [],
     };
 
-    await reviewer.postReviewComment('owner', 'repo', 1, mockReview);
+    const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
+    await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
     const comment = callArgs.body;
@@ -113,19 +109,16 @@ describe('HTML Whitespace Fix Test', () => {
     console.log(comment);
     console.log('=== END ===');
 
-    // Should have separate sections for each check
-    expect(comment).toContain('Security Issues');
-    expect(comment).toContain('Performance Issues');
-
-    // Should have both issues
+    // Should have simple format with all issues
+    expect(comment).toContain('## Issues Found (2)');
     expect(comment).toContain('SQL injection vulnerability');
     expect(comment).toContain('N+1 query detected');
 
-    // Should have two separate tables (one per check)
-    const tableMatches = comment.match(/<table>/g);
-    expect(tableMatches).toHaveLength(2);
+    // Should not have category-specific sections
+    expect(comment).not.toContain('Security Issues');
+    expect(comment).not.toContain('Performance Issues');
 
-    // Should have proper HTML structure
-    expect(comment).not.toMatch(/<tbody>\s*\n\s*\n/);
+    // Should not have HTML tables
+    expect(comment).not.toContain('<table>');
   });
 });

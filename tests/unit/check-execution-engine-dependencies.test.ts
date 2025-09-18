@@ -262,7 +262,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       // Should return error result instead of throwing
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues[0].message).toContain('Circular dependencies detected');
+      expect(result.reviewSummary.issues![0].message).toContain('Circular dependencies detected');
       expect(mockProvider.execute).not.toHaveBeenCalled();
     });
 
@@ -293,7 +293,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       // Should return error result instead of throwing
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues[0].message).toContain('Dependency validation failed');
+      expect(result.reviewSummary.issues![0].message).toContain('Dependency validation failed');
       expect(mockProvider.execute).not.toHaveBeenCalled();
     });
 
@@ -346,7 +346,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
       expect(mockProvider.execute).toHaveBeenCalledTimes(2);
 
       // Should have error issues from failed security check
-      const errorIssues = result.reviewSummary.issues.filter(issue =>
+      const errorIssues = (result.reviewSummary.issues || []).filter(issue =>
         issue.ruleId?.includes('error')
       );
       expect(errorIssues).toHaveLength(1);
@@ -384,17 +384,17 @@ describe('CheckExecutionEngine - Dependencies', () => {
         debug: true,
       });
 
-      const containsExecutionCompleted = result.reviewSummary.suggestions.some(suggestion =>
+      const containsExecutionCompleted = (result.reviewSummary.suggestions || []).some(suggestion =>
         suggestion.includes('Dependency-aware execution completed')
       );
       expect(containsExecutionCompleted).toBe(true);
 
-      const containsExecutionLevels = result.reviewSummary.suggestions.some(suggestion =>
+      const containsExecutionLevels = (result.reviewSummary.suggestions || []).some(suggestion =>
         suggestion.includes('Execution levels: 2')
       );
       expect(containsExecutionLevels).toBe(true);
 
-      const containsMaxParallelism = result.reviewSummary.suggestions.some(suggestion =>
+      const containsMaxParallelism = (result.reviewSummary.suggestions || []).some(suggestion =>
         suggestion.includes('Maximum parallelism: 1')
       );
       expect(containsMaxParallelism).toBe(true);

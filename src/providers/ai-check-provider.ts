@@ -183,6 +183,11 @@ export class AICheckProvider extends CheckProvider {
    * Load prompt content from file with security validation
    */
   private async loadPromptFromFile(promptPath: string): Promise<string> {
+    // Enforce .liquid file extension for all prompt files
+    if (!promptPath.endsWith('.liquid')) {
+      throw new Error('Prompt file must have .liquid extension');
+    }
+
     let resolvedPath: string;
 
     if (path.isAbsolute(promptPath)) {

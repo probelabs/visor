@@ -37,6 +37,33 @@ jest.mock('../../src/check-execution-engine', () => {
             ],
           };
         }),
+      executeGroupedChecks: jest
+        .fn()
+        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
+          // Return GroupedCheckResults format
+          return {
+            default: [
+              {
+                checkName: 'security-review',
+                content: `## Security Issues Found\n\n- **CRITICAL**: Potential hardcoded API key detected (src/test.ts:10)\n- **WARNING**: Consider using a more efficient data structure (src/test.ts:25)\n\n## Suggestions\n\n- Consider adding input validation\n- Add unit tests for new functionality`,
+                group: 'default',
+                debug: {
+                  provider: 'google',
+                  model: 'gemini-2.0-flash-exp',
+                  processingTime: 1500,
+                  apiKeySource: 'environment',
+                  prompt: 'Mocked prompt',
+                  rawResponse: 'Mocked response',
+                  promptLength: 100,
+                  responseLength: 200,
+                  jsonParseSuccess: true,
+                  errors: [],
+                  timestamp: new Date().toISOString(),
+                },
+              },
+            ],
+          };
+        }),
     })),
   };
 });
@@ -229,19 +256,15 @@ describe('GitHub PR Workflow Integration', () => {
         parallelExecution: false,
       });
 
-      // Verify review structure
+      // Verify review structure (new GroupedCheckResults format)
       expect(review).toEqual(
         expect.objectContaining({
-          issues: expect.arrayContaining([
+          default: expect.arrayContaining([
             expect.objectContaining({
-              file: 'src/test.ts',
-              severity: 'critical',
-              category: 'security',
+              checkName: 'security-review',
+              content: expect.stringContaining('Security Issues Found'),
+              group: 'default',
             }),
-          ]),
-          suggestions: expect.arrayContaining([
-            expect.stringContaining('validation'),
-            expect.stringContaining('tests'),
           ]),
         })
       );

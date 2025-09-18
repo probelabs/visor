@@ -141,14 +141,14 @@ describe('Session Reuse Integration', () => {
       expect(result.reviewSummary.issues).toHaveLength(2);
 
       // Verify first check found security issue
-      const securityIssue = result.reviewSummary.issues.find(
+      const securityIssue = (result.reviewSummary.issues || []).find(
         issue => issue.ruleId === 'security-scan/security/console-log'
       );
       expect(securityIssue).toBeDefined();
       expect(securityIssue?.message).toBe('Console.log usage detected');
 
       // Verify second check (with session reuse) found follow-up issue
-      const followUpIssue = result.reviewSummary.issues.find(
+      const followUpIssue = (result.reviewSummary.issues || []).find(
         issue => issue.ruleId === 'security-follow-up/follow-up/security-confirmation'
       );
       expect(followUpIssue).toBeDefined();

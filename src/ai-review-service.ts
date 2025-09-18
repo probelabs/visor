@@ -889,11 +889,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       };
 
       // Log issue counts
-      const criticalCount = result.issues.filter(i => i.severity === 'critical').length;
+      const criticalCount = (result.issues || []).filter(i => i.severity === 'critical').length;
       if (criticalCount > 0) {
         log(`🚨 Found ${criticalCount} critical severity issue(s)`);
       }
-      log(`📈 Total issues: ${result.issues.length}`);
+      log(`📈 Total issues: ${(result.issues || []).length}`);
 
       log('✅ Successfully created ReviewSummary');
       return result;

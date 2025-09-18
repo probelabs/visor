@@ -1,7 +1,7 @@
 {%- if issues.size == 0 -%}
-✅ **All Checks Passed**
+### ✅ {{ checkName | capitalize }} Check Passed
 
-**No issues found – changes LGTM.**
+**No {{ checkName | downcase }} issues found – changes LGTM.**
 {%- else -%}
 ### {{ checkName | capitalize }} Issues ({{ issues.size }})
 <table>
