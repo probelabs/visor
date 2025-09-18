@@ -139,8 +139,8 @@ describe('Schema-Template System', () => {
       const rendered = await liquid.parseAndRender(templateContent, data);
 
       // Should render the success message for empty issues
-      expect(rendered).toContain('All Checks Passed');
-      expect(rendered).toContain('No issues found');
+      expect(rendered).toContain('Security Check Passed');
+      expect(rendered).toContain('No security issues found');
       // Template should NOT render table structure for empty issues
       expect(rendered).not.toContain('<table');
       expect(rendered).not.toContain('<tbody>');

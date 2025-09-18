@@ -129,7 +129,6 @@ async function run() {
             'github-token': token,
             owner: (0, core_1.getInput)('owner') || process.env.GITHUB_REPOSITORY_OWNER,
             repo: (0, core_1.getInput)('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
-            'auto-review': (0, core_1.getInput)('auto-review'),
             debug: (0, core_1.getInput)('debug'),
             // GitHub App authentication inputs
             'app-id': (0, core_1.getInput)('app-id') || undefined,
@@ -151,7 +150,6 @@ async function run() {
             'visor-checks': (0, core_1.getInput)('visor-checks') || undefined,
         };
         const eventName = process.env.GITHUB_EVENT_NAME;
-        const autoReview = inputs['auto-review'] === 'true';
         // Create GitHub context for CLI bridge
         const context = {
             event_name: eventName || 'unknown',
@@ -174,26 +172,35 @@ async function run() {
         console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
         if (cliBridge.shouldUseVisor(inputs)) {
             console.log('🔍 Using Visor CLI mode');
-            // ENHANCED FIX: For PR auto-reviews, detect PR context across all event types
-            const isAutoReview = inputs['auto-review'] === 'true';
-            if (isAutoReview) {
-                console.log('🔄 Auto-review enabled - attempting to detect PR context across all event types');
-                // Try to detect if we're in a PR context (works for push, pull_request, issue_comment, etc.)
-                const prDetected = await detectPRContext(inputs, context, octokit);
-                if (prDetected) {
-                    console.log('✅ PR context detected - using GitHub API for PR analysis');
-                    await handlePullRequestVisorMode(inputs, context, octokit, authType);
-                    return;
-                }
-                else {
-                    console.log('ℹ️ No PR context detected - proceeding with CLI mode for general analysis');
-                }
-            }
             await handleVisorMode(cliBridge, inputs, context, octokit);
             return;
         }
-        console.log('🤖 Using legacy GitHub Action mode');
-        await handleLegacyMode(octokit, inputs, eventName, autoReview);
+        // Default behavior: Use Visor config to determine what to run
+        console.log('🤖 Using config-driven mode');
+        // Load config to determine which checks should run for this event
+        const configManager = new config_1.ConfigManager();
+        let config;
+        try {
+            config = await configManager.findAndLoadConfig();
+            console.log('📋 Loaded Visor config');
+        }
+        catch {
+            // Use default config if none found
+            config = {
+                version: '1.0',
+                checks: {},
+                output: {
+                    pr_comment: {
+                        format: 'markdown',
+                        group_by: 'check',
+                        collapse: false,
+                    },
+                },
+            };
+            console.log('📋 Using default configuration');
+        }
+        // Determine which event we're handling and run appropriate checks
+        await handleEvent(octokit, inputs, eventName, context, config);
     }
     catch (error) {
         (0, core_1.setFailed)(error instanceof Error ? error.message : 'Unknown error');
@@ -272,27 +279,47 @@ function mapGitHubEventToTrigger(eventName, action) {
     }
 }
 /**
- * Handle legacy GitHub Action mode (backward compatibility)
+ * Handle events based on config
  */
-async function handleLegacyMode(octokit, inputs, eventName, autoReview) {
+async function handleEvent(octokit, inputs, eventName, context, config) {
     const owner = inputs.owner;
     const repo = inputs.repo;
     if (!owner || !repo) {
         throw new Error('Owner and repo are required');
     }
     console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
+    // Map GitHub event to our event trigger format
+    const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
+    // Find checks that should run for this event
+    const checksToRun = [];
+    for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
+        // Check if this check should run for this event
+        const checkEvents = checkConfig.on || ['pr_opened', 'pr_updated'];
+        if (checkEvents.includes(eventType)) {
+            checksToRun.push(checkName);
+        }
+    }
+    if (checksToRun.length === 0) {
+        console.log(`ℹ️ No checks configured to run for event: ${eventType}`);
+        return;
+    }
+    console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
     // Handle different GitHub events
     switch (eventName) {
         case 'issue_comment':
             await handleIssueComment(octokit, owner, repo);
             break;
         case 'pull_request':
-            if (autoReview) {
-                await handlePullRequestEvent(octokit, owner, repo, inputs);
-            }
+            // Run the checks that are configured for this event
+            await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun);
+            break;
+        case 'push':
+            // Could handle push events that are associated with PRs
+            console.log('Push event detected - checking for associated PR');
             break;
         default:
-            // Fallback to original repo info functionality
+            // Fallback to repo info for unknown events
+            console.log(`Unknown event: ${eventName}`);
             await handleRepoInfo(octokit, owner, repo);
             break;
     }
@@ -449,6 +476,71 @@ async function handleIssueComment(octokit, owner, repo) {
             }
             break;
     }
+}
+async function handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun) {
+    const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
+    const pullRequest = context.event?.pull_request;
+    const action = context.event?.action;
+    if (!pullRequest) {
+        console.log('No pull request found in context');
+        return;
+    }
+    console.log(`Reviewing PR #${pullRequest.number} with checks: ${checksToRun.join(', ')}`);
+    const prNumber = pullRequest.number;
+    const analyzer = new pr_analyzer_1.PRAnalyzer(octokit);
+    const reviewer = new reviewer_1.PRReviewer(octokit);
+    // Generate comment ID for this PR
+    const commentId = `pr-review-${prNumber}`;
+    // Map the action to event type
+    const eventType = mapGitHubEventToTrigger('pull_request', action);
+    // Fetch PR diff
+    const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
+    if (prInfo.files.length === 0) {
+        console.log('⚠️ No files changed in this PR - skipping review');
+        (0, core_1.setOutput)('review-completed', 'true');
+        (0, core_1.setOutput)('issues-found', '0');
+        return;
+    }
+    // Filter checks based on conditions
+    const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
+    if (checksToExecute.length === 0) {
+        console.log('⚠️ No checks meet execution conditions');
+        (0, core_1.setOutput)('review-completed', 'true');
+        (0, core_1.setOutput)('issues-found', '0');
+        return;
+    }
+    console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
+    // Create review options
+    const reviewOptions = {
+        debug: inputs?.debug === 'true',
+        config: config,
+        checks: checksToExecute,
+        parallelExecution: true,
+    };
+    // Create GitHub check runs if enabled
+    let checkResults = null;
+    if (inputs && inputs['create-check'] !== 'false') {
+        checkResults = await createGitHubChecks(octokit, inputs, owner, repo, pullRequest.head?.sha || 'unknown', checksToExecute, config);
+        if (checkResults?.checkRunMap) {
+            await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
+        }
+    }
+    // Perform the review
+    const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+    // Complete GitHub check runs
+    if (checkResults?.checkRunMap) {
+        await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, groupedResults, config);
+    }
+    // Post review comment
+    await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
+        commentId,
+        triggeredBy: action,
+        commitSha: pullRequest.head?.sha,
+    });
+    // Set outputs
+    (0, core_1.setOutput)('review-completed', 'true');
+    (0, core_1.setOutput)('checks-executed', checksToExecute.length.toString());
+    (0, core_1.setOutput)('pr-action', action);
 }
 async function handlePullRequestEvent(octokit, owner, repo, inputs) {
     const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');

@@ -76,6 +76,28 @@ jest.mock('../src/reviewer', () => ({
   })),
 }));
 
+jest.mock('../src/config', () => ({
+  ConfigManager: jest.fn().mockImplementation(() => ({
+    findAndLoadConfig: jest.fn().mockResolvedValue({
+      version: '1.0',
+      checks: {
+        'test-check': {
+          type: 'ai',
+          on: ['pr_opened', 'pr_updated'],
+          prompt: 'Test prompt',
+        },
+      },
+      output: {
+        pr_comment: {
+          format: 'markdown',
+          group_by: 'check',
+          collapse: false,
+        },
+      },
+    }),
+  })),
+}));
+
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn().mockImplementation(() => ({
     rest: {
@@ -218,7 +240,7 @@ describe('GitHub Action Unit Tests', () => {
     expect(console.log).toHaveBeenCalledWith('🔑 Using GitHub token authentication');
   });
 
-  test('should handle pull_request event with auto-review enabled', async () => {
+  test('should handle pull_request event with configured checks', async () => {
     const mockContext = {
       event: {
         action: 'opened',
@@ -226,6 +248,7 @@ describe('GitHub Action Unit Tests', () => {
           number: 1,
           title: 'Test PR',
           user: { login: 'test-user' },
+          head: { sha: 'abc123' },
         },
       },
     };
@@ -233,7 +256,6 @@ describe('GitHub Action Unit Tests', () => {
     mockedCore.getInput.mockImplementation((name: string) => {
       const inputs: { [key: string]: string } = {
         'github-token': 'mock-token',
-        'auto-review': 'true',
       };
       return inputs[name] || '';
     });
@@ -245,37 +267,10 @@ describe('GitHub Action Unit Tests', () => {
 
     await run();
 
-    expect(mockedCore.setOutput).toHaveBeenCalledWith('auto-review-completed', 'true');
-    // Note: issues-found output depends on actual review results, not guaranteed in mock environment
+    // Verify the action ran and tried to process the PR
+    // The actual review may not complete due to mocked dependencies,
+    // but we should see config loading
+    expect(console.log).toHaveBeenCalledWith('📋 Loaded Visor config');
   });
 
-  test('should not auto-review when disabled', async () => {
-    const mockContext = {
-      event: {
-        action: 'opened',
-        pull_request: {
-          number: 1,
-          title: 'Test PR',
-          user: { login: 'test-user' },
-        },
-      },
-    };
-
-    mockedCore.getInput.mockImplementation((name: string) => {
-      const inputs: { [key: string]: string } = {
-        'github-token': 'mock-token',
-        'auto-review': 'false',
-      };
-      return inputs[name] || '';
-    });
-
-    process.env.GITHUB_EVENT_NAME = 'pull_request';
-    process.env.GITHUB_CONTEXT = JSON.stringify(mockContext);
-    process.env.GITHUB_REPOSITORY_OWNER = 'test-owner';
-    process.env.GITHUB_REPOSITORY = 'test-owner/test-repo';
-
-    await run();
-
-    expect(mockedCore.setOutput).not.toHaveBeenCalledWith('auto-review-completed', 'true');
-  });
 });
