@@ -1168,8 +1168,16 @@ async function markCheckAsFailed(
 }
 
 if (require.main === module) {
-  // Check if running in CLI mode
-  if (process.env.VISOR_CLI_MODE === 'true' || process.argv.length > 2) {
+  // Check if running in CLI mode - only when explicitly set or has CLI-specific arguments
+  const hasCliArgs = process.argv.slice(2).some(arg =>
+    arg.startsWith('--check') ||
+    arg.startsWith('--output') ||
+    arg.startsWith('--config') ||
+    arg === '--help' ||
+    arg === '--version'
+  );
+
+  if (process.env.VISOR_CLI_MODE === 'true' || hasCliArgs) {
     // Import and run CLI
     import('./cli-main').then(({ main }) => {
       main().catch(error => {
