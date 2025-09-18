@@ -1001,45 +1001,28 @@ async function completeIndividualChecks(
         suggestions: [],
       };
 
-      // Evaluate global fail_if
-      if (globalFailIf) {
+      // Determine which fail_if to use: check-specific overrides global
+      const effectiveFailIf = checkFailIf || globalFailIf;
+
+      if (effectiveFailIf) {
         const failed = await failureEvaluator.evaluateSimpleCondition(
           checkName,
           config?.checks?.[checkName]?.schema || 'plain',
           config?.checks?.[checkName]?.group || 'default',
           checkReviewSummary,
-          globalFailIf
+          effectiveFailIf
         );
 
         if (failed) {
+          const isCheckSpecific = checkFailIf !== undefined;
           failureResults.push({
-            conditionName: 'global_fail_if',
-            expression: globalFailIf,
+            conditionName: isCheckSpecific ? `${checkName}_fail_if` : 'global_fail_if',
+            expression: effectiveFailIf,
             failed: true,
             severity: 'error' as const,
-            message: 'Global failure condition met',
-            haltExecution: false,
-          });
-        }
-      }
-
-      // Evaluate check-specific fail_if (overrides global if present)
-      if (checkFailIf) {
-        const failed = await failureEvaluator.evaluateSimpleCondition(
-          checkName,
-          config?.checks?.[checkName]?.schema || 'plain',
-          config?.checks?.[checkName]?.group || 'default',
-          checkReviewSummary,
-          checkFailIf
-        );
-
-        if (failed) {
-          failureResults.push({
-            conditionName: `${checkName}_fail_if`,
-            expression: checkFailIf,
-            failed: true,
-            severity: 'error' as const,
-            message: `Check ${checkName} failure condition met`,
+            message: isCheckSpecific
+              ? `Check ${checkName} failure condition met`
+              : 'Global failure condition met',
             haltExecution: false,
           });
         }

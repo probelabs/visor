@@ -41,11 +41,9 @@ const commands_1 = require("./commands");
 const pr_analyzer_1 = require("./pr-analyzer");
 const reviewer_1 = require("./reviewer");
 const action_cli_bridge_1 = require("./action-cli-bridge");
-const github_comments_1 = require("./github-comments");
 const config_1 = require("./config");
 const pr_detector_1 = require("./pr-detector");
 const github_check_service_1 = require("./github-check-service");
-const failure_condition_evaluator_1 = require("./failure-condition-evaluator");
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
  */
@@ -253,204 +251,25 @@ async function handleVisorMode(cliBridge, inputs, _context, _octokit) {
         (0, core_1.setFailed)(error instanceof Error ? error.message : 'Visor mode failed');
     }
 }
-/**
- * Post CLI review results as PR comment with robust PR detection
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function postCliReviewComment(cliOutput, inputs, octokit) {
-    try {
-        const owner = inputs.owner || process.env.GITHUB_REPOSITORY_OWNER;
-        const repo = inputs.repo || process.env.GITHUB_REPOSITORY?.split('/')[1];
-        if (!owner || !repo) {
-            console.log('⚠️ Missing required parameters for PR comment creation');
-            return;
-        }
-        // Use the provided authenticated Octokit instance
-        const prDetector = new pr_detector_1.PRDetector(octokit, inputs.debug === 'true');
-        // Convert GitHub context to our format
-        const eventContext = {
-            event_name: process.env.GITHUB_EVENT_NAME || 'unknown',
-            repository: {
-                owner: { login: owner },
-                name: repo,
-            },
-            event: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT).event : undefined,
-            payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
-        };
-        // Use robust PR detection
-        const prResult = await prDetector.detectPRNumber(eventContext, owner, repo);
-        if (!prResult.prNumber) {
-            console.log(`⚠️ No PR found using any detection strategy: ${prResult.details || 'Unknown reason'}`);
-            if (inputs.debug === 'true') {
-                console.log('Available detection strategies:');
-                prDetector.getDetectionStrategies().forEach(strategy => console.log(`  ${strategy}`));
-            }
-            return;
-        }
-        console.log(`✅ Found PR #${prResult.prNumber} using ${prResult.source} (confidence: ${prResult.confidence})`);
-        if (prResult.details) {
-            console.log(`   Details: ${prResult.details}`);
-        }
-        const commentManager = new github_comments_1.CommentManager(octokit);
-        // Create Visor-formatted comment from CLI output
-        let comment = `# 🔍 Visor Code Review Results\n\n`;
-        comment += `## 📊 Summary\n`;
-        comment += `- **Overall Score**: ${cliOutput.overallScore || 0}/100\n`;
-        comment += `- **Issues Found**: ${cliOutput.totalIssues || 0} (${cliOutput.criticalIssues || 0} Critical)\n`;
-        comment += `- **Files Analyzed**: ${cliOutput.filesAnalyzed || 'N/A'}\n\n`;
-        // Add category scores if available
-        if (cliOutput.securityScore ||
-            cliOutput.performanceScore ||
-            cliOutput.styleScore ||
-            cliOutput.architectureScore) {
-            comment += `## 📈 Category Scores\n`;
-            if (cliOutput.securityScore !== undefined)
-                comment += `- **Security**: ${cliOutput.securityScore}/100\n`;
-            if (cliOutput.performanceScore !== undefined)
-                comment += `- **Performance**: ${cliOutput.performanceScore}/100\n`;
-            if (cliOutput.styleScore !== undefined)
-                comment += `- **Style**: ${cliOutput.styleScore}/100\n`;
-            if (cliOutput.architectureScore !== undefined)
-                comment += `- **Architecture**: ${cliOutput.architectureScore}/100\n`;
-            comment += '\n';
-        }
-        // Load config to determine grouping method
-        const { ConfigManager } = await Promise.resolve().then(() => __importStar(require('./config')));
-        const configManager = new ConfigManager();
-        const config = await configManager.findAndLoadConfig();
-        // Add issues grouped by check or category based on config
-        if (cliOutput.issues && cliOutput.issues.length > 0) {
-            // Always use check-based grouping when configured
-            const useCheckGrouping = config.output?.pr_comment?.group_by === 'check';
-            const groupedIssues = useCheckGrouping
-                ? groupIssuesByCheck(cliOutput.issues)
-                : groupIssuesByCategory(cliOutput.issues);
-            // Get configured checks for filtering
-            const configuredChecks = config.checks ? Object.keys(config.checks) : [];
-            for (const [groupKey, issues] of Object.entries(groupedIssues)) {
-                if (issues.length === 0)
-                    continue;
-                // When using check-based grouping, only show configured checks
-                if (useCheckGrouping && configuredChecks.length > 0) {
-                    // Skip if not a configured check (unless it's uncategorized)
-                    if (!configuredChecks.includes(groupKey) && groupKey !== 'uncategorized') {
-                        continue;
-                    }
-                }
-                const title = `${groupKey.charAt(0).toUpperCase() + groupKey.slice(1)} Issues (${issues.length})`;
-                let sectionContent = '';
-                for (const issue of issues.slice(0, 5)) {
-                    // Limit to 5 issues per category
-                    sectionContent += `- **${issue.severity?.toUpperCase() || 'UNKNOWN'}**: ${issue.message}\n`;
-                    sectionContent += `  - **File**: \`${issue.file}:${issue.line}\`\n\n`;
-                }
-                if (issues.length > 5) {
-                    sectionContent += `*...and ${issues.length - 5} more issues in this category.*\n\n`;
-                }
-                comment += commentManager.createCollapsibleSection(title, sectionContent, true);
-                comment += '\n\n';
-            }
-        }
-        // Add suggestions if any
-        if (cliOutput.suggestions && cliOutput.suggestions.length > 0) {
-            const suggestionsContent = cliOutput.suggestions.map((s) => `- ${s}`).join('\n') + '\n';
-            comment += commentManager.createCollapsibleSection('💡 Recommendations', suggestionsContent, true);
-            comment += '\n\n';
-        }
-        // Add debug information if available
-        if (cliOutput.debug) {
-            const debugContent = formatDebugInfo(cliOutput.debug);
-            comment +=
-                '\n\n' +
-                    commentManager.createCollapsibleSection('🐛 Debug Information', debugContent, false);
-            comment += '\n\n';
-        }
-        // Fetch fresh PR data to get the latest commit SHA
-        let latestCommitSha;
-        try {
-            const { data: pullRequest } = await octokit.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: prResult.prNumber,
-            });
-            latestCommitSha = pullRequest.head.sha;
-            console.log(`📝 Latest commit SHA: ${latestCommitSha.substring(0, 7)}`);
-        }
-        catch (error) {
-            console.warn('⚠️ Could not fetch latest PR data:', error);
-            // Fallback to environment or event data
-            latestCommitSha =
-                eventContext.event?.pull_request?.head?.sha ||
-                    eventContext.payload?.pull_request?.head
-                        ?.sha ||
-                    process.env.GITHUB_SHA;
-        }
-        // Use smart comment updating with unique ID
-        const commentId = `visor-cli-review-${prResult.prNumber}`;
-        await commentManager.updateOrCreateComment(owner, repo, prResult.prNumber, comment, {
-            commentId,
-            triggeredBy: 'visor-cli',
-            allowConcurrentUpdates: true,
-            commitSha: latestCommitSha,
-        });
-        console.log(`✅ Posted CLI review comment to PR #${prResult.prNumber}`);
+function mapGitHubEventToTrigger(eventName, action) {
+    if (!eventName)
+        return 'pr_updated';
+    switch (eventName) {
+        case 'pull_request':
+            if (action === 'opened')
+                return 'pr_opened';
+            if (action === 'synchronize' || action === 'edited')
+                return 'pr_updated';
+            return 'pr_updated';
+        case 'issues':
+            if (action === 'opened')
+                return 'issue_opened';
+            return 'issue_opened';
+        case 'issue_comment':
+            return 'issue_comment';
+        default:
+            return 'pr_updated';
     }
-    catch (error) {
-        console.error('❌ Failed to post CLI review comment:', error);
-    }
-}
-function groupIssuesByCategory(issues) {
-    const grouped = {
-        security: [],
-        performance: [],
-        style: [],
-        logic: [],
-        documentation: [],
-        architecture: [],
-    };
-    for (const issue of issues) {
-        const category = issue.category || 'logic';
-        if (!grouped[category])
-            grouped[category] = [];
-        grouped[category].push(issue);
-    }
-    return grouped;
-}
-/**
- * Group issues by the check that found them (extracted from ruleId prefix)
- */
-function groupIssuesByCheck(issues) {
-    const grouped = {};
-    for (const issue of issues) {
-        // Extract check name from ruleId prefix
-        // Format: "checkName/specific-rule" -> "checkName"
-        let checkName = 'uncategorized';
-        if (issue.ruleId && issue.ruleId.includes('/')) {
-            const parts = issue.ruleId.split('/');
-            checkName = parts[0];
-        }
-        // No fallback to category - only use ruleId prefix
-        if (!grouped[checkName]) {
-            grouped[checkName] = [];
-        }
-        grouped[checkName].push(issue);
-    }
-    return grouped;
-}
-function formatDebugInfo(debug) {
-    let content = '';
-    if (debug.provider)
-        content += `**Provider:** ${debug.provider}\n`;
-    if (debug.model)
-        content += `**Model:** ${debug.model}\n`;
-    if (debug.processingTime)
-        content += `**Processing Time:** ${debug.processingTime}ms\n`;
-    if (debug.parallelExecution !== undefined)
-        content += `**Parallel Execution:** ${debug.parallelExecution ? '✅' : '❌'}\n`;
-    if (debug.checksExecuted)
-        content += `**Checks Executed:** ${debug.checksExecuted.join(', ')}\n`;
-    content += '\n';
-    return content;
 }
 /**
  * Handle legacy GitHub Action mode (backward compatibility)
@@ -486,11 +305,15 @@ async function handleIssueComment(octokit, owner, repo) {
         console.log('No comment or issue found in context');
         return;
     }
-    // Only process PR comments (issues with pull_request key are PRs)
-    if (!issue.pull_request) {
-        console.log('Comment is not on a pull request');
+    // Prevent recursion: skip if comment is from visor itself
+    if (comment.body &&
+        (comment.body.includes('<!-- visor-comment-id:') ||
+            comment.body.includes('*Powered by [Visor]'))) {
+        console.log('Skipping visor comment to prevent recursion');
         return;
     }
+    // Process comments on both issues and PRs
+    // (issue.pull_request exists for PR comments, doesn't exist for issue comments)
     // Load configuration to get available commands
     const configManager = new config_1.ConfigManager();
     let config;
@@ -534,7 +357,7 @@ async function handleIssueComment(octokit, owner, repo) {
     const reviewer = new reviewer_1.PRReviewer(octokit);
     switch (command.type) {
         case 'status':
-            const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+            const statusPrInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
             const statusComment = `## 📊 PR Status\n\n` +
                 `**Title:** ${statusPrInfo.title}\n` +
                 `**Author:** ${statusPrInfo.author}\n` +
@@ -564,7 +387,7 @@ async function handleIssueComment(octokit, owner, repo) {
             if (commandRegistry[command.type]) {
                 const checkIds = commandRegistry[command.type];
                 console.log(`Running checks for command /${command.type}: ${checkIds.join(', ')}`);
-                const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+                const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
                 // Extract common arguments
                 const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1];
                 const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1];
@@ -576,18 +399,20 @@ async function handleIssueComment(octokit, owner, repo) {
                         }
                     }
                 }
-                const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
+                const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
                     focus,
                     format,
                     config: config,
                     checks: checkIds,
                     parallelExecution: false,
                 });
-                await reviewer.postReviewComment(owner, repo, prNumber, review, {
+                await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
                     focus,
                     format,
                 });
-                (0, core_1.setOutput)('issues-found', (0, reviewer_1.calculateTotalIssues)(review.issues).toString());
+                // Calculate total check results from grouped results
+                const totalChecks = Object.values(groupedResults).flat().length;
+                (0, core_1.setOutput)('checks-executed', totalChecks.toString());
             }
             break;
     }
@@ -610,37 +435,26 @@ async function handlePullRequestEvent(octokit, owner, repo, inputs) {
     const prNumber = pullRequest.number;
     const analyzer = new pr_analyzer_1.PRAnalyzer(octokit);
     const reviewer = new reviewer_1.PRReviewer(octokit);
-    const commentManager = new github_comments_1.CommentManager(octokit);
     // Generate comment ID for this PR to enable smart updating
     const commentId = `pr-review-${prNumber}`;
     let prInfo;
-    let reviewContext = '';
+    // Map the action to event type
+    const eventType = mapGitHubEventToTrigger('pull_request', action);
     // For synchronize (new commits), get the latest commit SHA for incremental analysis
     if (action === 'synchronize') {
         const latestCommitSha = pullRequest.head?.sha;
         if (latestCommitSha) {
             console.log(`Analyzing incremental changes from commit: ${latestCommitSha}`);
-            prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha);
-            reviewContext =
-                '## 🔄 Updated PR Analysis\n\nThis review has been updated to include the latest changes.\n\n';
+            prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha, eventType);
         }
         else {
             // Fallback to full analysis if no commit SHA available
-            prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-            reviewContext = '## 🔄 Updated PR Analysis\n\nAnalyzing all changes in this PR.\n\n';
+            prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
         }
     }
     else {
         // For opened and edited events, do full PR analysis
-        prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
-        if (action === 'opened') {
-            reviewContext =
-                '## 🚀 Welcome to Automated PR Review!\n\nThis PR has been automatically analyzed. Use `/help` to see available commands.\n\n';
-        }
-        else {
-            reviewContext =
-                '## ✏️ PR Analysis Updated\n\nThis review has been updated based on PR changes.\n\n';
-        }
+        prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
     }
     // Load config for the review
     const configManager = new config_1.ConfigManager();
@@ -685,59 +499,50 @@ async function handlePullRequestEvent(octokit, owner, repo, inputs) {
         await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
     }
     // Perform the review with debug options
-    const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
+    const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
     // Complete GitHub check runs with results
     if (checkResults) {
-        await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, review, config);
+        await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, groupedResults, config);
     }
     // If debug mode is enabled, output debug information to console
-    if (reviewOptions.debug && review.debug) {
+    const firstDebugInfo = Object.values(groupedResults).flat()[0]?.debug;
+    if (reviewOptions.debug && firstDebugInfo) {
         console.log('\n========================================');
         console.log('🐛 DEBUG INFORMATION');
         console.log('========================================');
-        console.log(`Provider: ${review.debug.provider}`);
-        console.log(`Model: ${review.debug.model}`);
-        console.log(`API Key Source: ${review.debug.apiKeySource}`);
-        console.log(`Processing Time: ${review.debug.processingTime}ms`);
-        console.log(`Prompt Length: ${review.debug.promptLength} characters`);
-        console.log(`Response Length: ${review.debug.responseLength} characters`);
-        console.log(`JSON Parse Success: ${review.debug.jsonParseSuccess ? '✅' : '❌'}`);
-        if (review.debug.errors && review.debug.errors.length > 0) {
+        console.log(`Provider: ${firstDebugInfo.provider}`);
+        console.log(`Model: ${firstDebugInfo.model}`);
+        console.log(`API Key Source: ${firstDebugInfo.apiKeySource}`);
+        console.log(`Processing Time: ${firstDebugInfo.processingTime}ms`);
+        console.log(`Prompt Length: ${firstDebugInfo.promptLength} characters`);
+        console.log(`Response Length: ${firstDebugInfo.responseLength} characters`);
+        console.log(`JSON Parse Success: ${firstDebugInfo.jsonParseSuccess ? '✅' : '❌'}`);
+        if (firstDebugInfo.errors && firstDebugInfo.errors.length > 0) {
             console.log(`\n⚠️ Errors:`);
-            review.debug.errors.forEach(err => console.log(`  - ${err}`));
+            firstDebugInfo.errors.forEach(err => console.log(`  - ${err}`));
         }
         console.log('\n--- AI PROMPT ---');
-        console.log(review.debug.prompt.substring(0, 500) + '...');
+        console.log(firstDebugInfo.prompt.substring(0, 500) + '...');
         console.log('\n--- RAW RESPONSE ---');
-        console.log(review.debug.rawResponse.substring(0, 500) + '...');
+        console.log(firstDebugInfo.rawResponse.substring(0, 500) + '...');
         console.log('========================================\n');
     }
-    const reviewComment = await reviewer['formatReviewCommentWithVisorFormat'](review, reviewOptions);
-    const fullComment = reviewContext + reviewComment;
-    // Use smart comment updating - will update existing comment or create new one
+    // Post the actual review results using the reviewer's comment formatting
     try {
-        const comment = await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+        await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             commentId,
             triggeredBy: action,
-            allowConcurrentUpdates: true, // Allow updates even if comment was modified externally
             commitSha: pullRequest.head?.sha,
         });
-        console.log(`✅ ${action === 'opened' ? 'Created' : 'Updated'} PR review comment (ID: ${comment.id})`);
+        console.log(`✅ ${action === 'opened' ? 'Created' : 'Updated'} PR review comment with actual results`);
     }
-    catch (error) {
-        console.error(`❌ Failed to ${action === 'opened' ? 'create' : 'update'} PR review comment:`, error);
-        // Fallback to creating a new comment without the smart updating
-        await octokit.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: prNumber,
-            body: fullComment,
-        });
-        console.log('✅ Created fallback PR review comment');
+    catch (commentError) {
+        // Don't fail the action if comment posting fails - we already have the results
+        console.warn(`⚠️  Failed to post/update comment: ${commentError}`);
     }
     // Set outputs
     (0, core_1.setOutput)('auto-review-completed', 'true');
-    (0, core_1.setOutput)('issues-found', (0, reviewer_1.calculateTotalIssues)(review.issues).toString());
+    (0, core_1.setOutput)('checks-executed', Object.values(groupedResults).flat().length.toString());
     (0, core_1.setOutput)('pr-action', action);
     (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
     // Set GitHub check run outputs
@@ -887,7 +692,7 @@ async function updateChecksInProgress(octokit, owner, repo, checkRunMap) {
 /**
  * Complete GitHub check runs with results
  */
-async function completeGitHubChecks(octokit, owner, repo, checkRunMap, reviewSummary, config) {
+async function completeGitHubChecks(octokit, owner, repo, checkRunMap, groupedResults, config) {
     if (!checkRunMap)
         return;
     const checkService = new github_check_service_1.GitHubCheckService(octokit);
@@ -895,40 +700,106 @@ async function completeGitHubChecks(octokit, owner, repo, checkRunMap, reviewSum
     console.log(`🏁 Completing ${checkRunMap.size} GitHub check runs...`);
     if (perCheckMode && !checkRunMap.has('combined')) {
         // Per-check mode: complete individual check runs
-        await completeIndividualChecks(checkService, owner, repo, checkRunMap, reviewSummary, config);
+        await completeIndividualChecks(checkService, owner, repo, checkRunMap, groupedResults, config);
     }
     else {
         // Combined mode: complete single check run with all results
-        await completeCombinedCheck(checkService, owner, repo, checkRunMap, reviewSummary, config);
+        await completeCombinedCheck(checkService, owner, repo, checkRunMap, groupedResults, config);
     }
+}
+/**
+ * Extract ReviewIssue[] from GroupedCheckResults content by parsing the rendered text
+ * This function parses the structured content created by CheckExecutionEngine.convertReviewSummaryToGroupedResults()
+ */
+function extractIssuesFromGroupedResults(groupedResults) {
+    const issues = [];
+    for (const [groupName, checkResults] of Object.entries(groupedResults)) {
+        for (const checkResult of checkResults) {
+            const { checkName, content } = checkResult;
+            // First, check if structured issues are available
+            if (checkResult.issues && checkResult.issues.length > 0) {
+                // Use structured issues directly - they're already properly formatted
+                issues.push(...checkResult.issues);
+                continue;
+            }
+            // Fall back to parsing issues from content (legacy support)
+            // Parse issues from content - look for lines like:
+            // - **CRITICAL**: message (file:line)
+            // - **ERROR**: message (file:line)
+            // - **WARNING**: message (file:line)
+            // - **INFO**: message (file:line)
+            const issueRegex = /^- \*\*([A-Z]+)\*\*: (.+?) \(([^:]+):(\d+)\)$/gm;
+            let match;
+            while ((match = issueRegex.exec(content)) !== null) {
+                const [, severityUpper, message, file, lineStr] = match;
+                const severity = severityUpper.toLowerCase();
+                const line = parseInt(lineStr, 10);
+                // Create ReviewIssue with proper format for GitHub annotations
+                const issue = {
+                    file,
+                    line,
+                    ruleId: `${checkName}/content-parsed`,
+                    message: message.trim(),
+                    severity,
+                    category: 'logic', // Default category since we can't parse this from content
+                    group: groupName,
+                    timestamp: Date.now(),
+                };
+                issues.push(issue);
+            }
+        }
+    }
+    return issues;
+}
+/**
+ * Extract issues for a specific check from GroupedCheckResults
+ */
+function extractIssuesForCheck(groupedResults, checkName) {
+    const allIssues = extractIssuesFromGroupedResults(groupedResults);
+    return allIssues.filter(issue => issue.ruleId?.startsWith(`${checkName}/`));
 }
 /**
  * Complete individual GitHub check runs
  */
-async function completeIndividualChecks(checkService, owner, repo, checkRunMap, reviewSummary, config) {
-    // Group issues by check name
-    const issuesByCheck = new Map();
-    // Initialize empty arrays for all checks
-    for (const checkName of checkRunMap.keys()) {
-        issuesByCheck.set(checkName, []);
-    }
-    // Group issues by their check name (extracted from ruleId prefix)
-    for (const issue of reviewSummary.issues || []) {
-        if (issue.ruleId && issue.ruleId.includes('/')) {
-            const checkName = issue.ruleId.split('/')[0];
-            if (issuesByCheck.has(checkName)) {
-                issuesByCheck.get(checkName).push(issue);
-            }
-        }
-    }
+async function completeIndividualChecks(checkService, owner, repo, checkRunMap, groupedResults, config) {
+    // Create failure condition evaluator
+    const { FailureConditionEvaluator } = await Promise.resolve().then(() => __importStar(require('./failure-condition-evaluator')));
+    const failureEvaluator = new FailureConditionEvaluator();
     for (const [checkName, checkRun] of checkRunMap) {
         try {
-            const checkIssues = issuesByCheck.get(checkName) || [];
-            const checkConfig = config.checks?.[checkName];
-            // Evaluate failure conditions for this specific check
-            const failureResults = await evaluateCheckFailureConditions(config, checkConfig, checkName, checkIssues);
-            await checkService.completeCheckRun(owner, repo, checkRun.id, checkName, failureResults, checkIssues);
-            console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
+            // Extract issues for this specific check from the grouped results content
+            const checkIssues = extractIssuesForCheck(groupedResults, checkName);
+            // Evaluate failure conditions based on fail_if configuration
+            const failureResults = [];
+            // Get global and check-specific fail_if conditions
+            const globalFailIf = config?.fail_if;
+            const checkFailIf = config?.checks?.[checkName]?.fail_if;
+            // Create a ReviewSummary for this check's issues
+            const checkReviewSummary = {
+                issues: checkIssues,
+                suggestions: [],
+            };
+            // Determine which fail_if to use: check-specific overrides global
+            const effectiveFailIf = checkFailIf || globalFailIf;
+            if (effectiveFailIf) {
+                const failed = await failureEvaluator.evaluateSimpleCondition(checkName, config?.checks?.[checkName]?.schema || 'plain', config?.checks?.[checkName]?.group || 'default', checkReviewSummary, effectiveFailIf);
+                if (failed) {
+                    const isCheckSpecific = checkFailIf !== undefined;
+                    failureResults.push({
+                        conditionName: isCheckSpecific ? `${checkName}_fail_if` : 'global_fail_if',
+                        expression: effectiveFailIf,
+                        failed: true,
+                        severity: 'error',
+                        message: isCheckSpecific
+                            ? `Check ${checkName} failure condition met`
+                            : 'Global failure condition met',
+                        haltExecution: false,
+                    });
+                }
+            }
+            await checkService.completeCheckRun(owner, repo, checkRun.id, checkName, failureResults, checkIssues // Pass extracted issues for GitHub annotations
+            );
+            console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues, ${failureResults.length} failure conditions evaluated`);
         }
         catch (error) {
             console.error(`❌ Failed to complete ${checkName} check:`, error);
@@ -939,133 +810,46 @@ async function completeIndividualChecks(checkService, owner, repo, checkRunMap, 
 /**
  * Complete combined GitHub check run
  */
-async function completeCombinedCheck(checkService, owner, repo, checkRunMap, reviewSummary, config) {
+async function completeCombinedCheck(checkService, owner, repo, checkRunMap, groupedResults, config) {
     const combinedCheckRun = checkRunMap.get('combined');
     if (!combinedCheckRun)
         return;
+    // Create failure condition evaluator
+    const { FailureConditionEvaluator } = await Promise.resolve().then(() => __importStar(require('./failure-condition-evaluator')));
+    const failureEvaluator = new FailureConditionEvaluator();
     try {
-        // Use all issues for the combined check
-        const allIssues = reviewSummary.issues || [];
-        // Evaluate global failure conditions
-        const failureResults = await evaluateGlobalFailureConditions(config, allIssues);
-        await checkService.completeCheckRun(owner, repo, combinedCheckRun.id, 'Code Review', failureResults, allIssues);
-        console.log(`✅ Completed combined check with ${allIssues.length} issues`);
+        // Extract all issues from the grouped results for the combined check
+        const allIssues = extractIssuesFromGroupedResults(groupedResults);
+        // Evaluate failure conditions for combined check
+        const failureResults = [];
+        // Create a combined ReviewSummary with all issues
+        const combinedReviewSummary = {
+            issues: allIssues,
+            suggestions: [],
+        };
+        // Evaluate global fail_if for the combined check
+        const globalFailIf = config?.fail_if;
+        if (globalFailIf) {
+            const failed = await failureEvaluator.evaluateSimpleCondition('combined', 'plain', 'combined', combinedReviewSummary, globalFailIf);
+            if (failed) {
+                failureResults.push({
+                    conditionName: 'global_fail_if',
+                    expression: globalFailIf,
+                    failed: true,
+                    severity: 'error',
+                    message: 'Global failure condition met',
+                    haltExecution: false,
+                });
+            }
+        }
+        await checkService.completeCheckRun(owner, repo, combinedCheckRun.id, 'Code Review', failureResults, allIssues // Pass all extracted issues for GitHub annotations
+        );
+        console.log(`✅ Completed combined check with ${allIssues.length} issues, ${failureResults.length} failure conditions evaluated`);
     }
     catch (error) {
         console.error(`❌ Failed to complete combined check:`, error);
         await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);
     }
-}
-/**
- * Evaluate failure conditions for a specific check
- */
-async function evaluateCheckFailureConditions(config, checkConfig, checkName, checkIssues) {
-    const failureResults = [];
-    const criticalIssues = checkIssues.filter(issue => issue.severity === 'critical').length;
-    const errorIssues = checkIssues.filter(issue => issue.severity === 'error').length;
-    // Check global fail_if condition
-    if (config.fail_if) {
-        try {
-            const evaluator = new failure_condition_evaluator_1.FailureConditionEvaluator();
-            const reviewSummary = {
-                issues: [],
-                suggestions: [],
-                metadata: {
-                    totalIssues: checkIssues.length,
-                    criticalIssues,
-                    errorIssues,
-                    warningIssues: 0,
-                    infoIssues: 0,
-                },
-            };
-            const shouldFail = await evaluator.evaluateSimpleCondition(checkName, 'legacy', 'legacy', reviewSummary, config.fail_if);
-            if (shouldFail) {
-                failureResults.push({
-                    conditionName: 'global_fail_if',
-                    failed: true,
-                    severity: 'error',
-                    expression: config.fail_if,
-                    message: 'Global failure condition met',
-                    haltExecution: false,
-                });
-            }
-        }
-        catch (error) {
-            console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
-        }
-    }
-    // Check check-specific fail_if condition
-    if (checkConfig?.fail_if) {
-        try {
-            const evaluator = new failure_condition_evaluator_1.FailureConditionEvaluator();
-            const reviewSummary = {
-                issues: [],
-                suggestions: [],
-                metadata: {
-                    totalIssues: checkIssues.length,
-                    criticalIssues,
-                    errorIssues,
-                    warningIssues: 0,
-                    infoIssues: 0,
-                },
-            };
-            const shouldFail = await evaluator.evaluateSimpleCondition(checkName, 'legacy', 'legacy', reviewSummary, checkConfig.fail_if);
-            if (shouldFail) {
-                failureResults.push({
-                    conditionName: `${checkName}_fail_if`,
-                    failed: true,
-                    severity: 'error',
-                    expression: checkConfig.fail_if,
-                    message: `Check ${checkName} failure condition met`,
-                    haltExecution: false,
-                });
-            }
-        }
-        catch (error) {
-            console.error('❌ Failed to evaluate check-specific fail_if condition:', checkConfig.fail_if, error);
-        }
-    }
-    return failureResults;
-}
-/**
- * Evaluate global failure conditions for combined check
- */
-async function evaluateGlobalFailureConditions(config, allIssues) {
-    const failureResults = [];
-    const criticalIssues = allIssues.filter(issue => issue.severity === 'critical').length;
-    const errorIssues = allIssues.filter(issue => issue.severity === 'error').length;
-    // Check global fail_if condition
-    if (config.fail_if) {
-        try {
-            const evaluator = new failure_condition_evaluator_1.FailureConditionEvaluator();
-            const reviewSummary = {
-                issues: [],
-                suggestions: [],
-                metadata: {
-                    totalIssues: allIssues.length,
-                    criticalIssues,
-                    errorIssues,
-                    warningIssues: 0,
-                    infoIssues: 0,
-                },
-            };
-            const shouldFail = await evaluator.evaluateSimpleCondition('combined', 'legacy', 'legacy', reviewSummary, config.fail_if);
-            if (shouldFail) {
-                failureResults.push({
-                    conditionName: 'global_fail_if',
-                    failed: true,
-                    severity: 'error',
-                    expression: config.fail_if,
-                    message: 'Global failure condition met',
-                    haltExecution: false,
-                });
-            }
-        }
-        catch (error) {
-            console.error('❌ Failed to evaluate global fail_if condition:', config.fail_if, error);
-        }
-    }
-    return failureResults;
 }
 /**
  * Mark a check as failed due to execution error
@@ -1152,8 +936,10 @@ async function handlePullRequestVisorMode(inputs, _context, octokit, _authType) 
         const configChecks = Object.keys(config.checks || {});
         const checksToRun = configChecks.length > 0 ? configChecks : ['security', 'performance', 'style', 'architecture'];
         console.log(`🔧 Running checks: ${checksToRun.join(', ')}`);
+        // Map GitHub event name to our EventTrigger format
+        const eventType = mapGitHubEventToTrigger(process.env.GITHUB_EVENT_NAME, action);
         // Fetch PR diff using GitHub API
-        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber);
+        const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
         console.log(`📄 Found ${prInfo.files.length} changed files`);
         if (prInfo.files.length === 0) {
             console.log('⚠️ No files changed in this PR - skipping review');
@@ -1183,53 +969,47 @@ async function handlePullRequestVisorMode(inputs, _context, octokit, _authType) 
         await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
         // Perform the review
         console.log('🤖 Starting parallel AI review with Visor config...');
-        const review = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
-        // Update the review summary to show correct checks executed
-        if (review.debug) {
-            review.debug.checksExecuted = checksToRun;
-            review.debug.parallelExecution = true;
-        }
+        const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
         // Complete GitHub check runs with results
         if (checkResults) {
-            await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, review, config);
+            await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, groupedResults, config);
         }
         // Post comment using group-based comment separation
         const commentId = `visor-config-review-${prNumber}`;
-        await reviewer.postReviewComment(owner, repo, prNumber, review, {
+        await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             ...reviewOptions,
             commentId,
             triggeredBy: `visor-config-${action}`,
             commitSha: pullRequest.head?.sha,
         });
         console.log('✅ Posted Visor config-based review comment');
-        // Check for API errors in the review issues
-        const apiErrors = (review.issues || []).filter(issue => issue.file === 'system' &&
-            issue.severity === 'critical' &&
-            (issue.message.includes('API rate limit') ||
-                issue.message.includes('403') ||
-                issue.message.includes('401') ||
-                issue.message.includes('authentication') ||
-                issue.message.includes('API key')));
-        if (apiErrors.length > 0) {
-            console.error('🚨 Critical API errors detected in review:');
-            apiErrors.forEach(error => {
-                console.error(`  - ${error.message}`);
-            });
+        // Check for API errors in the review content
+        const allContent = Object.values(groupedResults)
+            .flat()
+            .map(result => result.content)
+            .join(' ');
+        const hasApiErrors = allContent.includes('API rate limit') ||
+            allContent.includes('403') ||
+            allContent.includes('401') ||
+            allContent.includes('authentication') ||
+            allContent.includes('API key');
+        if (hasApiErrors) {
+            console.error('🚨 Critical API errors detected in review content');
             // Check if we should fail on API errors
             const failOnApiError = inputs['fail-on-api-error'] === 'true';
             if (failOnApiError) {
-                (0, core_1.setFailed)(`Critical API errors detected: ${apiErrors.length} authentication/rate limit issues found. Please check your API credentials.`);
+                (0, core_1.setFailed)('Critical API errors detected in review content. Please check your API credentials.');
                 return;
             }
         }
         // Set outputs
         (0, core_1.setOutput)('auto-review-completed', 'true');
-        (0, core_1.setOutput)('issues-found', (0, reviewer_1.calculateTotalIssues)(review.issues).toString());
+        (0, core_1.setOutput)('checks-executed', Object.values(groupedResults).flat().length.toString());
         (0, core_1.setOutput)('pr-action', action || 'unknown');
         (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
         (0, core_1.setOutput)('visor-config-used', 'true');
-        (0, core_1.setOutput)('checks-executed', checksToRun.join(','));
-        (0, core_1.setOutput)('api-errors-found', apiErrors.length.toString());
+        (0, core_1.setOutput)('checks-run', checksToRun.join(','));
+        (0, core_1.setOutput)('api-errors-found', hasApiErrors ? '1' : '0');
         // Set GitHub check run outputs
         (0, core_1.setOutput)('checks-api-available', checkResults.checksApiAvailable.toString());
         (0, core_1.setOutput)('check-runs-created', checkResults.checkRunsCreated.toString());

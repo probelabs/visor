@@ -181,56 +181,31 @@ export class GitHubCheckService {
       };
     }
 
-    // Check for failed conditions
+    // Check if any fail_if conditions were met
     const failedConditions = failureResults.filter(result => result.failed);
-    const errorConditions = failedConditions.filter(result => result.severity === 'error');
-    const warningConditions = failedConditions.filter(result => result.severity === 'warning');
 
-    // Count issues by severity
+    // Count issues by severity (for informational display only)
     const criticalIssues = reviewIssues.filter(issue => issue.severity === 'critical').length;
     const errorIssues = reviewIssues.filter(issue => issue.severity === 'error').length;
     const warningIssues = reviewIssues.filter(issue => issue.severity === 'warning').length;
     const totalIssues = reviewIssues.length;
 
-    // Determine conclusion based on failure conditions and issues
+    // Determine conclusion ONLY based on fail_if evaluation results
+    // The presence of issues (critical, error, warning) does NOT affect the conclusion
+    // Only the fail_if condition determines pass/fail status
     let conclusion: CheckRunConclusion;
     let title: string;
     let summaryText: string;
     let details: string;
 
-    if (errorConditions.length > 0 || criticalIssues > 0) {
+    if (failedConditions.length > 0) {
+      // Check fails if fail_if condition is met
       conclusion = 'failure';
       title = '🚨 Check Failed';
-      summaryText = `${checkName} check failed due to ${errorConditions.length > 0 ? 'failure conditions' : 'critical issues'}.`;
+      summaryText = `${checkName} check failed because fail_if condition was met.`;
 
       details = this.formatCheckDetails(failureResults, reviewIssues, {
-        failedConditions: errorConditions.length,
-        warningConditions: warningConditions.length,
-        criticalIssues,
-        errorIssues,
-        warningIssues,
-        totalIssues,
-      });
-    } else if (warningConditions.length > 0 || errorIssues > 0) {
-      conclusion = 'neutral';
-      title = '⚠️ Check Completed with Warnings';
-      summaryText = `${checkName} check completed but found ${warningConditions.length > 0 ? 'warning conditions' : 'error-level issues'}.`;
-
-      details = this.formatCheckDetails(failureResults, reviewIssues, {
-        failedConditions: 0,
-        warningConditions: warningConditions.length,
-        criticalIssues,
-        errorIssues,
-        warningIssues,
-        totalIssues,
-      });
-    } else if (warningIssues > 0) {
-      conclusion = 'neutral';
-      title = '⚠️ Check Completed with Minor Issues';
-      summaryText = `${checkName} check completed with ${warningIssues} warning${warningIssues === 1 ? '' : 's'}.`;
-
-      details = this.formatCheckDetails(failureResults, reviewIssues, {
-        failedConditions: 0,
+        failedConditions: failedConditions.length,
         warningConditions: 0,
         criticalIssues,
         errorIssues,
@@ -238,17 +213,28 @@ export class GitHubCheckService {
         totalIssues,
       });
     } else {
+      // No fail_if conditions met - check passes regardless of issues found
       conclusion = 'success';
-      title = '✅ Check Passed';
-      summaryText = `${checkName} check completed successfully with no issues found.`;
+
+      // Adjust the title and summary based on issues found, but conclusion remains success
+      if (criticalIssues > 0 || errorIssues > 0) {
+        title = '✅ Check Passed (Issues Found)';
+        summaryText = `${checkName} check passed. Found ${criticalIssues} critical and ${errorIssues} error issues, but fail_if condition was not met.`;
+      } else if (warningIssues > 0) {
+        title = '✅ Check Passed (Warnings Found)';
+        summaryText = `${checkName} check passed. Found ${warningIssues} warning${warningIssues === 1 ? '' : 's'}, but fail_if condition was not met.`;
+      } else {
+        title = '✅ Check Passed';
+        summaryText = `${checkName} check completed successfully with no issues found.`;
+      }
 
       details = this.formatCheckDetails(failureResults, reviewIssues, {
         failedConditions: 0,
         warningConditions: 0,
-        criticalIssues: 0,
-        errorIssues: 0,
-        warningIssues: 0,
-        totalIssues: 0,
+        criticalIssues,
+        errorIssues,
+        warningIssues,
+        totalIssues,
       });
     }
 
