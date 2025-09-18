@@ -200,9 +200,7 @@ export class ActionCliBridge {
         ? path.join(actionPath, 'dist', 'index.js')
         : path.join(__dirname, 'index.js'); // When running locally
 
-      // Set environment variable to indicate CLI mode for the bundled file
-      env.VISOR_CLI_MODE = 'true';
-
+      // Don't pass --github-action flag, so it runs in CLI mode
       const result = await this.executeCommand('node', [bundledPath, ...cliArgs], {
         cwd: workingDir,
         env,

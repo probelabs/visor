@@ -1176,16 +1176,15 @@ async function markCheckAsFailed(
 }
 
 if (require.main === module) {
-  // Check if running in CLI mode - only when explicitly set or has CLI-specific arguments
-  const hasCliArgs = process.argv.slice(2).some(arg =>
-    arg.startsWith('--check') ||
-    arg.startsWith('--output') ||
-    arg.startsWith('--config') ||
-    arg === '--help' ||
-    arg === '--version'
-  );
+  // Simple mode detection: if --github-action flag is present, run as action, otherwise CLI
+  const isGitHubAction = process.argv.includes('--github-action');
 
-  if (process.env.VISOR_CLI_MODE === 'true' || hasCliArgs) {
+  if (isGitHubAction) {
+    // Remove the --github-action flag from argv so it doesn't interfere
+    process.argv = process.argv.filter(arg => arg !== '--github-action');
+    // Run as GitHub Action
+    run();
+  } else {
     // Import and run CLI
     import('./cli-main').then(({ main }) => {
       main().catch(error => {
@@ -1193,8 +1192,5 @@ if (require.main === module) {
         process.exit(1);
       });
     });
-  } else {
-    // Run as GitHub Action
-    run();
   }
 }
