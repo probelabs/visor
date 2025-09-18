@@ -184,7 +184,15 @@ export class ActionCliBridge {
 
       console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);
 
-      const result = await this.executeCommand('node', ['dist/cli-main.js', ...cliArgs], {
+      // Determine the CLI path based on execution context
+      // When running as a GitHub Action, GITHUB_ACTION_PATH points to the action's directory
+      // When running locally or in tests, use relative path
+      const actionPath = process.env.GITHUB_ACTION_PATH;
+      const cliPath = actionPath
+        ? path.join(actionPath, 'dist', 'cli-main.js')
+        : path.join(__dirname, 'cli-main.js'); // In dist/, both files are in same directory
+
+      const result = await this.executeCommand('node', [cliPath, ...cliArgs], {
         cwd: workingDir,
         env,
         timeout,
