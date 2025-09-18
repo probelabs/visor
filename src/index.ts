@@ -1,10 +1,11 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
+import * as path from 'path';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
-import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
+import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 
@@ -103,12 +104,9 @@ export async function run(): Promise<void> {
     const { octokit, authType } = await createAuthenticatedOctokit();
     console.log(`✅ Authenticated successfully using ${authType}`);
 
-    // Get token for passing to CLI bridge (might be undefined if using App auth)
-    const token = getInput('github-token') || '';
-
     // Collect all GitHub Action inputs
     const inputs: GitHubActionInputs = {
-      'github-token': token,
+      'github-token': getInput('github-token') || '',
       owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
       repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
       debug: getInput('debug'),
@@ -147,124 +145,65 @@ export async function run(): Promise<void> {
       payload: process.env.GITHUB_CONTEXT ? JSON.parse(process.env.GITHUB_CONTEXT) : {},
     };
 
-    // Initialize CLI bridge
-    const cliBridge = new ActionCliBridge(token, context);
-
-    // Check if we should use Visor CLI
+    // Debug logging for inputs
     console.log('Debug: inputs.debug =', inputs.debug);
     console.log('Debug: inputs.checks =', inputs.checks);
     console.log('Debug: inputs.config-path =', inputs['config-path']);
     console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
     console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
 
-    if (cliBridge.shouldUseVisor(inputs)) {
-      console.log('🔍 Using Visor CLI mode');
-      // Instead of spawning subprocess, directly run CLI logic
-      const cliArgs = cliBridge.parseGitHubInputsToCliArgs(inputs);
-
-      // Set argv for CLI parsing
-      process.argv = ['node', 'visor', ...cliArgs];
-
-      // Import and run CLI directly
-      const { main } = await import('./cli-main');
-      await main();
-      return;
-    }
-
-    // Default behavior: Use Visor config to determine what to run
+    // Always use config-driven mode in GitHub Actions
+    // The CLI mode is only for local development, not for GitHub Actions
     console.log('🤖 Using config-driven mode');
 
     // Load config to determine which checks should run for this event
     const configManager = new ConfigManager();
     let config: import('./types/config').VisorConfig;
 
+    // First try to load user config, then fall back to defaults/.visor.yaml
+    const configPath = inputs['config-path'] || inputs['visor-config-path'];
+
     try {
-      config = await configManager.findAndLoadConfig();
-      console.log('📋 Loaded Visor config');
+      if (configPath) {
+        // Load specified config
+        config = await configManager.loadConfig(configPath);
+        console.log(`📋 Loaded config from: ${configPath}`);
+      } else {
+        // Try to find config in project
+        config = await configManager.findAndLoadConfig();
+        console.log('📋 Loaded Visor config from project');
+      }
     } catch {
-      // Use default config if none found
-      config = {
-        version: '1.0',
-        checks: {},
-        output: {
-          pr_comment: {
-            format: 'markdown' as const,
-            group_by: 'check' as const,
-            collapse: false,
+      // Fall back to bundled default config
+      try {
+        const defaultConfigPath = path.join(
+          process.env.GITHUB_ACTION_PATH || __dirname,
+          'defaults',
+          '.visor.yaml'
+        );
+        config = await configManager.loadConfig(defaultConfigPath);
+        console.log('📋 Using bundled default configuration from defaults/.visor.yaml');
+      } catch {
+        // Ultimate fallback if even defaults/.visor.yaml can't be loaded
+        config = {
+          version: '1.0',
+          checks: {},
+          output: {
+            pr_comment: {
+              format: 'markdown' as const,
+              group_by: 'check' as const,
+              collapse: false,
+            },
           },
-        },
-      };
-      console.log('📋 Using default configuration');
+        };
+        console.log('⚠️ Could not load defaults/.visor.yaml, using minimal configuration');
+      }
     }
 
     // Determine which event we're handling and run appropriate checks
     await handleEvent(octokit, inputs, eventName, context, config);
   } catch (error) {
     setFailed(error instanceof Error ? error.message : 'Unknown error');
-  }
-}
-
-/**
- * Handle Visor CLI mode
- */
-async function handleVisorMode(
-  cliBridge: ActionCliBridge,
-  inputs: GitHubActionInputs,
-  _context: GitHubContext,
-  _octokit: Octokit
-): Promise<void> {
-  try {
-    // Note: PR auto-review cases are now handled upstream in the main run() function
-
-    // Execute CLI with the provided config file (no temp config creation)
-    const result = await cliBridge.executeCliWithContext(inputs);
-
-    if (result.success) {
-      console.log('✅ Visor CLI execution completed successfully');
-
-      // Parse JSON output for PR comment creation
-      let cliOutput;
-      try {
-        // Extract JSON from CLI output
-        const outputLines = result.output?.split('\n') || [];
-        const jsonLine = outputLines.find(
-          line => line.trim().startsWith('{') && line.trim().endsWith('}')
-        );
-
-        if (jsonLine) {
-          cliOutput = JSON.parse(jsonLine);
-          console.log('📊 CLI Review Results:', cliOutput);
-
-          // Note: PR comment posting is now handled by handlePullRequestVisorMode for PR events
-          // CLI mode output is intended for non-PR scenarios
-        } else {
-          console.log('📄 CLI Output (non-JSON):', result.output);
-        }
-      } catch (parseError) {
-        console.log('⚠️ Could not parse CLI output as JSON:', parseError);
-        console.log('📄 Raw CLI Output:', result.output);
-      }
-
-      // Set outputs based on CLI result
-      const outputs = cliBridge.mergeActionAndCliOutputs(inputs, result);
-
-      // Add additional outputs from parsed JSON
-      if (cliOutput) {
-        outputs['total-issues'] = cliOutput.totalIssues?.toString() || '0';
-        outputs['critical-issues'] = cliOutput.criticalIssues?.toString() || '0';
-      }
-
-      for (const [key, value] of Object.entries(outputs)) {
-        setOutput(key, value);
-      }
-    } else {
-      console.error('❌ Visor CLI execution failed');
-      console.error(result.error || result.output);
-      setFailed(result.error || 'CLI execution failed');
-    }
-  } catch (error) {
-    console.error('❌ Visor mode error:', error);
-    setFailed(error instanceof Error ? error.message : 'Visor mode failed');
   }
 }
 
@@ -312,13 +251,53 @@ async function handleEvent(
   const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
 
   // Find checks that should run for this event
-  const checksToRun: string[] = [];
+  let checksToRun: string[] = [];
+
+  // First, get all checks that are configured for this event type
+  const eventChecks: string[] = [];
   for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
     // Check if this check should run for this event
     const checkEvents = checkConfig.on || ['pr_opened', 'pr_updated'];
     if (checkEvents.includes(eventType)) {
-      checksToRun.push(checkName);
+      eventChecks.push(checkName);
     }
+  }
+
+  // Now apply the 'checks' input filter if provided
+  const checksInput = inputs.checks || inputs['visor-checks'];
+  if (checksInput && checksInput.trim() !== '') {
+    const requestedChecks = checksInput.split(',').map(c => c.trim());
+
+    if (requestedChecks.includes('all')) {
+      // If 'all' is specified, run all event checks
+      checksToRun = eventChecks;
+      console.log('📋 Running all available checks for this event');
+    } else {
+      // Filter to only the requested checks that are also configured for this event
+      // Map simplified check names to actual config check names if needed
+      for (const requested of requestedChecks) {
+        // Try exact match first
+        if (eventChecks.includes(requested)) {
+          checksToRun.push(requested);
+        } else {
+          // Try with '-check' suffix (e.g., 'security' -> 'security-check')
+          const withSuffix = `${requested}-check`;
+          if (eventChecks.includes(withSuffix)) {
+            checksToRun.push(withSuffix);
+          } else {
+            // Try to find any check that contains the requested string
+            const matching = eventChecks.filter(check =>
+              check.toLowerCase().includes(requested.toLowerCase())
+            );
+            checksToRun.push(...matching);
+          }
+        }
+      }
+      console.log(`📋 Running requested checks: ${requestedChecks.join(', ')}`);
+    }
+  } else {
+    // No checks input provided, run all event checks
+    checksToRun = eventChecks;
   }
 
   if (checksToRun.length === 0) {
@@ -1187,14 +1166,16 @@ async function markCheckAsFailed(
     run();
   } else {
     // Import and run CLI
-    import('./cli-main').then(({ main }) => {
-      main().catch(error => {
-        console.error('CLI execution failed:', error);
+    import('./cli-main')
+      .then(({ main }) => {
+        main().catch(error => {
+          console.error('CLI execution failed:', error);
+          process.exit(1);
+        });
+      })
+      .catch(error => {
+        console.error('Failed to import CLI module:', error);
         process.exit(1);
       });
-    }).catch(error => {
-      console.error('Failed to import CLI module:', error);
-      process.exit(1);
-    });
   }
 })();

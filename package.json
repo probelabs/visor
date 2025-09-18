@@ -17,7 +17,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "ncc build src/index.ts -o dist",
+    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/",
     "test": "jest",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
