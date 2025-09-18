@@ -1175,7 +1175,9 @@ async function markCheckAsFailed(
   }
 }
 
-if (require.main === module) {
+// Entry point - execute immediately when the script is run
+// Note: require.main === module check doesn't work reliably with ncc bundling
+(() => {
   // Simple mode detection: use GITHUB_ACTIONS env var which is always 'true' in GitHub Actions
   // Also check for --cli flag to force CLI mode even in GitHub Actions environment
   const isGitHubAction = process.env.GITHUB_ACTIONS === 'true' && !process.argv.includes('--cli');
@@ -1190,6 +1192,9 @@ if (require.main === module) {
         console.error('CLI execution failed:', error);
         process.exit(1);
       });
+    }).catch(error => {
+      console.error('Failed to import CLI module:', error);
+      process.exit(1);
     });
   }
-}
+})();
