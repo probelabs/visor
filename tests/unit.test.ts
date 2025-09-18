@@ -53,6 +53,29 @@ jest.mock('../src/ai-review-service', () => ({
   })),
 }));
 
+// Mock PRReviewer to return ReviewSummary format for legacy mode compatibility
+jest.mock('../src/reviewer', () => ({
+  PRReviewer: jest.fn().mockImplementation(() => ({
+    reviewPR: jest.fn().mockResolvedValue({
+      issues: [
+        {
+          file: 'test.ts',
+          line: 10,
+          message: 'Mock security issue',
+          severity: 'error',
+          category: 'security',
+        },
+      ],
+      suggestions: ['Mock suggestion'],
+      debug: {
+        provider: 'mock',
+        model: 'test-model',
+        processingTime: 100,
+      },
+    }),
+  })),
+}));
+
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn().mockImplementation(() => ({
     rest: {

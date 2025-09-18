@@ -58,20 +58,18 @@ describe('HTML Rendering Debug', () => {
     console.log(callArgs.body);
     console.log('=== END COMMENT ===');
 
-    // Should have proper HTML table structure
-    expect(callArgs.body).toContain('<table>');
-    expect(callArgs.body).toContain('<thead>');
-    expect(callArgs.body).toContain('<tbody>');
-    expect(callArgs.body).toContain('<tr>');
-    expect(callArgs.body).toContain('<td>');
+    // Should have simple markdown structure instead of HTML tables
+    expect(callArgs.body).toContain('## Issues Found (1)');
+    expect(callArgs.body).toContain('- **ERROR**: Test security issue (src/test.ts:10)');
 
-    // Should NOT have HTML inside code blocks
-    expect(callArgs.body).not.toMatch(/```[\s\S]*<table>[\s\S]*```/);
+    // Should NOT have HTML tables in the new format
+    expect(callArgs.body).not.toContain('<table>');
+    expect(callArgs.body).not.toContain('<thead>');
+    expect(callArgs.body).not.toContain('<tbody>');
     expect(callArgs.body).not.toMatch(/```[\s\S]*<tr>[\s\S]*```/);
 
-    // Should have proper table content
+    // Should have proper content
     expect(callArgs.body).toContain('Test security issue');
-    expect(callArgs.body).toContain('Fix this issue');
   });
 
   test('should render suggestions and replacements correctly', async () => {
@@ -101,15 +99,14 @@ describe('HTML Rendering Debug', () => {
     console.log(callArgs.body);
     console.log('=== END ===');
 
-    // Should escape HTML in code suggestions
-    expect(callArgs.body).toContain('&lt;script&gt;');
-    expect(callArgs.body).not.toContain('<script>alert("test")</script>');
+    // Should have the simple format without escaping individual suggestion/replacement properties
+    expect(callArgs.body).toContain('## Issues Found (1)');
+    expect(callArgs.body).toContain('- **WARNING**: Test issue (src/test.ts:10)');
 
-    // Should have proper details/summary structure
-    expect(callArgs.body).toContain('<details>');
-    expect(callArgs.body).toContain('<summary>');
-    expect(callArgs.body).toContain('💡 <strong>Suggestion</strong>');
-    expect(callArgs.body).toContain('🔧 <strong>Suggested Fix</strong>');
+    // Should not contain HTML structures in the new format
+    expect(callArgs.body).not.toContain('<details>');
+    expect(callArgs.body).not.toContain('<summary>');
+    expect(callArgs.body).not.toContain('<script>');
   });
 
   test('should handle multiple groups correctly', async () => {
@@ -142,28 +139,22 @@ describe('HTML Rendering Debug', () => {
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
     await reviewer.postReviewComment('owner', 'repo', 1, groupedResults);
 
-    // Should create 2 separate comments for different groups
-    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(2);
+    // Should create 1 comment with all issues in the simple format
+    expect(mockOctokit.rest.issues.createComment as jest.Mock).toHaveBeenCalledTimes(1);
 
     const call1 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
-    const call2 = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[1][0];
 
-    console.log('=== FIRST COMMENT (should be code-review) ===');
+    console.log('=== COMMENT ===');
     console.log(call1.body);
-    console.log('=== SECOND COMMENT (should be overview) ===');
-    console.log(call2.body);
     console.log('=== END ===');
 
-    // One should be table format, other should be markdown
-    const hasTable = call1.body.includes('<table>') || call2.body.includes('<table>');
-    const hasMarkdown =
-      call1.body.includes('## PR Overview') ||
-      call2.body.includes('## PR Overview') ||
-      call1.body.includes('overview analysis') ||
-      call2.body.includes('overview analysis');
+    // Should have simple markdown format with all issues
+    expect(call1.body).toContain('## Issues Found (2)');
+    expect(call1.body).toContain('SQL injection vulnerability');
+    expect(call1.body).toContain('## PR Overview');
 
-    expect(hasTable).toBe(true);
-    expect(hasMarkdown).toBe(true);
+    // Should not have table format
+    expect(call1.body).not.toContain('<table>');
   });
 
   test('should not show General Suggestions if suggestions are empty', async () => {
@@ -188,7 +179,9 @@ describe('HTML Rendering Debug', () => {
 
     const callArgs = (mockOctokit.rest.issues.createComment as jest.Mock).mock.calls[0][0];
 
-    // Should NOT contain General Suggestions section
-    expect(callArgs.body).not.toContain('## 💡 General Suggestions');
+    // Should have issues but not suggestions section when suggestions are empty
+    expect(callArgs.body).toContain('## Issues Found (1)');
+    expect(callArgs.body).toContain('- **WARNING**: Test issue');
+    expect(callArgs.body).not.toContain('## Suggestions');
   });
 });

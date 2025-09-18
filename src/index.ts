@@ -3,9 +3,8 @@ import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer } from './pr-analyzer';
-import { PRReviewer, GroupedCheckResults } from './reviewer';
+import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { ActionCliBridge, GitHubActionInputs, GitHubContext } from './action-cli-bridge';
-import { CommentManager } from './github-comments';
 import { ConfigManager } from './config';
 import { PRDetector, GitHubEventContext } from './pr-detector';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
@@ -555,13 +554,11 @@ async function handlePullRequestEvent(
   const prNumber = pullRequest.number;
   const analyzer = new PRAnalyzer(octokit);
   const reviewer = new PRReviewer(octokit);
-  const commentManager = new CommentManager(octokit);
 
   // Generate comment ID for this PR to enable smart updating
   const commentId = `pr-review-${prNumber}`;
 
   let prInfo;
-  let reviewContext = '';
 
   // Map the action to event type
   const eventType = mapGitHubEventToTrigger('pull_request', action);
@@ -572,23 +569,13 @@ async function handlePullRequestEvent(
     if (latestCommitSha) {
       console.log(`Analyzing incremental changes from commit: ${latestCommitSha}`);
       prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, latestCommitSha, eventType);
-      reviewContext =
-        '## 🔄 Updated PR Analysis\n\nThis review has been updated to include the latest changes.\n\n';
     } else {
       // Fallback to full analysis if no commit SHA available
       prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
-      reviewContext = '## 🔄 Updated PR Analysis\n\nAnalyzing all changes in this PR.\n\n';
     }
   } else {
     // For opened and edited events, do full PR analysis
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
-    if (action === 'opened') {
-      reviewContext =
-        '## 🚀 Welcome to Automated PR Review!\n\nThis PR has been automatically analyzed. Use `/help` to see available commands.\n\n';
-    } else {
-      reviewContext =
-        '## ✏️ PR Analysis Updated\n\nThis review has been updated based on PR changes.\n\n';
-    }
   }
 
   // Load config for the review
@@ -688,35 +675,19 @@ async function handlePullRequestEvent(
     console.log('========================================\n');
   }
 
-  // Post the review comment directly using the new architecture
-  const fullComment = reviewContext + 'Review completed using the new check-based architecture.';
-
-  // Use smart comment updating - will update existing comment or create new one
+  // Post the actual review results using the reviewer's comment formatting
   try {
-    const comment = await commentManager.updateOrCreateComment(owner, repo, prNumber, fullComment, {
+    await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
       commentId,
       triggeredBy: action,
-      allowConcurrentUpdates: true, // Allow updates even if comment was modified externally
       commitSha: pullRequest.head?.sha,
     });
-
     console.log(
-      `✅ ${action === 'opened' ? 'Created' : 'Updated'} PR review comment (ID: ${comment.id})`
+      `✅ ${action === 'opened' ? 'Created' : 'Updated'} PR review comment with actual results`
     );
-  } catch (error) {
-    console.error(
-      `❌ Failed to ${action === 'opened' ? 'create' : 'update'} PR review comment:`,
-      error
-    );
-
-    // Fallback to creating a new comment without the smart updating
-    await octokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: prNumber,
-      body: fullComment,
-    });
-    console.log('✅ Created fallback PR review comment');
+  } catch (commentError) {
+    // Don't fail the action if comment posting fails - we already have the results
+    console.warn(`⚠️  Failed to post/update comment: ${commentError}`);
   }
 
   // Set outputs
@@ -935,6 +906,61 @@ async function completeGitHubChecks(
 }
 
 /**
+ * Extract ReviewIssue[] from GroupedCheckResults content by parsing the rendered text
+ * This function parses the structured content created by CheckExecutionEngine.convertReviewSummaryToGroupedResults()
+ */
+function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): ReviewIssue[] {
+  const issues: ReviewIssue[] = [];
+
+  for (const [groupName, checkResults] of Object.entries(groupedResults)) {
+    for (const checkResult of checkResults) {
+      const { checkName, content } = checkResult;
+
+      // Parse issues from content - look for lines like:
+      // - **CRITICAL**: message (file:line)
+      // - **ERROR**: message (file:line)
+      // - **WARNING**: message (file:line)
+      // - **INFO**: message (file:line)
+      const issueRegex = /^- \*\*([A-Z]+)\*\*: (.+?) \(([^:]+):(\d+)\)$/gm;
+      let match;
+
+      while ((match = issueRegex.exec(content)) !== null) {
+        const [, severityUpper, message, file, lineStr] = match;
+        const severity = severityUpper.toLowerCase() as 'info' | 'warning' | 'error' | 'critical';
+        const line = parseInt(lineStr, 10);
+
+        // Create ReviewIssue with proper format for GitHub annotations
+        const issue: ReviewIssue = {
+          file,
+          line,
+          ruleId: `${checkName}/content-parsed`,
+          message: message.trim(),
+          severity,
+          category: 'logic', // Default category since we can't parse this from content
+          group: groupName,
+          timestamp: Date.now(),
+        };
+
+        issues.push(issue);
+      }
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Extract issues for a specific check from GroupedCheckResults
+ */
+function extractIssuesForCheck(
+  groupedResults: GroupedCheckResults,
+  checkName: string
+): ReviewIssue[] {
+  const allIssues = extractIssuesFromGroupedResults(groupedResults);
+  return allIssues.filter(issue => issue.ruleId?.startsWith(`${checkName}/`));
+}
+
+/**
  * Complete individual GitHub check runs
  */
 async function completeIndividualChecks(
@@ -945,12 +971,10 @@ async function completeIndividualChecks(
   groupedResults: GroupedCheckResults,
   _config: import('./types/config').VisorConfig
 ): Promise<void> {
-  // Results are already grouped by check in the new architecture
-  const allCheckResults = Object.values(groupedResults).flat();
-
   for (const [checkName, checkRun] of checkRunMap) {
     try {
-      const checkResult = allCheckResults.find(result => result.checkName === checkName);
+      // Extract issues for this specific check from the grouped results content
+      const checkIssues = extractIssuesForCheck(groupedResults, checkName);
 
       // For the new architecture, we don't have structured failure conditions
       // The check content itself indicates success/failure
@@ -962,11 +986,11 @@ async function completeIndividualChecks(
         checkRun.id,
         checkName,
         failureResults,
-        [] // No structured issues in new architecture
+        checkIssues // Pass extracted issues for GitHub annotations
       );
 
       console.log(
-        `✅ Completed ${checkName} check with content: ${checkResult?.content.length || 0} characters`
+        `✅ Completed ${checkName} check with ${checkIssues.length} issues extracted for annotations`
       );
     } catch (error) {
       console.error(`❌ Failed to complete ${checkName} check:`, error);
@@ -990,8 +1014,8 @@ async function completeCombinedCheck(
   if (!combinedCheckRun) return;
 
   try {
-    // Use all check results for the combined check
-    const allCheckResults = Object.values(groupedResults).flat();
+    // Extract all issues from the grouped results for the combined check
+    const allIssues = extractIssuesFromGroupedResults(groupedResults);
 
     // For the new architecture, we don't have structured failure conditions
     const failureResults: import('./types/config').FailureConditionResult[] = [];
@@ -1002,10 +1026,12 @@ async function completeCombinedCheck(
       combinedCheckRun.id,
       'Code Review',
       failureResults,
-      [] // No structured issues in new architecture
+      allIssues // Pass all extracted issues for GitHub annotations
     );
 
-    console.log(`✅ Completed combined check with ${allCheckResults.length} check results`);
+    console.log(
+      `✅ Completed combined check with ${allIssues.length} issues extracted for annotations`
+    );
   } catch (error) {
     console.error(`❌ Failed to complete combined check:`, error);
     await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);

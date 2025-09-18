@@ -10,6 +10,11 @@ jest.mock('../../../src/git-repository-analyzer');
 jest.mock('../../../src/reviewer');
 jest.mock('../../../src/providers/check-provider-registry');
 
+// Mock for renderCheckContent tests
+jest.mock('liquidjs');
+jest.mock('fs/promises');
+jest.mock('path');
+
 describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
   let mockGitAnalyzer: jest.Mocked<GitRepositoryAnalyzer>;
@@ -109,10 +114,23 @@ describe('CheckExecutionEngine', () => {
       ],
     };
 
+    const mockReviewSummary = {
+      issues: [
+        {
+          category: 'security',
+          message: 'Potential security issue',
+          severity: 'error',
+          file: 'src/test.ts',
+          line: 10,
+        },
+      ],
+      suggestions: ['Add input validation', 'Improve error handling'],
+    };
+
     beforeEach(() => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue(mockRepositoryInfo);
       mockGitAnalyzer.toPRInfo.mockReturnValue(mockPRInfo);
-      mockReviewer.reviewPR.mockResolvedValue(mockGroupedResults);
+      mockReviewer.reviewPR.mockResolvedValue(mockReviewSummary as any);
     });
 
     it('should execute checks successfully', async () => {
@@ -525,6 +543,397 @@ describe('CheckExecutionEngine', () => {
       // This test demonstrates the expected behavior
       const result = await checkEngine.executeChecks(options);
       expect(result).toBeDefined();
+    });
+  });
+
+  describe('renderCheckContent', () => {
+    let mockLiquidInstance: jest.Mocked<any>;
+    let mockLiquid: jest.Mocked<any>;
+    let mockFs: jest.Mocked<any>;
+    let mockPath: jest.Mocked<any>;
+
+    const mockReviewSummary: ReviewSummary = {
+      issues: [
+        {
+          category: 'security',
+          message: 'Potential security vulnerability',
+          severity: 'error',
+          file: 'src/test.ts',
+          line: 10,
+          ruleId: 'sec-001',
+        },
+        {
+          category: 'style',
+          message: 'Code style issue',
+          severity: 'warning',
+          file: 'src/test.ts',
+          line: 15,
+          ruleId: 'style-001',
+        },
+      ],
+      suggestions: ['Add input validation', 'Improve error handling'],
+    };
+
+    beforeEach(() => {
+      // Reset all mocks
+      jest.clearAllMocks();
+
+      // Mock liquidjs
+      mockLiquidInstance = {
+        parseAndRender: jest.fn(),
+      };
+      mockLiquid = {
+        Liquid: jest.fn().mockImplementation(() => mockLiquidInstance),
+      };
+
+      // Mock fs/promises
+      mockFs = {
+        readFile: jest.fn(),
+      };
+
+      // Mock path
+      mockPath = {
+        join: jest.fn(),
+      };
+
+      // Configure the mocked modules
+      const liquidjsMock = require('liquidjs') as jest.Mocked<typeof import('liquidjs')>;
+      liquidjsMock.Liquid = mockLiquid.Liquid;
+
+      const fsMock = require('fs/promises') as jest.Mocked<typeof import('fs/promises')>;
+      fsMock.readFile = mockFs.readFile;
+
+      const pathMock = require('path') as jest.Mocked<typeof import('path')>;
+      pathMock.join = mockPath.join;
+    });
+
+    it('should return raw content for plain schema without template processing', async () => {
+      const checkConfig = { schema: 'plain' };
+
+      // Access the private method using bracket notation
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      expect(result).toBe(
+        'Potential security vulnerabilityAdd input validation\n\nImprove error handling'
+      );
+      expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should handle plain schema with missing issues and suggestions', async () => {
+      const emptyReviewSummary: ReviewSummary = {};
+      const checkConfig = { schema: 'plain' };
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        emptyReviewSummary,
+        checkConfig
+      );
+
+      expect(result).toBe('');
+    });
+
+    it('should use custom template content when provided', async () => {
+      const checkConfig = {
+        template: {
+          content:
+            'Check: {{ checkName }}\nIssues: {{ issues.size }}\nSuggestions: {{ suggestions | join: ", " }}',
+        },
+      };
+
+      mockLiquidInstance.parseAndRender.mockResolvedValue(
+        'Check: security\nIssues: 2\nSuggestions: Add input validation, Improve error handling'
+      );
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
+        issues: mockReviewSummary.issues,
+        checkName: 'security',
+        suggestions: mockReviewSummary.suggestions,
+      });
+      expect(result).toBe(
+        'Check: security\nIssues: 2\nSuggestions: Add input validation, Improve error handling'
+      );
+    });
+
+    it('should read custom template from file when file path is provided', async () => {
+      const templateContent = 'Template from file: {{ checkName }}';
+      const checkConfig = {
+        template: {
+          file: '/path/to/template.liquid',
+        },
+      };
+
+      mockFs.readFile.mockResolvedValue(templateContent);
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Template from file: security');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      expect(mockFs.readFile).toHaveBeenCalledWith('/path/to/template.liquid', 'utf-8');
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
+        issues: mockReviewSummary.issues,
+        checkName: 'security',
+        suggestions: mockReviewSummary.suggestions,
+      });
+      expect(result).toBe('Template from file: security');
+    });
+
+    it('should use built-in schema template when schema is specified', async () => {
+      const templateContent = 'Built-in template: {{ checkName }}';
+      const checkConfig = { schema: 'markdown' };
+
+      mockPath.join.mockReturnValue('/app/src/../output/markdown/template.liquid');
+      mockFs.readFile.mockResolvedValue(templateContent);
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Built-in template: security');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      expect(mockPath.join).toHaveBeenCalledWith(
+        expect.any(String),
+        '../output/markdown/template.liquid'
+      );
+      expect(mockFs.readFile).toHaveBeenCalledWith(
+        '/app/src/../output/markdown/template.liquid',
+        'utf-8'
+      );
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
+        issues: mockReviewSummary.issues,
+        checkName: 'security',
+        suggestions: mockReviewSummary.suggestions,
+      });
+      expect(result).toBe('Built-in template: security');
+    });
+
+    it('should sanitize schema names for security', async () => {
+      const templateContent = 'Sanitized template';
+      const checkConfig = { schema: 'markdown/../../../etc/passwd' };
+
+      mockPath.join.mockReturnValue('/app/src/../output/markdownetcpasswd/template.liquid');
+      mockFs.readFile.mockResolvedValue(templateContent);
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Sanitized template');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      // Should sanitize to 'markdownetcpasswd' and strip malicious path components like '../'
+      expect(mockPath.join).toHaveBeenCalledWith(
+        expect.any(String),
+        '../output/markdownetcpasswd/template.liquid'
+      );
+      expect(result).toBe('Sanitized template');
+    });
+
+    it('should throw error for invalid schema name (empty after sanitization)', async () => {
+      const checkConfig = { schema: '../../../' };
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Invalid schema name');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+      expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
+    });
+
+    it('should throw error when custom template has neither content nor file', async () => {
+      const checkConfig = {
+        template: {}, // Empty template config
+      };
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Custom template must specify either "file" or "content"');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+      expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
+    });
+
+    it('should handle file read errors for custom template files', async () => {
+      const checkConfig = {
+        template: {
+          file: '/nonexistent/template.liquid',
+        },
+      };
+
+      mockFs.readFile.mockRejectedValue(new Error('File not found'));
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('File not found');
+
+      expect(mockFs.readFile).toHaveBeenCalledWith('/nonexistent/template.liquid', 'utf-8');
+      expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
+    });
+
+    it('should handle file read errors for built-in schema templates', async () => {
+      const checkConfig = { schema: 'nonexistent-schema' };
+
+      mockPath.join.mockReturnValue('/app/src/../output/nonexistent-schema/template.liquid');
+      mockFs.readFile.mockRejectedValue(new Error('Template file not found'));
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template file not found');
+
+      expect(mockPath.join).toHaveBeenCalledWith(
+        expect.any(String),
+        '../output/nonexistent-schema/template.liquid'
+      );
+      expect(mockFs.readFile).toHaveBeenCalledWith(
+        '/app/src/../output/nonexistent-schema/template.liquid',
+        'utf-8'
+      );
+    });
+
+    it('should handle liquid template rendering errors', async () => {
+      const checkConfig = {
+        template: {
+          content: 'Invalid {{ liquid.syntax',
+        },
+      };
+
+      mockLiquidInstance.parseAndRender.mockRejectedValue(new Error('Liquid parsing error'));
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Liquid parsing error');
+
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
+        issues: mockReviewSummary.issues,
+        checkName: 'security',
+        suggestions: mockReviewSummary.suggestions,
+      });
+    });
+
+    it('should initialize Liquid with correct configuration', async () => {
+      const checkConfig = {
+        template: {
+          content: 'Test template',
+        },
+      };
+
+      mockLiquidInstance.parseAndRender.mockResolvedValue('rendered');
+
+      await (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig);
+
+      expect(mockLiquid.Liquid).toHaveBeenCalledWith({
+        trimTagLeft: false,
+        trimTagRight: false,
+        trimOutputLeft: false,
+        trimOutputRight: false,
+        greedy: false,
+      });
+    });
+
+    it('should trim whitespace from rendered output', async () => {
+      const checkConfig = {
+        template: {
+          content: 'Test template',
+        },
+      };
+
+      mockLiquidInstance.parseAndRender.mockResolvedValue('  \n  rendered content  \n  ');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      expect(result).toBe('rendered content');
+    });
+
+    it('should handle empty issues and suggestions arrays in template data', async () => {
+      const emptyReviewSummary: ReviewSummary = {
+        issues: [],
+        suggestions: [],
+      };
+      const checkConfig = {
+        template: {
+          content: 'Issues: {{ issues.size }}, Suggestions: {{ suggestions.size }}',
+        },
+      };
+
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Issues: 0, Suggestions: 0');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        emptyReviewSummary,
+        checkConfig
+      );
+
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
+        issues: [],
+        checkName: 'security',
+        suggestions: [],
+      });
+      expect(result).toBe('Issues: 0, Suggestions: 0');
+    });
+
+    it('should pass PRInfo to template if provided', async () => {
+      const checkConfig = {
+        template: {
+          content: 'Check: {{ checkName }}',
+        },
+      };
+      const prInfo = mockPRInfo;
+
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Check: security');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig,
+        prInfo
+      );
+
+      expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
+        issues: mockReviewSummary.issues,
+        checkName: 'security',
+        suggestions: mockReviewSummary.suggestions,
+      });
+      expect(result).toBe('Check: security');
+    });
+
+    it('should handle complex schema names with special characters', async () => {
+      const templateContent = 'Complex schema template';
+      const checkConfig = { schema: 'markdown-v2.1_beta#test' };
+
+      mockPath.join.mockReturnValue('/app/src/../output/markdown-v21betatest/template.liquid');
+      mockFs.readFile.mockResolvedValue(templateContent);
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Complex schema template');
+
+      const result = await (checkEngine as any).renderCheckContent(
+        'security',
+        mockReviewSummary,
+        checkConfig
+      );
+
+      // Should sanitize to 'markdown-v21betatest' removing special characters (. _ #)
+      expect(mockPath.join).toHaveBeenCalledWith(
+        expect.any(String),
+        '../output/markdown-v21betatest/template.liquid'
+      );
+      expect(result).toBe('Complex schema template');
     });
   });
 });

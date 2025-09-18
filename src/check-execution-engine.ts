@@ -675,7 +675,7 @@ export class CheckExecutionEngine {
     });
 
     // Determine template to use
-    const schema = checkConfig.schema || 'code-review';
+    const schema = checkConfig.schema || 'plain';
     let templateContent: string;
 
     if (checkConfig.template) {
