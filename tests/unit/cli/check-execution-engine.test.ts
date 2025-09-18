@@ -594,6 +594,9 @@ describe('CheckExecutionEngine', () => {
       // Mock path
       mockPath = {
         join: jest.fn(),
+        resolve: jest.fn(),
+        isAbsolute: jest.fn(),
+        sep: '/',
       };
 
       // Configure the mocked modules
@@ -605,6 +608,9 @@ describe('CheckExecutionEngine', () => {
 
       const pathMock = require('path') as jest.Mocked<typeof import('path')>;
       pathMock.join = mockPath.join;
+      pathMock.resolve = mockPath.resolve;
+      pathMock.isAbsolute = mockPath.isAbsolute;
+      (pathMock as any).sep = mockPath.sep;
     });
 
     it('should return raw content for plain schema without template processing', async () => {
@@ -669,9 +675,25 @@ describe('CheckExecutionEngine', () => {
       const templateContent = 'Template from file: {{ checkName }}';
       const checkConfig = {
         template: {
-          file: '/path/to/template.liquid',
+          file: 'templates/template.liquid',
         },
       };
+
+      // Mock the git analyzer to return working directory
+      mockGitAnalyzer.analyzeRepository.mockResolvedValue({
+        ...mockRepositoryInfo,
+        workingDirectory: '/test/working/dir',
+      });
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false);
+      mockPath.sep = '/';
+      mockPath.resolve.mockImplementation((base: string, relative?: string) => {
+        if (relative) {
+          return `${base}/${relative}`;
+        }
+        return base;
+      });
 
       mockFs.readFile.mockResolvedValue(templateContent);
       mockLiquidInstance.parseAndRender.mockResolvedValue('Template from file: security');
@@ -682,7 +704,10 @@ describe('CheckExecutionEngine', () => {
         checkConfig
       );
 
-      expect(mockFs.readFile).toHaveBeenCalledWith('/path/to/template.liquid', 'utf-8');
+      // The path should be validated and resolved to an absolute path within the project
+      expect(mockFs.readFile).toHaveBeenCalled();
+      const calledPath = mockFs.readFile.mock.calls[0][0];
+      expect(calledPath).toContain('templates/template.liquid');
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
@@ -770,9 +795,18 @@ describe('CheckExecutionEngine', () => {
     it('should handle file read errors for custom template files', async () => {
       const checkConfig = {
         template: {
-          file: '/nonexistent/template.liquid',
+          file: 'nonexistent/template.liquid',
         },
       };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false);
+      mockPath.resolve.mockImplementation((base: string, relative?: string) => {
+        if (relative) {
+          return `${base}/${relative}`;
+        }
+        return base;
+      });
 
       mockFs.readFile.mockRejectedValue(new Error('File not found'));
 
@@ -780,8 +814,132 @@ describe('CheckExecutionEngine', () => {
         (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
       ).rejects.toThrow('File not found');
 
-      expect(mockFs.readFile).toHaveBeenCalledWith('/nonexistent/template.liquid', 'utf-8');
+      // The path should be validated and resolved to an absolute path within the project
+      expect(mockFs.readFile).toHaveBeenCalled();
+      const calledPath = mockFs.readFile.mock.calls[0][0];
+      expect(calledPath).toContain('nonexistent/template.liquid');
       expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
+    });
+
+    // Security tests for path traversal prevention
+    it('should block absolute paths to prevent path traversal', async () => {
+      const checkConfig = {
+        template: {
+          file: '/etc/passwd.liquid',
+        },
+      };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(true); // Absolute path
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template path must be relative to project directory');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should block paths with .. segments to prevent path traversal', async () => {
+      const checkConfig = {
+        template: {
+          file: '../../../etc/passwd.liquid',
+        },
+      };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false); // Not absolute but has .. segments
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template path cannot contain ".." segments');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should block home directory paths to prevent path traversal', async () => {
+      const checkConfig = {
+        template: {
+          file: '~/.ssh/id_rsa.liquid',
+        },
+      };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false); // Not absolute but starts with ~
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template path cannot reference home directory');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should block paths with null bytes to prevent path traversal', async () => {
+      const checkConfig = {
+        template: {
+          file: 'template\0.liquid',
+        },
+      };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false); // Not absolute but has null byte
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template path contains invalid characters');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should block empty or invalid template paths', async () => {
+      const checkConfig = {
+        template: {
+          file: '',
+        },
+      };
+
+      // Empty string is falsy, so it will trigger the "must specify either file or content" error
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Custom template must specify either "file" or "content"');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should block whitespace-only template paths', async () => {
+      const checkConfig = {
+        template: {
+          file: '   ',
+        },
+      };
+
+      // Set up path mocks for this test
+      mockPath.isAbsolute.mockReturnValue(false); // Whitespace is not absolute
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template path must be a non-empty string');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should enforce .liquid file extension for template files', async () => {
+      const checkConfig = {
+        template: {
+          file: 'templates/template.txt',
+        },
+      };
+
+      // Mock the git analyzer to return working directory
+      mockGitAnalyzer.analyzeRepository.mockResolvedValue({
+        ...mockRepositoryInfo,
+        workingDirectory: '/test/working/dir',
+      });
+
+      await expect(
+        (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
+      ).rejects.toThrow('Template file must have .liquid extension');
+
+      expect(mockFs.readFile).not.toHaveBeenCalled();
     });
 
     it('should handle file read errors for built-in schema templates', async () => {

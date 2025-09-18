@@ -916,6 +916,14 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
     for (const checkResult of checkResults) {
       const { checkName, content } = checkResult;
 
+      // First, check if structured issues are available
+      if (checkResult.issues && checkResult.issues.length > 0) {
+        // Use structured issues directly - they're already properly formatted
+        issues.push(...checkResult.issues);
+        continue;
+      }
+
+      // Fall back to parsing issues from content (legacy support)
       // Parse issues from content - look for lines like:
       // - **CRITICAL**: message (file:line)
       // - **ERROR**: message (file:line)

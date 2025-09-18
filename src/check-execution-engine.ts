@@ -566,6 +566,7 @@ export class CheckExecutionEngine {
       content,
       group: checkConfig.group || 'default',
       debug: result.debug,
+      issues: result.issues, // Include structured issues
     };
   }
 
@@ -639,6 +640,7 @@ export class CheckExecutionEngine {
         content,
         group: checkConfig.group || 'default',
         debug: reviewSummary.debug,
+        issues: checkIssues, // Include structured issues
       };
 
       // Add to appropriate group
@@ -650,6 +652,84 @@ export class CheckExecutionEngine {
     }
 
     return groupedResults;
+  }
+
+  /**
+   * Validates that a file path is safe and within the project directory
+   * Prevents path traversal attacks by:
+   * - Blocking absolute paths
+   * - Blocking paths with ".." segments
+   * - Ensuring resolved path is within project directory
+   * - Blocking special characters and null bytes
+   * - Enforcing .liquid file extension
+   */
+  private async validateTemplatePath(templatePath: string): Promise<string> {
+    const path = await import('path');
+
+    // Validate input
+    if (!templatePath || typeof templatePath !== 'string' || templatePath.trim() === '') {
+      throw new Error('Template path must be a non-empty string');
+    }
+
+    // Block null bytes and other dangerous characters
+    if (templatePath.includes('\0') || templatePath.includes('\x00')) {
+      throw new Error('Template path contains invalid characters');
+    }
+
+    // Enforce .liquid file extension
+    if (!templatePath.endsWith('.liquid')) {
+      throw new Error('Template file must have .liquid extension');
+    }
+
+    // Block absolute paths
+    if (path.isAbsolute(templatePath)) {
+      throw new Error('Template path must be relative to project directory');
+    }
+
+    // Block paths with ".." segments
+    if (templatePath.includes('..')) {
+      throw new Error('Template path cannot contain ".." segments');
+    }
+
+    // Block paths starting with ~ (home directory)
+    if (templatePath.startsWith('~')) {
+      throw new Error('Template path cannot reference home directory');
+    }
+
+    // Get the project root directory from git analyzer
+    const repositoryInfo = await this.gitAnalyzer.analyzeRepository();
+    const projectRoot = repositoryInfo.workingDirectory;
+
+    // Validate project root
+    if (!projectRoot || typeof projectRoot !== 'string') {
+      throw new Error('Unable to determine project root directory');
+    }
+
+    // Resolve the template path relative to project root
+    const resolvedPath = path.resolve(projectRoot, templatePath);
+    const resolvedProjectRoot = path.resolve(projectRoot);
+
+    // Validate resolved paths
+    if (
+      !resolvedPath ||
+      !resolvedProjectRoot ||
+      resolvedPath === '' ||
+      resolvedProjectRoot === ''
+    ) {
+      throw new Error(
+        `Unable to resolve template path: projectRoot="${projectRoot}", templatePath="${templatePath}", resolvedPath="${resolvedPath}", resolvedProjectRoot="${resolvedProjectRoot}"`
+      );
+    }
+
+    // Ensure the resolved path is still within the project directory
+    if (
+      !resolvedPath.startsWith(resolvedProjectRoot + path.sep) &&
+      resolvedPath !== resolvedProjectRoot
+    ) {
+      throw new Error('Template path escapes project directory');
+    }
+
+    return resolvedPath;
   }
 
   /**
@@ -683,15 +763,20 @@ export class CheckExecutionEngine {
       if (checkConfig.template.content) {
         templateContent = checkConfig.template.content;
       } else if (checkConfig.template.file) {
-        templateContent = await fs.readFile(checkConfig.template.file, 'utf-8');
+        // Validate the template file path to prevent path traversal attacks
+        const validatedPath = await this.validateTemplatePath(checkConfig.template.file);
+        templateContent = await fs.readFile(validatedPath, 'utf-8');
       } else {
         throw new Error('Custom template must specify either "file" or "content"');
       }
     } else if (schema === 'plain') {
       // Plain schema - return raw content directly
-      return (
-        (reviewSummary.issues?.[0]?.message || '') + (reviewSummary.suggestions?.join('\n\n') || '')
-      );
+      // Strip [checkName] prefixes from suggestions before joining
+      const cleanedSuggestions = (reviewSummary.suggestions || []).map(suggestion => {
+        // Remove [checkName] prefix if present
+        return suggestion.replace(/^\[[^\]]+\]\s*/, '');
+      });
+      return (reviewSummary.issues?.[0]?.message || '') + (cleanedSuggestions.join('\n\n') || '');
     } else {
       // Use built-in schema template
       const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');

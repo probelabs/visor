@@ -41,6 +41,7 @@ export interface CheckResult {
   content: string; // Rendered output for this specific check
   group: string; // Which group this check belongs to
   debug?: AIDebugInfo;
+  issues?: ReviewIssue[]; // Structured issues alongside rendered content
 }
 
 // Results grouped by group name
@@ -89,6 +90,7 @@ export function convertReviewSummaryToGroupedResults(
     content: content.trim(),
     group: groupName,
     debug: reviewSummary.debug,
+    issues: reviewSummary.issues, // Include structured issues
   };
 
   const groupedResults: GroupedCheckResults = {};
