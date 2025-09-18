@@ -200,8 +200,8 @@ export class ActionCliBridge {
         ? path.join(actionPath, 'dist', 'index.js')
         : path.join(__dirname, 'index.js'); // When running locally
 
-      // Don't pass --github-action flag, so it runs in CLI mode
-      const result = await this.executeCommand('node', [bundledPath, ...cliArgs], {
+      // Pass --cli flag to force CLI mode even when GITHUB_ACTIONS env var is set
+      const result = await this.executeCommand('node', [bundledPath, '--cli', ...cliArgs], {
         cwd: workingDir,
         env,
         timeout,

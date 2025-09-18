@@ -1176,12 +1176,11 @@ async function markCheckAsFailed(
 }
 
 if (require.main === module) {
-  // Simple mode detection: if --github-action flag is present, run as action, otherwise CLI
-  const isGitHubAction = process.argv.includes('--github-action');
+  // Simple mode detection: use GITHUB_ACTIONS env var which is always 'true' in GitHub Actions
+  // Also check for --cli flag to force CLI mode even in GitHub Actions environment
+  const isGitHubAction = process.env.GITHUB_ACTIONS === 'true' && !process.argv.includes('--cli');
 
   if (isGitHubAction) {
-    // Remove the --github-action flag from argv so it doesn't interfere
-    process.argv = process.argv.filter(arg => arg !== '--github-action');
     // Run as GitHub Action
     run();
   } else {
