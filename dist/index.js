@@ -297,6 +297,37 @@ async function handleLegacyMode(octokit, inputs, eventName, autoReview) {
             break;
     }
 }
+/**
+ * Recursively resolve dependencies for a set of check IDs
+ */
+function resolveDependencies(checkIds, config, resolved = new Set(), visiting = new Set()) {
+    const result = [];
+    for (const checkId of checkIds) {
+        if (resolved.has(checkId)) {
+            continue;
+        }
+        if (visiting.has(checkId)) {
+            console.warn(`Circular dependency detected involving check: ${checkId}`);
+            continue;
+        }
+        visiting.add(checkId);
+        // Get dependencies for this check
+        const checkConfig = config?.checks?.[checkId];
+        const dependencies = checkConfig?.depends_on || [];
+        // Recursively resolve dependencies first
+        if (dependencies.length > 0) {
+            const resolvedDeps = resolveDependencies(dependencies, config, resolved, visiting);
+            result.push(...resolvedDeps.filter(dep => !result.includes(dep)));
+        }
+        // Add the current check if not already added
+        if (!result.includes(checkId)) {
+            result.push(checkId);
+        }
+        resolved.add(checkId);
+        visiting.delete(checkId);
+    }
+    return result;
+}
 async function handleIssueComment(octokit, owner, repo) {
     const context = JSON.parse(process.env.GITHUB_CONTEXT || '{}');
     const comment = context.event?.comment;
@@ -340,7 +371,7 @@ async function handleIssueComment(octokit, owner, repo) {
     }
     catch {
         console.log('Could not load config, using defaults');
-        config = null;
+        config = undefined;
         // Default commands when no config is available
         commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
     }
@@ -385,8 +416,10 @@ async function handleIssueComment(octokit, owner, repo) {
         default:
             // Handle custom commands from config
             if (commandRegistry[command.type]) {
-                const checkIds = commandRegistry[command.type];
-                console.log(`Running checks for command /${command.type}: ${checkIds.join(', ')}`);
+                const initialCheckIds = commandRegistry[command.type];
+                // Resolve all dependencies recursively
+                const checkIds = resolveDependencies(initialCheckIds, config);
+                console.log(`Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`);
                 const prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
                 // Extract common arguments
                 const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1];
@@ -561,6 +594,57 @@ async function handleRepoInfo(octokit, owner, repo) {
     console.log(`Repository: ${repoData.full_name}`);
     console.log(`Description: ${repoData.description || 'No description'}`);
     console.log(`Stars: ${repoData.stargazers_count}`);
+}
+/**
+ * Filter checks based on their if conditions and API requirements
+ */
+async function filterChecksToExecute(checksToRun, config, prInfo) {
+    const filteredChecks = [];
+    // Create a basic context for condition evaluation
+    const context = {
+        files: prInfo?.files || [],
+        filesChanged: prInfo?.files.map(f => f.filename) || [],
+        event: 'pull_request',
+        environment: process.env,
+        metadata: {
+            filesCount: prInfo?.files.length || 0,
+            additions: prInfo?.totalAdditions || 0,
+            deletions: prInfo?.totalDeletions || 0,
+        }
+    };
+    for (const checkName of checksToRun) {
+        const checkConfig = config?.checks?.[checkName];
+        if (!checkConfig) {
+            // If no config, include the check by default
+            filteredChecks.push(checkName);
+            continue;
+        }
+        // Check if the check has an if condition
+        if (checkConfig.if) {
+            try {
+                // Import the failure condition evaluator
+                const { FailureConditionEvaluator } = await Promise.resolve().then(() => __importStar(require('./failure-condition-evaluator')));
+                const evaluator = new FailureConditionEvaluator();
+                const shouldRun = await evaluator.evaluateIfCondition(checkName, checkConfig.if, context);
+                if (shouldRun) {
+                    filteredChecks.push(checkName);
+                }
+                else {
+                    console.log(`⚠️ Skipping check '${checkName}' - if condition not met`);
+                }
+            }
+            catch (error) {
+                console.warn(`Warning: Could not evaluate if condition for ${checkName}:`, error);
+                // Include the check if we can't evaluate the condition
+                filteredChecks.push(checkName);
+            }
+        }
+        else {
+            // No condition, include the check
+            filteredChecks.push(checkName);
+        }
+    }
+    return filteredChecks;
 }
 /**
  * Create GitHub check runs for individual checks if enabled
@@ -752,23 +836,30 @@ function extractIssuesFromGroupedResults(groupedResults) {
     return issues;
 }
 /**
- * Extract issues for a specific check from GroupedCheckResults
- */
-function extractIssuesForCheck(groupedResults, checkName) {
-    const allIssues = extractIssuesFromGroupedResults(groupedResults);
-    return allIssues.filter(issue => issue.ruleId?.startsWith(`${checkName}/`));
-}
-/**
  * Complete individual GitHub check runs
  */
 async function completeIndividualChecks(checkService, owner, repo, checkRunMap, groupedResults, config) {
     // Create failure condition evaluator
     const { FailureConditionEvaluator } = await Promise.resolve().then(() => __importStar(require('./failure-condition-evaluator')));
     const failureEvaluator = new FailureConditionEvaluator();
+    // Extract all issues once and group by check name for O(N) complexity
+    const allIssues = extractIssuesFromGroupedResults(groupedResults);
+    const issuesByCheck = new Map();
+    // Initialize empty arrays for all checks
+    for (const checkName of checkRunMap.keys()) {
+        issuesByCheck.set(checkName, []);
+    }
+    // Group issues by check name
+    for (const issue of allIssues) {
+        const checkName = issue.ruleId?.split('/')[0];
+        if (checkName && issuesByCheck.has(checkName)) {
+            issuesByCheck.get(checkName).push(issue);
+        }
+    }
     for (const [checkName, checkRun] of checkRunMap) {
         try {
-            // Extract issues for this specific check from the grouped results content
-            const checkIssues = extractIssuesForCheck(groupedResults, checkName);
+            // Get pre-grouped issues for this check - O(1) lookup
+            const checkIssues = issuesByCheck.get(checkName) || [];
             // Evaluate failure conditions based on fail_if configuration
             const failureResults = [];
             // Get global and check-specific fail_if conditions
@@ -950,11 +1041,22 @@ async function handlePullRequestVisorMode(inputs, _context, octokit, _authType) 
             (0, core_1.setOutput)('incremental-analysis', action === 'synchronize' ? 'true' : 'false');
             return;
         }
+        // Filter checks based on their conditions
+        const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
+        console.log(`📋 Checks that will execute: ${checksToExecute.join(', ')}`);
+        if (checksToExecute.length === 0) {
+            console.log('⚠️ No checks meet the execution conditions - skipping review');
+            // Set basic outputs
+            (0, core_1.setOutput)('auto-review-completed', 'true');
+            (0, core_1.setOutput)('issues-found', '0');
+            (0, core_1.setOutput)('checks-executed', '0');
+            return;
+        }
         // Create a custom review options with Visor config
         const reviewOptions = {
             debug: inputs.debug === 'true',
             config: config,
-            checks: checksToRun,
+            checks: checksToExecute,
             parallelExecution: true,
         };
         // Fetch PR info to get commit SHA for metadata
@@ -963,8 +1065,8 @@ async function handlePullRequestVisorMode(inputs, _context, octokit, _authType) 
             repo,
             pull_number: prNumber,
         });
-        // Create GitHub check runs for each configured check
-        const checkResults = await createGitHubChecks(octokit, inputs, owner, repo, pullRequest.head.sha, checksToRun, config);
+        // Create GitHub check runs only for checks that will execute
+        const checkResults = await createGitHubChecks(octokit, inputs, owner, repo, pullRequest.head.sha, checksToExecute, config);
         // Update checks to in-progress status
         await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
         // Perform the review
