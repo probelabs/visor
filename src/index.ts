@@ -977,16 +977,73 @@ async function completeIndividualChecks(
   repo: string,
   checkRunMap: Map<string, { id: number; url: string }>,
   groupedResults: GroupedCheckResults,
-  _config: import('./types/config').VisorConfig
+  config: import('./types/config').VisorConfig
 ): Promise<void> {
+  // Create failure condition evaluator
+  const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
+  const failureEvaluator = new FailureConditionEvaluator();
+
   for (const [checkName, checkRun] of checkRunMap) {
     try {
       // Extract issues for this specific check from the grouped results content
       const checkIssues = extractIssuesForCheck(groupedResults, checkName);
 
-      // For the new architecture, we don't have structured failure conditions
-      // The check content itself indicates success/failure
+      // Evaluate failure conditions based on fail_if configuration
       const failureResults: import('./types/config').FailureConditionResult[] = [];
+
+      // Get global and check-specific fail_if conditions
+      const globalFailIf = config?.fail_if;
+      const checkFailIf = config?.checks?.[checkName]?.fail_if;
+
+      // Create a ReviewSummary for this check's issues
+      const checkReviewSummary = {
+        issues: checkIssues,
+        suggestions: [],
+      };
+
+      // Evaluate global fail_if
+      if (globalFailIf) {
+        const failed = await failureEvaluator.evaluateSimpleCondition(
+          checkName,
+          config?.checks?.[checkName]?.schema || 'plain',
+          config?.checks?.[checkName]?.group || 'default',
+          checkReviewSummary,
+          globalFailIf
+        );
+
+        if (failed) {
+          failureResults.push({
+            conditionName: 'global_fail_if',
+            expression: globalFailIf,
+            failed: true,
+            severity: 'error' as const,
+            message: 'Global failure condition met',
+            haltExecution: false,
+          });
+        }
+      }
+
+      // Evaluate check-specific fail_if (overrides global if present)
+      if (checkFailIf) {
+        const failed = await failureEvaluator.evaluateSimpleCondition(
+          checkName,
+          config?.checks?.[checkName]?.schema || 'plain',
+          config?.checks?.[checkName]?.group || 'default',
+          checkReviewSummary,
+          checkFailIf
+        );
+
+        if (failed) {
+          failureResults.push({
+            conditionName: `${checkName}_fail_if`,
+            expression: checkFailIf,
+            failed: true,
+            severity: 'error' as const,
+            message: `Check ${checkName} failure condition met`,
+            haltExecution: false,
+          });
+        }
+      }
 
       await checkService.completeCheckRun(
         owner,
@@ -998,7 +1055,7 @@ async function completeIndividualChecks(
       );
 
       console.log(
-        `✅ Completed ${checkName} check with ${checkIssues.length} issues extracted for annotations`
+        `✅ Completed ${checkName} check with ${checkIssues.length} issues, ${failureResults.length} failure conditions evaluated`
       );
     } catch (error) {
       console.error(`❌ Failed to complete ${checkName} check:`, error);
@@ -1016,17 +1073,50 @@ async function completeCombinedCheck(
   repo: string,
   checkRunMap: Map<string, { id: number; url: string }>,
   groupedResults: GroupedCheckResults,
-  _config: import('./types/config').VisorConfig
+  config: import('./types/config').VisorConfig
 ): Promise<void> {
   const combinedCheckRun = checkRunMap.get('combined');
   if (!combinedCheckRun) return;
+
+  // Create failure condition evaluator
+  const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
+  const failureEvaluator = new FailureConditionEvaluator();
 
   try {
     // Extract all issues from the grouped results for the combined check
     const allIssues = extractIssuesFromGroupedResults(groupedResults);
 
-    // For the new architecture, we don't have structured failure conditions
+    // Evaluate failure conditions for combined check
     const failureResults: import('./types/config').FailureConditionResult[] = [];
+
+    // Create a combined ReviewSummary with all issues
+    const combinedReviewSummary = {
+      issues: allIssues,
+      suggestions: [],
+    };
+
+    // Evaluate global fail_if for the combined check
+    const globalFailIf = config?.fail_if;
+    if (globalFailIf) {
+      const failed = await failureEvaluator.evaluateSimpleCondition(
+        'combined',
+        'plain',
+        'combined',
+        combinedReviewSummary,
+        globalFailIf
+      );
+
+      if (failed) {
+        failureResults.push({
+          conditionName: 'global_fail_if',
+          expression: globalFailIf,
+          failed: true,
+          severity: 'error' as const,
+          message: 'Global failure condition met',
+          haltExecution: false,
+        });
+      }
+    }
 
     await checkService.completeCheckRun(
       owner,
@@ -1038,7 +1128,7 @@ async function completeCombinedCheck(
     );
 
     console.log(
-      `✅ Completed combined check with ${allIssues.length} issues extracted for annotations`
+      `✅ Completed combined check with ${allIssues.length} issues, ${failureResults.length} failure conditions evaluated`
     );
   } catch (error) {
     console.error(`❌ Failed to complete combined check:`, error);
