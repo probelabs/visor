@@ -272,5 +272,4 @@ describe('GitHub Action Unit Tests', () => {
     // but we should see config loading
     expect(console.log).toHaveBeenCalledWith('📋 Loaded Visor config');
   });
-
 });

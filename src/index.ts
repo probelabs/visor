@@ -301,10 +301,7 @@ async function handleEvent(
   console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
 
   // Map GitHub event to our event trigger format
-  const eventType = mapGitHubEventToTrigger(
-    eventName,
-    context.event?.action
-  );
+  const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
 
   // Find checks that should run for this event
   const checksToRun: string[] = [];
@@ -639,7 +636,14 @@ async function handlePullRequestWithConfig(
 
   // Complete GitHub check runs
   if (checkResults?.checkRunMap) {
-    await completeGitHubChecks(octokit, owner, repo, checkResults.checkRunMap, groupedResults, config);
+    await completeGitHubChecks(
+      octokit,
+      owner,
+      repo,
+      checkResults.checkRunMap,
+      groupedResults,
+      config
+    );
   }
 
   // Post review comment
@@ -654,7 +658,6 @@ async function handlePullRequestWithConfig(
   setOutput('checks-executed', checksToExecute.length.toString());
   setOutput('pr-action', action);
 }
-
 
 async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Promise<void> {
   const { data: repoData } = await octokit.rest.repos.get({
@@ -1163,8 +1166,6 @@ async function markCheckAsFailed(
     console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
   }
 }
-
-
 
 if (require.main === module) {
   run();
