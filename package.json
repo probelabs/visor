@@ -17,8 +17,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "tsc",
-    "postbuild": "chmod +x dist/cli-main.js",
+    "build": "ncc build src/index.ts -o dist",
     "test": "jest",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
@@ -86,6 +85,7 @@
     "@types/node": "^24.3.0",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
+    "@vercel/ncc": "^0.38.4",
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",

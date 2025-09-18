@@ -1168,5 +1168,17 @@ async function markCheckAsFailed(
 }
 
 if (require.main === module) {
-  run();
+  // Check if running in CLI mode
+  if (process.env.VISOR_CLI_MODE === 'true' || process.argv.length > 2) {
+    // Import and run CLI
+    import('./cli-main').then(({ main }) => {
+      main().catch(error => {
+        console.error('CLI execution failed:', error);
+        process.exit(1);
+      });
+    });
+  } else {
+    // Run as GitHub Action
+    run();
+  }
 }
