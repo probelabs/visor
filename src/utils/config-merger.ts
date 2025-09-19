@@ -178,8 +178,23 @@ export class ConfigMerger {
       const parentConfig = parent[checkName];
 
       if (!parentConfig) {
-        // New check, add it
-        result[checkName] = this.deepCopy(childConfig);
+        // New check - need to process appendPrompt even without parent
+        const copiedConfig = this.deepCopy(childConfig);
+
+        // Handle appendPrompt for new checks (convert to prompt)
+        if (copiedConfig.appendPrompt !== undefined) {
+          // If there's no parent, appendPrompt becomes the prompt
+          if (!copiedConfig.prompt) {
+            copiedConfig.prompt = copiedConfig.appendPrompt;
+          } else {
+            // If both prompt and appendPrompt exist in child, append them
+            copiedConfig.prompt = copiedConfig.prompt + '\n\n' + copiedConfig.appendPrompt;
+          }
+          // Remove appendPrompt from final config
+          delete copiedConfig.appendPrompt;
+        }
+
+        result[checkName] = copiedConfig;
       } else {
         // Merge existing check
         result[checkName] = this.mergeCheckConfig(parentConfig, childConfig);
@@ -198,6 +213,20 @@ export class ConfigMerger {
     // Simple properties (child overrides parent)
     if (child.type !== undefined) result.type = child.type;
     if (child.prompt !== undefined) result.prompt = child.prompt;
+
+    // Handle appendPrompt - append to existing prompt
+    if (child.appendPrompt !== undefined) {
+      if (result.prompt) {
+        // Append with a newline separator if parent has a prompt
+        result.prompt = result.prompt + '\n\n' + child.appendPrompt;
+      } else {
+        // If no parent prompt, appendPrompt becomes the prompt
+        result.prompt = child.appendPrompt;
+      }
+      // Don't carry forward appendPrompt to avoid re-appending
+      delete result.appendPrompt;
+    }
+
     if (child.exec !== undefined) result.exec = child.exec;
     if (child.stdin !== undefined) result.stdin = child.stdin;
     if (child.url !== undefined) result.url = child.url;

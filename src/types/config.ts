@@ -225,6 +225,8 @@ export interface CheckConfig {
   type: ConfigCheckType;
   /** AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks */
   prompt?: string;
+  /** Additional prompt to append when extending configurations - merged with parent prompt */
+  appendPrompt?: string;
   /** Tool execution command with Liquid template support - required for tool checks */
   exec?: string;
   /** Stdin input for tools with Liquid template support - optional for tool checks */

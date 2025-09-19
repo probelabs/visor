@@ -316,6 +316,75 @@ describe('Config Extends Functionality', () => {
       expect(merged.env?.NEW_VAR).toBe('new-value');
     });
 
+    it('should handle appendPrompt correctly', () => {
+      const parent: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          security: {
+            type: 'ai',
+            prompt: 'Perform basic security analysis',
+            on: ['pr_opened'],
+          },
+          quality: {
+            type: 'ai',
+            prompt: 'Check code quality',
+            on: ['pr_opened'],
+          },
+        },
+        output: {
+          pr_comment: {
+            format: 'markdown',
+            group_by: 'check',
+            collapse: true,
+          },
+        },
+      };
+
+      const child: Partial<VisorConfig> = {
+        checks: {
+          security: {
+            type: 'ai',
+            appendPrompt: 'Also check for OWASP Top 10 vulnerabilities.',
+            on: ['pr_opened', 'pr_updated'],
+          },
+          quality: {
+            type: 'ai',
+            prompt: 'Completely new quality check', // This overrides, not appends
+            on: ['pr_opened'],
+          },
+          performance: {
+            type: 'ai',
+            appendPrompt: 'Check performance metrics', // No parent, becomes the prompt
+            on: ['pr_opened'],
+          },
+        },
+        output: {
+          pr_comment: {
+            format: 'markdown',
+            group_by: 'check',
+            collapse: true,
+          },
+        },
+      };
+
+      const merged = merger.merge(parent, child);
+
+      // appendPrompt should be appended to parent prompt
+      expect(merged.checks?.security?.prompt).toBe(
+        'Perform basic security analysis\n\nAlso check for OWASP Top 10 vulnerabilities.'
+      );
+
+      // Direct prompt override should replace
+      expect(merged.checks?.quality?.prompt).toBe('Completely new quality check');
+
+      // appendPrompt with no parent becomes the prompt
+      expect(merged.checks?.performance?.prompt).toBe('Check performance metrics');
+
+      // appendPrompt should not be in final config
+      expect(merged.checks?.security?.appendPrompt).toBeUndefined();
+      expect(merged.checks?.performance?.appendPrompt).toBeUndefined();
+    });
+
     it('should replace arrays not concatenate them', () => {
       const parent: Partial<VisorConfig> = {
         version: '1.0',

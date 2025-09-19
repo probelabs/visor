@@ -921,6 +921,35 @@ When extending configurations:
 - **Arrays**: Replaced entirely (not concatenated)
 - **Checks**: Can be disabled by setting `on: []`
 
+#### Appending to Prompts with `appendPrompt`
+
+When extending configurations, you can append additional instructions to existing prompts using the `appendPrompt` field. This is useful for adding project-specific requirements without completely replacing the base prompt.
+
+**base-config.yaml**:
+```yaml
+checks:
+  security-review:
+    type: ai
+    prompt: "Perform basic security analysis"
+    on: [pr_opened]
+```
+
+**project-config.yaml**:
+```yaml
+extends: ./base-config.yaml
+
+checks:
+  security-review:
+    # Appends to the parent prompt instead of replacing it
+    appendPrompt: "Also check for SQL injection vulnerabilities and hardcoded secrets"
+    # Result: "Perform basic security analysis\n\nAlso check for SQL injection vulnerabilities and hardcoded secrets"
+```
+
+Notes:
+- `appendPrompt` is combined with parent `prompt` using a double newline separator
+- If no parent prompt exists, `appendPrompt` becomes the prompt
+- Use `prompt` field to completely replace the parent prompt instead of appending
+
 ### Configuration Priority Order
 
 With extends, the full priority order becomes:
