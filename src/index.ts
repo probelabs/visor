@@ -7,7 +7,7 @@ import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import * as path from 'path';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
-import { PRAnalyzer } from './pr-analyzer';
+import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
@@ -328,7 +328,7 @@ async function handleEvent(
   // Handle different GitHub events
   switch (eventName) {
     case 'issue_comment':
-      await handleIssueComment(octokit, owner, repo, context, inputs);
+      await handleIssueComment(octokit, owner, repo, context, inputs, config, checksToRun);
       break;
     case 'pull_request':
       // Run the checks that are configured for this event
@@ -500,7 +500,9 @@ async function handleIssueComment(
   owner: string,
   repo: string,
   context: GitHubContext,
-  inputs: GitHubActionInputs
+  inputs: GitHubActionInputs,
+  actionConfig?: import('./types/config').VisorConfig,
+  _actionChecksToRun?: string[]
 ): Promise<void> {
   const comment = context.event?.comment as any;
   const issue = context.event?.issue as any;
@@ -522,35 +524,43 @@ async function handleIssueComment(
 
   // Process comments on both issues and PRs
   // (issue.pull_request exists for PR comments, doesn't exist for issue comments)
+  const isPullRequest = !!issue.pull_request;
 
   // Load configuration to get available commands
   const configManager = new ConfigManager();
   let config: import('./types/config').VisorConfig | undefined;
   const commandRegistry: CommandRegistry = {};
 
-  try {
-    config = await configManager.findAndLoadConfig();
-    // Build command registry from config
-    if (config.checks) {
-      // Add 'review' command that runs all checks
-      commandRegistry['review'] = Object.keys(config.checks);
-
-      // Also add individual check names as commands
-      for (const [checkId, checkConfig] of Object.entries(config.checks)) {
-        // Legacy: check if it has old 'command' property
-        if (checkConfig.command) {
-          if (!commandRegistry[checkConfig.command]) {
-            commandRegistry[checkConfig.command] = [];
-          }
-          commandRegistry[checkConfig.command].push(checkId);
-        }
-        // New: add check name as command
-        commandRegistry[checkId] = [checkId];
-      }
+  // Use provided config if available (from action), otherwise load it
+  if (actionConfig) {
+    config = actionConfig;
+  } else {
+    try {
+      config = await configManager.findAndLoadConfig();
+    } catch {
+      console.log('Could not load config, using defaults');
+      config = undefined;
     }
-  } catch {
-    console.log('Could not load config, using defaults');
-    config = undefined;
+  }
+
+  // Build command registry from config
+  if (config?.checks) {
+    // Add 'review' command that runs all checks
+    commandRegistry['review'] = Object.keys(config.checks);
+
+    // Also add individual check names as commands
+    for (const [checkId, checkConfig] of Object.entries(config.checks)) {
+      // Legacy: check if it has old 'command' property
+      if (checkConfig.command) {
+        if (!commandRegistry[checkConfig.command]) {
+          commandRegistry[checkConfig.command] = [];
+        }
+        commandRegistry[checkConfig.command].push(checkId);
+      }
+      // New: add check name as command
+      commandRegistry[checkId] = [checkId];
+    }
+  } else {
     // Default commands when no config is available
     commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
   }
@@ -571,30 +581,49 @@ async function handleIssueComment(
 
   switch (command.type) {
     case 'status':
-      const statusPrInfo = await analyzer.fetchPRDiff(
-        owner,
-        repo,
-        prNumber,
-        undefined,
-        'issue_comment'
-      );
-      const statusComment =
-        `## 📊 PR Status\n\n` +
-        `**Title:** ${statusPrInfo.title}\n` +
-        `**Author:** ${statusPrInfo.author}\n` +
-        `**Files Changed:** ${statusPrInfo.files.length}\n` +
-        `**Additions:** +${statusPrInfo.totalAdditions}\n` +
-        `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
-        `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
-        `\n---\n\n` +
-        `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+      if (isPullRequest) {
+        const statusPrInfo = await analyzer.fetchPRDiff(
+          owner,
+          repo,
+          prNumber,
+          undefined,
+          'issue_comment'
+        );
+        const statusComment =
+          `## 📊 PR Status\n\n` +
+          `**Title:** ${statusPrInfo.title}\n` +
+          `**Author:** ${statusPrInfo.author}\n` +
+          `**Files Changed:** ${statusPrInfo.files.length}\n` +
+          `**Additions:** +${statusPrInfo.totalAdditions}\n` +
+          `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
+          `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
+          `\n---\n\n` +
+          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
-      await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: prNumber,
-        body: statusComment,
-      });
+        await octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: prNumber,
+          body: statusComment,
+        });
+      } else {
+        const statusComment =
+          `## 📊 Issue Status\n\n` +
+          `**Title:** ${issue.title || 'N/A'}\n` +
+          `**Author:** ${issue.user?.login || 'unknown'}\n` +
+          `**State:** ${issue.state || 'open'}\n` +
+          `**Comments:** ${issue.comments || 0}\n` +
+          `**Created:** ${issue.created_at || 'unknown'}\n` +
+          `\n---\n\n` +
+          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+
+        await octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: prNumber,
+          body: statusComment,
+        });
+      }
       break;
 
     case 'help':
@@ -616,13 +645,33 @@ async function handleIssueComment(
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
         );
 
-        const prInfo = await analyzer.fetchPRDiff(
-          owner,
-          repo,
-          prNumber,
-          undefined,
-          'issue_comment'
-        );
+        // Different handling for PRs vs Issues
+        let prInfo: PRInfo;
+        if (isPullRequest) {
+          // It's a PR comment - fetch the PR diff
+          prInfo = await analyzer.fetchPRDiff(
+            owner,
+            repo,
+            prNumber,
+            undefined,
+            'issue_comment'
+          );
+        } else {
+          // It's an issue comment - create a minimal PRInfo structure for issue assistant
+          prInfo = {
+            number: issue.number,
+            title: issue.title || '',
+            body: issue.body || '',
+            author: issue.user?.login || 'unknown',
+            base: 'main',
+            head: 'issue',
+            files: [],
+            totalAdditions: 0,
+            totalDeletions: 0,
+            fullDiff: '',
+            eventType: 'issue_comment'
+          };
+        }
 
         // Extract common arguments
         const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
@@ -647,11 +696,35 @@ async function handleIssueComment(
           }
         }
 
+        // Only run checks that are appropriate for the context
+        const filteredCheckIds = checkIds.filter(checkId => {
+          if (!config?.checks?.[checkId]) return false;
+          const checkConfig = config.checks[checkId];
+          const checkEvents = checkConfig.on || ['pr_opened', 'pr_updated'];
+          // For issue comments, only run checks that are configured for issue_comment events
+          if (!isPullRequest) {
+            return checkEvents.includes('issue_comment');
+          }
+          // For PR comments, run checks configured for PR events or issue_comment
+          return checkEvents.includes('pr_updated') || checkEvents.includes('issue_comment');
+        });
+
+        if (filteredCheckIds.length === 0) {
+          console.log(`No checks configured to run for ${isPullRequest ? 'PR' : 'issue'} comments`);
+          await octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: prNumber,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor)*`,
+          });
+          return;
+        }
+
         const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
           focus,
           format,
           config: config as import('./types/config').VisorConfig,
-          checks: checkIds,
+          checks: filteredCheckIds,
           parallelExecution: false,
         });
 
@@ -663,7 +736,7 @@ async function handleIssueComment(
             format,
           });
         } else {
-          console.log('📝 Skipping PR comment (comment-on-pr is disabled)');
+          console.log('📝 Skipping comment (comment-on-pr is disabled)');
         }
 
         // Calculate total check results from grouped results
