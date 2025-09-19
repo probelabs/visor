@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// GitHub event objects have complex dynamic structures that are difficult to fully type
+// Using 'any' for these objects is acceptable as they come from external GitHub webhooks
+
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
@@ -135,7 +139,7 @@ export async function run(): Promise<void> {
     const eventName = process.env.GITHUB_EVENT_NAME;
 
     // Load GitHub event data from event file
-    let eventData: Record<string, unknown> = {};
+    let eventData: any = {};
     if (process.env.GITHUB_EVENT_PATH) {
       try {
         const fs = await import('fs');
@@ -403,7 +407,7 @@ async function handleIssueEvent(
   config: import('./types/config').VisorConfig,
   checksToRun: string[]
 ): Promise<void> {
-  const issue = context.event?.issue as Record<string, unknown>;
+  const issue = context.event?.issue as any;
   const action = context.event?.action as string | undefined;
 
   if (!issue) {
@@ -456,8 +460,7 @@ async function handleIssueEvent(
     if (Object.keys(result).length > 0) {
       let commentBody = `## 🤖 Issue Assistant Results\n\n`;
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for (const [_group, checks] of Object.entries(result)) {
+      for (const checks of Object.values(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `### ${check.checkName}\n`;
@@ -499,8 +502,8 @@ async function handleIssueComment(
   context: GitHubContext,
   inputs: GitHubActionInputs
 ): Promise<void> {
-  const comment = context.event?.comment as Record<string, unknown>;
-  const issue = context.event?.issue as Record<string, unknown>;
+  const comment = context.event?.comment as any;
+  const issue = context.event?.issue as any;
 
   if (!comment || !issue) {
     console.log('No comment or issue found in context');
@@ -680,7 +683,7 @@ async function handlePullRequestWithConfig(
   checksToRun: string[],
   context: GitHubContext
 ): Promise<void> {
-  const pullRequest = context.event?.pull_request as Record<string, unknown>;
+  const pullRequest = context.event?.pull_request as any;
   const action = context.event?.action as string | undefined;
 
   if (!pullRequest) {
