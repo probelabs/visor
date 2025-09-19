@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "main": "dist/index.js",
   "bin": {
-    "visor": "./dist/cli-main.js"
+    "visor": "./dist/index.js"
   },
   "files": [
     "dist/",
@@ -17,7 +17,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/",
+    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/ && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "test": "jest",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",

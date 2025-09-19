@@ -40,9 +40,8 @@ jobs:
 
       - name: Test CLI
         run: |
-          chmod +x ./dist/cli-main.js
-          ./dist/cli-main.js --version
-          ./dist/cli-main.js --help
+          ./dist/index.js --version
+          ./dist/index.js --help
 
       - name: Test package installation
         run: |
