@@ -330,6 +330,10 @@ async function handleEvent(
       // Run the checks that are configured for this event
       await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun, context);
       break;
+    case 'issues':
+      // Handle issue events (opened, closed, etc)
+      await handleIssueEvent(octokit, owner, repo, context, inputs, config, checksToRun);
+      break;
     case 'push':
       // Could handle push events that are associated with PRs
       console.log('Push event detected - checking for associated PR');
@@ -385,6 +389,105 @@ function resolveDependencies(
   }
 
   return result;
+}
+
+/**
+ * Handle issue events (opened, edited, etc)
+ */
+async function handleIssueEvent(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  context: GitHubContext,
+  inputs: GitHubActionInputs,
+  config: import('./types/config').VisorConfig,
+  checksToRun: string[]
+): Promise<void> {
+  const issue = context.event?.issue as any;
+  const action = context.event?.action as string | undefined;
+
+  if (!issue) {
+    console.log('No issue found in context');
+    return;
+  }
+
+  // Skip if this is a pull request (has pull_request property)
+  if (issue.pull_request) {
+    console.log('Skipping PR-related issue event');
+    return;
+  }
+
+  console.log(`Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`);
+
+  // For issue events, we need to create a PR-like structure for the checks to process
+  // This allows us to reuse the existing check infrastructure
+  const prInfo = {
+    number: issue.number,
+    title: issue.title || '',
+    body: issue.body || '',
+    author: issue.user?.login || 'unknown',
+    base: 'main', // Issues don't have branches
+    head: 'issue', // Issues don't have branches
+    files: [], // No file changes for issues
+    additions: 0,
+    deletions: 0,
+    totalAdditions: 0,
+    totalDeletions: 0,
+    eventType: mapGitHubEventToTrigger('issues', action)
+  };
+
+  // Run the checks using CheckExecutionEngine
+  const { CheckExecutionEngine } = await import('./check-execution-engine');
+  const engine = new CheckExecutionEngine();
+
+  try {
+    const result = await engine.executeGroupedChecks(
+      prInfo,
+      checksToRun,
+      undefined, // timeout
+      config,
+      undefined, // outputFormat
+      inputs.debug === 'true'
+    );
+
+    // Format and post results as a comment on the issue
+    if (Object.keys(result).length > 0) {
+      let commentBody = `## 🤖 Issue Assistant Results\n\n`;
+
+      for (const [group, checks] of Object.entries(result)) {
+        for (const check of checks) {
+          if (check.content && check.content.trim()) {
+            commentBody += `### ${check.checkName}\n`;
+            commentBody += `${check.content}\n\n`;
+          }
+        }
+      }
+
+      commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+
+      // Post comment to the issue
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: issue.number,
+        body: commentBody
+      });
+
+      console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
+    } else {
+      console.log('No results from issue assistant checks');
+    }
+
+    // Set outputs for GitHub Actions
+    setOutput('review-completed', 'true');
+    setOutput('checks-executed', checksToRun.length.toString());
+
+  } catch (error) {
+    console.error('Error running issue assistant checks:', error);
+    setOutput('review-completed', 'false');
+    setOutput('error', error instanceof Error ? error.message : 'Unknown error');
+    throw error;
+  }
 }
 
 async function handleIssueComment(
