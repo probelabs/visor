@@ -385,7 +385,12 @@ function resolveDependencies(
   return result;
 }
 
-async function handleIssueComment(octokit: Octokit, owner: string, repo: string, context: GitHubContext): Promise<void> {
+async function handleIssueComment(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  context: GitHubContext
+): Promise<void> {
   const comment = context.event?.comment as any;
   const issue = context.event?.issue as any;
 
@@ -470,7 +475,7 @@ async function handleIssueComment(octokit: Octokit, owner: string, repo: string,
         `**Additions:** +${statusPrInfo.totalAdditions}\n` +
         `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
         `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
-        `---\n` +
+        `\n---\n\n` +
         `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
       await octokit.rest.issues.createComment({
