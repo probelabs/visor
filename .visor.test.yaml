@@ -19,6 +19,7 @@ checks:
 
 output:
   pr_comment:
+    enabled: false  # Disable PR comments during CI testing
     format: markdown
     group_by: check
     collapse: true
