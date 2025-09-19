@@ -33,6 +33,7 @@ export interface PRInfo {
   commitDiff?: string;
   isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
   isIssue?: boolean; // Flag to indicate this is an issue, not a PR
+  eventContext?: Record<string, unknown>; // GitHub event context for templates
 }
 
 interface NetworkError {
