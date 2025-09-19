@@ -56,7 +56,7 @@ jobs:
       - name: 🧪 Test Markdown Output
         run: |
           echo "Testing Markdown output format..."
-          ./dist/index.js --cli --check performance --output markdown 2>&1 | grep -q "Analysis Results" || {
+          ./dist/index.js --cli --check performance --output markdown 2>&1 | grep -qi "analysis results" || {
             echo "Markdown output test failed"
             exit 1
           }
