@@ -25,6 +25,8 @@ export interface GitHubActionInputs {
   'max-parallelism'?: string;
   'fail-fast'?: string;
   debug?: string;
+  'ai-provider'?: string;
+  'ai-model'?: string;
   // Legacy inputs for backward compatibility
   'visor-config-path'?: string;
   'visor-checks'?: string;
