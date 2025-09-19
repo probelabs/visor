@@ -40,8 +40,8 @@ jobs:
 
       - name: Test CLI
         run: |
-          ./dist/index.js --version
-          ./dist/index.js --help
+          ./dist/index.js --cli --version
+          ./dist/index.js --cli --help
 
       - name: Test package installation
         run: |
