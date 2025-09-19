@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Comprehensive E2E tests for PR detection across all GitHub event types
  */

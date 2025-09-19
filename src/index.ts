@@ -135,7 +135,7 @@ export async function run(): Promise<void> {
     const eventName = process.env.GITHUB_EVENT_NAME;
 
     // Load GitHub event data from event file
-    let eventData: any = {};
+    let eventData: Record<string, unknown> = {};
     if (process.env.GITHUB_EVENT_PATH) {
       try {
         const fs = await import('fs');
@@ -403,7 +403,7 @@ async function handleIssueEvent(
   config: import('./types/config').VisorConfig,
   checksToRun: string[]
 ): Promise<void> {
-  const issue = context.event?.issue as any;
+  const issue = context.event?.issue as Record<string, unknown>;
   const action = context.event?.action as string | undefined;
 
   if (!issue) {
@@ -417,7 +417,9 @@ async function handleIssueEvent(
     return;
   }
 
-  console.log(`Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`);
+  console.log(
+    `Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`
+  );
 
   // For issue events, we need to create a PR-like structure for the checks to process
   // This allows us to reuse the existing check infrastructure
@@ -433,7 +435,7 @@ async function handleIssueEvent(
     deletions: 0,
     totalAdditions: 0,
     totalDeletions: 0,
-    eventType: mapGitHubEventToTrigger('issues', action)
+    eventType: mapGitHubEventToTrigger('issues', action),
   };
 
   // Run the checks using CheckExecutionEngine
@@ -454,7 +456,8 @@ async function handleIssueEvent(
     if (Object.keys(result).length > 0) {
       let commentBody = `## 🤖 Issue Assistant Results\n\n`;
 
-      for (const [group, checks] of Object.entries(result)) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for (const [_group, checks] of Object.entries(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `### ${check.checkName}\n`;
@@ -470,7 +473,7 @@ async function handleIssueEvent(
         owner,
         repo,
         issue_number: issue.number,
-        body: commentBody
+        body: commentBody,
       });
 
       console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
@@ -481,7 +484,6 @@ async function handleIssueEvent(
     // Set outputs for GitHub Actions
     setOutput('review-completed', 'true');
     setOutput('checks-executed', checksToRun.length.toString());
-
   } catch (error) {
     console.error('Error running issue assistant checks:', error);
     setOutput('review-completed', 'false');
@@ -497,8 +499,8 @@ async function handleIssueComment(
   context: GitHubContext,
   inputs: GitHubActionInputs
 ): Promise<void> {
-  const comment = context.event?.comment as any;
-  const issue = context.event?.issue as any;
+  const comment = context.event?.comment as Record<string, unknown>;
+  const issue = context.event?.issue as Record<string, unknown>;
 
   if (!comment || !issue) {
     console.log('No comment or issue found in context');
@@ -678,7 +680,7 @@ async function handlePullRequestWithConfig(
   checksToRun: string[],
   context: GitHubContext
 ): Promise<void> {
-  const pullRequest = context.event?.pull_request as any;
+  const pullRequest = context.event?.pull_request as Record<string, unknown>;
   const action = context.event?.action as string | undefined;
 
   if (!pullRequest) {

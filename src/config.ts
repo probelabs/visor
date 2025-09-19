@@ -74,7 +74,10 @@ export class ConfigManager {
         const merger = new ConfigMerger();
 
         // Process extends
-        const extends_ = Array.isArray(parsedConfig.extends) ? parsedConfig.extends : [parsedConfig.extends];
+        const extends_ = Array.isArray(parsedConfig.extends)
+          ? parsedConfig.extends
+          : [parsedConfig.extends];
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { extends: _extendsField, ...configWithoutExtends } = parsedConfig;
 
         // Load and merge all parent configurations
@@ -478,7 +481,10 @@ export class ConfigManager {
    */
   private isRemoteExtendsAllowed(): boolean {
     // Check environment variable first
-    if (process.env.VISOR_NO_REMOTE_EXTENDS === 'true' || process.env.VISOR_NO_REMOTE_EXTENDS === '1') {
+    if (
+      process.env.VISOR_NO_REMOTE_EXTENDS === 'true' ||
+      process.env.VISOR_NO_REMOTE_EXTENDS === '1'
+    ) {
       return false;
     }
     // Default to allowing remote extends

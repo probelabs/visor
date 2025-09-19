@@ -299,6 +299,7 @@ export class ConfigLoader {
     const extends_ = Array.isArray(config.extends) ? config.extends : [config.extends];
 
     // Remove extends from the config to avoid infinite recursion
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { extends: _extendsField, ...configWithoutExtends } = config;
 
     // Load all parent configurations

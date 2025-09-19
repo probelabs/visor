@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Import real spawn, not the mocked version
 const { spawn } = jest.requireActual('child_process');
 import * as path from 'path';

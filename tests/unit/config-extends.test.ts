@@ -511,7 +511,9 @@ describe('Config Extends Functionality', () => {
 
       fs.writeFileSync(path.join(testConfigDir, 'extends-default.yaml'), yaml.dump(config));
 
-      const loaded = await configManager.loadConfig(path.join(testConfigDir, 'extends-default.yaml'));
+      const loaded = await configManager.loadConfig(
+        path.join(testConfigDir, 'extends-default.yaml')
+      );
 
       expect(loaded.checks.custom).toBeDefined();
       // Should have some default checks if default config exists
@@ -725,6 +727,7 @@ describe('Config Extends Functionality', () => {
       });
 
       // Use reflection to access the private method for testing
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fetchRemoteConfig = (loader as any).fetchRemoteConfig.bind(loader);
       await expect(fetchRemoteConfig('ftp://invalid-protocol.com/config.yaml')).rejects.toThrow(
         'Invalid URL: ftp://invalid-protocol.com/config.yaml. Only HTTP and HTTPS protocols are supported.'
@@ -745,7 +748,10 @@ describe('Config Extends Functionality', () => {
         },
       };
 
-      fs.writeFileSync(path.join(testConfigDir, 'child-with-missing-parent.yaml'), yaml.dump(childConfig));
+      fs.writeFileSync(
+        path.join(testConfigDir, 'child-with-missing-parent.yaml'),
+        yaml.dump(childConfig)
+      );
 
       await expect(
         configManager.loadConfig(path.join(testConfigDir, 'child-with-missing-parent.yaml'))
@@ -766,12 +772,10 @@ describe('Config Extends Functionality', () => {
 
   describe('Edge Cases', () => {
     let configManager: ConfigManager;
-    let loader: ConfigLoader;
     let merger: ConfigMerger;
 
     beforeEach(() => {
       configManager = new ConfigManager();
-      loader = new ConfigLoader({ baseDir: testConfigDir });
       merger = new ConfigMerger();
     });
 
@@ -823,8 +827,10 @@ describe('Config Extends Functionality', () => {
 
       const child: Partial<VisorConfig> = {
         // Don't set ai_model - it should be inherited
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         max_parallelism: null as any, // Should remove this field
         env: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           API_KEY: null as any, // Should remove this key
           NEW_KEY: 'new-value',
         },
@@ -1210,7 +1216,7 @@ describe('Config Extends Functionality', () => {
       expect(global.fetch).toHaveBeenCalledTimes(1);
 
       // Wait for TTL to expire
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await new Promise(resolve => setTimeout(resolve, 60));
 
       // Second call should refetch
       await loader.fetchConfig('https://example.com/ttl.yaml');
@@ -1287,6 +1293,7 @@ describe('Config Extends Functionality', () => {
     it('should validate extends sources', async () => {
       // Test invalid extends types
       const config: Partial<VisorConfig> = {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         extends: 123 as any, // Invalid type
         version: '1.0',
         checks: {},
@@ -1391,6 +1398,7 @@ describe('Config Extends Functionality', () => {
       };
 
       const childWithMalformedExtends: Partial<VisorConfig> = {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         extends: { invalid: 'object' } as any, // Invalid extends format
         version: '1.0',
         checks: {},
@@ -1404,7 +1412,10 @@ describe('Config Extends Functionality', () => {
       };
 
       fs.writeFileSync(path.join(testConfigDir, 'valid-parent.yaml'), yaml.dump(validParent));
-      fs.writeFileSync(path.join(testConfigDir, 'malformed-child.yaml'), yaml.dump(childWithMalformedExtends));
+      fs.writeFileSync(
+        path.join(testConfigDir, 'malformed-child.yaml'),
+        yaml.dump(childWithMalformedExtends)
+      );
 
       await expect(
         configManager.loadConfig(path.join(testConfigDir, 'malformed-child.yaml'))
@@ -1543,7 +1554,9 @@ describe('Config Extends Functionality', () => {
       fs.writeFileSync(path.join(testConfigDir, 'base-disabled.yaml'), yaml.dump(baseConfig));
       fs.writeFileSync(path.join(testConfigDir, 'child-disabled.yaml'), yaml.dump(childConfig));
 
-      const config = await configManager.loadConfig(path.join(testConfigDir, 'child-disabled.yaml'));
+      const config = await configManager.loadConfig(
+        path.join(testConfigDir, 'child-disabled.yaml')
+      );
 
       expect(config.checks.enabled).toBeDefined();
       expect(config.checks.disabled).toBeUndefined(); // Should be removed
@@ -1571,7 +1584,9 @@ describe('Config Extends Functionality', () => {
 
       fs.writeFileSync(path.join(testConfigDir, 'default-override.yaml'), yaml.dump(config));
 
-      const loaded = await configManager.loadConfig(path.join(testConfigDir, 'default-override.yaml'));
+      const loaded = await configManager.loadConfig(
+        path.join(testConfigDir, 'default-override.yaml')
+      );
 
       expect(loaded.ai_model).toBe('custom-model');
       expect(loaded.checks.custom).toBeDefined();
@@ -1627,7 +1642,9 @@ describe('Config Extends Functionality', () => {
       fs.writeFileSync(path.join(testConfigDir, 'absolute-parent.yaml'), yaml.dump(parentConfig));
       fs.writeFileSync(path.join(testConfigDir, 'absolute-child.yaml'), yaml.dump(childConfig));
 
-      const loaded = await configManager.loadConfig(path.join(testConfigDir, 'absolute-child.yaml'));
+      const loaded = await configManager.loadConfig(
+        path.join(testConfigDir, 'absolute-child.yaml')
+      );
 
       expect(loaded.checks.absolute).toBeDefined();
       expect(loaded.checks.child).toBeDefined();
@@ -1745,10 +1762,7 @@ describe('Config Extends Functionality', () => {
       };
 
       const childConfig: Partial<VisorConfig> = {
-        extends: [
-          './relative-config1.yaml',
-          path.join(testConfigDir, 'absolute-config2.yaml'),
-        ],
+        extends: ['./relative-config1.yaml', path.join(testConfigDir, 'absolute-config2.yaml')],
         checks: {
           child: {
             type: 'webhook',

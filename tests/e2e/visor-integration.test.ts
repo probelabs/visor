@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { MockGithub } from '@kie/mock-github';
 import { Act } from '@kie/act-js';
 import * as fs from 'fs';

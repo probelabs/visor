@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { ConfigManager } from '../../src/config';
 import { VisorConfig } from '../../src/types/config';
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { VisorConfig, CheckConfig } from '../types/config';
 
 /**
@@ -10,10 +11,7 @@ export class ConfigMerger {
    * @param child - Configuration to merge on top
    * @returns Merged configuration
    */
-  public merge(
-    parent: Partial<VisorConfig>,
-    child: Partial<VisorConfig>
-  ): Partial<VisorConfig> {
+  public merge(parent: Partial<VisorConfig>, child: Partial<VisorConfig>): Partial<VisorConfig> {
     // Start with a deep copy of parent
     const result: Partial<VisorConfig> = this.deepCopy(parent);
 
@@ -24,7 +22,8 @@ export class ConfigMerger {
     if (child.max_parallelism !== undefined) result.max_parallelism = child.max_parallelism;
     if (child.fail_fast !== undefined) result.fail_fast = child.fail_fast;
     if (child.fail_if !== undefined) result.fail_if = child.fail_if;
-    if (child.failure_conditions !== undefined) result.failure_conditions = child.failure_conditions;
+    if (child.failure_conditions !== undefined)
+      result.failure_conditions = child.failure_conditions;
 
     // Merge environment variables (deep merge)
     if (child.env) {
@@ -79,10 +78,7 @@ export class ConfigMerger {
   /**
    * Merge two objects (child overrides parent)
    */
-  private mergeObjects<T extends Record<string, any>>(
-    parent: T,
-    child: T
-  ): T {
+  private mergeObjects<T extends Record<string, any>>(parent: T, child: T): T {
     const result: any = { ...parent };
 
     for (const key in child) {
@@ -196,10 +192,7 @@ export class ConfigMerger {
   /**
    * Merge individual check configurations
    */
-  private mergeCheckConfig(
-    parent: CheckConfig,
-    child: CheckConfig
-  ): CheckConfig {
+  private mergeCheckConfig(parent: CheckConfig, child: CheckConfig): CheckConfig {
     const result: CheckConfig = this.deepCopy(parent);
 
     // Simple properties (child overrides parent)
@@ -217,7 +210,8 @@ export class ConfigMerger {
     if (child.if !== undefined) result.if = child.if;
     if (child.reuse_ai_session !== undefined) result.reuse_ai_session = child.reuse_ai_session;
     if (child.fail_if !== undefined) result.fail_if = child.fail_if;
-    if (child.failure_conditions !== undefined) result.failure_conditions = child.failure_conditions;
+    if (child.failure_conditions !== undefined)
+      result.failure_conditions = child.failure_conditions;
 
     // Special handling for 'on' array
     if (child.on !== undefined) {

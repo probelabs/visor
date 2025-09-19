@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AICheckProvider } from '../../../src/providers/ai-check-provider';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { CheckProviderConfig } from '../../../src/providers/check-provider.interface';
