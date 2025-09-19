@@ -261,6 +261,7 @@ export class AICheckProvider extends CheckProvider {
         ? {
             name: eventContext.event_name || 'unknown',
             action: eventContext.action,
+            isPullRequest: !prInfo.isIssue, // Set based on whether this is a PR or an issue
 
             // Repository Info
             repository: eventContext.repository

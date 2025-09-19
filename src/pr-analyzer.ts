@@ -32,6 +32,7 @@ export interface PRInfo {
   fullDiff?: string;
   commitDiff?: string;
   isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
+  isIssue?: boolean; // Flag to indicate this is an issue, not a PR
 }
 
 interface NetworkError {

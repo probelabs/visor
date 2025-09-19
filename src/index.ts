@@ -440,6 +440,7 @@ async function handleIssueEvent(
     totalAdditions: 0,
     totalDeletions: 0,
     eventType: mapGitHubEventToTrigger('issues', action),
+    isIssue: true, // Flag to indicate this is an issue, not a PR
   };
 
   // Run the checks using CheckExecutionEngine
@@ -513,12 +514,22 @@ async function handleIssueComment(
   }
 
   // Prevent recursion: skip if comment is from visor itself
-  if (
+  // Check both comment author and content markers
+  const isVisorBot =
+    comment.user?.login === 'visor[bot]' ||
+    comment.user?.login === 'github-actions[bot]' ||
+    comment.user?.type === 'Bot';
+
+  const hasVisorMarkers =
     comment.body &&
     (comment.body.includes('<!-- visor-comment-id:') ||
-      comment.body.includes('*Powered by [Visor]'))
-  ) {
-    console.log('Skipping visor comment to prevent recursion');
+      comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
+      comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
+
+  if (isVisorBot || hasVisorMarkers) {
+    console.log(
+      `Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
+    );
     return;
   }
 
@@ -649,13 +660,7 @@ async function handleIssueComment(
         let prInfo: PRInfo;
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
-          prInfo = await analyzer.fetchPRDiff(
-            owner,
-            repo,
-            prNumber,
-            undefined,
-            'issue_comment'
-          );
+          prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -669,7 +674,8 @@ async function handleIssueComment(
             totalAdditions: 0,
             totalDeletions: 0,
             fullDiff: '',
-            eventType: 'issue_comment'
+            eventType: 'issue_comment',
+            isIssue: true, // Flag to indicate this is an issue, not a PR
           };
         }
 
