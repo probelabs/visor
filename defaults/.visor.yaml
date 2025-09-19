@@ -278,12 +278,11 @@ checks:
         {%- endif %}
 
         ## Repository Analysis Context
-        {%- if pr.title %}
-        **Recent PR Activity**: {{ pr.title }}
+        {%- if event.isPullRequest and pr.title %}
+        **PR Context**: {{ pr.title }}
         {%- endif %}
-        {%- if utils.totalFiles > 0 %}
-        **Project Size**: {{ utils.totalFiles }} files
-        **Technologies**: {% for ext in utils.filesByExtension %}{{ ext[0] }}{% unless forloop.last %}, {% endunless %}{% endfor %}
+        {%- if event.repository %}
+        **Repository**: {{ event.repository.fullName }}
         {%- endif %}
 
         ## Instructions
