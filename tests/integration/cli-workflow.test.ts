@@ -6,7 +6,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 
 describe('CLI Workflow Integration Tests', () => {
-  const CLI_PATH = path.join(__dirname, '../../src/cli-main.ts');
+  // Use compiled version for faster test execution
+  const CLI_PATH = path.join(__dirname, '../../dist/cli-main.js');
   const timeout = 10000; // 10 seconds timeout for integration tests (reduced for CI)
 
   let tempDir: string;
@@ -49,7 +50,7 @@ describe('CLI Workflow Integration Tests', () => {
     exitCode: number;
   }> => {
     return new Promise((resolve, reject) => {
-      const child = spawn('npx', ['ts-node', CLI_PATH, ...args], {
+      const child = spawn('node', [CLI_PATH, ...args], {
         cwd: options.cwd || tempDir,
         stdio: 'pipe',
       });
