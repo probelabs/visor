@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CLI } from '../../src/cli';
 import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
@@ -20,9 +21,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle empty PR data gracefully', async () => {
       console.log('Testing empty PR data handling...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const analyzer = new PRAnalyzer(mockOctokit as any);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reviewer = new PRReviewer(mockOctokit as any);
 
       // Test various empty PR scenarios
@@ -226,9 +225,7 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle extremely large PR data', async () => {
       console.log('Testing extremely large PR data handling...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const analyzer = new PRAnalyzer(mockOctokit as any);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reviewer = new PRReviewer(mockOctokit as any);
 
       // Create PR with boundary values
@@ -371,7 +368,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
         },
       ];
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const analyzer = new PRAnalyzer(mockOctokit as any);
 
       for (const scenario of extremeNumericScenarios) {
@@ -407,7 +403,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle GitHub API rate limit boundaries', async () => {
       console.log('Testing GitHub API rate limit boundary conditions...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 5,
         baseDelay: 10, // Very short delay for testing
@@ -501,7 +496,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle all Unicode character ranges', async () => {
       console.log('Testing Unicode character range handling...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const analyzer = new PRAnalyzer(mockOctokit as any);
 
       const unicodeTestCases = [
@@ -597,7 +591,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle special file path characters', async () => {
       console.log('Testing special file path character handling...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const analyzer = new PRAnalyzer(mockOctokit as any);
 
       const specialPathCases = [
@@ -882,7 +875,6 @@ describe('Edge Cases & Boundary Condition Tests', () => {
     test('should handle concurrent operations on same resources', async () => {
       console.log('Testing concurrent operations on same resources...');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 2,
         baseDelay: 10,

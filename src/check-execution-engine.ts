@@ -12,7 +12,7 @@ import { CheckProviderRegistry } from './providers/check-provider-registry';
 import { CheckProviderConfig } from './providers/check-provider.interface';
 import { DependencyResolver, DependencyGraph } from './dependency-resolver';
 import { FailureConditionEvaluator } from './failure-condition-evaluator';
-import { FailureConditionResult } from './types/config';
+import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 
 /**
@@ -738,7 +738,7 @@ export class CheckExecutionEngine {
   private async renderCheckContent(
     checkName: string,
     reviewSummary: ReviewSummary,
-    checkConfig: any,
+    checkConfig: CheckConfig,
     _prInfo?: PRInfo
   ): Promise<string> {
     // Import the liquid template system

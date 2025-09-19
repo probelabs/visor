@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import fs from 'fs/promises';
 import path from 'path';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';

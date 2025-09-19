@@ -35,7 +35,9 @@ export async function main(): Promise<void> {
     let config;
     if (cliOptions.configPath) {
       try {
-        config = await configManager.loadConfig(cliOptions.configPath);
+        config = await configManager.loadConfig(cliOptions.configPath, {
+          allowedRemotePatterns: cliOptions.allowedRemotePatterns,
+        });
       } catch (error) {
         console.error(
           `⚠️  Warning: ${error instanceof Error ? error.message : 'Configuration file not found'}`
@@ -44,7 +46,9 @@ export async function main(): Promise<void> {
         config = await configManager.getDefaultConfig();
       }
     } else {
-      config = await configManager.findAndLoadConfig();
+      config = await configManager.findAndLoadConfig({
+        allowedRemotePatterns: cliOptions.allowedRemotePatterns,
+      });
     }
 
     // Merge CLI options with configuration

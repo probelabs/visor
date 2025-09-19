@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { PRReviewer, GroupedCheckResults } from '../../src/reviewer';
 
 // Mock Octokit

@@ -225,6 +225,8 @@ export interface CheckConfig {
   type: ConfigCheckType;
   /** AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks */
   prompt?: string;
+  /** Additional prompt to append when extending configurations - merged with parent prompt */
+  appendPrompt?: string;
   /** Tool execution command with Liquid template support - required for tool checks */
   exec?: string;
   /** Stdin input for tools with Liquid template support - optional for tool checks */
@@ -355,6 +357,8 @@ export interface OutputConfig {
 export interface VisorConfig {
   /** Configuration version */
   version: string;
+  /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
+  extends?: string | string[];
   /** Check configurations */
   checks: Record<string, CheckConfig>;
   /** Output configuration */
@@ -421,6 +425,8 @@ export interface ConfigLoadOptions {
   validate?: boolean;
   /** Whether to merge with defaults */
   mergeDefaults?: boolean;
+  /** Allowed URL patterns for remote config extends */
+  allowedRemotePatterns?: string[];
   /** Custom validation rules */
   customValidation?: (config: Partial<VisorConfig>) => ConfigValidationError[];
 }

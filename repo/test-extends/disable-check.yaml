@@ -1,0 +1,8 @@
+version: "1.0"
+extends: ./base-config.yaml
+
+checks:
+  security:
+    type: ai
+    prompt: "Security check"
+    on: []  # This disables the security check

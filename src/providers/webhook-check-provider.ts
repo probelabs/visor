@@ -118,7 +118,7 @@ export class WebhookCheckProvider extends CheckProvider {
     } catch (error: unknown) {
       clearTimeout(timeoutId);
 
-      if ((error as any)?.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`Webhook request timed out after ${timeout}ms`);
       }
 

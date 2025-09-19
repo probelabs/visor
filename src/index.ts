@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// GitHub event objects have complex dynamic structures that are difficult to fully type
+// Using 'any' for these objects is acceptable as they come from external GitHub webhooks
+
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
@@ -417,7 +421,9 @@ async function handleIssueEvent(
     return;
   }
 
-  console.log(`Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`);
+  console.log(
+    `Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`
+  );
 
   // For issue events, we need to create a PR-like structure for the checks to process
   // This allows us to reuse the existing check infrastructure
@@ -433,7 +439,7 @@ async function handleIssueEvent(
     deletions: 0,
     totalAdditions: 0,
     totalDeletions: 0,
-    eventType: mapGitHubEventToTrigger('issues', action)
+    eventType: mapGitHubEventToTrigger('issues', action),
   };
 
   // Run the checks using CheckExecutionEngine
@@ -454,7 +460,7 @@ async function handleIssueEvent(
     if (Object.keys(result).length > 0) {
       let commentBody = `## 🤖 Issue Assistant Results\n\n`;
 
-      for (const [group, checks] of Object.entries(result)) {
+      for (const checks of Object.values(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `### ${check.checkName}\n`;
@@ -470,7 +476,7 @@ async function handleIssueEvent(
         owner,
         repo,
         issue_number: issue.number,
-        body: commentBody
+        body: commentBody,
       });
 
       console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
@@ -481,7 +487,6 @@ async function handleIssueEvent(
     // Set outputs for GitHub Actions
     setOutput('review-completed', 'true');
     setOutput('checks-executed', checksToRun.length.toString());
-
   } catch (error) {
     console.error('Error running issue assistant checks:', error);
     setOutput('review-completed', 'false');

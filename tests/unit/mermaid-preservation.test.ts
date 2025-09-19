@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AIReviewService } from '../../src/ai-review-service';
 import { PRInfo } from '../../src/pr-analyzer';
 

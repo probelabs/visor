@@ -26,6 +26,8 @@ export interface CliOptions {
   debug?: boolean;
   /** Stop execution on first failure condition */
   failFast?: boolean;
+  /** Allowed URL patterns for remote config extends */
+  allowedRemotePatterns?: string[];
   /** Show help text */
   help?: boolean;
   /** Show version */

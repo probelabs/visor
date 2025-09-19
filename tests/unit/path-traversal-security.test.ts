@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AIReviewService } from '../../src/ai-review-service';
 
 // Mock the filesystem operations
