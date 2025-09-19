@@ -1172,26 +1172,29 @@ async function markCheckAsFailed(
 
 // Entry point - execute immediately when the script is run
 // Note: require.main === module check doesn't work reliably with ncc bundling
-(() => {
-  // Simple mode detection: use GITHUB_ACTIONS env var which is always 'true' in GitHub Actions
-  // Also check for --cli flag to force CLI mode even in GitHub Actions environment
-  const isGitHubAction = process.env.GITHUB_ACTIONS === 'true' && !process.argv.includes('--cli');
+// Only execute if not in test environment
+if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+  (() => {
+    // Simple mode detection: use GITHUB_ACTIONS env var which is always 'true' in GitHub Actions
+    // Also check for --cli flag to force CLI mode even in GitHub Actions environment
+    const isGitHubAction = process.env.GITHUB_ACTIONS === 'true' && !process.argv.includes('--cli');
 
-  if (isGitHubAction) {
-    // Run as GitHub Action
-    run();
-  } else {
-    // Import and run CLI
-    import('./cli-main')
-      .then(({ main }) => {
-        main().catch(error => {
-          console.error('CLI execution failed:', error);
+    if (isGitHubAction) {
+      // Run as GitHub Action
+      run();
+    } else {
+      // Import and run CLI
+      import('./cli-main')
+        .then(({ main }) => {
+          main().catch(error => {
+            console.error('CLI execution failed:', error);
+            process.exit(1);
+          });
+        })
+        .catch(error => {
+          console.error('Failed to import CLI module:', error);
           process.exit(1);
         });
-      })
-      .catch(error => {
-        console.error('Failed to import CLI module:', error);
-        process.exit(1);
-      });
-  }
-})();
+    }
+  })();
+}
