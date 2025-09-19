@@ -15,6 +15,8 @@ import {
   ConfigLoadOptions,
 } from './types/config';
 import { CliOptions } from './types/cli';
+import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
+import { ConfigMerger } from './utils/config-merger';
 
 /**
  * Configuration manager for Visor
@@ -58,6 +60,36 @@ export class ConfigManager {
 
       if (!parsedConfig || typeof parsedConfig !== 'object') {
         throw new Error('Configuration file must contain a valid YAML object');
+      }
+
+      // Handle extends directive if present
+      if (parsedConfig.extends) {
+        const loaderOptions: ConfigLoaderOptions = {
+          baseDir: path.dirname(configPath),
+          allowRemote: this.isRemoteExtendsAllowed(),
+          maxDepth: 10,
+        };
+
+        const loader = new ConfigLoader(loaderOptions);
+        const merger = new ConfigMerger();
+
+        // Process extends
+        const extends_ = Array.isArray(parsedConfig.extends) ? parsedConfig.extends : [parsedConfig.extends];
+        const { extends: _extendsField, ...configWithoutExtends } = parsedConfig;
+
+        // Load and merge all parent configurations
+        let mergedConfig: Partial<VisorConfig> = {};
+        for (const source of extends_) {
+          console.log(`📦 Extending from: ${source}`);
+          const parentConfig = await loader.fetchConfig(source);
+          mergedConfig = merger.merge(mergedConfig, parentConfig);
+        }
+
+        // Merge with current config (child overrides parent)
+        parsedConfig = merger.merge(mergedConfig, configWithoutExtends);
+
+        // Remove disabled checks (those with empty 'on' array)
+        parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
 
       if (validate) {
@@ -439,6 +471,18 @@ export class ConfigManager {
         });
       }
     }
+  }
+
+  /**
+   * Check if remote extends are allowed
+   */
+  private isRemoteExtendsAllowed(): boolean {
+    // Check environment variable first
+    if (process.env.VISOR_NO_REMOTE_EXTENDS === 'true' || process.env.VISOR_NO_REMOTE_EXTENDS === '1') {
+      return false;
+    }
+    // Default to allowing remote extends
+    return true;
   }
 
   /**

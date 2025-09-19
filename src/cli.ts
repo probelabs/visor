@@ -44,6 +44,7 @@ export class CLI {
       )
       .option('--debug', 'Enable debug mode for detailed output')
       .option('--fail-fast', 'Stop execution on first failure condition')
+      .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -105,6 +106,11 @@ export class CLI {
 
       // Remove duplicates and preserve order
       const uniqueChecks = [...new Set(options.check)] as CheckType[];
+
+      // Set environment variable if no-remote-extends is set
+      if (options.noRemoteExtends) {
+        process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+      }
 
       return {
         checks: uniqueChecks,

@@ -355,6 +355,8 @@ export interface OutputConfig {
 export interface VisorConfig {
   /** Configuration version */
   version: string;
+  /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
+  extends?: string | string[];
   /** Check configurations */
   checks: Record<string, CheckConfig>;
   /** Output configuration */
