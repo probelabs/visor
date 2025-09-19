@@ -322,7 +322,7 @@ async function handleEvent(
   // Handle different GitHub events
   switch (eventName) {
     case 'issue_comment':
-      await handleIssueComment(octokit, owner, repo, context);
+      await handleIssueComment(octokit, owner, repo, context, inputs);
       break;
     case 'pull_request':
       // Run the checks that are configured for this event
@@ -389,7 +389,8 @@ async function handleIssueComment(
   octokit: Octokit,
   owner: string,
   repo: string,
-  context: GitHubContext
+  context: GitHubContext,
+  inputs: GitHubActionInputs
 ): Promise<void> {
   const comment = context.event?.comment as any;
   const issue = context.event?.issue as any;
@@ -544,10 +545,16 @@ async function handleIssueComment(
           parallelExecution: false,
         });
 
-        await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
-          focus,
-          format,
-        });
+        // Check if commenting is enabled before posting
+        const shouldComment = inputs['comment-on-pr'] !== 'false';
+        if (shouldComment) {
+          await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
+            focus,
+            format,
+          });
+        } else {
+          console.log('📝 Skipping PR comment (comment-on-pr is disabled)');
+        }
 
         // Calculate total check results from grouped results
         const totalChecks = Object.values(groupedResults).flat().length;
@@ -649,12 +656,17 @@ async function handlePullRequestWithConfig(
     );
   }
 
-  // Post review comment
-  await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
-    commentId,
-    triggeredBy: action,
-    commitSha: pullRequest.head?.sha,
-  });
+  // Post review comment (only if comment-on-pr is not disabled)
+  const shouldComment = inputs['comment-on-pr'] !== 'false';
+  if (shouldComment) {
+    await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
+      commentId,
+      triggeredBy: action,
+      commitSha: pullRequest.head?.sha,
+    });
+  } else {
+    console.log('📝 Skipping PR comment (comment-on-pr is disabled)');
+  }
 
   // Set outputs
   setOutput('review-completed', 'true');
