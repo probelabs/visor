@@ -527,7 +527,9 @@ async function handleIssueComment(
       comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
 
   if (isVisorBot || hasVisorMarkers) {
-    console.log(`Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`);
+    console.log(
+      `Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
+    );
     return;
   }
 
@@ -658,13 +660,7 @@ async function handleIssueComment(
         let prInfo: PRInfo;
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
-          prInfo = await analyzer.fetchPRDiff(
-            owner,
-            repo,
-            prNumber,
-            undefined,
-            'issue_comment'
-          );
+          prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
