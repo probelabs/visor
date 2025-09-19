@@ -441,6 +441,7 @@ async function handleIssueEvent(
     totalDeletions: 0,
     eventType: mapGitHubEventToTrigger('issues', action),
     isIssue: true, // Flag to indicate this is an issue, not a PR
+    eventContext: context.event, // Pass the full event context for templates
   };
 
   // Run the checks using CheckExecutionEngine
@@ -459,12 +460,12 @@ async function handleIssueEvent(
 
     // Format and post results as a comment on the issue
     if (Object.keys(result).length > 0) {
-      let commentBody = `## 🤖 Issue Assistant Results\n\n`;
+      let commentBody = '';
 
+      // Directly use check content without adding extra headers
       for (const checks of Object.values(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
-            commentBody += `### ${check.checkName}\n`;
             commentBody += `${check.content}\n\n`;
           }
         }
@@ -661,6 +662,8 @@ async function handleIssueComment(
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
           prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
+          // Add event context for templates
+          prInfo.eventContext = context.event;
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -676,6 +679,7 @@ async function handleIssueComment(
             fullDiff: '',
             eventType: 'issue_comment',
             isIssue: true, // Flag to indicate this is an issue, not a PR
+            eventContext: context.event, // Pass the full event context for templates
           };
         }
 
@@ -786,6 +790,8 @@ async function handlePullRequestWithConfig(
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
+    // Add event context for templates
+    prInfo.eventContext = context.event;
   } catch (error) {
     // Handle test scenarios with mock repos
     if (inputs['ai-provider'] === 'mock' || inputs['ai-model'] === 'mock') {
