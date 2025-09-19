@@ -41,7 +41,7 @@ export class ConfigManager {
     configPath: string,
     options: ConfigLoadOptions = {}
   ): Promise<VisorConfig> {
-    const { validate = true, mergeDefaults = true } = options;
+    const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
 
     try {
       if (!fs.existsSync(configPath)) {
@@ -68,6 +68,7 @@ export class ConfigManager {
           baseDir: path.dirname(configPath),
           allowRemote: this.isRemoteExtendsAllowed(),
           maxDepth: 10,
+          allowedRemotePatterns,
         };
 
         const loader = new ConfigLoader(loaderOptions);
@@ -119,7 +120,7 @@ export class ConfigManager {
   /**
    * Find and load configuration from default locations
    */
-  public async findAndLoadConfig(): Promise<VisorConfig> {
+  public async findAndLoadConfig(options: ConfigLoadOptions = {}): Promise<VisorConfig> {
     // Try to find the git repository root first, fall back to current directory
     const gitRoot = await this.findGitRepositoryRoot();
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
@@ -129,7 +130,7 @@ export class ConfigManager {
 
       for (const configPath of possiblePaths) {
         if (fs.existsSync(configPath)) {
-          return this.loadConfig(configPath);
+          return this.loadConfig(configPath, options);
         }
       }
     }

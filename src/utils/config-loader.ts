@@ -35,6 +35,10 @@ export interface ConfigLoaderOptions {
   timeout?: number;
   /** Maximum recursion depth (default: 10) */
   maxDepth?: number;
+  /** Allowed remote URL patterns (default: ['https://github.com/', 'https://raw.githubusercontent.com/']) */
+  allowedRemotePatterns?: string[];
+  /** Project root directory for path traversal protection */
+  projectRoot?: string;
 }
 
 /**
@@ -50,6 +54,8 @@ export class ConfigLoader {
       cacheTTL: 5 * 60 * 1000, // 5 minutes
       timeout: 30 * 1000, // 30 seconds
       maxDepth: 10,
+      allowedRemotePatterns: [], // Empty by default for security
+      projectRoot: this.findProjectRoot(),
       ...options,
     };
   }
@@ -140,6 +146,9 @@ export class ConfigLoader {
     const basePath = this.options.baseDir || process.cwd();
     const resolvedPath = path.resolve(basePath, filePath);
 
+    // Validate against path traversal attacks
+    this.validateLocalPath(resolvedPath);
+
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`Configuration file not found: ${resolvedPath}`);
     }
@@ -180,10 +189,13 @@ export class ConfigLoader {
    * Fetch configuration from remote URL
    */
   private async fetchRemoteConfig(url: string): Promise<Partial<VisorConfig>> {
-    // Validate URL
+    // Validate URL protocol
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       throw new Error(`Invalid URL: ${url}. Only HTTP and HTTPS protocols are supported.`);
     }
+
+    // Validate against SSRF attacks
+    this.validateRemoteURL(url);
 
     // Check cache
     const cacheEntry = this.cache.get(url);
@@ -322,6 +334,79 @@ export class ConfigLoader {
 
     // Then merge with the current config (child overrides parent)
     return merger.merge(mergedParents, configWithoutExtends);
+  }
+
+  /**
+   * Find project root directory (for security validation)
+   */
+  private findProjectRoot(): string {
+    // Try to find git root first
+    try {
+      const { execSync } = require('child_process');
+      const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+      if (gitRoot) return gitRoot;
+    } catch {
+      // Not a git repo, continue
+    }
+
+    // Fall back to finding package.json
+    const packageRoot = this.findPackageRoot();
+    if (packageRoot) return packageRoot;
+
+    // Last resort: use current working directory
+    return process.cwd();
+  }
+
+  /**
+   * Validate remote URL against allowlist
+   */
+  private validateRemoteURL(url: string): void {
+    // If allowlist is empty, allow all URLs (backward compatibility)
+    const allowedPatterns = this.options.allowedRemotePatterns || [];
+    if (allowedPatterns.length === 0) {
+      return;
+    }
+
+    // Check if URL matches any allowed pattern
+    const isAllowed = allowedPatterns.some(pattern => url.startsWith(pattern));
+    if (!isAllowed) {
+      throw new Error(
+        `Security error: URL ${url} is not in the allowed list. Allowed patterns: ${allowedPatterns.join(', ')}`
+      );
+    }
+  }
+
+  /**
+   * Validate local path against traversal attacks
+   */
+  private validateLocalPath(resolvedPath: string): void {
+    const projectRoot = this.options.projectRoot || process.cwd();
+    const normalizedPath = path.normalize(resolvedPath);
+    const normalizedRoot = path.normalize(projectRoot);
+
+    // Check if the resolved path is within the project root
+    if (!normalizedPath.startsWith(normalizedRoot)) {
+      throw new Error(
+        `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
+      );
+    }
+
+    // Additional check for sensitive system files
+    const sensitivePatterns = [
+      '/etc/passwd',
+      '/etc/shadow',
+      '/.ssh/',
+      '/.aws/',
+      '/.env',
+      '/private/',
+    ];
+
+    const lowerPath = normalizedPath.toLowerCase();
+    for (const pattern of sensitivePatterns) {
+      if (lowerPath.includes(pattern)) {
+        throw new Error(`Security error: Cannot access potentially sensitive file: ${pattern}`);
+      }
+    }
   }
 
   /**

@@ -423,6 +423,8 @@ export interface ConfigLoadOptions {
   validate?: boolean;
   /** Whether to merge with defaults */
   mergeDefaults?: boolean;
+  /** Allowed URL patterns for remote config extends */
+  allowedRemotePatterns?: string[];
   /** Custom validation rules */
   customValidation?: (config: Partial<VisorConfig>) => ConfigValidationError[];
 }

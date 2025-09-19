@@ -155,6 +155,9 @@ Options:
   --timeout <ms>             Timeout for check operations in milliseconds
                              Default: 600000ms (10 minutes)
   --debug                    Enable debug mode for detailed output
+  --allowed-remote-patterns  Comma-separated list of allowed URL prefixes for remote configs
+                             Example: "https://github.com/myorg/,https://raw.githubusercontent.com/"
+  --no-remote-extends        Disable remote configuration extends for security
   --version                  Show version
   --help                     Show help
 
@@ -165,6 +168,9 @@ Examples:
   visor --check all --max-parallelism 5       # Run up to 5 checks in parallel
   visor --check all --fail-fast               # Stop on first failure
   visor --check all --timeout 300000 --debug  # 5 minute timeout with debug output
+
+  # Using remote configs with security allowlist
+  visor --check all --allowed-remote-patterns "https://github.com/myorg/"
 ```
 
 ## 🤖 AI Configuration
@@ -815,14 +821,116 @@ env:
   FEATURES: "security,performance"
 ```
 
-### Configuration Inheritance
+### Configuration Inheritance with Extends
 
-Configuration follows this priority order:
+Visor supports configuration inheritance through the `extends` directive, allowing you to build upon existing configurations. This is useful for:
+- Sharing common configurations across projects
+- Building team/organization standards
+- Creating environment-specific configs (dev, staging, prod)
+
+#### Using the Extends Directive
+
+The `extends` field can reference:
+- **Local files**: Relative or absolute paths to YAML files
+- **Remote URLs**: HTTPS URLs to configuration files (requires allowlist for security)
+- **Default**: Built-in default configuration (`extends: default`)
+
+```yaml
+# .visor.yaml - Your project config
+extends: ./base-config.yaml  # Single extend
+# OR multiple extends (merged left-to-right)
+extends:
+  - default                   # Start with defaults
+  - ./team-standards.yaml     # Apply team standards
+  - ./project-specific.yaml   # Project overrides
+
+checks:
+  my-custom-check:
+    type: ai
+    prompt: "Project-specific analysis..."
+```
+
+#### Example: Team Configuration
+
+**team-config.yaml** (shared team configuration):
+```yaml
+version: "1.0"
+ai_provider: openai
+ai_model: gpt-4
+
+checks:
+  security-scan:
+    type: ai
+    prompt: "Perform security analysis following OWASP guidelines"
+    on: [pr_opened, pr_updated]
+
+  code-quality:
+    type: ai
+    prompt: "Check code quality and best practices"
+    on: [pr_opened, pr_updated]
+```
+
+**project-config.yaml** (project extends team config):
+```yaml
+extends: ./team-config.yaml
+
+# Override team defaults
+ai_model: gpt-4-turbo  # Use newer model
+
+checks:
+  # Disable code-quality by setting empty 'on' array
+  code-quality:
+    on: []
+
+  # Add project-specific check
+  performance-check:
+    type: ai
+    prompt: "Analyze performance implications"
+    on: [pr_opened]
+```
+
+#### Remote Configuration (with Security)
+
+For security, remote URLs must be explicitly allowed via CLI:
+
+```bash
+# Allow specific URL prefixes
+visor --check all \
+  --allowed-remote-patterns "https://github.com/myorg/,https://raw.githubusercontent.com/myorg/"
+```
+
+Then use in your config:
+```yaml
+extends: https://raw.githubusercontent.com/myorg/configs/main/base.yaml
+
+checks:
+  # Your project-specific checks...
+```
+
+#### Security Features
+
+1. **Path Traversal Protection**: Local file paths are restricted to the project root
+2. **URL Allowlist**: Remote URLs must match allowed patterns (empty by default)
+3. **No Remote by Default**: Use `--no-remote-extends` to completely disable remote configs
+
+#### Merge Behavior
+
+When extending configurations:
+- **Simple values**: Child overrides parent
+- **Objects**: Deep merge (child properties override parent)
+- **Arrays**: Replaced entirely (not concatenated)
+- **Checks**: Can be disabled by setting `on: []`
+
+### Configuration Priority Order
+
+With extends, the full priority order becomes:
 
 1. **Check-level settings** (highest priority)
-2. **Global configuration**
-3. **Environment variables**
-4. **Default values** (lowest priority)
+2. **Current file configuration**
+3. **Extended configurations** (merged in order)
+4. **Global configuration**
+5. **Environment variables**
+6. **Default values** (lowest priority)
 
 ```yaml
 # Global defaults
