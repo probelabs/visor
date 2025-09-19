@@ -15,7 +15,9 @@ describe('CLI Workflow Integration Tests', () => {
   if (useCompiledVersion) {
     console.log('Using compiled CLI for tests (faster)');
   } else {
-    console.log('Using TypeScript CLI with ts-node (slower, building dist/ first would speed up tests)');
+    console.log(
+      'Using TypeScript CLI with ts-node (slower, building dist/ first would speed up tests)'
+    );
   }
   const timeout = 10000; // 10 seconds timeout for integration tests (reduced for CI)
 
