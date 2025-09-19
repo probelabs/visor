@@ -6,8 +6,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 
 describe('CLI Workflow Integration Tests', () => {
-  // Use compiled version for faster test execution
-  const CLI_PATH = path.join(__dirname, '../../dist/cli-main.js');
+  // Check if compiled version exists for faster test execution
+  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/cli-main.js');
+  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/cli-main.ts');
+  const useCompiledVersion = fs.existsSync(COMPILED_CLI_PATH);
+
+  // Log which version we're using (helpful for debugging CI issues)
+  if (useCompiledVersion) {
+    console.log('Using compiled CLI for tests (faster)');
+  } else {
+    console.log('Using TypeScript CLI with ts-node (slower, building dist/ first would speed up tests)');
+  }
   const timeout = 10000; // 10 seconds timeout for integration tests (reduced for CI)
 
   let tempDir: string;
@@ -50,7 +59,19 @@ describe('CLI Workflow Integration Tests', () => {
     exitCode: number;
   }> => {
     return new Promise((resolve, reject) => {
-      const child = spawn('node', [CLI_PATH, ...args], {
+      // Use node for compiled JS, or npx ts-node for TypeScript source
+      let command: string;
+      let commandArgs: string[];
+
+      if (useCompiledVersion) {
+        command = 'node';
+        commandArgs = [COMPILED_CLI_PATH, ...args];
+      } else {
+        command = 'npx';
+        commandArgs = ['ts-node', SOURCE_CLI_PATH, ...args];
+      }
+
+      const child = spawn(command, commandArgs, {
         cwd: options.cwd || tempDir,
         stdio: 'pipe',
       });
