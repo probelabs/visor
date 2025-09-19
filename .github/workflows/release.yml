@@ -142,7 +142,7 @@ jobs:
           VISOR_OUTPUT=$(TAG_NAME=${{ env.TAG_NAME }} \
             GIT_LOG="$GIT_LOG" \
             GIT_DIFF_STAT="$GIT_DIFF_STAT" \
-            timeout 300 ./dist/cli-main.js --check release-notes --config .visor.yaml --output json 2>&1 || true)
+            timeout 300 ./dist/index.js --cli --check release-notes --config .visor.yaml --output json 2>&1 || true)
 
           echo "📋 Visor output:"
           echo "$VISOR_OUTPUT"

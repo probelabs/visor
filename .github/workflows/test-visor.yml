@@ -30,17 +30,17 @@ jobs:
       
       - name: 🔍 Test CLI Basic Functionality
         run: |
-          chmod +x ./dist/cli-main.js
+          chmod +x ./dist/index.js
           echo "Testing Visor CLI help..."
-          ./dist/cli-main.js --help
+          ./dist/index.js --cli --help
           
           echo "Testing Visor CLI version..."
-          ./dist/cli-main.js --version
+          ./dist/index.js --cli --version
       
       - name: 🧪 Test JSON Output
         run: |
           echo "Testing JSON output format..."
-          ./dist/cli-main.js --check security --output json 2>/dev/null | jq '.summary.overallScore' || {
+          ./dist/index.js --cli --check security --output json 2>/dev/null | jq '.summary.overallScore' || {
             echo "JSON output test failed"
             exit 1
           }
@@ -48,7 +48,7 @@ jobs:
       - name: 🧪 Test SARIF Output
         run: |
           echo "Testing SARIF output format..."
-          ./dist/cli-main.js --check security --output sarif 2>/dev/null | jq '.version' || {
+          ./dist/index.js --cli --check security --output sarif 2>/dev/null | jq '.version' || {
             echo "SARIF output test failed"
             exit 1
           }
@@ -56,7 +56,7 @@ jobs:
       - name: 🧪 Test Markdown Output
         run: |
           echo "Testing Markdown output format..."
-          ./dist/cli-main.js --check performance --output markdown 2>&1 | grep -q "Analysis Results" || {
+          ./dist/index.js --cli --check performance --output markdown 2>&1 | grep -q "Analysis Results" || {
             echo "Markdown output test failed"
             exit 1
           }
@@ -64,7 +64,7 @@ jobs:
       - name: 🧪 Test Table Output
         run: |
           echo "Testing Table output format..."
-          ./dist/cli-main.js --check style --output table 2>&1 | grep -q "Analysis Summary" || {
+          ./dist/index.js --cli --check style --output table 2>&1 | grep -q "Analysis Summary" || {
             echo "Table output test failed"
             exit 1
           }
@@ -72,10 +72,10 @@ jobs:
       - name: 📊 Generate Sample Reports
         run: |
           # Generate reports in all formats for artifact upload (using mock provider)
-          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output json 2>/dev/null > sample-report.json || echo '{"error": "Mock provider failed"}' > sample-report.json
-          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output sarif 2>/dev/null > sample-report.sarif || echo '{"error": "Mock provider failed"}' > sample-report.sarif
-          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output markdown 2>&1 > sample-report.md || echo "Error: Mock provider failed" > sample-report.md
-          ./dist/cli-main.js --check all --config .visor.test.yaml --provider mock --output table 2>&1 > sample-report.txt || echo "Error: Mock provider failed" > sample-report.txt
+          ./dist/index.js --cli --check all --config .visor.test.yaml --provider mock --output json 2>/dev/null > sample-report.json || echo '{"error": "Mock provider failed"}' > sample-report.json
+          ./dist/index.js --cli --check all --config .visor.test.yaml --provider mock --output sarif 2>/dev/null > sample-report.sarif || echo '{"error": "Mock provider failed"}' > sample-report.sarif
+          ./dist/index.js --cli --check all --config .visor.test.yaml --provider mock --output markdown 2>&1 > sample-report.md || echo "Error: Mock provider failed" > sample-report.md
+          ./dist/index.js --cli --check all --config .visor.test.yaml --provider mock --output table 2>&1 > sample-report.txt || echo "Error: Mock provider failed" > sample-report.txt
       
       - name: 📈 Upload Sample Reports
         uses: actions/upload-artifact@v4
