@@ -28,7 +28,15 @@ jobs:
         run: npm run lint
 
       - name: Check formatting
-        run: npm run format:check
+        run: |
+          if ! npm run format:check; then
+            echo "❌ Formatting check failed! Showing differences:"
+            echo "=================================================="
+            npm run format:diff
+            echo "=================================================="
+            echo "To fix locally, run: npm run format"
+            exit 1
+          fi
 
       - name: Run tests
         run: npm test
