@@ -16,7 +16,8 @@ export async function main(): Promise<void> {
     const configManager = new ConfigManager();
 
     // Check for help flag before parsing
-    const args = process.argv.slice(2);
+    // Filter out --cli flag which is only used to force CLI mode in GitHub Actions
+    const args = process.argv.slice(2).filter(arg => arg !== '--cli');
     if (args.includes('--help') || args.includes('-h')) {
       console.log(cli.getHelpText());
       process.exit(0);

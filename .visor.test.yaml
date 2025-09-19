@@ -3,8 +3,6 @@ version: "1.0"
 # Test configuration for CI - uses mock AI and minimal checks
 # This prevents API key requirements during automated testing
 
-# Test configuration - mock provider will be passed via CLI --provider mock option
-
 checks:
   # Simple security check using mock AI provider
   security:
@@ -13,9 +11,15 @@ checks:
     schema: plain
     prompt: "This is a mock security analysis for CI testing. No real security analysis is performed."
     on: [pr_opened, pr_updated]
+    ai:
+      provider: mock
+      model: mock
+      timeout: 60000
+      debug: false
 
 output:
   pr_comment:
+    enabled: false  # Disable PR comments during CI testing
     format: markdown
     group_by: check
     collapse: true

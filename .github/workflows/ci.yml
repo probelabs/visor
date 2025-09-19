@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18, 20]
+        node-version: [20]
 
     steps:
       - name: Checkout code
@@ -40,9 +40,8 @@ jobs:
 
       - name: Test CLI
         run: |
-          chmod +x ./dist/cli-main.js
-          ./dist/cli-main.js --version
-          ./dist/cli-main.js --help
+          ./dist/index.js --cli --version
+          ./dist/index.js --cli --help
 
       - name: Test package installation
         run: |

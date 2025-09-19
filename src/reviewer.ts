@@ -220,7 +220,7 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
-    comment += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    comment += `\n\n---\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
     return comment;
   }
 

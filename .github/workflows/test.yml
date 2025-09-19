@@ -40,6 +40,7 @@ jobs:
           ai-model: 'mock'
           ai-provider: 'mock'
           config-path: '.visor.test.yaml'
+          comment-on-pr: 'false'  # Disable commenting in tests
 
   test-scenarios:
     runs-on: ubuntu-latest
@@ -69,5 +70,6 @@ jobs:
           ai-model: 'mock'
           ai-provider: 'mock'
           config-path: '.visor.test.yaml'
+          comment-on-pr: 'false'  # Disable commenting in tests
         env:
           GITHUB_EVENT_NAME: 'repository'

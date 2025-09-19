@@ -177,12 +177,12 @@ jobs:
         if: matrix.ai_provider.api_key_secret != ''
         continue-on-error: true  # Allow test to continue if quota issues occur
         run: |
-          chmod +x ./dist/cli-main.js
+          chmod +x ./dist/index.js
           echo "🔍 Testing different check provider types..."
           
           # Test all checks (which includes AI-powered review)
           echo "Testing all checks with AI provider..."
-          ./dist/cli-main.js --check all --output json > ai_result.json
+          ./dist/index.js --cli --check all --output json > ai_result.json
           
           # Validate AI result
           if ! jq -e '.summary.overallScore' ai_result.json > /dev/null; then
@@ -211,12 +211,12 @@ jobs:
 
       - name: 🧪 Test 5 - Output Format Validation
         run: |
-          chmod +x ./dist/cli-main.js
+          chmod +x ./dist/index.js
           echo "🔍 Testing output formats..."
           
           # Test table output (should not truncate messages)
           echo "Testing table output formatting..."
-          ./dist/cli-main.js --check all --output table > table_output.txt
+          ./dist/index.js --cli --check all --output table > table_output.txt
           
           # Check that table contains expected sections
           if grep -q "Analysis Summary" table_output.txt && grep -q "Issues" table_output.txt; then
@@ -229,7 +229,7 @@ jobs:
           
           # Test JSON output
           echo "Testing JSON output..."
-          ./dist/cli-main.js --check all --output json > json_output.json
+          ./dist/index.js --cli --check all --output json > json_output.json
           
           if jq -e '.summary' json_output.json > /dev/null; then
             echo "✅ JSON output format test passed"
@@ -241,7 +241,7 @@ jobs:
 
       - name: 🧪 Test 6 - Error Handling and Fallbacks
         run: |
-          chmod +x ./dist/cli-main.js
+          chmod +x ./dist/index.js
           echo "🔍 Testing error handling..."
           
           # Test with invalid API key (should gracefully handle)
@@ -249,14 +249,14 @@ jobs:
           # Clear all API keys and set an invalid one
           unset GOOGLE_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
           export GOOGLE_API_KEY="invalid-key-test"
-          ./dist/cli-main.js --check ai --output json > error_test.json || {
+          ./dist/index.js --cli --check ai --output json > error_test.json || {
             echo "✅ Error handling working - invalid API key properly rejected"
           }
           
           # Test with no API key (should use fallback if available)
           echo "Testing fallback behavior..."
           unset GOOGLE_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY LLM_BASE_URL
-          ./dist/cli-main.js --check all --output json > fallback_test.json
+          ./dist/index.js --cli --check all --output json > fallback_test.json
           
           if jq -e '.summary' fallback_test.json > /dev/null; then
             echo "✅ Fallback behavior test passed"
@@ -269,11 +269,11 @@ jobs:
         if: matrix.ai_provider.name == 'Google Gemini'
         continue-on-error: true  # Allow benchmark to continue if quota issues occur
         run: |
-          chmod +x ./dist/cli-main.js
+          chmod +x ./dist/index.js
           echo "🚀 Running performance benchmark..."
           
           start_time=$(date +%s%3N)
-          ./dist/cli-main.js --check all --output json > benchmark_result.json
+          ./dist/index.js --cli --check all --output json > benchmark_result.json
           end_time=$(date +%s%3N)
           
           execution_time=$((end_time - start_time))
