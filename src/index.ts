@@ -125,6 +125,8 @@ export async function run(): Promise<void> {
       'fail-on-api-error': getInput('fail-on-api-error') || undefined,
       'min-score': getInput('min-score') || undefined,
       'max-parallelism': getInput('max-parallelism') || undefined,
+      'ai-provider': getInput('ai-provider') || undefined,
+      'ai-model': getInput('ai-model') || undefined,
       // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path') || undefined,
       'visor-checks': getInput('visor-checks') || undefined,
