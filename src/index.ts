@@ -459,12 +459,12 @@ async function handleIssueEvent(
 
     // Format and post results as a comment on the issue
     if (Object.keys(result).length > 0) {
-      let commentBody = `## 🤖 Issue Assistant Results\n\n`;
+      let commentBody = '';
 
+      // Directly use check content without adding extra headers
       for (const checks of Object.values(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
-            commentBody += `### ${check.checkName}\n`;
             commentBody += `${check.content}\n\n`;
           }
         }
