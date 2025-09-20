@@ -176,8 +176,9 @@ export class EventMapper {
     eventTrigger: EventTrigger,
     fileContext?: FileChangeContext
   ): boolean {
-    // Check if event trigger matches
-    if (!checkConfig.on.includes(eventTrigger)) {
+    // Check if event trigger matches (default to ['manual'] if not specified)
+    const triggers = checkConfig.on || ['manual'];
+    if (!triggers.includes(eventTrigger)) {
       return false;
     }
 
@@ -331,9 +332,10 @@ export class EventMapper {
     }
 
     // Check if any configured checks match this event
-    return Object.values(this.config.checks || {}).some(checkConfig =>
-      checkConfig.on.includes(eventTrigger)
-    );
+    return Object.values(this.config.checks || {}).some(checkConfig => {
+      const triggers = checkConfig.on || ['manual'];
+      return triggers.includes(eventTrigger);
+    });
   }
 
   /**
@@ -348,7 +350,7 @@ export class EventMapper {
       name,
       description:
         config.prompt?.split('\n')[0] || config.exec?.split(' ')[0] || 'No description available',
-      triggers: config.on,
+      triggers: config.on || ['manual'],
     }));
   }
 

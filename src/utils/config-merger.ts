@@ -181,6 +181,16 @@ export class ConfigMerger {
         // New check - need to process appendPrompt even without parent
         const copiedConfig = this.deepCopy(childConfig);
 
+        // Default to 'ai' type if not specified
+        if (!copiedConfig.type) {
+          copiedConfig.type = 'ai';
+        }
+
+        // Default 'on' to ['manual'] if not specified
+        if (!copiedConfig.on) {
+          copiedConfig.on = ['manual'];
+        }
+
         // Handle appendPrompt for new checks (convert to prompt)
         if (copiedConfig.appendPrompt !== undefined) {
           // If there's no parent, appendPrompt becomes the prompt
@@ -212,6 +222,11 @@ export class ConfigMerger {
 
     // Simple properties (child overrides parent)
     if (child.type !== undefined) result.type = child.type;
+
+    // Default to 'ai' type if not specified in either parent or child
+    if (!result.type) {
+      result.type = 'ai';
+    }
     if (child.prompt !== undefined) result.prompt = child.prompt;
 
     // Handle appendPrompt - append to existing prompt
@@ -251,6 +266,11 @@ export class ConfigMerger {
         // Replace parent's on array
         result.on = [...child.on];
       }
+    }
+
+    // Default 'on' to ['manual'] if still not specified
+    if (!result.on) {
+      result.on = ['manual'];
     }
 
     // Arrays that get replaced (not concatenated)
