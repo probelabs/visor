@@ -79,11 +79,7 @@ checks:
 
         ## Files Changed Analysis
 
-        | File | Type | Status | Changes | Impact |
-        |------|------|--------|---------|--------|
-        {% for file in files %}
-        | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status | capitalize }} | +{{ file.additions }}/-{{ file.deletions }} | {% if file.changes > 50 %}High{% elsif file.changes > 20 %}Medium{% else %}Low{% endif %} |
-        {% endfor %}
+        Analyze the files listed in the `<files_summary>` section, which provides a structured overview of all changes including filenames, status, additions, and deletions.
 
         ## Architecture & Impact Assessment
 
@@ -117,15 +113,11 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Based on our overview discussion, please perform a comprehensive security analysis of the code changes in this pull request.
+        Based on our overview discussion, please perform a comprehensive security analysis of the code changes.
 
-        ## Files Changed
-        {% for file in files %}
-        - `{{ file.filename }}` - {{ file.status }}, +{{ file.additions }}/-{{ file.deletions }} ({{ file.changes }} total changes)
-        {% endfor %}
+        Analyze the files listed in the `<files_summary>` section and focus on the code changes shown in the diff sections.
 
-        ## Instructions
-        Analyze the code for security vulnerabilities including:
+        ## Security Analysis Areas
 
         **Input Validation & Injection:**
         - SQL injection in database queries
@@ -162,14 +154,11 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview and security analysis, now review the code changes for performance issues:
+        Building on our overview and security analysis, now review the code changes for performance issues.
 
-        ## Files to Analyze
-        {% for file in files %}
-        - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
-        {% endfor %}
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
 
-        ## Analysis Areas
+        ## Performance Analysis Areas
         **Algorithm & Data Structure Efficiency:**
         - Time complexity analysis (O(n), O(n²), etc.)
         - Space complexity and memory usage
@@ -204,7 +193,9 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview, security, and performance discussions, evaluate the code quality and maintainability:
+        Building on our overview, security, and performance discussions, evaluate the code quality and maintainability.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
 
         ## Quality Assessment Areas
         **Code Structure & Design:**

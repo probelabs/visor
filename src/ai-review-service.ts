@@ -365,67 +365,64 @@ export class AIReviewService {
 
     if (isIssue) {
       // Issue context - no code analysis needed
-      return `You are an intelligent GitHub issue assistant.
+      return `<review_request>
+  <role>You are an intelligent GitHub issue assistant.</role>
 
-REVIEW INSTRUCTIONS:
+  <instructions>
 ${customInstructions}
+  </instructions>
 
-Analyze the following GitHub issue:
-
+  <context>
 ${prContext}
+  </context>
 
-XML Data Structure Guide:
-- <issue>: Root element containing all issue information
-- <metadata>: Issue metadata (number, title, author, state, timestamps, comments count)
-- <description>: Issue description/body text
-- <labels>: Applied labels for categorization
-- <assignees>: Users assigned to work on this issue
-- <milestone>: Associated project milestone if any
-
-IMPORTANT RULES:
-1. Understand the issue context and requirements
-2. Provide helpful, actionable guidance
-3. Be constructive and supportive
-4. Consider project conventions and patterns
-5. Suggest practical solutions or next steps
-6. Focus on addressing the specific concern raised in the issue`;
+  <rules>
+    <rule>Understand the issue context and requirements from the XML data structure</rule>
+    <rule>Provide helpful, actionable guidance based on the issue details</rule>
+    <rule>Be constructive and supportive in your analysis</rule>
+    <rule>Consider project conventions and patterns when making recommendations</rule>
+    <rule>Suggest practical solutions or next steps that address the specific concern</rule>
+    <rule>Focus on addressing the specific concern raised in the issue</rule>
+    <rule>Reference relevant XML elements like metadata, description, labels, assignees when providing context</rule>
+  </rules>
+</review_request>`;
     }
 
-    // PR context - original logic
+    // PR context - structured XML format
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
-    return `You are a senior code reviewer.
+    return `<review_request>
+  <role>You are a senior code reviewer performing ${analysisType} analysis.</role>
 
-ANALYSIS TYPE: ${analysisType}
-${
-  analysisType === 'INCREMENTAL'
-    ? '- You are analyzing a NEW COMMIT added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
-    : '- You are analyzing the COMPLETE PR. Review all changes in the <full_diff> section.'
-}
+  <analysis_type>${analysisType}</analysis_type>
 
-REVIEW INSTRUCTIONS:
+  <analysis_focus>
+    ${
+      analysisType === 'INCREMENTAL'
+        ? 'You are analyzing a NEW COMMIT added to an existing PR. Focus on the changes in the commit_diff section for this specific commit.'
+        : 'You are analyzing the COMPLETE PR. Review all changes in the full_diff section.'
+    }
+  </analysis_focus>
+
+  <instructions>
 ${customInstructions}
+  </instructions>
 
-Analyze the following structured pull request data:
-
+  <context>
 ${prContext}
+  </context>
 
-XML Data Structure Guide:
-- <pull_request>: Root element containing all PR information
-- <metadata>: PR metadata (number, title, author, branches, statistics)
-- <description>: PR description text if provided
-- <full_diff>: Complete unified diff of all changes (for FULL analysis)
-- <commit_diff>: Diff of only the latest commit (for INCREMENTAL analysis)
-- <files_summary>: List of all files changed with statistics
-
-IMPORTANT RULES:
-1. Only analyze code that appears with + (additions) or - (deletions) in the diff
-2. Ignore unchanged code unless it's directly relevant to understanding a change
-3. Line numbers in your response should match the actual file line numbers
-4. Focus on real issues, not nitpicks
-5. Provide actionable, specific feedback
-6. For INCREMENTAL analysis, ONLY review changes in <commit_diff>
-7. For FULL analysis, review all changes in <full_diff>`;
+  <rules>
+    <rule>Only analyze code that appears with + (additions) or - (deletions) in the diff sections</rule>
+    <rule>Ignore unchanged code unless directly relevant to understanding a change</rule>
+    <rule>Line numbers in your response should match actual file line numbers from the diff</rule>
+    <rule>Focus on real issues, not nitpicks or cosmetic concerns</rule>
+    <rule>Provide actionable, specific feedback with clear remediation steps</rule>
+    <rule>For INCREMENTAL analysis, ONLY review changes in commit_diff section</rule>
+    <rule>For FULL analysis, review all changes in full_diff section</rule>
+    <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
+  </rules>
+</review_request>`;
   }
 
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
@@ -442,6 +439,7 @@ IMPORTANT RULES:
     if (isIssue) {
       // Format as issue context
       let context = `<issue>
+  <!-- Core issue metadata including identification, status, and timeline information -->
   <metadata>
     <number>${prInfo.number}</number>
     <title>${this.escapeXml(prInfo.title)}</title>
@@ -455,6 +453,7 @@ IMPORTANT RULES:
       // Add issue body/description if available
       if (prInfo.body) {
         context += `
+  <!-- Full issue description and body text provided by the issue author -->
   <description>
 ${this.escapeXml(prInfo.body)}
   </description>`;
@@ -464,6 +463,7 @@ ${this.escapeXml(prInfo.body)}
       const labels = (prInfo as any).eventContext?.issue?.labels;
       if (labels && labels.length > 0) {
         context += `
+  <!-- Applied labels for issue categorization and organization -->
   <labels>`;
         labels.forEach((label: any) => {
           context += `
@@ -477,6 +477,7 @@ ${this.escapeXml(prInfo.body)}
       const assignees = (prInfo as any).eventContext?.issue?.assignees;
       if (assignees && assignees.length > 0) {
         context += `
+  <!-- Users assigned to work on this issue -->
   <assignees>`;
         assignees.forEach((assignee: any) => {
           context += `
@@ -490,6 +491,7 @@ ${this.escapeXml(prInfo.body)}
       const milestone = (prInfo as any).eventContext?.issue?.milestone;
       if (milestone) {
         context += `
+  <!-- Associated project milestone information -->
   <milestone>
     <title>${this.escapeXml(milestone.title || '')}</title>
     <state>${milestone.state || 'open'}</state>
@@ -501,6 +503,7 @@ ${this.escapeXml(prInfo.body)}
       const triggeringComment = (prInfo as any).eventContext?.comment;
       if (triggeringComment) {
         context += `
+  <!-- The comment that triggered this analysis -->
   <triggering_comment>
     <author>${this.escapeXml(triggeringComment.user?.login || 'unknown')}</author>
     <created_at>${triggeringComment.created_at || ''}</created_at>
@@ -518,10 +521,11 @@ ${this.escapeXml(prInfo.body)}
 
         if (historicalComments.length > 0) {
           context += `
+  <!-- Previous comments in chronological order (excluding triggering comment) -->
   <comment_history>`;
-          historicalComments.forEach((comment: any, index: number) => {
+          historicalComments.forEach((comment: any) => {
             context += `
-    <comment index="${index + 1}">
+    <comment>
       <author>${this.escapeXml(comment.author || 'unknown')}</author>
       <created_at>${comment.createdAt || ''}</created_at>
       <body>${this.escapeXml(comment.body || '')}</body>
@@ -541,6 +545,7 @@ ${this.escapeXml(prInfo.body)}
 
     // Original PR context formatting
     let context = `<pull_request>
+  <!-- Core pull request metadata including identification, branches, and change statistics -->
   <metadata>
     <number>${prInfo.number}</number>
     <title>${this.escapeXml(prInfo.title)}</title>
@@ -555,6 +560,7 @@ ${this.escapeXml(prInfo.body)}
     // Add PR description if available
     if (prInfo.body) {
       context += `
+  <!-- Full pull request description provided by the author -->
   <description>
 ${this.escapeXml(prInfo.body)}
   </description>`;
@@ -563,6 +569,7 @@ ${this.escapeXml(prInfo.body)}
     // Add full diff if available (for complete PR review)
     if (prInfo.fullDiff) {
       context += `
+  <!-- Complete unified diff showing all changes in the pull request -->
   <full_diff>
 ${this.escapeXml(prInfo.fullDiff)}
   </full_diff>`;
@@ -572,13 +579,14 @@ ${this.escapeXml(prInfo.fullDiff)}
     if (prInfo.isIncremental) {
       if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
         context += `
+  <!-- Diff of only the latest commit for incremental analysis -->
   <commit_diff>
 ${this.escapeXml(prInfo.commitDiff)}
   </commit_diff>`;
       } else {
         context += `
+  <!-- Commit diff could not be retrieved - falling back to full diff analysis -->
   <commit_diff>
-<!-- Commit diff could not be retrieved - falling back to full diff analysis -->
 ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   </commit_diff>`;
       }
@@ -587,10 +595,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     // Add file summary for context
     if (prInfo.files.length > 0) {
       context += `
+  <!-- Summary of all files changed with statistics -->
   <files_summary>`;
-      prInfo.files.forEach((file, index) => {
+      prInfo.files.forEach((file) => {
         context += `
-    <file index="${index + 1}">
+    <file>
       <filename>${this.escapeXml(file.filename)}</filename>
       <status>${file.status}</status>
       <additions>${file.additions}</additions>
@@ -605,6 +614,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     const triggeringComment = (prInfo as any).eventContext?.comment;
     if (triggeringComment) {
       context += `
+  <!-- The comment that triggered this analysis -->
   <triggering_comment>
     <author>${this.escapeXml(triggeringComment.user?.login || 'unknown')}</author>
     <created_at>${triggeringComment.created_at || ''}</created_at>
@@ -622,10 +632,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       if (historicalComments.length > 0) {
         context += `
+  <!-- Previous PR comments in chronological order (excluding triggering comment) -->
   <comment_history>`;
-        historicalComments.forEach((comment: any, index: number) => {
+        historicalComments.forEach((comment: any) => {
           context += `
-    <comment index="${index + 1}">
+    <comment>
       <author>${this.escapeXml(comment.author || 'unknown')}</author>
       <created_at>${comment.createdAt || ''}</created_at>
       <body>${this.escapeXml(comment.body || '')}</body>
