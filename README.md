@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="site/visor.png" alt="Visor Logo" width="200" />
+  <img src="site/visor.png" alt="Visor Logo" width="500" />
   
   # Visor - AI-Powered Code Review with Schema-Template System
   
