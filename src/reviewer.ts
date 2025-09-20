@@ -186,9 +186,18 @@ export class PRReviewer {
         commitSha: options.commitSha,
       });
 
-      const commentId = options.commentId
-        ? `${options.commentId}-${groupName}`
-        : `visor-review-${groupName}`;
+      // Generate comment ID - use unique ID for "dynamic" group
+      let commentId: string;
+      if (groupName === 'dynamic') {
+        // Dynamic group creates a new comment each time with timestamp-based ID
+        const timestamp = Date.now();
+        commentId = `visor-dynamic-${timestamp}`;
+      } else {
+        // Regular groups use static IDs that get updated
+        commentId = options.commentId
+          ? `${options.commentId}-${groupName}`
+          : `visor-review-${groupName}`;
+      }
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId,
