@@ -190,12 +190,18 @@ export async function run(): Promise<void> {
         config = await configManager.findAndLoadConfig();
         console.log('📋 Loaded Visor config from project');
       }
-    } catch {
+    } catch (configError) {
+      // Log the error for debugging
+      console.warn(
+        '⚠️ Error loading config:',
+        configError instanceof Error ? configError.message : String(configError)
+      );
+
       // Fall back to bundled default config
       const bundledConfig = configManager.loadBundledDefaultConfig();
       if (bundledConfig) {
         config = bundledConfig;
-        console.log('📋 Using bundled default configuration');
+        console.log('📋 Using bundled default configuration (fallback due to error)');
       } else {
         // Ultimate fallback if even defaults/.visor.yaml can't be loaded
         config = {
@@ -259,6 +265,14 @@ async function handleEvent(
   }
 
   console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
+
+  // Debug: Log the checks that are available in the loaded config
+  const allChecks = Object.keys(config.checks || {});
+  console.log(`📚 Total checks in loaded config: ${allChecks.length}`);
+  if (allChecks.length <= 10) {
+    // Only log check names if there aren't too many
+    console.log(`📚 Available checks: ${allChecks.join(', ')}`);
+  }
 
   // Map GitHub event to our event trigger format
   const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
