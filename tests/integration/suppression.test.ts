@@ -1,7 +1,6 @@
 import { IssueFilter } from '../../src/issue-filter';
 import { ReviewIssue } from '../../src/reviewer';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
-import { VisorConfig } from '../../src/types/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
