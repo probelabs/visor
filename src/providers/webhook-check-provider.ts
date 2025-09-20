@@ -1,6 +1,7 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
+import { IssueFilter } from '../issue-filter';
 
 /**
  * Check provider that sends PR info to a webhook for external analysis
@@ -76,7 +77,17 @@ export class WebhookCheckProvider extends CheckProvider {
       const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
 
       // Parse webhook response
-      return this.parseWebhookResponse(response, url);
+      const result = this.parseWebhookResponse(response, url);
+
+      // Apply issue suppression filtering
+      const suppressionEnabled = config.suppressionEnabled !== false;
+      const issueFilter = new IssueFilter(suppressionEnabled);
+      const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
+
+      return {
+        ...result,
+        issues: filteredIssues,
+      };
     } catch (error) {
       return this.createErrorResult(url, error);
     }

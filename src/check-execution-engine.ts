@@ -14,6 +14,7 @@ import { DependencyResolver, DependencyGraph } from './dependency-resolver';
 import { FailureConditionEvaluator } from './failure-condition-evaluator';
 import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { IssueFilter } from './issue-filter';
 
 /**
  * Filter environment variables to only include safe ones for sandbox evaluation
@@ -103,9 +104,12 @@ export class CheckExecutionEngine {
   private githubCheckService?: GitHubCheckService;
   private checkRunMap?: Map<string, { id: number; url: string }>;
   private githubContext?: { owner: string; repo: string };
+  private workingDirectory: string;
+  private config?: import('./types/config').VisorConfig;
 
   constructor(workingDirectory?: string) {
-    this.gitAnalyzer = new GitRepositoryAnalyzer(workingDirectory);
+    this.workingDirectory = workingDirectory || process.cwd();
+    this.gitAnalyzer = new GitRepositoryAnalyzer(this.workingDirectory);
     this.providerRegistry = CheckProviderRegistry.getInstance();
     this.failureEvaluator = new FailureConditionEvaluator();
 
@@ -310,6 +314,9 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean
   ): Promise<ReviewSummary> {
+    // Store config for use in filtering
+    this.config = config;
+
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
 
@@ -1472,6 +1479,11 @@ export class CheckExecutionEngine {
       `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
     );
 
+    // Apply issue suppression filtering
+    const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
+    const issueFilter = new IssueFilter(suppressionEnabled);
+    const filteredIssues = issueFilter.filterIssues(aggregatedIssues, this.workingDirectory);
+
     // Collect debug information when debug mode is enabled
     let aggregatedDebug: import('./ai-review-service').AIDebugInfo | undefined;
     if (debug) {
@@ -1522,7 +1534,7 @@ export class CheckExecutionEngine {
     }
 
     return {
-      issues: aggregatedIssues,
+      issues: filteredIssues,
       suggestions: aggregatedSuggestions,
       debug: aggregatedDebug,
     };
@@ -1644,6 +1656,11 @@ export class CheckExecutionEngine {
       `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
     );
 
+    // Apply issue suppression filtering
+    const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
+    const issueFilter = new IssueFilter(suppressionEnabled);
+    const filteredIssues = issueFilter.filterIssues(aggregatedIssues, this.workingDirectory);
+
     // Collect debug information when debug mode is enabled
     let aggregatedDebug: import('./ai-review-service').AIDebugInfo | undefined;
     if (debug) {
@@ -1744,7 +1761,7 @@ export class CheckExecutionEngine {
     }
 
     return {
-      issues: aggregatedIssues,
+      issues: filteredIssues,
       suggestions: aggregatedSuggestions,
       debug: aggregatedDebug,
     };
