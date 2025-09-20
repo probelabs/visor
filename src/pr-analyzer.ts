@@ -173,6 +173,19 @@ export class PRAnalyzer {
       eventType,
     };
 
+    // Fetch comment history for better context
+    try {
+      console.log(`💬 Fetching comment history for PR #${prInfo.number}`);
+      const comments = await this.fetchPRComments(owner, repo, prInfo.number);
+      (prInfo as any).comments = comments;
+      console.log(`✅ Retrieved ${comments.length} comments`);
+    } catch (error) {
+      console.warn(
+        `⚠️ Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      (prInfo as any).comments = [];
+    }
+
     // Add commit diff for incremental analysis
     if (commitSha) {
       console.log(`🔧 Fetching incremental diff for commit: ${commitSha}`);

@@ -109,6 +109,8 @@ describe('PRAnalyzer', () => {
         totalDeletions: 10,
         fullDiff: expect.stringContaining('--- src/test.ts'),
         isIncremental: false,
+        comments: [],
+        eventType: undefined,
       });
 
       expect(mockOctokit.rest.pulls.get).toHaveBeenCalledWith({

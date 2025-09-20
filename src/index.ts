@@ -427,7 +427,7 @@ async function handleIssueEvent(
 
   // For issue events, we need to create a PR-like structure for the checks to process
   // This allows us to reuse the existing check infrastructure
-  const prInfo = {
+  const prInfo: any = {
     number: issue.number,
     title: issue.title || '',
     body: issue.body || '',
@@ -443,6 +443,20 @@ async function handleIssueEvent(
     isIssue: true, // Flag to indicate this is an issue, not a PR
     eventContext: context.event, // Pass the full event context for templates
   };
+
+  // Fetch comment history for issues
+  try {
+    console.log(`💬 Fetching comment history for issue #${issue.number}`);
+    const analyzer = new PRAnalyzer(octokit);
+    const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
+    prInfo.comments = comments;
+    console.log(`✅ Retrieved ${comments.length} comments for issue`);
+  } catch (error) {
+    console.warn(
+      `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+    prInfo.comments = [];
+  }
 
   // Run the checks using CheckExecutionEngine
   const { CheckExecutionEngine } = await import('./check-execution-engine');
@@ -662,8 +676,8 @@ async function handleIssueComment(
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
           prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
-          // Add event context for templates
-          prInfo.eventContext = context.event;
+          // Add event context for templates and XML generation
+          (prInfo as any).eventContext = context.event;
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -679,8 +693,21 @@ async function handleIssueComment(
             fullDiff: '',
             eventType: 'issue_comment',
             isIssue: true, // Flag to indicate this is an issue, not a PR
-            eventContext: context.event, // Pass the full event context for templates
-          };
+            eventContext: context.event, // Pass the full event context
+          } as any;
+
+          // Fetch comment history for the issue
+          try {
+            console.log(`💬 Fetching comment history for issue #${issue.number}`);
+            const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
+            (prInfo as any).comments = comments;
+            console.log(`✅ Retrieved ${comments.length} comments for issue`);
+          } catch (error) {
+            console.warn(
+              `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
+            (prInfo as any).comments = [];
+          }
         }
 
         // Extract common arguments
@@ -790,8 +817,8 @@ async function handlePullRequestWithConfig(
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
-    // Add event context for templates
-    prInfo.eventContext = context.event;
+    // Add event context for templates and XML generation
+    (prInfo as any).eventContext = context.event;
   } catch (error) {
     // Handle test scenarios with mock repos
     if (inputs['ai-provider'] === 'mock' || inputs['ai-model'] === 'mock') {

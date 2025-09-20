@@ -361,40 +361,64 @@ export class AIReviewService {
     _schema?: string
   ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
+    const isIssue = (prInfo as any).isIssue === true;
+
+    if (isIssue) {
+      // Issue context - no code analysis needed
+      return `<review_request>
+  <instructions>
+${customInstructions}
+  </instructions>
+
+  <context>
+${prContext}
+  </context>
+
+  <rules>
+    <rule>Understand the issue context and requirements from the XML data structure</rule>
+    <rule>Provide helpful, actionable guidance based on the issue details</rule>
+    <rule>Be constructive and supportive in your analysis</rule>
+    <rule>Consider project conventions and patterns when making recommendations</rule>
+    <rule>Suggest practical solutions or next steps that address the specific concern</rule>
+    <rule>Focus on addressing the specific concern raised in the issue</rule>
+    <rule>Reference relevant XML elements like metadata, description, labels, assignees when providing context</rule>
+  </rules>
+</review_request>`;
+    }
+
+    // PR context - structured XML format
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
-    return `You are a senior code reviewer. 
+    return `<review_request>
+  <analysis_type>${analysisType}</analysis_type>
 
-ANALYSIS TYPE: ${analysisType}
-${
-  analysisType === 'INCREMENTAL'
-    ? '- You are analyzing a NEW COMMIT added to an existing PR. Focus on the <commit_diff> section for changes made in this specific commit.'
-    : '- You are analyzing the COMPLETE PR. Review all changes in the <full_diff> section.'
-}
+  <analysis_focus>
+    ${
+      analysisType === 'INCREMENTAL'
+        ? 'You are analyzing a NEW COMMIT added to an existing PR. Focus on the changes in the commit_diff section for this specific commit.'
+        : 'You are analyzing the COMPLETE PR. Review all changes in the full_diff section.'
+    }
+  </analysis_focus>
 
-REVIEW INSTRUCTIONS:
+  <instructions>
 ${customInstructions}
+  </instructions>
 
-Analyze the following structured pull request data:
-
+  <context>
 ${prContext}
+  </context>
 
-XML Data Structure Guide:
-- <pull_request>: Root element containing all PR information
-- <metadata>: PR metadata (number, title, author, branches, statistics)
-- <description>: PR description text if provided
-- <full_diff>: Complete unified diff of all changes (for FULL analysis)
-- <commit_diff>: Diff of only the latest commit (for INCREMENTAL analysis)
-- <files_summary>: List of all files changed with statistics
-
-IMPORTANT RULES:
-1. Only analyze code that appears with + (additions) or - (deletions) in the diff
-2. Ignore unchanged code unless it's directly relevant to understanding a change
-3. Line numbers in your response should match the actual file line numbers
-4. Focus on real issues, not nitpicks
-5. Provide actionable, specific feedback
-6. For INCREMENTAL analysis, ONLY review changes in <commit_diff>
-7. For FULL analysis, review all changes in <full_diff>`;
+  <rules>
+    <rule>Only analyze code that appears with + (additions) or - (deletions) in the diff sections</rule>
+    <rule>Ignore unchanged code unless directly relevant to understanding a change</rule>
+    <rule>Line numbers in your response should match actual file line numbers from the diff</rule>
+    <rule>Focus on real issues, not nitpicks or cosmetic concerns</rule>
+    <rule>Provide actionable, specific feedback with clear remediation steps</rule>
+    <rule>For INCREMENTAL analysis, ONLY review changes in commit_diff section</rule>
+    <rule>For FULL analysis, review all changes in full_diff section</rule>
+    <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
+  </rules>
+</review_request>`;
   }
 
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
@@ -402,10 +426,122 @@ IMPORTANT RULES:
   // REMOVED: getFocusInstructions - only use custom prompts from .visor.yaml
 
   /**
-   * Format PR context for the AI using XML structure
+   * Format PR or Issue context for the AI using XML structure
    */
   private formatPRContext(prInfo: PRInfo): string {
+    // Check if this is an issue (not a PR)
+    const isIssue = (prInfo as any).isIssue === true;
+
+    if (isIssue) {
+      // Format as issue context
+      let context = `<issue>
+  <!-- Core issue metadata including identification, status, and timeline information -->
+  <metadata>
+    <number>${prInfo.number}</number>
+    <title>${this.escapeXml(prInfo.title)}</title>
+    <author>${prInfo.author}</author>
+    <state>${(prInfo as any).eventContext?.issue?.state || 'open'}</state>
+    <created_at>${(prInfo as any).eventContext?.issue?.created_at || ''}</created_at>
+    <updated_at>${(prInfo as any).eventContext?.issue?.updated_at || ''}</updated_at>
+    <comments_count>${(prInfo as any).eventContext?.issue?.comments || 0}</comments_count>
+  </metadata>`;
+
+      // Add issue body/description if available
+      if (prInfo.body) {
+        context += `
+  <!-- Full issue description and body text provided by the issue author -->
+  <description>
+${this.escapeXml(prInfo.body)}
+  </description>`;
+      }
+
+      // Add labels if available
+      const labels = (prInfo as any).eventContext?.issue?.labels;
+      if (labels && labels.length > 0) {
+        context += `
+  <!-- Applied labels for issue categorization and organization -->
+  <labels>`;
+        labels.forEach((label: any) => {
+          context += `
+    <label>${this.escapeXml(label.name || label)}</label>`;
+        });
+        context += `
+  </labels>`;
+      }
+
+      // Add assignees if available
+      const assignees = (prInfo as any).eventContext?.issue?.assignees;
+      if (assignees && assignees.length > 0) {
+        context += `
+  <!-- Users assigned to work on this issue -->
+  <assignees>`;
+        assignees.forEach((assignee: any) => {
+          context += `
+    <assignee>${this.escapeXml(assignee.login || assignee)}</assignee>`;
+        });
+        context += `
+  </assignees>`;
+      }
+
+      // Add milestone if available
+      const milestone = (prInfo as any).eventContext?.issue?.milestone;
+      if (milestone) {
+        context += `
+  <!-- Associated project milestone information -->
+  <milestone>
+    <title>${this.escapeXml(milestone.title || '')}</title>
+    <state>${milestone.state || 'open'}</state>
+    <due_on>${milestone.due_on || ''}</due_on>
+  </milestone>`;
+      }
+
+      // Add current/triggering comment if this is a comment event
+      const triggeringComment = (prInfo as any).eventContext?.comment;
+      if (triggeringComment) {
+        context += `
+  <!-- The comment that triggered this analysis -->
+  <triggering_comment>
+    <author>${this.escapeXml(triggeringComment.user?.login || 'unknown')}</author>
+    <created_at>${triggeringComment.created_at || ''}</created_at>
+    <body>${this.escapeXml(triggeringComment.body || '')}</body>
+  </triggering_comment>`;
+      }
+
+      // Add comment history (excluding the current comment if it exists)
+      const issueComments = (prInfo as any).comments;
+      if (issueComments && issueComments.length > 0) {
+        // Filter out the triggering comment from history if present
+        const historicalComments = triggeringComment
+          ? issueComments.filter((c: any) => c.id !== triggeringComment.id)
+          : issueComments;
+
+        if (historicalComments.length > 0) {
+          context += `
+  <!-- Previous comments in chronological order (excluding triggering comment) -->
+  <comment_history>`;
+          historicalComments.forEach((comment: any) => {
+            context += `
+    <comment>
+      <author>${this.escapeXml(comment.author || 'unknown')}</author>
+      <created_at>${comment.createdAt || ''}</created_at>
+      <body>${this.escapeXml(comment.body || '')}</body>
+    </comment>`;
+          });
+          context += `
+  </comment_history>`;
+        }
+      }
+
+      // Close the issue tag
+      context += `
+</issue>`;
+
+      return context;
+    }
+
+    // Original PR context formatting
     let context = `<pull_request>
+  <!-- Core pull request metadata including identification, branches, and change statistics -->
   <metadata>
     <number>${prInfo.number}</number>
     <title>${this.escapeXml(prInfo.title)}</title>
@@ -420,6 +556,7 @@ IMPORTANT RULES:
     // Add PR description if available
     if (prInfo.body) {
       context += `
+  <!-- Full pull request description provided by the author -->
   <description>
 ${this.escapeXml(prInfo.body)}
   </description>`;
@@ -428,6 +565,7 @@ ${this.escapeXml(prInfo.body)}
     // Add full diff if available (for complete PR review)
     if (prInfo.fullDiff) {
       context += `
+  <!-- Complete unified diff showing all changes in the pull request -->
   <full_diff>
 ${this.escapeXml(prInfo.fullDiff)}
   </full_diff>`;
@@ -437,13 +575,14 @@ ${this.escapeXml(prInfo.fullDiff)}
     if (prInfo.isIncremental) {
       if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
         context += `
+  <!-- Diff of only the latest commit for incremental analysis -->
   <commit_diff>
 ${this.escapeXml(prInfo.commitDiff)}
   </commit_diff>`;
       } else {
         context += `
+  <!-- Commit diff could not be retrieved - falling back to full diff analysis -->
   <commit_diff>
-<!-- Commit diff could not be retrieved - falling back to full diff analysis -->
 ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   </commit_diff>`;
       }
@@ -452,10 +591,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     // Add file summary for context
     if (prInfo.files.length > 0) {
       context += `
+  <!-- Summary of all files changed with statistics -->
   <files_summary>`;
-      prInfo.files.forEach((file, index) => {
+      prInfo.files.forEach(file => {
         context += `
-    <file index="${index + 1}">
+    <file>
       <filename>${this.escapeXml(file.filename)}</filename>
       <status>${file.status}</status>
       <additions>${file.additions}</additions>
@@ -464,6 +604,43 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       });
       context += `
   </files_summary>`;
+    }
+
+    // Add current/triggering comment if this is a comment event
+    const triggeringComment = (prInfo as any).eventContext?.comment;
+    if (triggeringComment) {
+      context += `
+  <!-- The comment that triggered this analysis -->
+  <triggering_comment>
+    <author>${this.escapeXml(triggeringComment.user?.login || 'unknown')}</author>
+    <created_at>${triggeringComment.created_at || ''}</created_at>
+    <body>${this.escapeXml(triggeringComment.body || '')}</body>
+  </triggering_comment>`;
+    }
+
+    // Add comment history (excluding the current comment if it exists)
+    const prComments = (prInfo as any).comments;
+    if (prComments && prComments.length > 0) {
+      // Filter out the triggering comment from history if present
+      const historicalComments = triggeringComment
+        ? prComments.filter((c: any) => c.id !== triggeringComment.id)
+        : prComments;
+
+      if (historicalComments.length > 0) {
+        context += `
+  <!-- Previous PR comments in chronological order (excluding triggering comment) -->
+  <comment_history>`;
+        historicalComments.forEach((comment: any) => {
+          context += `
+    <comment>
+      <author>${this.escapeXml(comment.author || 'unknown')}</author>
+      <created_at>${comment.createdAt || ''}</created_at>
+      <body>${this.escapeXml(comment.body || '')}</body>
+    </comment>`;
+        });
+        context += `
+  </comment_history>`;
+      }
     }
 
     context += `
