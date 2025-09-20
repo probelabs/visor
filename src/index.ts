@@ -5,7 +5,6 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
-import * as path from 'path';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
@@ -193,15 +192,11 @@ export async function run(): Promise<void> {
       }
     } catch {
       // Fall back to bundled default config
-      try {
-        const defaultConfigPath = path.join(
-          process.env.GITHUB_ACTION_PATH || __dirname,
-          'defaults',
-          '.visor.yaml'
-        );
-        config = await configManager.loadConfig(defaultConfigPath);
-        console.log('📋 Using bundled default configuration from defaults/.visor.yaml');
-      } catch {
+      const bundledConfig = configManager.loadBundledDefaultConfig();
+      if (bundledConfig) {
+        config = bundledConfig;
+        console.log('📋 Using bundled default configuration');
+      } else {
         // Ultimate fallback if even defaults/.visor.yaml can't be loaded
         config = {
           version: '1.0',

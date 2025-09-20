@@ -258,18 +258,33 @@ export class ConfigLoader {
    * Load bundled default configuration
    */
   private async fetchDefaultConfig(): Promise<Partial<VisorConfig>> {
-    // First try to find the bundled default config
-    let packageRoot = this.findPackageRoot();
+    // Try different paths to find the bundled default config
+    const possiblePaths = [
+      // When running as GitHub Action (bundled in dist/)
+      path.join(__dirname, 'defaults', '.visor.yaml'),
+      // When running from source
+      path.join(__dirname, '..', '..', 'defaults', '.visor.yaml'),
+      // Try via package root
+      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
+      // GitHub Action environment variable
+      process.env.GITHUB_ACTION_PATH
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
+        : '',
+      process.env.GITHUB_ACTION_PATH
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+        : '',
+    ].filter(p => p); // Remove empty paths
 
-    if (!packageRoot) {
-      // Fallback: try relative to current file
-      packageRoot = path.resolve(__dirname, '..', '..');
+    let defaultConfigPath: string | undefined;
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        defaultConfigPath = possiblePath;
+        break;
+      }
     }
 
-    const defaultConfigPath = path.join(packageRoot, 'defaults', '.visor.yaml');
-
-    if (fs.existsSync(defaultConfigPath)) {
-      console.log(`📦 Loading bundled default configuration`);
+    if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
+      console.log(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
 
