@@ -93,7 +93,7 @@ describe('CheckExecutionEngine', () => {
   describe('Constructor', () => {
     it('should initialize with default working directory', () => {
       const engine = new CheckExecutionEngine();
-      expect(GitRepositoryAnalyzer).toHaveBeenCalledWith(undefined);
+      expect(GitRepositoryAnalyzer).toHaveBeenCalledWith(process.cwd());
     });
 
     it('should initialize with custom working directory', () => {

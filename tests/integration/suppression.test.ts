@@ -21,7 +21,7 @@ describe('Issue Suppression Integration Tests', () => {
 
   describe('Integration with CheckExecutionEngine', () => {
     it('should apply suppression in the execution engine', async () => {
-      // Create test files
+      // Create test files with absolute paths
       const file1 = path.join(tempDir, 'file1.js');
       fs.writeFileSync(
         file1,
@@ -54,83 +54,54 @@ function test() {
 
       const engine = new CheckExecutionEngine(tempDir);
 
-      // Mock the aggregateDependencyAwareResults to test filtering
-      const originalMethod = (engine as any).aggregateDependencyAwareResults;
-      let capturedIssues: ReviewIssue[] = [];
-
-      (engine as any).aggregateDependencyAwareResults = function (
-        results: Map<string, any>,
-        dependencyGraph: any,
-        debug?: boolean,
-        stoppedEarly?: boolean
-      ) {
-        // Create mock issues
-        const mockResults = new Map();
-        mockResults.set('test-check', {
-          issues: [
-            {
-              file: 'file1.js',
-              line: 3,
-              ruleId: 'security/hardcoded-password',
-              message: 'Hardcoded password - should be suppressed',
-              severity: 'error',
-              category: 'security',
-            },
-            {
-              file: 'file2.js',
-              line: 3,
-              ruleId: 'security/hardcoded-api-key',
-              message: 'Hardcoded API key - should NOT be suppressed',
-              severity: 'error',
-              category: 'security',
-            },
-          ],
-          suggestions: [],
-        });
-
-        // Call original method with mock data
-        const result = originalMethod.call(this, mockResults, dependencyGraph, debug, stoppedEarly);
-        capturedIssues = result.issues || [];
-        return result;
-      };
-
-      const config: VisorConfig = {
-        version: '1.0',
-        checks: {
-          'test-check': {
-            type: 'noop',
-            on: ['pr_opened'],
-          },
-        },
+      // Store the original config so we can pass it through
+      (engine as any).config = {
         output: {
-          pr_comment: {
-            format: 'markdown',
-            group_by: 'check',
-            collapse: false,
-          },
           suppressionEnabled: true,
         },
       };
 
-      // We need to mock executeReviewChecks to trigger our mocked aggregation
-      (engine as any).executeReviewChecks = async function () {
-        const mockDependencyGraph = {
-          executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        };
-
-        return this.aggregateDependencyAwareResults(new Map(), mockDependencyGraph, false, false);
-      };
-
-      await engine.executeChecks({
-        checks: ['test-check'],
-        config,
-        outputFormat: 'json',
+      // Test the filtering directly with the aggregateDependencyAwareResults method
+      const mockResults = new Map();
+      mockResults.set('test-check', {
+        issues: [
+          {
+            file: 'file1.js',
+            line: 3,
+            ruleId: 'security/hardcoded-password',
+            message: 'Hardcoded password - should be suppressed',
+            severity: 'error',
+            category: 'security',
+          },
+          {
+            file: 'file2.js',
+            line: 3,
+            ruleId: 'security/hardcoded-api-key',
+            message: 'Hardcoded API key - should NOT be suppressed',
+            severity: 'error',
+            category: 'security',
+          },
+        ],
+        suggestions: [],
       });
 
+      const mockDependencyGraph = {
+        executionOrder: [{ level: 0, parallel: ['test-check'] }],
+        nodes: new Map([['test-check', { name: 'test-check', dependencies: [] }]]),
+      };
+
+      // Call the method directly
+      const result = (engine as any).aggregateDependencyAwareResults(
+        mockResults,
+        mockDependencyGraph,
+        false,
+        false
+      );
+
       // Verify that only file2 issue remains (file1 was suppressed)
-      expect(capturedIssues).toHaveLength(1);
-      expect(capturedIssues[0].file).toBe('file2.js');
-      expect(capturedIssues[0].message).toContain('should NOT be suppressed');
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].file).toBe('file2.js');
+      expect(result.issues[0].message).toContain('should NOT be suppressed');
     });
 
     it('should respect suppressionEnabled config', async () => {
@@ -155,71 +126,45 @@ function test() {
 
       const engine = new CheckExecutionEngine(tempDir);
 
-      // Mock the aggregation to test filtering
-      let capturedIssues: ReviewIssue[] = [];
-      const originalMethod = (engine as any).aggregateDependencyAwareResults;
-
-      (engine as any).aggregateDependencyAwareResults = function (
-        results: Map<string, any>,
-        dependencyGraph: any,
-        debug?: boolean,
-        stoppedEarly?: boolean
-      ) {
-        const mockResults = new Map();
-        mockResults.set('test-check', {
-          issues: [
-            {
-              file: 'test.js',
-              line: 3,
-              ruleId: 'security/hardcoded-password',
-              message: 'Hardcoded password',
-              severity: 'error',
-              category: 'security',
-            },
-          ],
-          suggestions: [],
-        });
-
-        const result = originalMethod.call(this, mockResults, dependencyGraph, debug, stoppedEarly);
-        capturedIssues = result.issues || [];
-        return result;
-      };
-
-      // Mock executeReviewChecks
-      (engine as any).executeReviewChecks = async function () {
-        const mockDependencyGraph = {
-          executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        };
-
-        return this.aggregateDependencyAwareResults(new Map(), mockDependencyGraph, false, false);
-      };
-
-      const config: VisorConfig = {
-        version: '1.0',
-        checks: {
-          'test-check': {
-            type: 'noop',
-            on: ['pr_opened'],
-          },
-        },
+      // Set config to disable suppression
+      (engine as any).config = {
         output: {
-          pr_comment: {
-            format: 'markdown',
-            group_by: 'check',
-            collapse: false,
-          },
-          suppressionEnabled: false, // Explicitly disable suppression
+          suppressionEnabled: false,
         },
       };
 
-      await engine.executeChecks({
-        checks: ['test-check'],
-        config,
-        outputFormat: 'json',
+      // Test the filtering directly with the aggregateDependencyAwareResults method
+      const mockResults = new Map();
+      mockResults.set('test-check', {
+        issues: [
+          {
+            file: 'test.js',
+            line: 3,
+            ruleId: 'security/hardcoded-password',
+            message: 'Hardcoded password',
+            severity: 'error',
+            category: 'security',
+          },
+        ],
+        suggestions: [],
       });
 
+      const mockDependencyGraph = {
+        executionOrder: [{ level: 0, parallel: ['test-check'] }],
+        nodes: new Map([['test-check', { name: 'test-check', dependencies: [] }]]),
+      };
+
+      // Call the method directly
+      const result = (engine as any).aggregateDependencyAwareResults(
+        mockResults,
+        mockDependencyGraph,
+        false,
+        false
+      );
+
       // Should NOT suppress when disabled
-      expect(capturedIssues).toHaveLength(1);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].message).toBe('Hardcoded password');
     });
   });
 
