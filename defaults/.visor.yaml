@@ -244,7 +244,7 @@ checks:
   # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
   issue-assistant:
     type: ai
-    group: issue-support
+    group: dynamic  # Special group: creates new comment each time instead of updating
     command: "ask"
     if: "event.name === 'issues' && event.action === 'opened' || (event.name === 'issue_comment' && event.comment && event.comment.body && event.comment.body.trim().startsWith('/ask'))"
     prompt: |

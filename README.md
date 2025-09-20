@@ -1170,10 +1170,19 @@ checks:
     group: code-review    # \
   performance:            #  } All grouped in one comment
     group: code-review    # /
-    
+
   overview:
     group: summary        # Separate comment
+
+  issue-assistant:
+    group: dynamic        # Special group: creates NEW comment each time (never updates)
 ```
+
+**Special "dynamic" group**: When a check uses `group: dynamic`, it creates a new comment for each execution instead of updating an existing comment. This is perfect for:
+- Issue assistants that respond to user questions
+- Release notes generation
+- Changelog updates
+- Any check where you want to preserve the history of responses
 
 ### Custom Schemas and Templates
 
@@ -1218,7 +1227,11 @@ checks:
     group: code-review    # Same group = combined in one comment
   overview:
     group: pr-summary     # Different group = separate comment
+  changelog:
+    group: dynamic        # Special: creates NEW comment each time
 ```
+
+The special `group: dynamic` creates a new comment for each execution instead of updating existing comments. Use this for checks where you want to preserve history (issue assistants, release notes, etc.)
 
 #### Schema Property
 Enforces structured output format:
