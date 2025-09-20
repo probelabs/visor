@@ -110,6 +110,7 @@ describe('AICheckProvider', () => {
         criticalIssues: 0,
         suggestions: ['Consider refactoring'],
         comments: [],
+        issues: [],
       };
 
       const mockService = {

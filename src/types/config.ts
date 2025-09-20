@@ -349,6 +349,8 @@ export interface OutputConfig {
   file_comment?: FileCommentOutput;
   /** GitHub check runs configuration (optional) */
   github_checks?: GitHubCheckOutput;
+  /** Whether to enable issue suppression via visor-disable comments (default: true) */
+  suppressionEnabled?: boolean;
 }
 
 /**

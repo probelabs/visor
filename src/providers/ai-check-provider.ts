@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 import { EnvironmentResolver } from '../utils/env-resolver';
+import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -477,12 +478,14 @@ export class AICheckProvider extends CheckProvider {
     try {
       console.error(`🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`);
 
+      let result: ReviewSummary;
+
       // Check if we should use session reuse
       if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
         console.error(
           `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
         );
-        return await service.executeReviewWithSessionReuse(
+        result = await service.executeReviewWithSessionReuse(
           prInfo,
           processedPrompt,
           sessionInfo.parentSessionId,
@@ -491,7 +494,7 @@ export class AICheckProvider extends CheckProvider {
         );
       } else {
         console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
-        return await service.executeReview(
+        result = await service.executeReview(
           prInfo,
           processedPrompt,
           schema,
@@ -499,6 +502,16 @@ export class AICheckProvider extends CheckProvider {
           config.sessionId
         );
       }
+
+      // Apply issue suppression filtering
+      const suppressionEnabled = config.suppressionEnabled !== false;
+      const issueFilter = new IssueFilter(suppressionEnabled);
+      const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
+
+      return {
+        ...result,
+        issues: filteredIssues,
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

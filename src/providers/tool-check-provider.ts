@@ -1,6 +1,7 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewComment, ReviewIssue } from '../reviewer';
+import { IssueFilter } from '../issue-filter';
 import { spawn } from 'child_process';
 import { Liquid } from 'liquidjs';
 
@@ -107,8 +108,13 @@ export class ToolCheckProvider extends CheckProvider {
       replacement: undefined,
     }));
 
+    // Apply issue suppression filtering
+    const suppressionEnabled = config.suppressionEnabled !== false;
+    const issueFilter = new IssueFilter(suppressionEnabled);
+    const filteredIssues = issueFilter.filterIssues(issues, process.cwd());
+
     return {
-      issues,
+      issues: filteredIssues,
       suggestions: this.generateSuggestions(comments, renderedCommand),
     };
   }
