@@ -427,7 +427,7 @@ async function handleIssueEvent(
 
   // For issue events, we need to create a PR-like structure for the checks to process
   // This allows us to reuse the existing check infrastructure
-  const prInfo = {
+  const prInfo: any = {
     number: issue.number,
     title: issue.title || '',
     body: issue.body || '',
@@ -440,7 +440,21 @@ async function handleIssueEvent(
     totalAdditions: 0,
     totalDeletions: 0,
     eventType: mapGitHubEventToTrigger('issues', action),
+    isIssue: true, // Flag to indicate this is an issue, not a PR
+    eventContext: context.event, // Pass the full event context for templates
   };
+
+  // Fetch comment history for issues
+  try {
+    console.log(`💬 Fetching comment history for issue #${issue.number}`);
+    const analyzer = new PRAnalyzer(octokit);
+    const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
+    prInfo.comments = comments;
+    console.log(`✅ Retrieved ${comments.length} comments for issue`);
+  } catch (error) {
+    console.warn(`⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    prInfo.comments = [];
+  }
 
   // Run the checks using CheckExecutionEngine
   const { CheckExecutionEngine } = await import('./check-execution-engine');
@@ -669,8 +683,21 @@ async function handleIssueComment(
             totalAdditions: 0,
             totalDeletions: 0,
             fullDiff: '',
-            eventType: 'issue_comment'
-          };
+            eventType: 'issue_comment',
+            isIssue: true, // Flag to indicate this is an issue, not a PR
+            eventContext: context.event, // Pass the full event context
+          } as any;
+
+          // Fetch comment history for the issue
+          try {
+            console.log(`💬 Fetching comment history for issue #${issue.number}`);
+            const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
+            (prInfo as any).comments = comments;
+            console.log(`✅ Retrieved ${comments.length} comments for issue`);
+          } catch (error) {
+            console.warn(`⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            (prInfo as any).comments = [];
+          }
         }
 
         // Extract common arguments
@@ -780,6 +807,8 @@ async function handlePullRequestWithConfig(
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
+    // Add event context for templates and XML generation
+    (prInfo as any).eventContext = context.event;
   } catch (error) {
     // Handle test scenarios with mock repos
     if (inputs['ai-provider'] === 'mock' || inputs['ai-model'] === 'mock') {
