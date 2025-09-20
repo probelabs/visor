@@ -471,7 +471,7 @@ async function handleIssueEvent(
         }
       }
 
-      commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+      commentBody += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
 
       // Post comment to the issue
       await octokit.rest.issues.createComment({
@@ -725,7 +725,7 @@ async function handleIssueComment(
             owner,
             repo,
             issue_number: prNumber,
-            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor)*`,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`,
           });
           return;
         }

@@ -244,7 +244,10 @@ checks:
     type: ai
     group: code-review
     schema: code-review
-    prompt: "Comprehensive security analysis..."
+    prompt: |
+      Analyze security vulnerabilities in <full_diff>.
+      Review files in <files_summary> for sensitive data handling.
+      # The XML context variables are automatically available - see Advanced AI Features section
     on: [pr_opened, pr_updated]
     # No dependencies - runs first
 
@@ -1228,28 +1231,113 @@ When checks return the structured format above:
 
 ## 🧠 Advanced AI Features
 
-### XML-Formatted Analysis
-Visor now uses structured XML formatting when sending data to AI providers, enabling more precise and context-aware analysis:
+### XML-Formatted Analysis & Default Context
+
+Visor automatically provides structured XML context to AI providers for precise, context-aware analysis. This rich context is available in all PR-related checks without any additional configuration.
+
+#### Available XML Context Variables
+
+When analyzing PRs, the following XML structure is automatically included in your prompts:
 
 ```xml
 <pull_request>
   <metadata>
-    <title>Add user authentication</title>
-    <author>developer</author>
-    <files_changed_count>3</files_changed_count>
+    <number>123</number>                    <!-- PR number -->
+    <title>Add user authentication</title>  <!-- PR title -->
+    <author>developer</author>               <!-- PR author username -->
+    <base_branch>main</base_branch>         <!-- Target branch (e.g., main) -->
+    <target_branch>feature-auth</target_branch> <!-- Source branch -->
+    <total_additions>250</total_additions>  <!-- Total lines added -->
+    <total_deletions>50</total_deletions>   <!-- Total lines removed -->
+    <files_changed_count>3</files_changed_count> <!-- Number of files changed -->
   </metadata>
+
   <description>
-    This PR implements JWT-based authentication
+    <!-- PR description/body text if provided -->
+    This PR implements JWT-based authentication with refresh tokens
   </description>
+
   <full_diff>
+    <!-- Complete unified diff of all changes (for full PR analysis) -->
     --- src/auth.ts
     +++ src/auth.ts
     @@ -1,3 +1,10 @@
     +import jwt from 'jsonwebtoken';
+    +import { User } from './types';
     ...
   </full_diff>
+
+  <commit_diff>
+    <!-- Only appears for incremental analysis of new commits -->
+    <!-- Contains diff of just the latest commit pushed to the PR -->
+  </commit_diff>
+
+  <files_summary>
+    <file index="1">
+      <filename>src/auth.ts</filename>
+      <status>modified</status>          <!-- added/modified/removed -->
+      <additions>120</additions>
+      <deletions>10</deletions>
+    </file>
+    <file index="2">
+      <filename>src/types.ts</filename>
+      <status>added</status>
+      <additions>45</additions>
+      <deletions>0</deletions>
+    </file>
+  </files_summary>
 </pull_request>
 ```
+
+#### Using Context Variables in Prompts
+
+You can reference these XML elements directly in your check prompts for targeted analysis:
+
+```yaml
+checks:
+  security-review:
+    prompt: |
+      Analyze the security implications of the changes in <pull_request>.
+
+      Focus on:
+      1. Files in <files_summary> that handle authentication or sensitive data
+      2. New dependencies or imports in <full_diff>
+      3. The PR author (<metadata><author>) experience level
+
+      Pay special attention to any files with "auth", "security", or "token" in the filename.
+      Review the actual code changes in <full_diff> for common vulnerabilities.
+
+  performance-check:
+    prompt: |
+      Review <full_diff> for performance implications.
+
+      Consider the scale indicated by:
+      - <metadata><total_additions>: How many lines are being added
+      - <metadata><files_changed_count>: Scope of changes
+
+      Look for:
+      - Database query patterns in the diff
+      - Loop complexity and potential O(n²) operations
+      - Memory allocation patterns
+
+  incremental-review:
+    on: [pr_updated]  # Runs on new commits
+    prompt: |
+      This is an incremental review. ONLY analyze the new changes in <commit_diff>.
+
+      Context from <metadata>:
+      - This is PR #<number> by <author>
+      - Working on branch <target_branch> targeting <base_branch>
+
+      Do not re-review code already in the PR, focus solely on the latest commit.
+```
+
+#### Context Behavior by Event Type
+
+- **PR Opened (`pr_opened`)**: Includes `<full_diff>` with all PR changes
+- **PR Updated (`pr_updated`)**: Includes both `<full_diff>` and `<commit_diff>` for incremental analysis
+- **PR Synchronized**: Same as `pr_updated`, focuses on new commits
+- **Issue Events**: No diff context (these run on issues without code changes)
 
 ### Incremental Commit Analysis
 When new commits are pushed to a PR, Visor performs incremental analysis:

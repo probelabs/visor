@@ -1,0 +1,201 @@
+version: "1.0"
+
+# Example configuration demonstrating use of XML context variables
+# These variables are automatically provided for all PR-related checks
+
+checks:
+  # Security review using XML context
+  security-review:
+    type: ai
+    group: code-review
+    schema: code-review
+    prompt:
+      content: |
+        Analyze the security implications of the changes in this pull request.
+
+        The PR context is provided in <pull_request> XML tags. Use this information to:
+
+        1. Review all code changes in <full_diff> for security vulnerabilities
+        2. Check <files_summary> to identify which files handle sensitive data
+        3. Consider the PR author from <metadata><author> and their experience level
+        4. Examine the PR description in <description> for security considerations mentioned
+
+        Focus areas based on the diff:
+        - Authentication/authorization changes
+        - Input validation and sanitization
+        - SQL injection vulnerabilities
+        - XSS vulnerabilities in frontend code
+        - Sensitive data exposure in logs or responses
+        - Cryptographic implementation issues
+        - Dependencies with known vulnerabilities
+
+        For files with names containing "auth", "security", "token", "password", or "key",
+        apply extra scrutiny.
+
+        Return results in JSON format matching the code-review schema.
+    on: [pr_opened, pr_updated]
+
+  # Performance analysis leveraging metadata
+  performance-analysis:
+    type: ai
+    group: code-review
+    schema: code-review
+    prompt:
+      content: |
+        Review the performance implications of changes in <full_diff>.
+
+        Use the metadata to assess impact:
+        - Total changes: <metadata><total_additions> additions, <metadata><total_deletions> deletions
+        - Files affected: <metadata><files_changed_count> files
+        - Review each file in <files_summary> for performance-critical paths
+
+        Analyze for:
+        1. Database query patterns (N+1 queries, missing indexes, inefficient joins)
+        2. Algorithm complexity (nested loops, recursive functions)
+        3. Memory usage patterns (large data structures, memory leaks)
+        4. Synchronous operations that should be async
+        5. Frontend bundle size impact
+        6. API response time implications
+        7. Caching opportunities missed
+
+        Pay special attention to:
+        - Files with >100 lines of additions (check <files_summary>)
+        - Database migration files
+        - API endpoint modifications
+        - Frontend components with state management
+
+        Return results in JSON format matching the code-review schema.
+    on: [pr_opened, pr_updated]
+
+  # Incremental commit analysis
+  incremental-review:
+    type: ai
+    group: code-review
+    schema: code-review
+    prompt:
+      content: |
+        INCREMENTAL ANALYSIS - Review ONLY the latest commit.
+
+        You have access to two diffs:
+        - <commit_diff>: The LATEST COMMIT ONLY - analyze this
+        - <full_diff>: The entire PR - use for context only
+
+        Instructions:
+        1. Focus exclusively on changes in <commit_diff>
+        2. Do NOT re-review code that was already in the PR
+        3. Use <full_diff> only to understand the broader context
+
+        Context from metadata:
+        - PR #<metadata><number> by <metadata><author>
+        - Branch: <metadata><target_branch> → <metadata><base_branch>
+        - This is an update to an existing PR
+
+        Review the new commit for:
+        - Bugs or issues introduced
+        - Whether it addresses previous review comments
+        - Consistency with the rest of the PR
+        - New security or performance concerns
+
+        Return results in JSON format matching the code-review schema.
+    on: [pr_updated]  # Only runs on PR updates, not initial creation
+
+  # PR overview using all context
+  pr-overview:
+    type: ai
+    group: pr-summary
+    schema: plain  # Free-form markdown output
+    prompt:
+      content: |
+        Generate a comprehensive overview of this pull request.
+
+        PR Information from <metadata>:
+        - PR #<number> titled "<title>"
+        - Author: <author>
+        - Target: <target_branch> → <base_branch>
+        - Scale: <total_additions> additions, <total_deletions> deletions across <files_changed_count> files
+
+        Description from <description>:
+        Review the PR description to understand the intended changes and motivation.
+
+        Files changed (from <files_summary>):
+        Analyze the types and patterns of files being modified.
+
+        Based on <full_diff>, provide:
+
+        ## Summary
+        A 2-3 sentence overview of what this PR accomplishes.
+
+        ## Key Changes
+        - Bullet points of the most significant modifications
+        - Group by functional area (e.g., backend, frontend, database)
+
+        ## Architecture Impact
+        - Does this PR introduce new patterns or dependencies?
+        - Are there breaking changes?
+        - Performance implications at scale?
+
+        ## Risk Assessment
+        Based on the scope and nature of changes:
+        - Low/Medium/High risk assessment
+        - Specific concerns to address before merging
+
+        ## Testing Recommendations
+        Suggest specific test scenarios based on the changes.
+
+        ## Review Priority
+        Recommend which parts need the most careful review based on:
+        - Complexity of changes
+        - Critical path involvement
+        - Security sensitivity
+    on: [pr_opened]
+
+  # Best practices check
+  best-practices:
+    type: ai
+    group: code-review
+    schema: code-review
+    prompt:
+      content: |
+        Review <full_diff> for adherence to best practices.
+
+        PR Context:
+        - Author: <metadata><author> (consider experience level in feedback tone)
+        - Files: Check <files_summary> for file types and naming conventions
+
+        Analyze for:
+
+        1. Code Quality:
+           - Clear variable and function names
+           - Appropriate comments for complex logic
+           - DRY principle violations
+           - SOLID principles adherence
+
+        2. Error Handling:
+           - Proper try-catch blocks
+           - Meaningful error messages
+           - Graceful degradation
+
+        3. Testing:
+           - Are tests included for new functionality?
+           - Test coverage for edge cases
+
+        4. Documentation:
+           - Updated README if needed
+           - API documentation for new endpoints
+           - JSDoc/comments for public functions
+
+        5. Language-Specific:
+           - TypeScript: Proper typing, no 'any' abuse
+           - Python: PEP 8 compliance
+           - Go: Idiomatic Go patterns
+           - React: Hook rules, component composition
+
+        Return constructive feedback in JSON format matching the code-review schema.
+        Be educational rather than critical, especially for junior developers.
+    on: [pr_opened, pr_updated]
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

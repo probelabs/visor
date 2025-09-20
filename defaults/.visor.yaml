@@ -119,13 +119,15 @@ checks:
     prompt: |
         Based on our overview discussion, please perform a comprehensive security analysis of the code changes in this pull request.
 
-        ## Files Changed
-        {% for file in files %}
-        - `{{ file.filename }}` - {{ file.status }}, +{{ file.additions }}/-{{ file.deletions }} ({{ file.changes }} total changes)
-        {% endfor %}
+        ## Context Available
+        You have access to the full PR context in <pull_request> XML tags, including:
+        - <metadata> with PR number, title, and change statistics
+        - <description> with the PR description
+        - <full_diff> containing all code changes
+        - <files_summary> listing all modified files with their change details
 
         ## Instructions
-        Analyze the code for security vulnerabilities including:
+        Analyze the code in <full_diff> for security vulnerabilities including:
 
         **Input Validation & Injection:**
         - SQL injection in database queries
@@ -162,12 +164,13 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview and security analysis, now review the code changes for performance issues:
+        Building on our overview and security analysis, now review the code changes for performance issues.
 
-        ## Files to Analyze
-        {% for file in files %}
-        - `{{ file.filename }}` ({{ file.changes }} changes, {{ file.status }})
-        {% endfor %}
+        ## Context Available
+        The complete PR context is in <pull_request> XML tags. Focus your analysis on:
+        - Code changes in <full_diff> (or <commit_diff> for incremental reviews)
+        - File change patterns in <files_summary>
+        - Scale of changes from <metadata><total_additions> and <metadata><total_deletions>
 
         ## Analysis Areas
         **Algorithm & Data Structure Efficiency:**
@@ -204,7 +207,11 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview, security, and performance discussions, evaluate the code quality and maintainability:
+        Building on our overview, security, and performance discussions, evaluate the code quality and maintainability.
+
+        ## Context Available
+        Review the code changes in <full_diff> within the <pull_request> XML structure.
+        The files being changed are listed in <files_summary>.
 
         ## Quality Assessment Areas
         **Code Structure & Design:**
