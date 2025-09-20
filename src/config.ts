@@ -342,6 +342,14 @@ export class ConfigManager {
     } else {
       // Validate each check configuration
       for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+        // Default type to 'ai' if not specified
+        if (!checkConfig.type) {
+          checkConfig.type = 'ai';
+        }
+        // Default 'on' to ['manual'] if not specified
+        if (!checkConfig.on) {
+          checkConfig.on = ['manual'];
+        }
         this.validateCheckConfig(checkName, checkConfig, errors);
       }
     }
@@ -379,12 +387,9 @@ export class ConfigManager {
     checkConfig: CheckConfig,
     errors: ConfigValidationError[]
   ): void {
+    // Default to 'ai' if no type specified
     if (!checkConfig.type) {
-      errors.push({
-        field: `checks.${checkName}.type`,
-        message: `Invalid check configuration for "${checkName}": missing type`,
-      });
-      return;
+      checkConfig.type = 'ai';
     }
 
     if (!this.validCheckTypes.includes(checkConfig.type)) {

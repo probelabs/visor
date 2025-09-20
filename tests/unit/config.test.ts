@@ -126,21 +126,23 @@ output:
       );
     });
 
-    it('should validate check configuration structure', async () => {
-      const configWithInvalidCheck = `
+    it('should validate check configuration structure - type defaults to ai when missing', async () => {
+      const configWithNoType = `
 version: "1.0"
 checks:
   performance:
-    prompt: "Missing type field"
+    prompt: "Type defaults to ai"
     on: [pr_opened]
 `;
 
       mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(configWithInvalidCheck);
+      mockFs.readFileSync.mockReturnValue(configWithNoType);
 
-      await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Invalid check configuration for "performance": missing type'
-      );
+      const config = await configManager.loadConfig('/path/to/config.yaml');
+
+      // Should not throw - type defaults to 'ai'
+      expect(config.checks.performance.type).toBe('ai');
+      expect(config.checks.performance.prompt).toBe('Type defaults to ai');
     });
 
     it('should validate check type values', async () => {

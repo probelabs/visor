@@ -221,8 +221,8 @@ export interface AIProviderConfig {
  * Configuration for a single check
  */
 export interface CheckConfig {
-  /** Type of check to perform */
-  type: ConfigCheckType;
+  /** Type of check to perform (defaults to 'ai' if not specified) */
+  type?: ConfigCheckType;
   /** AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks */
   prompt?: string;
   /** Additional prompt to append when extending configurations - merged with parent prompt */
@@ -237,8 +237,8 @@ export interface CheckConfig {
   focus?: string;
   /** Command that triggers this check (e.g., "review", "security-scan") - optional */
   command?: string;
-  /** Events that trigger this check */
-  on: EventTrigger[];
+  /** Events that trigger this check (defaults to ['manual'] if not specified) */
+  on?: EventTrigger[];
   /** File patterns that trigger this check (optional) */
   triggers?: string[];
   /** AI provider configuration (optional) */
