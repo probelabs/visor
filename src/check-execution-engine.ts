@@ -367,6 +367,7 @@ export class CheckExecutionEngine {
         const providerConfig: CheckProviderConfig = {
           type: checks[0],
           prompt: 'all',
+          eventContext: prInfo.eventContext, // Pass event context for templates
           ai: timeout ? { timeout } : undefined,
         };
         const result = await provider.execute(prInfo, providerConfig);
@@ -405,6 +406,7 @@ export class CheckExecutionEngine {
         type: 'ai',
         prompt: focus,
         focus: focus,
+        eventContext: prInfo.eventContext, // Pass event context for templates
         ai: timeout ? { timeout } : undefined,
         // Inherit global AI provider and model settings if config is available
         ai_provider: config?.ai_provider,
@@ -547,6 +549,7 @@ export class CheckExecutionEngine {
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
+      eventContext: prInfo.eventContext, // Pass event context for templates
       ai: {
         timeout: timeout || 600000,
         debug: debug,
@@ -982,6 +985,7 @@ export class CheckExecutionEngine {
             schema: checkConfig.schema,
             group: checkConfig.group,
             checkName: checkName, // Add checkName for sessionID
+            eventContext: prInfo.eventContext, // Pass event context for templates
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -1260,6 +1264,7 @@ export class CheckExecutionEngine {
           focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
           schema: checkConfig.schema,
           group: checkConfig.group,
+          eventContext: prInfo.eventContext, // Pass event context for templates
           ai: {
             timeout: timeout || 600000,
             debug: debug, // Pass debug flag to AI provider
@@ -1355,6 +1360,7 @@ export class CheckExecutionEngine {
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
+      eventContext: prInfo.eventContext, // Pass event context for templates
       ai: {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),

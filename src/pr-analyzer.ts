@@ -32,6 +32,8 @@ export interface PRInfo {
   fullDiff?: string;
   commitDiff?: string;
   isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
+  isIssue?: boolean; // Flag to indicate this is an issue, not a PR
+  eventContext?: Record<string, unknown>; // GitHub event context for templates
 }
 
 interface NetworkError {
@@ -178,7 +180,9 @@ export class PRAnalyzer {
       (prInfo as any).comments = comments;
       console.log(`✅ Retrieved ${comments.length} comments`);
     } catch (error) {
-      console.warn(`⚠️ Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.warn(
+        `⚠️ Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       (prInfo as any).comments = [];
     }
 

@@ -366,8 +366,6 @@ export class AIReviewService {
     if (isIssue) {
       // Issue context - no code analysis needed
       return `<review_request>
-  <role>You are an intelligent GitHub issue assistant.</role>
-
   <instructions>
 ${customInstructions}
   </instructions>
@@ -392,8 +390,6 @@ ${prContext}
     const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
     return `<review_request>
-  <role>You are a senior code reviewer performing ${analysisType} analysis.</role>
-
   <analysis_type>${analysisType}</analysis_type>
 
   <analysis_focus>
@@ -597,7 +593,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       context += `
   <!-- Summary of all files changed with statistics -->
   <files_summary>`;
-      prInfo.files.forEach((file) => {
+      prInfo.files.forEach(file => {
         context += `
     <file>
       <filename>${this.escapeXml(file.filename)}</filename>

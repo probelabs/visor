@@ -452,7 +452,9 @@ async function handleIssueEvent(
     prInfo.comments = comments;
     console.log(`✅ Retrieved ${comments.length} comments for issue`);
   } catch (error) {
-    console.warn(`⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.warn(
+      `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
     prInfo.comments = [];
   }
 
@@ -472,12 +474,12 @@ async function handleIssueEvent(
 
     // Format and post results as a comment on the issue
     if (Object.keys(result).length > 0) {
-      let commentBody = `## 🤖 Issue Assistant Results\n\n`;
+      let commentBody = '';
 
+      // Directly use check content without adding extra headers
       for (const checks of Object.values(result)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
-            commentBody += `### ${check.checkName}\n`;
             commentBody += `${check.content}\n\n`;
           }
         }
@@ -527,12 +529,22 @@ async function handleIssueComment(
   }
 
   // Prevent recursion: skip if comment is from visor itself
-  if (
+  // Check both comment author and content markers
+  const isVisorBot =
+    comment.user?.login === 'visor[bot]' ||
+    comment.user?.login === 'github-actions[bot]' ||
+    comment.user?.type === 'Bot';
+
+  const hasVisorMarkers =
     comment.body &&
     (comment.body.includes('<!-- visor-comment-id:') ||
-      comment.body.includes('*Powered by [Visor]'))
-  ) {
-    console.log('Skipping visor comment to prevent recursion');
+      comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
+      comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
+
+  if (isVisorBot || hasVisorMarkers) {
+    console.log(
+      `Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
+    );
     return;
   }
 
@@ -663,13 +675,9 @@ async function handleIssueComment(
         let prInfo: PRInfo;
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
-          prInfo = await analyzer.fetchPRDiff(
-            owner,
-            repo,
-            prNumber,
-            undefined,
-            'issue_comment'
-          );
+          prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
+          // Add event context for templates and XML generation
+          (prInfo as any).eventContext = context.event;
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -695,7 +703,9 @@ async function handleIssueComment(
             (prInfo as any).comments = comments;
             console.log(`✅ Retrieved ${comments.length} comments for issue`);
           } catch (error) {
-            console.warn(`⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.warn(
+              `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
             (prInfo as any).comments = [];
           }
         }
