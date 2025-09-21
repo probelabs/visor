@@ -31,6 +31,9 @@ export async function main(): Promise<void> {
     // Parse CLI arguments
     const cliOptions = cli.parseArgs(args);
 
+    // Set environment variable early so config loading respects output format
+    process.env.VISOR_OUTPUT_FORMAT = cliOptions.output || 'table';
+
     // Load configuration
     let config;
     if (cliOptions.configPath) {
@@ -54,7 +57,7 @@ export async function main(): Promise<void> {
     // Merge CLI options with configuration
     const mergedConfig = configManager.mergeWithCliOptions(config, cliOptions);
 
-    // Set environment variable so other modules know the output format
+    // Update environment variable in case config merging changed the output format
     process.env.VISOR_OUTPUT_FORMAT = mergedConfig.cliOutput;
 
     // Only show decorative output for non-JSON formats
@@ -80,19 +83,21 @@ export async function main(): Promise<void> {
       isUsingConfigChecks = true;
     }
 
-    // Log check extraction for debugging
-    if (mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif') {
-      console.error(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
-      console.error(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
-      console.error(
-        `🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`
-      );
-    } else {
-      console.log(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
-      console.log(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
-      console.log(
-        `🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`
-      );
+    // Log check extraction for debugging (only if debug flag is enabled)
+    if (cliOptions.debug) {
+      if (mergedConfig.cliOutput === 'json' || mergedConfig.cliOutput === 'sarif') {
+        console.error(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
+        console.error(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
+        console.error(
+          `🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`
+        );
+      } else {
+        console.log(`🔧 Debug: Extracted checks from config: ${JSON.stringify(checksToRun)}`);
+        console.log(`🔧 Debug: CLI checks specified: ${JSON.stringify(mergedConfig.cliChecks)}`);
+        console.log(
+          `🔧 Debug: Config checks available: ${JSON.stringify(Object.keys(config.checks || {}))}`
+        );
+      }
     }
 
     // If no checks specified, show help

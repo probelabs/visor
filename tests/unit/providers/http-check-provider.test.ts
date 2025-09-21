@@ -14,6 +14,15 @@ jest.mock('liquidjs', () => ({
   })),
 }));
 
+// Type for test configs where we may delete properties for validation testing
+type TestConfig = {
+  type?: string;
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+};
+
 describe('HttpCheckProvider', () => {
   let provider: HttpCheckProvider;
   let mockPRInfo: PRInfo;
@@ -316,7 +325,7 @@ describe('HttpCheckProvider', () => {
     });
 
     it('should require url field', async () => {
-      const configWithoutUrl: any = { ...mockConfig };
+      const configWithoutUrl: TestConfig = { ...mockConfig };
       delete configWithoutUrl.url;
 
       const isValid = await provider.validateConfig(configWithoutUrl);
@@ -324,7 +333,7 @@ describe('HttpCheckProvider', () => {
     });
 
     it('should require body field', async () => {
-      const configWithoutBody: any = { ...mockConfig };
+      const configWithoutBody: TestConfig = { ...mockConfig };
       delete configWithoutBody.body;
 
       const isValid = await provider.validateConfig(configWithoutBody);
@@ -332,7 +341,7 @@ describe('HttpCheckProvider', () => {
     });
 
     it('should require both url and body fields', async () => {
-      const configWithoutFields: any = { ...mockConfig };
+      const configWithoutFields: TestConfig = { ...mockConfig };
       delete configWithoutFields.url;
       delete configWithoutFields.body;
 

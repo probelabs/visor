@@ -320,12 +320,15 @@ export class CheckExecutionEngine {
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
 
-    logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
-    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+    // Only output debug messages if debug mode is enabled
+    if (debug) {
+      logFn(`🔧 Debug: executeReviewChecks called with checks: ${JSON.stringify(checks)}`);
+      logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+    }
 
     // Filter checks based on current event type to prevent execution of checks that shouldn't run
-    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
-    if (filteredChecks.length !== checks.length) {
+    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn, debug);
+    if (filteredChecks.length !== checks.length && debug) {
       logFn(
         `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
       );
@@ -344,9 +347,11 @@ export class CheckExecutionEngine {
       });
 
     if (config?.checks && (checks.length > 1 || hasDependencies)) {
-      logFn(
-        `🔧 Debug: Using dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
-      );
+      if (debug) {
+        logFn(
+          `🔧 Debug: Using dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+        );
+      }
       return await this.executeDependencyAwareChecks(
         prInfo,
         checks,
@@ -361,7 +366,9 @@ export class CheckExecutionEngine {
 
     // Single check execution (existing logic)
     if (checks.length === 1) {
-      logFn(`🔧 Debug: Using single check execution for: ${checks[0]}`);
+      if (debug) {
+        logFn(`🔧 Debug: Using single check execution for: ${checks[0]}`);
+      }
 
       // If we have a config definition for this check, use it
       if (config?.checks?.[checks[0]]) {
@@ -394,7 +401,9 @@ export class CheckExecutionEngine {
 
     // Check if 'ai' provider is available for focus-based checks (legacy support)
     if (this.providerRegistry.hasProvider('ai')) {
-      logFn(`🔧 Debug: Using AI provider with focus mapping`);
+      if (debug) {
+        logFn(`🔧 Debug: Using AI provider with focus mapping`);
+      }
       const provider = this.providerRegistry.getProviderOrThrow('ai');
 
       let focus = 'all';
@@ -435,7 +444,9 @@ export class CheckExecutionEngine {
     }
 
     // Fallback to existing PRReviewer for backward compatibility
-    logFn(`🔧 Debug: Using legacy PRReviewer fallback`);
+    if (debug) {
+      logFn(`🔧 Debug: Using legacy PRReviewer fallback`);
+    }
     const focusMap: Record<string, ReviewOptions['focus']> = {
       security: 'security',
       performance: 'performance',
@@ -471,12 +482,15 @@ export class CheckExecutionEngine {
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
 
-    logFn(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
-    logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+    // Only output debug messages if debug mode is enabled
+    if (debug) {
+      logFn(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
+      logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+    }
 
     // Filter checks based on current event type to prevent execution of checks that shouldn't run
-    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn);
-    if (filteredChecks.length !== checks.length) {
+    const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn, debug);
+    if (filteredChecks.length !== checks.length && debug) {
       logFn(
         `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
       );
@@ -496,9 +510,11 @@ export class CheckExecutionEngine {
     });
 
     if (checks.length > 1 || hasDependencies) {
-      logFn(
-        `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
-      );
+      if (debug) {
+        logFn(
+          `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+        );
+      }
       return await this.executeGroupedDependencyAwareChecks(
         prInfo,
         checks,
@@ -513,7 +529,9 @@ export class CheckExecutionEngine {
 
     // Single check execution
     if (checks.length === 1) {
-      logFn(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
+      if (debug) {
+        logFn(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
+      }
       const checkResult = await this.executeSingleGroupedCheck(
         prInfo,
         checks[0],
@@ -822,7 +840,10 @@ export class CheckExecutionEngine {
     failFast?: boolean
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
-    log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
+
+    if (debug) {
+      log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
+    }
 
     if (!config?.checks) {
       throw new Error('Config with check definitions required for dependency-aware execution');
@@ -832,8 +853,11 @@ export class CheckExecutionEngine {
     const effectiveMaxParallelism = maxParallelism ?? config.max_parallelism ?? 3;
     // Determine effective fail-fast setting (CLI > config > default)
     const effectiveFailFast = failFast ?? config.fail_fast ?? false;
-    log(`🔧 Debug: Using max parallelism: ${effectiveMaxParallelism}`);
-    log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
+
+    if (debug) {
+      log(`🔧 Debug: Using max parallelism: ${effectiveMaxParallelism}`);
+      log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
+    }
 
     // Build dependency graph and check for session reuse requirements
     const dependencies: Record<string, string[]> = {};
@@ -2264,7 +2288,8 @@ export class CheckExecutionEngine {
     checks: string[],
     config?: import('./types/config').VisorConfig,
     prInfo?: PRInfo,
-    logFn?: (message: string) => void
+    logFn?: (message: string) => void,
+    debug?: boolean
   ): string[] {
     if (!config?.checks) {
       // No config available, return all checks (fallback behavior)
@@ -2282,7 +2307,9 @@ export class CheckExecutionEngine {
     if (hasEventContext) {
       // GitHub Action context - apply strict event filtering
       const currentEvent = prInfoWithEvent.eventType!;
-      logFn?.(`🔧 Debug: GitHub Action context, current event: ${currentEvent}`);
+      if (debug) {
+        logFn?.(`🔧 Debug: GitHub Action context, current event: ${currentEvent}`);
+      }
 
       const filteredChecks: string[] = [];
       for (const checkName of checks) {
@@ -2296,22 +2323,30 @@ export class CheckExecutionEngine {
         if (eventTriggers.length === 0) {
           // No triggers specified, include it
           filteredChecks.push(checkName);
-          logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
+          if (debug) {
+            logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
+          }
         } else if (eventTriggers.includes(currentEvent)) {
           // Check matches current event
           filteredChecks.push(checkName);
-          logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+          if (debug) {
+            logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+          }
         } else {
           // Check doesn't match current event
-          logFn?.(
-            `🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`
-          );
+          if (debug) {
+            logFn?.(
+              `🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`
+            );
+          }
         }
       }
       return filteredChecks;
     } else {
       // CLI/Test context - conservative filtering (only exclude manual-only checks)
-      logFn?.(`🔧 Debug: CLI/Test context, using conservative filtering`);
+      if (debug) {
+        logFn?.(`🔧 Debug: CLI/Test context, using conservative filtering`);
+      }
 
       const filteredChecks: string[] = [];
       for (const checkName of checks) {
@@ -2325,12 +2360,16 @@ export class CheckExecutionEngine {
 
         // Only exclude checks that are explicitly manual-only
         if (eventTriggers.length === 1 && eventTriggers[0] === 'manual') {
-          logFn?.(`🔧 Debug: Check '${checkName}' is manual-only, skipping`);
+          if (debug) {
+            logFn?.(`🔧 Debug: Check '${checkName}' is manual-only, skipping`);
+          }
         } else {
           filteredChecks.push(checkName);
-          logFn?.(
-            `🔧 Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`
-          );
+          if (debug) {
+            logFn?.(
+              `🔧 Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`
+            );
+          }
         }
       }
       return filteredChecks;

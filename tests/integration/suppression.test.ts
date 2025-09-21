@@ -1,9 +1,22 @@
 import { IssueFilter } from '../../src/issue-filter';
-import { ReviewIssue } from '../../src/reviewer';
+import { ReviewIssue, ReviewSummary } from '../../src/reviewer';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
+import { VisorConfig } from '../../src/types/config';
+import { DependencyGraph } from '../../src/dependency-resolver';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+
+// Type for accessing private methods and properties in tests
+interface CheckExecutionEngineWithPrivates {
+  config: Partial<VisorConfig>;
+  aggregateDependencyAwareResults(
+    results: Map<string, ReviewSummary>,
+    dependencyGraph: DependencyGraph,
+    debug: boolean,
+    stoppedEarly: boolean
+  ): ReviewSummary;
+}
 
 describe('Issue Suppression Integration Tests', () => {
   let tempDir: string;
@@ -54,9 +67,14 @@ function test() {
       const engine = new CheckExecutionEngine(tempDir);
 
       // Store the original config so we can pass it through
-      (engine as any).config = {
+      (engine as unknown as CheckExecutionEngineWithPrivates).config = {
         output: {
           suppressionEnabled: true,
+          pr_comment: {
+            format: 'table',
+            group_by: 'check',
+            collapse: false,
+          },
         },
       };
 
@@ -84,23 +102,23 @@ function test() {
         suggestions: [],
       });
 
-      const mockDependencyGraph = {
+      const mockDependencyGraph: DependencyGraph = {
         executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        nodes: new Map([['test-check', { name: 'test-check', dependencies: [] }]]),
+        nodes: new Map([
+          ['test-check', { id: 'test-check', dependencies: [], dependents: [], depth: 0 }],
+        ]),
+        hasCycles: false,
       };
 
       // Call the method directly
-      const result = (engine as any).aggregateDependencyAwareResults(
-        mockResults,
-        mockDependencyGraph,
-        false,
-        false
-      );
+      const result = (
+        engine as unknown as CheckExecutionEngineWithPrivates
+      ).aggregateDependencyAwareResults(mockResults, mockDependencyGraph, false, false);
 
       // Verify that only file2 issue remains (file1 was suppressed)
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].file).toBe('file2.js');
-      expect(result.issues[0].message).toContain('should NOT be suppressed');
+      expect(result.issues![0].file).toBe('file2.js');
+      expect(result.issues![0].message).toContain('should NOT be suppressed');
     });
 
     it('should respect suppressionEnabled config', async () => {
@@ -126,9 +144,14 @@ function test() {
       const engine = new CheckExecutionEngine(tempDir);
 
       // Set config to disable suppression
-      (engine as any).config = {
+      (engine as unknown as CheckExecutionEngineWithPrivates).config = {
         output: {
           suppressionEnabled: false,
+          pr_comment: {
+            format: 'table',
+            group_by: 'check',
+            collapse: false,
+          },
         },
       };
 
@@ -148,22 +171,22 @@ function test() {
         suggestions: [],
       });
 
-      const mockDependencyGraph = {
+      const mockDependencyGraph: DependencyGraph = {
         executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        nodes: new Map([['test-check', { name: 'test-check', dependencies: [] }]]),
+        nodes: new Map([
+          ['test-check', { id: 'test-check', dependencies: [], dependents: [], depth: 0 }],
+        ]),
+        hasCycles: false,
       };
 
       // Call the method directly
-      const result = (engine as any).aggregateDependencyAwareResults(
-        mockResults,
-        mockDependencyGraph,
-        false,
-        false
-      );
+      const result = (
+        engine as unknown as CheckExecutionEngineWithPrivates
+      ).aggregateDependencyAwareResults(mockResults, mockDependencyGraph, false, false);
 
       // Should NOT suppress when disabled
       expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toBe('Hardcoded password');
+      expect(result.issues![0].message).toBe('Hardcoded password');
     });
   });
 
