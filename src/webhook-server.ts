@@ -1,6 +1,7 @@
 import * as http from 'http';
 import * as https from 'https';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { CheckExecutionEngine } from './check-execution-engine';
@@ -10,6 +11,10 @@ export interface WebhookPayload {
   headers: Record<string, string>;
   body: unknown;
   timestamp: string;
+}
+
+export interface WebhookContext {
+  webhookData: Map<string, unknown>;
 }
 
 /**
@@ -31,9 +36,6 @@ export class WebhookServer {
 
     // Detect GitHub Actions environment
     this.isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
-
-    // Store webhook data globally for webhook_input provider access
-    (global as Record<string, unknown>).__visor_webhook_data = this.webhookData;
   }
 
   /**
@@ -200,15 +202,16 @@ export class WebhookServer {
         return;
       }
 
-      // Check authentication
-      if (!this.authenticateRequest(req)) {
+      // Parse request body first (needed for HMAC verification)
+      const body = await this.parseRequestBody(req);
+      const rawBody = typeof body === 'string' ? body : JSON.stringify(body);
+
+      // Check authentication with raw body
+      if (!this.authenticateRequest(req, rawBody)) {
         res.writeHead(401, { 'Content-Type': 'text/plain' });
         res.end('Unauthorized');
         return;
       }
-
-      // Parse request body
-      const body = await this.parseRequestBody(req);
 
       // Find matching endpoint
       const endpoint = this.findEndpoint(req.url || '');
@@ -241,7 +244,7 @@ export class WebhookServer {
   /**
    * Authenticate incoming request
    */
-  private authenticateRequest(req: http.IncomingMessage): boolean {
+  private authenticateRequest(req: http.IncomingMessage, rawBody: string): boolean {
     if (!this.config.auth || this.config.auth.type === 'none') {
       return true;
     }
@@ -258,14 +261,11 @@ export class WebhookServer {
         return token === auth.secret;
 
       case 'hmac':
-        // Implement HMAC signature verification
-        const signature = req.headers['x-webhook-signature'] as string;
-        if (!signature || !auth.secret) {
+        if (!auth.secret) {
+          console.warn('HMAC authentication configured but no secret provided');
           return false;
         }
-        // Would need to verify HMAC signature with body
-        // For now, simplified check
-        return true;
+        return this.verifyHmacSignature(req, rawBody, auth.secret);
 
       case 'basic':
         const basicAuth = req.headers.authorization;
@@ -278,6 +278,50 @@ export class WebhookServer {
 
       default:
         return false;
+    }
+  }
+
+  /**
+   * Verify HMAC-SHA256 signature
+   */
+  private verifyHmacSignature(req: http.IncomingMessage, rawBody: string, secret: string): boolean {
+    try {
+      // Get signature from header
+      const receivedSignature = req.headers['x-webhook-signature'] as string;
+      if (!receivedSignature) {
+        console.warn('Missing x-webhook-signature header for HMAC authentication');
+        return false;
+      }
+
+      // Calculate expected signature
+      const hmac = crypto.createHmac('sha256', secret);
+      hmac.update(rawBody, 'utf8');
+      const calculatedSignature = `sha256=${hmac.digest('hex')}`;
+
+      // Use timing-safe comparison to prevent timing attacks
+      return this.timingSafeEqual(receivedSignature, calculatedSignature);
+    } catch (error) {
+      console.error('Error verifying HMAC signature:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Timing-safe string comparison to prevent timing attacks
+   */
+  private timingSafeEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+
+    // Use Node.js built-in timing-safe comparison
+    try {
+      const bufferA = Buffer.from(a, 'utf8');
+      const bufferB = Buffer.from(b, 'utf8');
+      return crypto.timingSafeEqual(bufferA, bufferB);
+    } catch (error) {
+      console.error('Timing-safe comparison failed:', error);
+      return false;
     }
   }
 
@@ -379,12 +423,15 @@ export class WebhookServer {
     console.log(`🚀 Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
 
     try {
-      // Execute the checks
+      // Execute the checks with webhook context
       await this.executionEngine.executeChecks({
         checks: checksToRun,
         showDetails: true,
         outputFormat: 'json',
         config: this.visorConfig,
+        webhookContext: {
+          webhookData: this.webhookData,
+        },
       });
 
       console.log(`✅ Webhook checks completed for: ${endpoint}`);

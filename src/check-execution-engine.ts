@@ -84,6 +84,10 @@ export interface CheckExecutionOptions {
   outputFormat?: string;
   config?: import('./types/config').VisorConfig;
   debug?: boolean; // Enable debug mode to collect AI execution details
+  // Webhook context for passing webhook data to http_input providers
+  webhookContext?: {
+    webhookData: Map<string, unknown>;
+  };
   // GitHub Check integration options
   githubChecks?: {
     enabled: boolean;
@@ -106,6 +110,7 @@ export class CheckExecutionEngine {
   private githubContext?: { owner: string; repo: string };
   private workingDirectory: string;
   private config?: import('./types/config').VisorConfig;
+  private webhookContext?: { webhookData: Map<string, unknown> };
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -120,6 +125,17 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Set webhook context on a provider if it supports it
+   */
+  private setProviderWebhookContext(
+    provider: import('./providers/check-provider.interface').CheckProvider
+  ): void {
+    if (this.webhookContext && provider.setWebhookContext) {
+      provider.setWebhookContext(this.webhookContext.webhookData);
+    }
+  }
+
+  /**
    * Execute checks on the local repository
    */
   async executeChecks(options: CheckExecutionOptions): Promise<AnalysisResult> {
@@ -127,6 +143,9 @@ export class CheckExecutionEngine {
     const timestamp = new Date().toISOString();
 
     try {
+      // Store webhook context if provided
+      this.webhookContext = options.webhookContext;
+
       // Determine where to send log messages based on output format
       const logFn =
         options.outputFormat === 'json' || options.outputFormat === 'sarif'
@@ -378,6 +397,7 @@ export class CheckExecutionEngine {
       // Try provider system for single checks
       if (this.providerRegistry.hasProvider(checks[0])) {
         const provider = this.providerRegistry.getProviderOrThrow(checks[0]);
+        this.setProviderWebhookContext(provider);
         const providerConfig: CheckProviderConfig = {
           type: checks[0],
           prompt: 'all',
@@ -405,6 +425,7 @@ export class CheckExecutionEngine {
         logFn(`🔧 Debug: Using AI provider with focus mapping`);
       }
       const provider = this.providerRegistry.getProviderOrThrow('ai');
+      this.setProviderWebhookContext(provider);
 
       let focus = 'all';
       let checkName = 'all';
@@ -567,6 +588,7 @@ export class CheckExecutionEngine {
 
     const checkConfig = config.checks[checkName];
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    this.setProviderWebhookContext(provider);
 
     const providerConfig = {
       type: 'ai' as const,
@@ -937,6 +959,7 @@ export class CheckExecutionEngine {
     const results = new Map<string, ReviewSummary>();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    this.setProviderWebhookContext(provider);
     const sessionIds = new Map<string, string>(); // checkName -> sessionId
     let shouldStopExecution = false;
 
@@ -1240,6 +1263,7 @@ export class CheckExecutionEngine {
     log(`🔧 Debug: Using fail-fast: ${effectiveFailFast}`);
 
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    this.setProviderWebhookContext(provider);
 
     // Create individual check task functions
     const checkTaskFunctions = checks.map(checkName => async () => {
@@ -1384,6 +1408,7 @@ export class CheckExecutionEngine {
 
     const checkConfig = config.checks[checkName];
     const provider = this.providerRegistry.getProviderOrThrow('ai');
+    this.setProviderWebhookContext(provider);
 
     const providerConfig: CheckProviderConfig = {
       type: 'ai',

@@ -94,4 +94,11 @@ export abstract class CheckProvider {
    * Get provider requirements (e.g., environment variables needed)
    */
   abstract getRequirements(): string[];
+
+  /**
+   * Set webhook context for providers that need access to webhook data
+   * This is optional and only used by http_input providers
+   * @param webhookContext Map of endpoint paths to webhook data
+   */
+  setWebhookContext?(webhookContext: Map<string, unknown>): void;
 }

@@ -8,10 +8,18 @@ import { Liquid } from 'liquidjs';
  */
 export class HttpInputProvider extends CheckProvider {
   private liquid: Liquid;
+  private webhookContext?: Map<string, unknown>;
 
   constructor() {
     super();
     this.liquid = new Liquid();
+  }
+
+  /**
+   * Set webhook context for accessing webhook data
+   */
+  setWebhookContext(webhookContext: Map<string, unknown>): void {
+    this.webhookContext = webhookContext;
   }
 
   getName(): string {
@@ -109,15 +117,20 @@ export class HttpInputProvider extends CheckProvider {
   }
 
   private getWebhookData(endpoint: string): Record<string, unknown> | null {
-    // This would be implemented to retrieve data from the webhook server
-    // For now, check if there's data in a global store or context
-    // In production, this would interface with the webhook server service
+    // Use webhook context if available (preferred method)
+    if (this.webhookContext) {
+      return (this.webhookContext.get(endpoint) as Record<string, unknown>) || null;
+    }
 
-    // Placeholder implementation - would be replaced with actual webhook server integration
+    // Fallback to global store for backwards compatibility
+    // This should be removed once all usages are migrated
     const globalWebhookStore = (global as Record<string, unknown>).__visor_webhook_data as
       | Map<string, Record<string, unknown>>
       | undefined;
     if (globalWebhookStore && globalWebhookStore.get) {
+      console.warn(
+        'HttpInputProvider: Using deprecated global webhook store. Please use webhook context instead.'
+      );
       return globalWebhookStore.get(endpoint) || null;
     }
 
