@@ -361,7 +361,7 @@ export class AIReviewService {
     _schema?: string
   ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
-    const isIssue = (prInfo as any).isIssue === true;
+    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Issue context - no code analysis needed
@@ -430,7 +430,7 @@ ${prContext}
    */
   private formatPRContext(prInfo: PRInfo): string {
     // Check if this is an issue (not a PR)
-    const isIssue = (prInfo as any).isIssue === true;
+    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Format as issue context
@@ -440,10 +440,10 @@ ${prContext}
     <number>${prInfo.number}</number>
     <title>${this.escapeXml(prInfo.title)}</title>
     <author>${prInfo.author}</author>
-    <state>${(prInfo as any).eventContext?.issue?.state || 'open'}</state>
-    <created_at>${(prInfo as any).eventContext?.issue?.created_at || ''}</created_at>
-    <updated_at>${(prInfo as any).eventContext?.issue?.updated_at || ''}</updated_at>
-    <comments_count>${(prInfo as any).eventContext?.issue?.comments || 0}</comments_count>
+    <state>${(prInfo as PRInfo & { eventContext?: { issue?: { state?: string; created_at?: string; updated_at?: string; comments?: number } } }).eventContext?.issue?.state || 'open'}</state>
+    <created_at>${(prInfo as PRInfo & { eventContext?: { issue?: { state?: string; created_at?: string; updated_at?: string; comments?: number } } }).eventContext?.issue?.created_at || ''}</created_at>
+    <updated_at>${(prInfo as PRInfo & { eventContext?: { issue?: { state?: string; updated_at?: string; comments?: number } } }).eventContext?.issue?.updated_at || ''}</updated_at>
+    <comments_count>${(prInfo as PRInfo & { eventContext?: { issue?: { comments?: number } } }).eventContext?.issue?.comments || 0}</comments_count>
   </metadata>`;
 
       // Add issue body/description if available
@@ -456,35 +456,51 @@ ${this.escapeXml(prInfo.body)}
       }
 
       // Add labels if available
-      const labels = (prInfo as any).eventContext?.issue?.labels;
+      const eventContext = prInfo as PRInfo & {
+        eventContext?: { issue?: { labels?: Array<{ name?: string } | string> } };
+      };
+      const labels = eventContext.eventContext?.issue?.labels;
       if (labels && labels.length > 0) {
         context += `
   <!-- Applied labels for issue categorization and organization -->
   <labels>`;
-        labels.forEach((label: any) => {
+        labels.forEach((label: { name?: string } | string) => {
+          const labelName = typeof label === 'string' ? label : label.name || 'unknown';
           context += `
-    <label>${this.escapeXml(label.name || label)}</label>`;
+    <label>${this.escapeXml(labelName)}</label>`;
         });
         context += `
   </labels>`;
       }
 
       // Add assignees if available
-      const assignees = (prInfo as any).eventContext?.issue?.assignees;
+      const assignees = (
+        prInfo as PRInfo & {
+          eventContext?: { issue?: { assignees?: Array<{ login?: string } | string> } };
+        }
+      ).eventContext?.issue?.assignees;
       if (assignees && assignees.length > 0) {
         context += `
   <!-- Users assigned to work on this issue -->
   <assignees>`;
-        assignees.forEach((assignee: any) => {
+        assignees.forEach((assignee: { login?: string } | string) => {
+          const assigneeName =
+            typeof assignee === 'string' ? assignee : assignee.login || 'unknown';
           context += `
-    <assignee>${this.escapeXml(assignee.login || assignee)}</assignee>`;
+    <assignee>${this.escapeXml(assigneeName)}</assignee>`;
         });
         context += `
   </assignees>`;
       }
 
       // Add milestone if available
-      const milestone = (prInfo as any).eventContext?.issue?.milestone;
+      const milestone = (
+        prInfo as PRInfo & {
+          eventContext?: {
+            issue?: { milestone?: { title?: string; state?: string; due_on?: string } };
+          };
+        }
+      ).eventContext?.issue?.milestone;
       if (milestone) {
         context += `
   <!-- Associated project milestone information -->
@@ -496,7 +512,18 @@ ${this.escapeXml(prInfo.body)}
       }
 
       // Add current/triggering comment if this is a comment event
-      const triggeringComment = (prInfo as any).eventContext?.comment;
+      const triggeringComment = (
+        prInfo as PRInfo & {
+          eventContext?: {
+            comment?: {
+              user?: { login?: string };
+              created_at?: string;
+              body?: string;
+              id?: number;
+            };
+          };
+        }
+      ).eventContext?.comment;
       if (triggeringComment) {
         context += `
   <!-- The comment that triggered this analysis -->
@@ -508,18 +535,22 @@ ${this.escapeXml(prInfo.body)}
       }
 
       // Add comment history (excluding the current comment if it exists)
-      const issueComments = (prInfo as any).comments;
+      const issueComments = (
+        prInfo as PRInfo & {
+          comments?: Array<{ id?: number; author?: string; body?: string; createdAt?: string }>;
+        }
+      ).comments;
       if (issueComments && issueComments.length > 0) {
         // Filter out the triggering comment from history if present
         const historicalComments = triggeringComment
-          ? issueComments.filter((c: any) => c.id !== triggeringComment.id)
+          ? issueComments.filter(c => c.id !== triggeringComment.id)
           : issueComments;
 
         if (historicalComments.length > 0) {
           context += `
   <!-- Previous comments in chronological order (excluding triggering comment) -->
   <comment_history>`;
-          historicalComments.forEach((comment: any) => {
+          historicalComments.forEach(comment => {
             context += `
     <comment>
       <author>${this.escapeXml(comment.author || 'unknown')}</author>
@@ -607,7 +638,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     // Add current/triggering comment if this is a comment event
-    const triggeringComment = (prInfo as any).eventContext?.comment;
+    const triggeringComment = (
+      prInfo as PRInfo & {
+        eventContext?: {
+          comment?: { user?: { login?: string }; created_at?: string; body?: string; id?: number };
+        };
+      }
+    ).eventContext?.comment;
     if (triggeringComment) {
       context += `
   <!-- The comment that triggered this analysis -->
@@ -619,18 +656,22 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     // Add comment history (excluding the current comment if it exists)
-    const prComments = (prInfo as any).comments;
+    const prComments = (
+      prInfo as PRInfo & {
+        comments?: Array<{ id?: number; author?: string; body?: string; createdAt?: string }>;
+      }
+    ).comments;
     if (prComments && prComments.length > 0) {
       // Filter out the triggering comment from history if present
       const historicalComments = triggeringComment
-        ? prComments.filter((c: any) => c.id !== triggeringComment.id)
+        ? prComments.filter(c => c.id !== triggeringComment.id)
         : prComments;
 
       if (historicalComments.length > 0) {
         context += `
   <!-- Previous PR comments in chronological order (excluding triggering comment) -->
   <comment_history>`;
-        historicalComments.forEach((comment: any) => {
+        historicalComments.forEach(comment => {
           context += `
     <comment>
       <author>${this.escapeXml(comment.author || 'unknown')}</author>

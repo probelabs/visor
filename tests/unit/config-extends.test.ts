@@ -78,8 +78,9 @@ describe('Config Extends Functionality', () => {
         version: '1.0',
         checks: {
           remote: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com/webhook',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },
@@ -98,7 +99,7 @@ describe('Config Extends Functionality', () => {
       });
 
       const loaded = await loader.fetchConfig('https://example.com/config.yaml');
-      expect(loaded.checks?.remote?.type).toBe('webhook');
+      expect(loaded.checks?.remote?.type).toBe('http');
       expect(loaded.output?.pr_comment?.format).toBe('json');
     });
 
@@ -531,8 +532,9 @@ describe('Config Extends Functionality', () => {
         extends: ['./base1.yaml', './base2.yaml'],
         checks: {
           custom: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },
@@ -965,8 +967,9 @@ describe('Config Extends Functionality', () => {
         extends: './middle.yaml',
         checks: {
           top: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },
@@ -1016,8 +1019,9 @@ describe('Config Extends Functionality', () => {
         version: '1.0',
         checks: {
           remote: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },
@@ -1538,8 +1542,9 @@ describe('Config Extends Functionality', () => {
             group: 'security',
           },
           performance: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://perf.example.com/analyze',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
             group: 'performance',
           },
@@ -1767,8 +1772,9 @@ describe('Config Extends Functionality', () => {
         extends: '../level1-config.yaml',
         checks: {
           level2: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },
@@ -1834,8 +1840,9 @@ describe('Config Extends Functionality', () => {
         extends: ['./relative-config1.yaml', path.join(testConfigDir, 'absolute-config2.yaml')],
         checks: {
           child: {
-            type: 'webhook',
+            type: 'http',
             url: 'https://example.com',
+            body: '{"test": "data"}',
             on: ['pr_opened'],
           },
         },

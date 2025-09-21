@@ -18,6 +18,14 @@ export interface PRDiff {
   status: 'added' | 'removed' | 'modified' | 'renamed';
 }
 
+export interface PRComment {
+  id: number;
+  author: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PRInfo {
   number: number;
   title: string;
@@ -34,6 +42,7 @@ export interface PRInfo {
   isIncremental?: boolean; // Flag to indicate if this was intended as incremental analysis
   isIssue?: boolean; // Flag to indicate this is an issue, not a PR
   eventContext?: Record<string, unknown>; // GitHub event context for templates
+  comments?: PRComment[]; // Comments added dynamically
 }
 
 interface NetworkError {
@@ -177,13 +186,13 @@ export class PRAnalyzer {
     try {
       console.log(`💬 Fetching comment history for PR #${prInfo.number}`);
       const comments = await this.fetchPRComments(owner, repo, prInfo.number);
-      (prInfo as any).comments = comments;
+      (prInfo as PRInfo & { comments: PRComment[] }).comments = comments;
       console.log(`✅ Retrieved ${comments.length} comments`);
     } catch (error) {
       console.warn(
         `⚠️ Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
-      (prInfo as any).comments = [];
+      (prInfo as PRInfo & { comments: PRComment[] }).comments = [];
     }
 
     // Add commit diff for incremental analysis

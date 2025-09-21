@@ -173,7 +173,7 @@ export interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-export type ConfigCheckType = 'ai' | 'tool' | 'webhook' | 'noop';
+export type ConfigCheckType = 'ai' | 'tool' | 'http' | 'http_input' | 'http_client' | 'noop';
 
 /**
  * Valid event triggers for checks
@@ -184,7 +184,9 @@ export type EventTrigger =
   | 'pr_closed'
   | 'issue_opened'
   | 'issue_comment'
-  | 'manual';
+  | 'manual'
+  | 'schedule'
+  | 'webhook_received';
 
 /**
  * Valid output formats
@@ -231,8 +233,20 @@ export interface CheckConfig {
   exec?: string;
   /** Stdin input for tools with Liquid template support - optional for tool checks */
   stdin?: string;
-  /** Webhook URL - required for webhook checks */
+  /** HTTP URL - required for http output checks */
   url?: string;
+  /** HTTP body template (Liquid) - required for http output checks */
+  body?: string;
+  /** HTTP method (defaults to POST) */
+  method?: string;
+  /** HTTP headers */
+  headers?: Record<string, string>;
+  /** HTTP endpoint path - required for http_input checks */
+  endpoint?: string;
+  /** Transform template for http_input data (Liquid) - optional */
+  transform?: string;
+  /** Cron schedule expression (e.g., "0 2 * * *") - optional for any check type */
+  schedule?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
   focus?: string;
   /** Command that triggers this check (e.g., "review", "security-scan") - optional */
@@ -354,6 +368,66 @@ export interface OutputConfig {
 }
 
 /**
+ * HTTP server authentication configuration
+ */
+export interface HttpAuthConfig {
+  /** Authentication type */
+  type: 'bearer_token' | 'hmac' | 'basic' | 'none';
+  /** Secret or token for authentication */
+  secret?: string;
+  /** Username for basic auth */
+  username?: string;
+  /** Password for basic auth */
+  password?: string;
+}
+
+/**
+ * HTTP server endpoint configuration
+ */
+export interface HttpEndpointConfig {
+  /** Path for the webhook endpoint */
+  path: string;
+  /** Optional transform template (Liquid) for the received data */
+  transform?: string;
+  /** Optional name/ID for this endpoint */
+  name?: string;
+}
+
+/**
+ * TLS/SSL configuration for HTTPS server
+ */
+export interface TlsConfig {
+  /** Enable TLS/HTTPS */
+  enabled: boolean;
+  /** Path to TLS certificate file or certificate content */
+  cert?: string;
+  /** Path to TLS key file or key content */
+  key?: string;
+  /** Path to CA certificate file or CA content (optional) */
+  ca?: string;
+  /** Reject unauthorized connections (default: true) */
+  rejectUnauthorized?: boolean;
+}
+
+/**
+ * HTTP server configuration for receiving webhooks
+ */
+export interface HttpServerConfig {
+  /** Whether HTTP server is enabled */
+  enabled: boolean;
+  /** Port to listen on */
+  port: number;
+  /** Host/IP to bind to (defaults to 0.0.0.0) */
+  host?: string;
+  /** TLS/SSL configuration for HTTPS */
+  tls?: TlsConfig;
+  /** Authentication configuration */
+  auth?: HttpAuthConfig;
+  /** HTTP endpoints configuration */
+  endpoints?: HttpEndpointConfig[];
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -365,6 +439,8 @@ export interface VisorConfig {
   checks: Record<string, CheckConfig>;
   /** Output configuration */
   output: OutputConfig;
+  /** HTTP server configuration for receiving webhooks */
+  http_server?: HttpServerConfig;
   /** Global environment variables */
   env?: EnvConfig;
   /** Global AI model setting */

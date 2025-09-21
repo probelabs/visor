@@ -1,0 +1,240 @@
+version: "1.0"
+
+# Complete example of HTTP integration features
+# Demonstrates http, http_input, and http_client check types
+
+# HTTP server for receiving webhooks (disabled in GitHub Actions)
+http_server:
+  enabled: true
+  port: 8080
+  host: "0.0.0.0"
+  auth:
+    type: bearer_token
+    secret: "${HTTP_SERVER_SECRET}"  # Environment variable
+  endpoints:
+    - path: "/github/webhook"
+      name: "github-events"
+    - path: "/monitoring/health"
+      name: "health-checks"
+
+checks:
+  # === HTTP CLIENT: Fetch data from external APIs ===
+
+  # Fetch repository statistics from GitHub API
+  github-stats:
+    type: http_client
+    url: "https://api.github.com/repos/{{ pr.base | split: '/' | last }}/stats/contributors"
+    headers:
+      Authorization: "token ${GITHUB_TOKEN}"
+      Accept: "application/vnd.github.v3+json"
+    transform: |
+      {
+        "total_contributors": {{ response | size }},
+        "top_contributor": "{{ response | first | map: 'author.login' }}",
+        "total_commits": {{ response | map: 'total' | sum }}
+      }
+    schedule: "0 0 * * 0"  # Weekly on Sunday
+
+  # Fetch build status from CI/CD system
+  ci-status:
+    type: http_client
+    url: "${CI_API_URL}/builds/{{ pr.head }}"
+    method: GET
+    headers:
+      X-API-Key: "${CI_API_KEY}"
+    transform: |
+      {
+        "build_status": "{{ response.status }}",
+        "test_coverage": {{ response.coverage }},
+        "failed_tests": {{ response.failed_tests | default: 0 }}
+      }
+
+  # Poll external service with POST request
+  vulnerability-check:
+    type: http_client
+    url: "${SECURITY_API_URL}/scan"
+    method: POST
+    body: |
+      {
+        "repository": "{{ pr.base }}",
+        "commit": "{{ pr.head }}",
+        "files": {{ pr.files | map: 'filename' | json }}
+      }
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer ${SECURITY_API_TOKEN}"
+    transform: |
+      {
+        "vulnerabilities": {{ response.vulnerabilities | default: [] | json }},
+        "risk_score": {{ response.risk_score | default: 0 }}
+      }
+
+  # === HTTP INPUT: Receive webhook data ===
+
+  # Receive GitHub webhook events
+  github-webhook-receiver:
+    type: http_input
+    endpoint: "/github/webhook"
+    on: [webhook_received]
+    transform: |
+      {
+        "event": "{{ webhook.action }}",
+        "repository": "{{ webhook.repository.full_name }}",
+        "sender": "{{ webhook.sender.login }}"
+      }
+
+  # Receive monitoring health checks
+  health-check-receiver:
+    type: http_input
+    endpoint: "/monitoring/health"
+    on: [webhook_received]
+
+  # === AI ANALYSIS: Process fetched/received data ===
+
+  # Analyze GitHub statistics
+  contributor-analysis:
+    type: ai
+    depends_on: [github-stats]
+    prompt: |
+      Analyze the repository contributor statistics:
+      - Total contributors: {{ outputs['github-stats'].suggestions | first | parse_json: 'total_contributors' }}
+      - Top contributor: {{ outputs['github-stats'].suggestions | first | parse_json: 'top_contributor' }}
+      - Total commits: {{ outputs['github-stats'].suggestions | first | parse_json: 'total_commits' }}
+
+      Provide insights on:
+      1. Contribution patterns
+      2. Bus factor risks
+      3. Recommendations for improving collaboration
+    group: analytics
+
+  # Analyze CI/CD status
+  build-analysis:
+    type: ai
+    depends_on: [ci-status]
+    prompt: |
+      CI/CD Build Analysis:
+      {{ outputs['ci-status'].suggestions | first }}
+
+      Evaluate:
+      1. Build health and stability
+      2. Test coverage adequacy
+      3. Failed test patterns
+      4. Recommendations for improvement
+    group: ci-cd
+
+  # Security assessment based on vulnerability scan
+  security-assessment:
+    type: ai
+    depends_on: [vulnerability-check]
+    prompt: |
+      Security Vulnerability Assessment:
+      {{ outputs['vulnerability-check'].suggestions | first }}
+
+      Provide:
+      1. Risk assessment summary
+      2. Critical vulnerabilities that need immediate attention
+      3. Remediation priorities
+      4. Security best practices recommendations
+    group: security
+
+  # === HTTP OUTPUT: Send results to external services ===
+
+  # Send analysis to Slack
+  slack-notification:
+    type: http
+    depends_on: [contributor-analysis, build-analysis]
+    url: "${SLACK_WEBHOOK_URL}"
+    method: POST
+    body: |
+      {
+        "text": "Repository Analysis Complete",
+        "attachments": [
+          {
+            "color": "good",
+            "title": "Contributor Analysis",
+            "text": "{{ outputs['contributor-analysis'].suggestions | first | truncate: 200 }}"
+          },
+          {
+            "color": "{{ outputs['ci-status'].suggestions | first | parse_json: 'build_status' == 'passed' ? 'good' : 'danger' }}",
+            "title": "Build Status",
+            "text": "{{ outputs['build-analysis'].suggestions | first | truncate: 200 }}"
+          }
+        ]
+      }
+
+  # Send metrics to monitoring system
+  metrics-export:
+    type: http
+    depends_on: [github-stats, ci-status]
+    url: "${METRICS_ENDPOINT}"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      X-API-Key: "${METRICS_API_KEY}"
+    body: |
+      {
+        "timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%S' }}",
+        "metrics": {
+          "contributors": {{ outputs['github-stats'].suggestions | first | parse_json: 'total_contributors' }},
+          "commits": {{ outputs['github-stats'].suggestions | first | parse_json: 'total_commits' }},
+          "test_coverage": {{ outputs['ci-status'].suggestions | first | parse_json: 'test_coverage' }},
+          "failed_tests": {{ outputs['ci-status'].suggestions | first | parse_json: 'failed_tests' }}
+        }
+      }
+
+  # Create JIRA ticket for critical vulnerabilities
+  jira-ticket:
+    type: http
+    depends_on: [vulnerability-check]
+    if: "outputs['vulnerability-check'].suggestions | first | parse_json: 'risk_score' > 7"
+    url: "${JIRA_API_URL}/rest/api/2/issue"
+    method: POST
+    headers:
+      Authorization: "Basic ${JIRA_AUTH}"
+      Content-Type: "application/json"
+    body: |
+      {
+        "fields": {
+          "project": { "key": "SEC" },
+          "summary": "Critical vulnerabilities detected in {{ pr.base }}",
+          "description": "Risk Score: {{ outputs['vulnerability-check'].suggestions | first | parse_json: 'risk_score' }}\n\nVulnerabilities:\n{{ outputs['vulnerability-check'].suggestions | first | parse_json: 'vulnerabilities' | json }}",
+          "issuetype": { "name": "Bug" },
+          "priority": { "name": "Critical" }
+        }
+      }
+
+  # === SCHEDULED AGGREGATION ===
+
+  # Daily summary that combines multiple data sources
+  daily-report:
+    type: http_client
+    schedule: "0 18 * * *"  # 6 PM daily
+    url: "${ANALYTICS_API}/daily-summary"
+    method: GET
+    transform: |
+      {
+        "date": "{{ 'now' | date: '%Y-%m-%d' }}",
+        "summary": {{ response | json }}
+      }
+
+  # Send daily report via email service
+  email-report:
+    type: http
+    depends_on: [daily-report]
+    url: "${EMAIL_SERVICE_URL}/send"
+    method: POST
+    headers:
+      Authorization: "Bearer ${EMAIL_API_KEY}"
+    body: |
+      {
+        "to": ["team@example.com"],
+        "subject": "Daily Visor Report - {{ 'now' | date: '%Y-%m-%d' }}",
+        "html": "<h1>Daily Summary</h1><pre>{{ outputs['daily-report'].suggestions | first }}</pre>"
+      }
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+  suppressionEnabled: true

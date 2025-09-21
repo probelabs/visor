@@ -22,7 +22,14 @@ import { ConfigMerger } from './utils/config-merger';
  * Configuration manager for Visor
  */
 export class ConfigManager {
-  private validCheckTypes: ConfigCheckType[] = ['ai', 'tool', 'webhook', 'noop'];
+  private validCheckTypes: ConfigCheckType[] = [
+    'ai',
+    'tool',
+    'http',
+    'http_input',
+    'http_client',
+    'noop',
+  ];
   private validEventTriggers: EventTrigger[] = [
     'pr_opened',
     'pr_updated',
@@ -30,6 +37,8 @@ export class ConfigManager {
     'issue_opened',
     'issue_comment',
     'manual',
+    'schedule',
+    'webhook_received',
   ];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
@@ -214,7 +223,11 @@ export class ConfigManager {
       }
 
       if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
-        console.log(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
+        // Use stderr to avoid contaminating JSON/SARIF output
+        const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+        const logFn =
+          outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+        logFn(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
         const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
 
@@ -359,6 +372,14 @@ export class ConfigManager {
       this.validateOutputConfig(config.output as unknown as Record<string, unknown>, errors);
     }
 
+    // Validate HTTP server configuration if present
+    if (config.http_server) {
+      this.validateHttpServerConfig(
+        config.http_server as unknown as Record<string, unknown>,
+        errors
+      );
+    }
+
     // Validate max_parallelism if present
     if (config.max_parallelism !== undefined) {
       if (
@@ -416,12 +437,49 @@ export class ConfigManager {
       });
     }
 
-    // Webhook checks require url field
-    if (checkConfig.type === 'webhook' && !checkConfig.url) {
+    // HTTP output checks require url and body fields
+    if (checkConfig.type === 'http') {
+      if (!checkConfig.url) {
+        errors.push({
+          field: `checks.${checkName}.url`,
+          message: `Invalid check configuration for "${checkName}": missing url field (required for http checks)`,
+        });
+      }
+      if (!checkConfig.body) {
+        errors.push({
+          field: `checks.${checkName}.body`,
+          message: `Invalid check configuration for "${checkName}": missing body field (required for http checks)`,
+        });
+      }
+    }
+
+    // HTTP input checks require endpoint field
+    if (checkConfig.type === 'http_input' && !checkConfig.endpoint) {
+      errors.push({
+        field: `checks.${checkName}.endpoint`,
+        message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`,
+      });
+    }
+
+    // HTTP client checks require url field
+    if (checkConfig.type === 'http_client' && !checkConfig.url) {
       errors.push({
         field: `checks.${checkName}.url`,
-        message: `Invalid check configuration for "${checkName}": missing url field (required for webhook checks)`,
+        message: `Invalid check configuration for "${checkName}": missing url field (required for http_client checks)`,
       });
+    }
+
+    // Validate cron schedule if specified
+    if (checkConfig.schedule) {
+      // Basic cron validation - could use node-cron.validate() for better validation
+      const cronParts = checkConfig.schedule.split(' ');
+      if (cronParts.length < 5 || cronParts.length > 6) {
+        errors.push({
+          field: `checks.${checkName}.schedule`,
+          message: `Invalid cron expression for "${checkName}": ${checkConfig.schedule}`,
+          value: checkConfig.schedule,
+        });
+      }
     }
 
     if (!checkConfig.on || !Array.isArray(checkConfig.on)) {
@@ -462,6 +520,86 @@ export class ConfigManager {
             message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
             value: checkConfig.reuse_ai_session,
           });
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate HTTP server configuration
+   */
+  private validateHttpServerConfig(
+    httpServerConfig: Record<string, unknown>,
+    errors: ConfigValidationError[]
+  ): void {
+    if (typeof httpServerConfig.enabled !== 'boolean') {
+      errors.push({
+        field: 'http_server.enabled',
+        message: 'http_server.enabled must be a boolean',
+        value: httpServerConfig.enabled,
+      });
+    }
+
+    if (httpServerConfig.enabled === true) {
+      // Port is required when enabled
+      if (
+        typeof httpServerConfig.port !== 'number' ||
+        httpServerConfig.port < 1 ||
+        httpServerConfig.port > 65535
+      ) {
+        errors.push({
+          field: 'http_server.port',
+          message: 'http_server.port must be a number between 1 and 65535',
+          value: httpServerConfig.port,
+        });
+      }
+
+      // Validate auth if present
+      if (httpServerConfig.auth) {
+        const auth = httpServerConfig.auth as Record<string, unknown>;
+        const validAuthTypes = ['bearer_token', 'hmac', 'basic', 'none'];
+
+        if (!auth.type || !validAuthTypes.includes(auth.type as string)) {
+          errors.push({
+            field: 'http_server.auth.type',
+            message: `Invalid auth type. Must be one of: ${validAuthTypes.join(', ')}`,
+            value: auth.type,
+          });
+        }
+      }
+
+      // Validate TLS configuration if present
+      if (httpServerConfig.tls && typeof httpServerConfig.tls === 'object') {
+        const tls = httpServerConfig.tls as Record<string, unknown>;
+
+        if (tls.enabled === true) {
+          // Cert and key are required when TLS is enabled
+          if (!tls.cert) {
+            errors.push({
+              field: 'http_server.tls.cert',
+              message: 'TLS certificate is required when TLS is enabled',
+            });
+          }
+          if (!tls.key) {
+            errors.push({
+              field: 'http_server.tls.key',
+              message: 'TLS key is required when TLS is enabled',
+            });
+          }
+        }
+      }
+
+      // Validate endpoints if present
+      if (httpServerConfig.endpoints && Array.isArray(httpServerConfig.endpoints)) {
+        for (let i = 0; i < httpServerConfig.endpoints.length; i++) {
+          const endpoint = httpServerConfig.endpoints[i] as Record<string, unknown>;
+          if (!endpoint.path || typeof endpoint.path !== 'string') {
+            errors.push({
+              field: `http_server.endpoints[${i}].path`,
+              message: 'Endpoint path must be a string',
+              value: endpoint.path,
+            });
+          }
         }
       }
     }

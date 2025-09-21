@@ -68,7 +68,9 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAvailableProviders();
       expect(providers).toContain('ai');
       expect(providers).toContain('tool');
-      expect(providers).toContain('webhook');
+      expect(providers).toContain('http');
+      expect(providers).toContain('http_input');
+      expect(providers).toContain('http_client');
       expect(providers).toContain('noop');
     });
   });
@@ -172,8 +174,8 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 4 default providers (ai, tool, webhook, noop) + 2 custom = 6 total
-      expect(providers.length).toBe(6);
+      // Reset adds 6 default providers (ai, tool, http, http_input, http_client, noop) + 2 custom = 8 total
+      expect(providers.length).toBe(8);
     });
   });
 
@@ -220,7 +222,9 @@ describe('CheckProviderRegistry', () => {
       expect(registry.hasProvider('custom')).toBe(false);
       expect(registry.hasProvider('ai')).toBe(true);
       expect(registry.hasProvider('tool')).toBe(true);
-      expect(registry.hasProvider('webhook')).toBe(true);
+      expect(registry.hasProvider('http')).toBe(true);
+      expect(registry.hasProvider('http_input')).toBe(true);
+      expect(registry.hasProvider('http_client')).toBe(true);
       expect(registry.hasProvider('noop')).toBe(true);
     });
   });

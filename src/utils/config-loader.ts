@@ -200,11 +200,18 @@ export class ConfigLoader {
     // Check cache
     const cacheEntry = this.cache.get(url);
     if (cacheEntry && Date.now() - cacheEntry.timestamp < cacheEntry.ttl) {
-      console.log(`📦 Using cached configuration from: ${url}`);
+      // Use stderr to avoid contaminating JSON/SARIF output
+      const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+      const logFn =
+        outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+      logFn(`📦 Using cached configuration from: ${url}`);
       return cacheEntry.config;
     }
 
-    console.log(`⬇️  Fetching remote configuration from: ${url}`);
+    // Use stderr to avoid contaminating JSON/SARIF output
+    const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    logFn(`⬇️  Fetching remote configuration from: ${url}`);
 
     try {
       const controller = new AbortController();
@@ -284,7 +291,11 @@ export class ConfigLoader {
     }
 
     if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
-      console.log(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
+      // Use stderr to avoid contaminating JSON/SARIF output
+      const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+      const logFn =
+        outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+      logFn(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
 

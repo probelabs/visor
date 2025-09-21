@@ -466,25 +466,34 @@ export class AICheckProvider extends CheckProvider {
     // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
 
-    console.error(
-      `🔧 Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
-    );
-
     // Pass the custom prompt and schema - no fallbacks
     const schema = config.schema as string | undefined;
-    console.error(`🔧 Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-    console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+
+    // Only output debug messages if debug mode is enabled
+    if (aiConfig.debug) {
+      console.error(
+        `🔧 Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
+      );
+      console.error(`🔧 Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
+      console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+    }
 
     try {
-      console.error(`🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`);
+      if (aiConfig.debug) {
+        console.error(
+          `🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`
+        );
+      }
 
       let result: ReviewSummary;
 
       // Check if we should use session reuse
       if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
-        console.error(
-          `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
-        );
+        if (aiConfig.debug) {
+          console.error(
+            `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
+          );
+        }
         result = await service.executeReviewWithSessionReuse(
           prInfo,
           processedPrompt,
@@ -493,7 +502,9 @@ export class AICheckProvider extends CheckProvider {
           config.checkName
         );
       } else {
-        console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
+        if (aiConfig.debug) {
+          console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
+        }
         result = await service.executeReview(
           prInfo,
           processedPrompt,
