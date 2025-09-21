@@ -1633,6 +1633,47 @@ tls:
   key: "/etc/letsencrypt/live/example.com/privkey.pem"
 ```
 
+### HTTP Security Features
+
+Visor's HTTP server includes comprehensive security protections:
+
+#### Authentication Methods
+```yaml
+# Bearer Token Authentication
+auth:
+  type: bearer_token
+  secret: "${WEBHOOK_SECRET}"
+
+# HMAC-SHA256 Signature Verification
+auth:
+  type: hmac
+  secret: "${WEBHOOK_SECRET}"
+
+# Basic Authentication
+auth:
+  type: basic
+  username: "${HTTP_USERNAME}"
+  password: "${HTTP_PASSWORD}"
+```
+
+#### HMAC Authentication Details
+For `hmac` authentication, webhooks must include the `x-webhook-signature` header:
+- Signature format: `sha256={hash}`
+- Uses HMAC-SHA256 with the configured secret
+- Implements timing-safe comparison to prevent timing attacks
+- Compatible with GitHub webhook signatures
+
+#### DoS Protection
+- **Request size limits**: Maximum 1MB request body size
+- **Early rejection**: Validates `Content-Length` header before processing
+- **Graceful error handling**: Returns proper HTTP status codes (413 Payload Too Large)
+
+#### Security Best Practices
+- **Environment detection**: Automatically disables in GitHub Actions
+- **TLS support**: Full HTTPS configuration with custom certificates
+- **Input validation**: Validates all webhook payloads before processing
+- **Error isolation**: Security failures don't affect independent checks
+
 ### Complete HTTP Pipeline Example
 
 ```yaml
