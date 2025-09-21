@@ -1,0 +1,209 @@
+version: "1.0"
+
+# Example of HTTPS server configuration with TLS/SSL
+# Note: This server is automatically disabled when running in GitHub Actions
+
+http_server:
+  enabled: true
+  port: 8443  # Standard HTTPS port
+  host: "0.0.0.0"
+
+  # TLS/SSL Configuration Options
+  tls:
+    enabled: true
+
+    # Option 1: File paths to certificates
+    # cert: "/path/to/server.crt"
+    # key: "/path/to/server.key"
+    # ca: "/path/to/ca.crt"  # Optional: CA certificate
+
+    # Option 2: Environment variables containing certificate content
+    cert: "${TLS_CERT}"  # Certificate content from environment variable
+    key: "${TLS_KEY}"    # Private key content from environment variable
+    ca: "${TLS_CA}"      # Optional: CA cert from environment variable
+
+    # Option 3: Inline certificate content (not recommended for production)
+    # cert: |
+    #   -----BEGIN CERTIFICATE-----
+    #   MIIDXTCCAkWgAwIBAgIJAKLdQVPy90WjMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV
+    #   ... certificate content ...
+    #   -----END CERTIFICATE-----
+    # key: |
+    #   -----BEGIN PRIVATE KEY-----
+    #   MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDYscr5BQJG
+    #   ... key content ...
+    #   -----END PRIVATE KEY-----
+
+    # Reject unauthorized connections (default: true)
+    rejectUnauthorized: true
+
+  # Authentication for webhook endpoints
+  auth:
+    type: bearer_token
+    secret: "${WEBHOOK_SECRET}"
+
+  # Webhook endpoints
+  endpoints:
+    - path: "/webhook/github"
+      name: "github-events"
+    - path: "/webhook/jenkins"
+      name: "jenkins-builds"
+    - path: "/webhook/datadog"
+      name: "monitoring-alerts"
+
+checks:
+  # === Webhook receivers for HTTPS endpoints ===
+
+  github-webhook:
+    type: http_input
+    endpoint: "/webhook/github"
+    on: [webhook_received]
+    transform: |
+      {
+        "event": "{{ webhook.action }}",
+        "repository": "{{ webhook.repository.full_name }}",
+        "sender": "{{ webhook.sender.login }}",
+        "signature": "{{ headers['x-hub-signature-256'] }}"
+      }
+
+  jenkins-webhook:
+    type: http_input
+    endpoint: "/webhook/jenkins"
+    on: [webhook_received]
+    transform: |
+      {
+        "job": "{{ webhook.name }}",
+        "build": "{{ webhook.build.number }}",
+        "status": "{{ webhook.build.status }}",
+        "url": "{{ webhook.build.url }}"
+      }
+
+  datadog-alert:
+    type: http_input
+    endpoint: "/webhook/datadog"
+    on: [webhook_received]
+    transform: |
+      {
+        "alert": "{{ webhook.title }}",
+        "priority": "{{ webhook.priority }}",
+        "tags": {{ webhook.tags | json }},
+        "event_msg": "{{ webhook.event_msg }}"
+      }
+
+  # === Process webhook data ===
+
+  github-analysis:
+    type: ai
+    depends_on: [github-webhook]
+    prompt: |
+      Analyze the GitHub webhook event:
+      {{ outputs['github-webhook'].suggestions | first }}
+
+      Determine:
+      1. Security implications
+      2. Required actions
+      3. Impact assessment
+    group: github
+
+  jenkins-build-analysis:
+    type: ai
+    depends_on: [jenkins-webhook]
+    prompt: |
+      Jenkins build notification:
+      {{ outputs['jenkins-webhook'].suggestions | first }}
+
+      Analyze:
+      1. Build failure patterns
+      2. Performance trends
+      3. Recommended fixes
+    group: ci-cd
+
+  monitoring-response:
+    type: ai
+    depends_on: [datadog-alert]
+    prompt: |
+      Datadog monitoring alert:
+      {{ outputs['datadog-alert'].suggestions | first }}
+
+      Provide:
+      1. Root cause analysis
+      2. Immediate remediation steps
+      3. Long-term prevention strategies
+    group: monitoring
+
+  # === Send secure notifications ===
+
+  # Send to secure internal API using HTTPS
+  internal-api-notification:
+    type: http
+    depends_on: [github-analysis, jenkins-build-analysis]
+    url: "https://internal-api.example.com/notifications"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer ${INTERNAL_API_TOKEN}"
+      X-TLS-Client-Cert: "${CLIENT_CERT}"  # Client certificate for mTLS
+    body: |
+      {
+        "source": "visor",
+        "timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%S' }}",
+        "github_analysis": {{ outputs['github-analysis'] | json }},
+        "jenkins_analysis": {{ outputs['jenkins-build-analysis'] | json }},
+        "secure": true,
+        "protocol": "https"
+      }
+
+  # Fetch from secure API endpoint
+  secure-api-fetch:
+    type: http_client
+    url: "https://secure-api.example.com/data"
+    method: GET
+    headers:
+      Authorization: "Bearer ${SECURE_API_TOKEN}"
+      X-Client-Id: "${CLIENT_ID}"
+    # Note: http_client automatically handles HTTPS connections
+    transform: |
+      {
+        "fetched_at": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%S' }}",
+        "data": {{ response | json }}
+      }
+    schedule: "*/30 * * * *"  # Every 30 minutes
+
+# Production TLS Setup Examples:
+
+# 1. Let's Encrypt with Certbot:
+#    tls:
+#      cert: "/etc/letsencrypt/live/example.com/fullchain.pem"
+#      key: "/etc/letsencrypt/live/example.com/privkey.pem"
+
+# 2. Self-signed for development:
+#    Generate: openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+#    tls:
+#      cert: "./cert.pem"
+#      key: "./key.pem"
+#      rejectUnauthorized: false  # Allow self-signed in dev
+
+# 3. Kubernetes secrets:
+#    tls:
+#      cert: "${TLS_CERT}"  # Mounted from K8s secret
+#      key: "${TLS_KEY}"    # Mounted from K8s secret
+
+# 4. AWS Certificate Manager:
+#    Use AWS ALB/NLB for TLS termination, then:
+#    tls:
+#      enabled: false  # TLS handled by load balancer
+#    auth:
+#      type: bearer_token  # Still authenticate requests
+
+# 5. Mutual TLS (mTLS):
+#    tls:
+#      cert: "${SERVER_CERT}"
+#      key: "${SERVER_KEY}"
+#      ca: "${CLIENT_CA}"  # CA to verify client certificates
+#      rejectUnauthorized: true
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

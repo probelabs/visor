@@ -1,7 +1,9 @@
 import { CheckProvider } from './check-provider.interface';
 import { AICheckProvider } from './ai-check-provider';
 import { ToolCheckProvider } from './tool-check-provider';
-import { WebhookCheckProvider } from './webhook-check-provider';
+import { HttpCheckProvider } from './http-check-provider';
+import { HttpInputProvider } from './http-input-provider';
+import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
 
 /**
@@ -33,7 +35,9 @@ export class CheckProviderRegistry {
     // Register all built-in providers
     this.register(new AICheckProvider());
     this.register(new ToolCheckProvider());
-    this.register(new WebhookCheckProvider());
+    this.register(new HttpCheckProvider());
+    this.register(new HttpInputProvider());
+    this.register(new HttpClientProvider());
     this.register(new NoopCheckProvider());
   }
 

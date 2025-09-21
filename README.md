@@ -1476,6 +1476,244 @@ When new commits are pushed to a PR, Visor performs incremental analysis:
 - **Collision Detection**: Prevents conflicts when multiple reviews run simultaneously
 - **Context-Aware Updates**: Comments are updated with relevant context (PR opened, updated, synchronized)
 
+## 🌐 HTTP Integration & Scheduling
+
+Visor provides comprehensive HTTP integration capabilities including webhook reception, HTTP outputs, scheduled executions via cron, and TLS/HTTPS support.
+
+### HTTP Server for Webhook Reception
+
+Configure an HTTP/HTTPS server to receive webhooks and trigger checks:
+
+```yaml
+version: "1.0"
+
+http_server:
+  enabled: true
+  port: 8080
+  host: "0.0.0.0"
+
+  # Optional TLS/HTTPS configuration
+  tls:
+    enabled: true
+    cert: "${TLS_CERT}"  # From environment variable
+    key: "${TLS_KEY}"
+    ca: "${TLS_CA}"      # Optional CA certificate
+    rejectUnauthorized: true
+
+  # Authentication
+  auth:
+    type: bearer_token
+    secret: "${WEBHOOK_SECRET}"
+
+  # Webhook endpoints
+  endpoints:
+    - path: "/webhook/github"
+      name: "github-events"
+    - path: "/webhook/jenkins"
+      name: "jenkins-builds"
+```
+
+**Note**: The HTTP server is automatically disabled when running in GitHub Actions to avoid conflicts.
+
+### Check Types for HTTP Integration
+
+#### 1. HTTP Input (Webhook Receiver)
+Receive data from configured webhook endpoints:
+
+```yaml
+checks:
+  github-webhook:
+    type: http_input
+    endpoint: "/webhook/github"
+    on: [webhook_received]
+    transform: |
+      {
+        "event": "{{ webhook.action }}",
+        "repository": "{{ webhook.repository.full_name }}"
+      }
+```
+
+#### 2. HTTP Output (Send Data)
+Send check results to external services:
+
+```yaml
+checks:
+  notify-external:
+    type: http
+    depends_on: [security-check]
+    url: "https://api.example.com/notify"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer ${API_TOKEN}"
+    body: |
+      {
+        "results": {{ outputs['security-check'] | json }},
+        "timestamp": "{{ 'now' | date: '%Y-%m-%d %H:%M:%S' }}"
+      }
+```
+
+#### 3. HTTP Client (Fetch Data)
+Fetch data from external APIs:
+
+```yaml
+checks:
+  fetch-config:
+    type: http_client
+    url: "https://api.example.com/config"
+    method: GET
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    transform: |
+      {
+        "settings": {{ response.data | json }},
+        "fetched_at": "{{ 'now' | date: '%Y-%m-%d' }}"
+      }
+```
+
+### Cron Scheduling
+
+Schedule any check type to run at specific intervals:
+
+```yaml
+checks:
+  daily-security-scan:
+    type: ai
+    prompt: "Perform comprehensive security audit"
+    schedule: "0 2 * * *"  # Run at 2 AM daily
+
+  hourly-metrics:
+    type: http_client
+    url: "https://metrics.example.com/latest"
+    schedule: "0 * * * *"  # Every hour
+
+  weekly-report:
+    type: ai
+    prompt: "Generate weekly summary"
+    schedule: "0 9 * * MON"  # Every Monday at 9 AM
+```
+
+**Cron Expression Format**:
+```
+┌────────────── minute (0-59)
+│ ┌──────────── hour (0-23)
+│ │ ┌────────── day of month (1-31)
+│ │ │ ┌──────── month (1-12)
+│ │ │ │ ┌────── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+### TLS/HTTPS Configuration
+
+Support for various TLS certificate configurations:
+
+#### Environment Variables
+```yaml
+tls:
+  enabled: true
+  cert: "${TLS_CERT}"  # Certificate from env var
+  key: "${TLS_KEY}"    # Private key from env var
+```
+
+#### File Paths
+```yaml
+tls:
+  enabled: true
+  cert: "/etc/ssl/certs/server.crt"
+  key: "/etc/ssl/private/server.key"
+  ca: "/etc/ssl/certs/ca-bundle.crt"
+```
+
+#### Let's Encrypt
+```yaml
+tls:
+  enabled: true
+  cert: "/etc/letsencrypt/live/example.com/fullchain.pem"
+  key: "/etc/letsencrypt/live/example.com/privkey.pem"
+```
+
+### Complete HTTP Pipeline Example
+
+```yaml
+version: "1.0"
+
+# HTTP server configuration
+http_server:
+  enabled: true
+  port: 8443
+  tls:
+    enabled: true
+    cert: "${TLS_CERT}"
+    key: "${TLS_KEY}"
+  auth:
+    type: bearer_token
+    secret: "${WEBHOOK_SECRET}"
+  endpoints:
+    - path: "/webhook/deployment"
+      name: "deployment-trigger"
+
+checks:
+  # 1. Receive webhook
+  deployment-webhook:
+    type: http_input
+    endpoint: "/webhook/deployment"
+    on: [webhook_received]
+    transform: |
+      {
+        "version": "{{ webhook.version }}",
+        "environment": "{{ webhook.environment }}"
+      }
+
+  # 2. Analyze deployment
+  deployment-analysis:
+    type: ai
+    depends_on: [deployment-webhook]
+    prompt: |
+      Analyze deployment for version {{ outputs['deployment-webhook'].suggestions | first }}
+      Check for potential issues and risks
+
+  # 3. Fetch current status
+  current-status:
+    type: http_client
+    depends_on: [deployment-webhook]
+    url: "https://api.example.com/status"
+    method: GET
+
+  # 4. Send results
+  notify-team:
+    type: http
+    depends_on: [deployment-analysis, current-status]
+    url: "https://slack.example.com/webhook"
+    body: |
+      {
+        "text": "Deployment Analysis Complete",
+        "analysis": {{ outputs['deployment-analysis'] | json }},
+        "current_status": {{ outputs['current-status'] | json }}
+      }
+
+  # 5. Scheduled health check
+  health-check:
+    type: http_client
+    url: "https://api.example.com/health"
+    schedule: "*/5 * * * *"  # Every 5 minutes
+    transform: |
+      {
+        "status": "{{ response.status }}",
+        "checked_at": "{{ 'now' | date: '%Y-%m-%d %H:%M:%S' }}"
+      }
+```
+
+### Liquid Template Support
+
+All HTTP configurations support Liquid templating for dynamic content:
+
+- Access webhook data: `{{ webhook.field }}`
+- Access headers: `{{ headers['x-custom-header'] }}`
+- Access previous outputs: `{{ outputs['check-name'].suggestions | first }}`
+- Date formatting: `{{ 'now' | date: '%Y-%m-%d' }}`
+- JSON encoding: `{{ data | json }}`
+
 ## 🔧 Pluggable Architecture
 
 Visor features a pluggable provider system for extensibility:
@@ -1483,8 +1721,10 @@ Visor features a pluggable provider system for extensibility:
 ### Supported Check Types
 - **AI Provider**: Intelligent analysis using LLMs (Google Gemini, Anthropic Claude, OpenAI GPT)
 - **Tool Provider**: Integration with external tools (ESLint, Prettier, SonarQube)
+- **HTTP Provider**: Send data to external HTTP endpoints
+- **HTTP Input Provider**: Receive data from webhooks
+- **HTTP Client Provider**: Fetch data from external APIs
 - **Script Provider**: Custom shell scripts and commands
-- **Webhook Provider**: External service integration via HTTP calls
 
 ### Adding Custom Providers
 ```typescript

@@ -117,9 +117,9 @@ jest.mock('../../src/providers/tool-check-provider', () => ({
   })),
 }));
 
-jest.mock('../../src/providers/webhook-check-provider', () => ({
-  WebhookCheckProvider: jest.fn().mockImplementation(() => ({
-    getName: jest.fn().mockReturnValue('webhook'),
+jest.mock('../../src/providers/http-check-provider', () => ({
+  HttpCheckProvider: jest.fn().mockImplementation(() => ({
+    getName: jest.fn().mockReturnValue('http'),
     initialize: jest.fn().mockResolvedValue(undefined),
     execute: jest.fn().mockResolvedValue({ issues: [], suggestions: [] }),
   })),

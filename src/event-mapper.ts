@@ -148,6 +148,14 @@ export class EventMapper {
         // Push events are not directly supported as PR events
         // They would need additional context to determine if they're part of a PR
         return null;
+
+      case 'schedule':
+        // GitHub Actions scheduled event
+        return 'schedule';
+
+      case 'workflow_dispatch':
+        // Manual workflow trigger could be treated as schedule
+        return 'schedule';
     }
 
     return null;
