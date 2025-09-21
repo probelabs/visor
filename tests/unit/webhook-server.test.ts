@@ -30,6 +30,9 @@ describe('WebhookServer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    // Ensure GITHUB_ACTIONS is not set for normal tests
+    delete process.env.GITHUB_ACTIONS;
+
     mockConfig = {
       enabled: true,
       port: 8080,
@@ -107,7 +110,11 @@ describe('WebhookServer', () => {
       const githubServer = new WebhookServer(mockConfig, mockVisorConfig);
       expect(githubServer).toBeDefined();
 
-      process.env.GITHUB_ACTIONS = originalEnv;
+      if (originalEnv === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = originalEnv;
+      }
     });
   });
 
@@ -153,7 +160,11 @@ describe('WebhookServer', () => {
       );
 
       consoleLogSpy.mockRestore();
-      process.env.GITHUB_ACTIONS = originalEnv;
+      if (originalEnv === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = originalEnv;
+      }
     });
 
     it('should start HTTPS server when TLS is enabled', async () => {
@@ -1302,8 +1313,8 @@ describe('WebhookServer', () => {
       expect(server.getWebhookData('/webhook/github')).toBe('{"invalid": json}');
     });
 
-    it('should handle large request body', async () => {
-      const largeData = 'x'.repeat(10000); // 10KB of data
+    it('should handle large request body within limits', async () => {
+      const largeData = 'x'.repeat(10000); // 10KB of data (well within 1MB limit)
       const largePayload = { data: largeData };
 
       mockRequest.on.mockImplementation((event: string, callback: Function) => {
@@ -1325,6 +1336,106 @@ describe('WebhookServer', () => {
         'Content-Type': 'application/json',
       });
       expect(server.getWebhookData('/webhook/github')).toEqual(largePayload);
+    });
+
+    it('should reject request body exceeding size limit via Content-Length header', async () => {
+      mockRequest.headers['content-length'] = '2097152'; // 2MB, exceeds 1MB limit
+
+      mockRequest.on.mockImplementation((event: string, callback: Function) => {
+        if (event === 'data') {
+          // This shouldn't be called due to Content-Length check
+          callback(Buffer.from('{"test": "data"}'));
+        } else if (event === 'end') {
+          callback();
+        }
+      });
+
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      await requestHandler(mockRequest, mockResponse);
+
+      expect(mockResponse.writeHead).toHaveBeenCalledWith(413, { 'Content-Type': 'text/plain' });
+      expect(mockResponse.end).toHaveBeenCalledWith('Payload Too Large');
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '❌ Error handling webhook request:',
+        expect.any(Error)
+      );
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should reject request body exceeding size limit during streaming', async () => {
+      delete mockRequest.headers['content-length']; // No Content-Length header
+
+      mockRequest.on.mockImplementation((event: string, callback: Function) => {
+        if (event === 'data') {
+          // Simulate large chunks that exceed 1MB limit
+          const chunk1 = Buffer.alloc(512 * 1024, 'a'); // 512KB
+          const chunk2 = Buffer.alloc(512 * 1024, 'b'); // 512KB
+          const chunk3 = Buffer.alloc(1024, 'c'); // 1KB - this should trigger the limit
+          callback(chunk1);
+          callback(chunk2);
+          callback(chunk3);
+        } else if (event === 'end') {
+          callback();
+        }
+      });
+
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      await requestHandler(mockRequest, mockResponse);
+
+      expect(mockResponse.writeHead).toHaveBeenCalledWith(413, { 'Content-Type': 'text/plain' });
+      expect(mockResponse.end).toHaveBeenCalledWith('Payload Too Large');
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '❌ Error handling webhook request:',
+        expect.objectContaining({
+          message: expect.stringContaining('Request body too large'),
+        })
+      );
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should handle invalid Content-Length header gracefully', async () => {
+      mockRequest.headers['content-length'] = 'invalid';
+
+      mockRequest.on.mockImplementation((event: string, callback: Function) => {
+        if (event === 'data') {
+          callback(Buffer.from('{"test": "data"}'));
+        } else if (event === 'end') {
+          callback();
+        }
+      });
+
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      await requestHandler(mockRequest, mockResponse);
+
+      expect(mockResponse.writeHead).toHaveBeenCalledWith(413, { 'Content-Type': 'text/plain' });
+      expect(mockResponse.end).toHaveBeenCalledWith('Payload Too Large');
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should accept request at exactly the size limit', async () => {
+      const exactLimitData = 'x'.repeat(1024 * 1024 - 20); // Just under 1MB to account for JSON structure
+      const exactLimitPayload = { data: exactLimitData };
+
+      mockRequest.on.mockImplementation((event: string, callback: Function) => {
+        if (event === 'data') {
+          callback(Buffer.from(JSON.stringify(exactLimitPayload)));
+        } else if (event === 'end') {
+          callback();
+        }
+      });
+
+      await requestHandler(mockRequest, mockResponse);
+
+      expect(mockResponse.writeHead).toHaveBeenCalledWith(200, {
+        'Content-Type': 'application/json',
+      });
+      expect(server.getWebhookData('/webhook/github')).toEqual(exactLimitPayload);
     });
 
     it('should handle request body parsing errors', async () => {

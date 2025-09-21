@@ -236,6 +236,14 @@ export class WebhookServer {
       res.end(JSON.stringify({ status: 'success', endpoint: endpoint.path }));
     } catch (error) {
       console.error('❌ Error handling webhook request:', error);
+
+      // Handle request body too large errors with proper HTTP status
+      if (error instanceof Error && error.message.includes('Request body too large')) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('Payload Too Large');
+        return;
+      }
+
       res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end('Internal Server Error');
     }
@@ -326,13 +334,34 @@ export class WebhookServer {
   }
 
   /**
-   * Parse request body
+   * Parse request body with size limits to prevent DoS attacks
    */
   private async parseRequestBody(req: http.IncomingMessage): Promise<unknown> {
+    const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
+
     return new Promise((resolve, reject) => {
       let body = '';
+      let totalSize = 0;
+
+      // Check Content-Length header first if present
+      const contentLength = req.headers['content-length'];
+      if (contentLength) {
+        const length = parseInt(contentLength, 10);
+        if (isNaN(length) || length > MAX_BODY_SIZE) {
+          reject(new Error(`Request body too large. Maximum size allowed: ${MAX_BODY_SIZE} bytes`));
+          return;
+        }
+      }
 
       req.on('data', chunk => {
+        totalSize += chunk.length;
+
+        // Check if we've exceeded the size limit
+        if (totalSize > MAX_BODY_SIZE) {
+          reject(new Error(`Request body too large. Maximum size allowed: ${MAX_BODY_SIZE} bytes`));
+          return;
+        }
+
         body += chunk.toString();
       });
 
