@@ -67,6 +67,10 @@ export class CLI {
    */
   public parseArgs(argv: string[]): CliOptions {
     try {
+      // Ensure argv has at least the program name for commander.js
+      const normalizedArgv =
+        argv.length > 0 && !argv[0].startsWith('-') ? argv : ['node', 'visor', ...argv];
+
       // Create a fresh program instance for each parse to avoid state issues
       const tempProgram = new Command();
       tempProgram
@@ -102,7 +106,7 @@ export class CLI {
         .addHelpText('after', this.getExamplesText())
         .exitOverride(); // Prevent process.exit during tests
 
-      tempProgram.parse(argv);
+      tempProgram.parse(normalizedArgv);
       const options = tempProgram.opts();
 
       // Validate options
@@ -137,49 +141,30 @@ export class CLI {
         version: options.version,
       };
     } catch (error: unknown) {
-      // Handle commander.js exit overrides
-      if (
-        error &&
-        typeof error === 'object' &&
-        'code' in error &&
-        (error as any).code === 'commander.helpDisplayed'
-      ) {
-        // Help was displayed, this is not an error
-        return {
-          checks: [],
-          output: 'table' as OutputFormat,
-          help: true,
-        };
-      }
-      if (
-        error &&
-        typeof error === 'object' &&
-        'code' in error &&
-        (error as any).code === 'commander.version'
-      ) {
-        // Version was displayed, this is not an error
-        return {
-          checks: [],
-          output: 'table' as OutputFormat,
-          version: true,
-        };
-      }
-      if (error instanceof Error) {
-        // Handle commander.js specific errors
-        if (error.message.includes('unknown option') || error.message.includes('Unknown option')) {
-          throw error;
+      // Handle commander.js exit overrides for help/version ONLY
+      if (error && typeof error === 'object' && 'code' in error) {
+        const commanderError = error as { code: string };
+
+        if (commanderError.code === 'commander.helpDisplayed') {
+          return {
+            checks: [],
+            output: 'table' as OutputFormat,
+            help: true,
+          };
         }
-        if (
-          error.message.includes('Missing required argument') ||
-          error.message.includes('argument missing')
-        ) {
-          throw error;
+
+        if (commanderError.code === 'commander.version') {
+          return {
+            checks: [],
+            output: 'table' as OutputFormat,
+            version: true,
+          };
         }
-        if (error.message.includes('too many arguments')) {
-          throw error;
-        }
-        throw new Error(`CLI parsing error: ${error.message}`);
+
+        // For all other commander errors (including optionMissingArgument), re-throw
       }
+
+      // Re-throw all errors including commander parsing errors
       throw error;
     }
   }
@@ -188,20 +173,8 @@ export class CLI {
    * Validate parsed options
    */
   private validateOptions(options: Record<string, unknown>): void {
-    // Validate check types - but allow custom checks when config is provided
-    if (Array.isArray(options.check) && options.check.length > 0) {
-      // If no custom config provided, validate against built-in checks
-      if (!options.config) {
-        for (const check of options.check) {
-          if (!this.validChecks.includes(check as CheckType)) {
-            throw new Error(
-              `Invalid check type: ${check}. Available options: ${this.validChecks.join(', ')}`
-            );
-          }
-        }
-      }
-      // If custom config is provided, allow any check names (will be validated against config later)
-    }
+    // Skip check name validation here - it will be validated against the actual loaded config
+    // This allows both built-in checks and config-defined checks to work properly
 
     // Validate output format
     if (options.output && !this.validOutputs.includes(options.output as OutputFormat)) {

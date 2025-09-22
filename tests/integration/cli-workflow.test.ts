@@ -212,10 +212,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
         const result = await runCLI(['--check', 'invalid-check']);
 
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain('Invalid check type: invalid-check');
-        expect(result.stderr).toContain(
-          'Available options: performance, architecture, security, style, all'
-        );
+        expect(result.stderr).toContain('No configuration found for check: invalid-check');
       },
       timeout
     );

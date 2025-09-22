@@ -21,6 +21,9 @@ export async function main(): Promise<void> {
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
 
+    // Set environment variable early for proper logging in all modules
+    process.env.VISOR_OUTPUT_FORMAT = options.output;
+
     // Handle help and version flags
     if (options.help) {
       console.log(cli.getHelpText());
@@ -33,34 +36,57 @@ export async function main(): Promise<void> {
     }
 
     // Load configuration
-    const config = options.configPath
-      ? await configManager.loadConfig(options.configPath)
-      : await configManager.findAndLoadConfig().catch(() => configManager.getDefaultConfig());
+    let config;
+    if (options.configPath) {
+      try {
+        config = await configManager.loadConfig(options.configPath);
+      } catch {
+        console.error(`⚠️ Warning: Configuration file not found: ${options.configPath}`);
+        console.error('Falling back to default configuration');
+        config = await configManager
+          .findAndLoadConfig()
+          .catch(() => configManager.getDefaultConfig());
+      }
+    } else {
+      config = await configManager
+        .findAndLoadConfig()
+        .catch(() => configManager.getDefaultConfig());
+    }
 
     // Get repository info using GitRepositoryAnalyzer
     const { GitRepositoryAnalyzer } = await import('./git-repository-analyzer');
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
     const repositoryInfo = await analyzer.analyzeRepository();
 
+    // Check if we're in a git repository and handle error early
+    if (!repositoryInfo.isGitRepository) {
+      console.error('❌ Error: Not a git repository or no changes found');
+      process.exit(1);
+    }
+
     // Determine checks to run
     const checksToRun =
       options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
-    console.log('🔍 Visor - AI-powered code review tool');
-    console.log(`Configuration version: ${config.version}`);
-    console.log(`Configuration source: ${options.configPath || 'default search locations'}`);
+    // Use stderr for status messages when outputting JSON to stdout
+    const logFn =
+      options.output === 'json' || options.output === 'sarif' ? console.error : console.log;
+
+    logFn('🔍 Visor - AI-powered code review tool');
+    logFn(`Configuration version: ${config.version}`);
+    logFn(`Configuration source: ${options.configPath || 'default search locations'}`);
 
     // Show registered providers if in debug mode
     if (options.debug) {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
       const registry = CheckProviderRegistry.getInstance();
-      console.log('Registered providers:', registry.getAvailableProviders().join(', '));
+      logFn('Registered providers:', registry.getAvailableProviders().join(', '));
     }
 
-    console.log(`📂 Repository: ${repositoryInfo.base} branch`);
-    console.log(`📁 Files changed: ${repositoryInfo.files?.length || 0}`);
-    console.log('🔍 Analyzing local git repository...');
-    console.log(`🤖 Executing checks: ${checksToRun.join(', ')}`);
+    logFn(`📂 Repository: ${repositoryInfo.base} branch`);
+    logFn(`📁 Files changed: ${repositoryInfo.files?.length || 0}`);
+    logFn('🔍 Analyzing local git repository...');
+    logFn(`🤖 Executing checks: ${checksToRun.join(', ')}`);
 
     // Create CheckExecutionEngine for running checks
     const engine = new CheckExecutionEngine();
@@ -100,12 +126,19 @@ export async function main(): Promise<void> {
 
     // Check for critical issues
     const allResults = Object.values(groupedResults).flat();
-    const criticalCount = allResults.reduce((sum, result: any) => {
-      const issues = result.content?.issues || [];
-      return sum + issues.filter((i: any) => i.severity === 'critical').length;
+    const criticalCount = allResults.reduce((sum, result: CheckResult) => {
+      const issues = result.issues || [];
+      return (
+        sum + issues.filter((issue: { severity: string }) => issue.severity === 'critical').length
+      );
     }, 0);
 
-    if (criticalCount > 0) {
+    // Check for git repository errors or other fatal errors
+    const hasRepositoryError = allResults.some((result: CheckResult) => {
+      return result.content.includes('Not a git repository');
+    });
+
+    if (criticalCount > 0 || hasRepositoryError) {
       process.exit(1);
     }
   } catch (error) {
