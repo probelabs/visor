@@ -232,11 +232,45 @@ checks:
     reuse_ai_session: true  # 🔄 Reuses the performance check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
+  # Code style and formatting analysis
+  style:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview, security, performance, and quality discussions, analyze the code style and formatting consistency.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Style Assessment Areas
+        **Code Formatting & Consistency:**
+        - Indentation and spacing consistency
+        - Naming conventions adherence
+        - Code organization and structure
+        - Comment style and documentation
+
+        **Language-Specific Style Guidelines:**
+        - Adherence to language style guides (PEP 8, ESLint, etc.)
+        - Import/require statement organization
+        - Variable and function naming patterns
+        - Code readability and clarity
+
+        **Team Standards:**
+        - Consistency with existing codebase patterns
+        - Formatting tool configuration compliance
+        - Documentation standards adherence
+        - Code comment quality and completeness
+
+        Focus on style improvements that enhance code readability and maintainability while considering our previous analysis.
+    depends_on: [quality]
+    reuse_ai_session: true  # 🔄 Reuses the quality check's AI session for context continuity
+    on: [pr_opened, pr_updated]
+
   # Command orchestrator - demonstrates noop type for triggering multiple checks
   review-all:
     type: noop
     command: '/review'
-    depends_on: [overview, security, performance, quality]
+    depends_on: [overview, security, performance, quality, style]
     on: [issue_comment]
     if: "event.isPullRequest"  # Only trigger on PR comments, not issues
     group: orchestrator
