@@ -999,9 +999,28 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(
           `📋 ${_schema === 'plain' ? 'Plain' : 'No'} schema detected - returning raw response without JSON parsing`
         );
+
+        // Strip common XML wrapper tags that AI might add when given XML-formatted prompts
+        let cleanedResponse = response.trim();
+
+        // Remove <result>...</result> tags if present
+        cleanedResponse = cleanedResponse
+          .replace(/^<result>\s*/i, '')
+          .replace(/\s*<\/result>$/i, '');
+
+        // Remove <response>...</response> tags if present
+        cleanedResponse = cleanedResponse
+          .replace(/^<response>\s*/i, '')
+          .replace(/\s*<\/response>$/i, '');
+
+        // Remove <answer>...</answer> tags if present
+        cleanedResponse = cleanedResponse
+          .replace(/^<answer>\s*/i, '')
+          .replace(/\s*<\/answer>$/i, '');
+
         return {
           issues: [],
-          suggestions: [response.trim()],
+          suggestions: [cleanedResponse.trim()],
           debug: debugInfo,
         };
       }
