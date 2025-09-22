@@ -82,11 +82,7 @@ describe('CLI Argument Parser', () => {
   });
 
   describe('Argument Validation', () => {
-    it('should validate check types', () => {
-      expect(() => cli.parseArgs(['--check', 'invalid-check'])).toThrow(
-        'Invalid check type: invalid-check'
-      );
-    });
+    // Check type validation is now done in main() with actual config, not in CLI parser
 
     it('should validate output formats', () => {
       expect(() => cli.parseArgs(['--output', 'invalid-format'])).toThrow(

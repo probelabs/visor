@@ -58,15 +58,23 @@ export async function main(): Promise<void> {
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
     const repositoryInfo = await analyzer.analyzeRepository();
 
+    // Determine checks to run and validate check types early
+    const checksToRun =
+      options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
+
+    // Validate that all requested checks exist in the configuration
+    const availableChecks = Object.keys(config.checks || {});
+    const invalidChecks = checksToRun.filter(check => !availableChecks.includes(check));
+    if (invalidChecks.length > 0) {
+      console.error(`❌ Error: No configuration found for check: ${invalidChecks[0]}`);
+      process.exit(1);
+    }
+
     // Check if we're in a git repository and handle error early
     if (!repositoryInfo.isGitRepository) {
       console.error('❌ Error: Not a git repository or no changes found');
       process.exit(1);
     }
-
-    // Determine checks to run
-    const checksToRun =
-      options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
     // Use stderr for status messages when outputting JSON to stdout
     const logFn =
@@ -104,6 +112,10 @@ export async function main(): Promise<void> {
     // Format output based on format type
     let output: string;
     if (options.output === 'json') {
+      output = JSON.stringify(groupedResults, null, 2);
+    } else if (options.output === 'sarif') {
+      // For SARIF output, we need to convert to SARIF format
+      // For now, output as JSON until proper SARIF formatting is implemented
       output = JSON.stringify(groupedResults, null, 2);
     } else {
       // Create analysis result for table formatting
