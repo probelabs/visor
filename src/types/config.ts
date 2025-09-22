@@ -180,6 +180,7 @@ export type ConfigCheckType =
   | 'http_input'
   | 'http_client'
   | 'noop'
+  | 'log'
   | 'claude-code';
 
 /**

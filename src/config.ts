@@ -30,6 +30,7 @@ export class ConfigManager {
     'http_input',
     'http_client',
     'noop',
+    'log',
   ];
   private validEventTriggers: EventTrigger[] = [
     'pr_opened',

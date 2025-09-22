@@ -5,6 +5,7 @@ import { HttpCheckProvider } from './http-check-provider';
 import { HttpInputProvider } from './http-input-provider';
 import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
+import { LogCheckProvider } from './log-check-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 
 /**
@@ -40,6 +41,7 @@ export class CheckProviderRegistry {
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());
     this.register(new NoopCheckProvider());
+    this.register(new LogCheckProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {
