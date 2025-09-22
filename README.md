@@ -1881,6 +1881,57 @@ checks:
       }
 ```
 
+#### 4. Log Provider (Debugging & Monitoring)
+Output debugging information and monitor workflow execution:
+
+```yaml
+checks:
+  debug-start:
+    type: log
+    group: debugging
+    level: info
+    message: "🚀 Starting code review for PR #{{ pr.number }} by {{ pr.author }}"
+    include_pr_context: true
+    include_dependencies: false
+    include_metadata: true
+
+  debug-dependencies:
+    type: log
+    group: debugging
+    level: debug
+    depends_on: [security-check]
+    message: |
+      📊 Dependency results summary:
+      {% if dependencies %}
+      - Security check found {{ dependencies['security-check'].issueCount }} issues
+      {% else %}
+      - No dependencies processed
+      {% endif %}
+    include_dependencies: true
+
+  performance-monitor:
+    type: log
+    group: monitoring
+    level: warn
+    message: "⚠️ Large PR detected: {{ pr.totalAdditions }} lines added"
+    include_pr_context: true
+```
+
+**Configuration Options:**
+- `message` - Log message (required, supports Liquid templates)
+- `level` - Log level: `debug`, `info`, `warn`, `error` (default: `info`)
+- `include_pr_context` - Include PR information (default: `true`)
+- `include_dependencies` - Include dependency results (default: `true`)
+- `include_metadata` - Include execution metadata (default: `true`)
+- `group` - Output group for organization
+
+**Use Cases:**
+- Debug complex check workflows and execution order
+- Monitor check performance and resource usage
+- Create audit trails for review processes
+- Troubleshoot configuration issues
+- Track dependency execution flow
+
 ### Cron Scheduling
 
 Schedule any check type to run at specific intervals:
