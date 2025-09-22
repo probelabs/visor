@@ -5,6 +5,7 @@ import { HttpCheckProvider } from './http-check-provider';
 import { HttpInputProvider } from './http-input-provider';
 import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
+import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 
 /**
  * Registry for managing check providers
@@ -39,6 +40,17 @@ export class CheckProviderRegistry {
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());
     this.register(new NoopCheckProvider());
+
+    // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
+    try {
+      this.register(new ClaudeCodeCheckProvider());
+    } catch (error) {
+      console.error(
+        `Warning: Failed to register ClaudeCodeCheckProvider: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
   }
 
   /**

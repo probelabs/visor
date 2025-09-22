@@ -102,7 +102,7 @@ export class CLI {
         .addHelpText('after', this.getExamplesText())
         .exitOverride(); // Prevent process.exit during tests
 
-      tempProgram.parse(argv, { from: 'user' });
+      tempProgram.parse(argv);
       const options = tempProgram.opts();
 
       // Validate options
@@ -136,7 +136,34 @@ export class CLI {
         help: options.help,
         version: options.version,
       };
-    } catch (error) {
+    } catch (error: unknown) {
+      // Handle commander.js exit overrides
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as any).code === 'commander.helpDisplayed'
+      ) {
+        // Help was displayed, this is not an error
+        return {
+          checks: [],
+          output: 'table' as OutputFormat,
+          help: true,
+        };
+      }
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as any).code === 'commander.version'
+      ) {
+        // Version was displayed, this is not an error
+        return {
+          checks: [],
+          output: 'table' as OutputFormat,
+          version: true,
+        };
+      }
       if (error instanceof Error) {
         // Handle commander.js specific errors
         if (error.message.includes('unknown option') || error.message.includes('Unknown option')) {

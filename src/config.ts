@@ -24,6 +24,7 @@ import { ConfigMerger } from './utils/config-merger';
 export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = [
     'ai',
+    'claude-code',
     'tool',
     'http',
     'http_input',

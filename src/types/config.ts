@@ -173,7 +173,14 @@ export interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-export type ConfigCheckType = 'ai' | 'tool' | 'http' | 'http_input' | 'http_client' | 'noop';
+export type ConfigCheckType =
+  | 'ai'
+  | 'tool'
+  | 'http'
+  | 'http_input'
+  | 'http_client'
+  | 'noop'
+  | 'claude-code';
 
 /**
  * Valid event triggers for checks
@@ -220,6 +227,43 @@ export interface AIProviderConfig {
 }
 
 /**
+ * MCP Server configuration
+ */
+export interface McpServerConfig {
+  /** Command to execute for the MCP server */
+  command: string;
+  /** Arguments to pass to the command */
+  args?: string[];
+  /** Environment variables for the MCP server */
+  env?: Record<string, string>;
+}
+
+/**
+ * Claude Code configuration
+ */
+export interface ClaudeCodeConfig {
+  /** List of allowed tools for Claude Code to use */
+  allowedTools?: string[];
+  /** Maximum number of turns in conversation */
+  maxTurns?: number;
+  /** System prompt for Claude Code */
+  systemPrompt?: string;
+  /** MCP servers configuration */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** Path to subagent script */
+  subagent?: string;
+  /** Event hooks for lifecycle management */
+  hooks?: {
+    /** Called when check starts */
+    onStart?: string;
+    /** Called when check ends */
+    onEnd?: string;
+    /** Called when check encounters an error */
+    onError?: string;
+  };
+}
+
+/**
  * Configuration for a single check
  */
 export interface CheckConfig {
@@ -261,6 +305,8 @@ export interface CheckConfig {
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  /** Claude Code configuration (for claude-code type checks) */
+  claude_code?: ClaudeCodeConfig;
   /** Environment variables for this check */
   env?: EnvConfig;
   /** Check IDs that this check depends on (optional) */
@@ -446,7 +492,7 @@ export interface VisorConfig {
   /** Global AI model setting */
   ai_model?: string;
   /** Global AI provider setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code' | string;
   /** Maximum number of checks to run in parallel (default: 3) */
   max_parallelism?: number;
   /** Stop execution when any check fails (default: false) */

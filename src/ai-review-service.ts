@@ -16,10 +16,10 @@ function log(...args: unknown[]): void {
 }
 
 export interface AIReviewConfig {
-  apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY
+  apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or CLAUDE_CODE_API_KEY
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 600000ms (10 minutes)
-  provider?: 'google' | 'anthropic' | 'openai' | 'mock';
+  provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
 }
 
@@ -98,7 +98,10 @@ export class AIReviewService {
 
     // Auto-detect provider and API key from environment
     if (!this.config.apiKey) {
-      if (process.env.GOOGLE_API_KEY) {
+      if (process.env.CLAUDE_CODE_API_KEY) {
+        this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+        this.config.provider = 'claude-code';
+      } else if (process.env.GOOGLE_API_KEY) {
         this.config.apiKey = process.env.GOOGLE_API_KEY;
         this.config.provider = 'google';
       } else if (process.env.ANTHROPIC_API_KEY) {
@@ -803,6 +806,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
     // Store original env vars to restore later
     const originalEnv: Record<string, string | undefined> = {
+      CLAUDE_CODE_API_KEY: process.env.CLAUDE_CODE_API_KEY,
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -811,7 +815,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     try {
       // Set environment variables for ProbeAgent
       // ProbeAgent SDK expects these to be in the environment
-      if (this.config.provider === 'google' && this.config.apiKey) {
+      if (this.config.provider === 'claude-code' && this.config.apiKey) {
+        process.env.CLAUDE_CODE_API_KEY = this.config.apiKey;
+        // Also set ANTHROPIC_API_KEY as fallback since Claude Code uses Anthropic API
+        process.env.ANTHROPIC_API_KEY = this.config.apiKey;
+      } else if (this.config.provider === 'google' && this.config.apiKey) {
         process.env.GOOGLE_API_KEY = this.config.apiKey;
       } else if (this.config.provider === 'anthropic' && this.config.apiKey) {
         process.env.ANTHROPIC_API_KEY = this.config.apiKey;
@@ -827,7 +835,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Add provider-specific options if configured
       if (this.config.provider) {
-        options.provider = this.config.provider;
+        // Map claude-code to anthropic for ProbeAgent compatibility
+        options.provider =
+          this.config.provider === 'claude-code' ? 'anthropic' : this.config.provider;
       }
       if (this.config.model) {
         options.model = this.config.model;
@@ -1288,6 +1298,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
    * Get the API key source for debugging (without revealing the key)
    */
   private getApiKeySource(): string {
+    if (process.env.CLAUDE_CODE_API_KEY && this.config.provider === 'claude-code') {
+      return 'CLAUDE_CODE_API_KEY';
+    }
     if (process.env.GOOGLE_API_KEY && this.config.provider === 'google') {
       return 'GOOGLE_API_KEY';
     }
