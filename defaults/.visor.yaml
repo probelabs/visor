@@ -18,8 +18,8 @@ max_parallelism: 1
 # Example: security-remediation reuses the session from the security check,
 # allowing the AI to reference the previous security analysis discussion.
 
-# Global fail condition - fail if critical issues are found
-fail_if: "output.issues && output.issues.some(i => i.severity === 'critical')"
+# Global fail condition - fail if critical or error severity issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
 
 checks:
   # AI-powered release notes generation - manual execution only for release workflows
@@ -93,16 +93,10 @@ checks:
            - Affected system components
 
         2. **Architecture Visualization**
-           - Create appropriate mermaid diagram(s) showing:
-             - Component relationships (use `graph TD/LR`)
-             - Process flows (use `flowchart` or `sequenceDiagram`)
-             - Data flow between modified components
-
-        **Guidelines for diagrams:**
-        - Use multiple diagrams if there are distinct architectural aspects
-        - Choose the most appropriate diagram type for each concept
-        - Focus on modified components and their relationships
-        - Keep diagrams clean and informative
+           - Create appropriate mermaid diagram(s) to visualize the changes
+           - Choose the best diagram type for the context
+           - Use multiple diagrams if needed to explain different aspects
+           - Focus on modified components and their relationships
 
         Provide a balanced technical assessment suitable for both developers and stakeholders.
     on: [pr_opened, pr_updated]
@@ -144,6 +138,13 @@ checks:
         - Resource exhaustion vulnerabilities
 
         Provide specific findings with clear explanations and actionable remediation steps.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Security vulnerabilities that could lead to immediate compromise (RCE, SQL injection, authentication bypass, exposed secrets)
+        - **error**: Security issues that must be fixed before production (XSS, path traversal, weak crypto, missing auth checks)
+        - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
+        - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
     depends_on: [overview]
     reuse_ai_session: true  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
@@ -183,6 +184,13 @@ checks:
         - Inefficient parallel processing
 
         Building on our overview and security analysis, identify performance issues and provide optimization recommendations that complement our previous findings.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Performance issues causing system failure or severe degradation (infinite loops, memory leaks causing OOM)
+        - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
+        - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
+        - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
     depends_on: [security]
     reuse_ai_session: true  # 🔄 Reuses the security check's AI session for context continuity
     on: [pr_opened, pr_updated]
@@ -228,15 +236,63 @@ checks:
         - Type safety (if applicable)
 
         Focus on actionable improvements that enhance code maintainability while considering the overview, security, and performance findings we've already discussed.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Code quality issues that will cause bugs or failures (logic errors, race conditions, null pointer issues)
+        - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling)
+        - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming)
+        - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements)
     depends_on: [performance]
     reuse_ai_session: true  # 🔄 Reuses the performance check's AI session for context continuity
+    on: [pr_opened, pr_updated]
+
+  # Code style and formatting analysis
+  style:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview, security, performance, and quality discussions, analyze the code style and formatting consistency.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Style Assessment Areas
+        **Code Formatting & Consistency:**
+        - Indentation and spacing consistency
+        - Naming conventions adherence
+        - Code organization and structure
+        - Comment style and documentation
+
+        **Language-Specific Style Guidelines:**
+        - Adherence to language style guides (PEP 8, ESLint, etc.)
+        - Import/require statement organization
+        - Variable and function naming patterns
+        - Code readability and clarity
+
+        **Team Standards:**
+        - Consistency with existing codebase patterns
+        - Formatting tool configuration compliance
+        - Documentation standards adherence
+        - Code comment quality and completeness
+
+        Focus on style improvements that enhance code readability and maintainability while considering our previous analysis.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Never use for style issues (style issues are never critical)
+        - **error**: Major style violations that significantly harm readability (completely inconsistent formatting, misleading names)
+        - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
+        - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
+    depends_on: [quality]
+    reuse_ai_session: true  # 🔄 Reuses the quality check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Command orchestrator - demonstrates noop type for triggering multiple checks
   review-all:
     type: noop
     command: '/review'
-    depends_on: [overview, security, performance, quality]
+    depends_on: [overview, security, performance, quality, style]
     on: [issue_comment]
     if: "event.isPullRequest"  # Only trigger on PR comments, not issues
     group: orchestrator

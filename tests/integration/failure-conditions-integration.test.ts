@@ -279,7 +279,7 @@ describe('Failure Conditions Integration', () => {
 
       const formatted = FailureConditionEvaluator.formatResults(results);
 
-      expect(formatted).toContain('❌ **Error conditions (1):**');
+      expect(formatted).toContain('❌ **Error severity conditions (1):**');
       expect(formatted).toContain('security_critical: Critical security issues found');
       expect(formatted).toContain('⚠️ **Warning conditions (1):**');
       expect(formatted).toContain('quality_warning: Code quality below threshold');

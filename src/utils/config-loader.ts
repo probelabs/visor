@@ -291,11 +291,8 @@ export class ConfigLoader {
     }
 
     if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
-      // Use stderr to avoid contaminating JSON/SARIF output
-      const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-      const logFn =
-        outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
-      logFn(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
+      // Always log to stderr to avoid contaminating formatted output
+      console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
 

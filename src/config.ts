@@ -24,6 +24,7 @@ import { ConfigMerger } from './utils/config-merger';
 export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = [
     'ai',
+    'claude-code',
     'tool',
     'http',
     'http_input',
@@ -223,11 +224,8 @@ export class ConfigManager {
       }
 
       if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
-        // Use stderr to avoid contaminating JSON/SARIF output
-        const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-        const logFn =
-          outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
-        logFn(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
+        // Always log to stderr to avoid contaminating formatted output
+        console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
         const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
 

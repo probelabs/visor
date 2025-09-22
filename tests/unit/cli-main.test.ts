@@ -54,12 +54,12 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(
+    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
+    expect(mockConsoleError).toHaveBeenCalledWith(
       expect.stringContaining('Configuration version: 1.0')
     );
     // CLI now shows repository status instead of config summary
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
+    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
   });
 
   it('should run CLI with check arguments', async () => {
@@ -70,7 +70,7 @@ describe('CLI Main Entry Point', () => {
     // For JSON output, decorative messages go to stderr
     expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
     // CLI now performs actual analysis, so expect JSON output in stdout
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('"summary"'));
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('"review"'));
   });
 
   it('should handle CLI errors gracefully', async () => {
@@ -79,8 +79,7 @@ describe('CLI Main Entry Point', () => {
     await main();
 
     expect(mockConsoleError).toHaveBeenCalledWith(
-      '❌ Error:',
-      expect.stringContaining('Invalid check type')
+      expect.stringContaining('No configuration found for check: invalid-type')
     );
     expect(mockProcessExit).toHaveBeenCalledWith(1);
   });
@@ -90,8 +89,8 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(
+    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
+    expect(mockConsoleError).toHaveBeenCalledWith(
       expect.stringContaining('Configuration version: 1.0')
     );
   });

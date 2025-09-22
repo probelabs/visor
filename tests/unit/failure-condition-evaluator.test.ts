@@ -435,7 +435,7 @@ describe('FailureConditionEvaluator', () => {
       ];
 
       const formatted = FailureConditionEvaluator.formatResults(results);
-      expect(formatted).toContain('❌ **Error conditions (1):**');
+      expect(formatted).toContain('❌ **Error severity conditions (1):**');
       expect(formatted).toContain('error_condition: Critical issues found');
       expect(formatted).toContain('⚠️ **Warning conditions (1):**');
       expect(formatted).toContain('warning_condition: output.issues.length > 5');

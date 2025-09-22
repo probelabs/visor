@@ -52,11 +52,17 @@ Visor is an AI-powered code review tool for GitHub Pull Requests that can run as
 
 **Provider System:**
 - `src/providers/` - Pluggable check provider architecture
-  - `ai-check-provider.ts` - AI-powered analysis
+  - `ai-check-provider.ts` - AI-powered analysis (Gemini, Claude, OpenAI)
+  - `claude-code-check-provider.ts` - Claude Code SDK integration with MCP tools
   - `tool-check-provider.ts` - Integration with external tools
   - `script-check-provider.ts` - Custom shell scripts
-  - `webhook-check-provider.ts` - HTTP webhook integration
+  - `http-check-provider.ts` - HTTP webhook output
+  - `http-input-provider.ts` - HTTP webhook input
+  - `http-client-provider.ts` - HTTP client for external APIs
+  - `noop-check-provider.ts` - No-op provider for command orchestration
   - `check-provider-registry.ts` - Provider registration system
+  - `mcp-tools.ts` - MCP tool definitions and server management
+  - `claude-code-types.ts` - TypeScript types for Claude Code SDK
 
 **Configuration:**
 - `src/config.ts` - Configuration loading and management
@@ -67,10 +73,12 @@ Visor is an AI-powered code review tool for GitHub Pull Requests that can run as
 
 1. **Dual Operation Modes**: GitHub Action and CLI tool with shared core logic
 2. **Pluggable Providers**: Extensible system for different analysis types
-3. **AI Integration**: Multi-provider AI support with fallback to pattern matching
-4. **Incremental Analysis**: Smart PR updates that analyze only new commits
-5. **Comment Management**: Unique comment IDs prevent duplicate reviews
-6. **Multiple Output Formats**: table, json, markdown, sarif
+3. **AI Integration**: Multi-provider AI support including Claude Code SDK
+4. **Claude Code Provider**: Advanced AI with MCP tools, subagents, and streaming
+5. **Incremental Analysis**: Smart PR updates that analyze only new commits
+6. **Comment Management**: Unique comment IDs prevent duplicate reviews
+7. **Multiple Output Formats**: table, json, markdown, sarif
+8. **MCP Protocol Support**: Custom tools and external server integration
 
 ### Configuration System
 

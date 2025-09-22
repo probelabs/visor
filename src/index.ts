@@ -222,7 +222,27 @@ export async function run(): Promise<void> {
     // Determine which event we're handling and run appropriate checks
     await handleEvent(octokit, inputs, eventName, context, config);
   } catch (error) {
-    setFailed(error instanceof Error ? error.message : 'Unknown error');
+    // Import error classes dynamically to avoid circular dependencies
+    const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
+      './providers/claude-code-check-provider'
+    ).catch(() => ({ ClaudeCodeSDKNotInstalledError: null, ClaudeCodeAPIKeyMissingError: null }));
+
+    // Provide user-friendly error messages for known errors
+    if (ClaudeCodeSDKNotInstalledError && error instanceof ClaudeCodeSDKNotInstalledError) {
+      const errorMessage = [
+        'Claude Code SDK is not installed.',
+        'To use the claude-code provider, install: npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk',
+      ].join(' ');
+      setFailed(errorMessage);
+    } else if (ClaudeCodeAPIKeyMissingError && error instanceof ClaudeCodeAPIKeyMissingError) {
+      const errorMessage = [
+        'No API key found for Claude Code provider.',
+        'Set CLAUDE_CODE_API_KEY or ANTHROPIC_API_KEY in your GitHub secrets.',
+      ].join(' ');
+      setFailed(errorMessage);
+    } else {
+      setFailed(error instanceof Error ? error.message : 'Unknown error');
+    }
   }
 }
 

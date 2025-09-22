@@ -587,11 +587,12 @@ export class CheckExecutionEngine {
     }
 
     const checkConfig = config.checks[checkName];
-    const provider = this.providerRegistry.getProviderOrThrow('ai');
+    const providerType = checkConfig.type || 'ai';
+    const provider = this.providerRegistry.getProviderOrThrow(providerType);
     this.setProviderWebhookContext(provider);
 
-    const providerConfig = {
-      type: 'ai' as const,
+    const providerConfig: CheckProviderConfig = {
+      type: providerType,
       prompt: checkConfig.prompt,
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
@@ -604,6 +605,10 @@ export class CheckExecutionEngine {
       },
       ai_provider: checkConfig.ai_provider || config.ai_provider,
       ai_model: checkConfig.ai_model || config.ai_model,
+      // Pass claude_code config if present
+      claude_code: checkConfig.claude_code,
+      // Pass any provider-specific config
+      ...checkConfig,
     };
 
     const result = await provider.execute(prInfo, providerConfig);
@@ -906,7 +911,7 @@ export class CheckExecutionEngine {
       }
     }
 
-    if (sessionReuseChecks.size > 0) {
+    if (sessionReuseChecks.size > 0 && debug) {
       log(
         `🔄 Debug: Found ${sessionReuseChecks.size} checks requiring session reuse: ${Array.from(sessionReuseChecks).join(', ')}`
       );
@@ -1194,7 +1199,7 @@ export class CheckExecutionEngine {
 
             if (hasFailuresToReport) {
               log(
-                `🛑 Check "${checkName}" found critical/error issues and fail-fast is enabled - stopping execution`
+                `🛑 Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
               );
               shouldStopExecution = true;
               break;

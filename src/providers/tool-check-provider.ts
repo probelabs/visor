@@ -168,11 +168,12 @@ export class ToolCheckProvider extends CheckProvider {
       // Example: file.js:10:5: error: Missing semicolon
       const match = line.match(/^(.+?):(\d+):(\d+):\s*(critical|error|warning|info):\s*(.+)$/);
       if (match) {
+        const severity = match[4] as 'critical' | 'error' | 'warning' | 'info';
         comments.push({
           file: match[1],
           line: parseInt(match[2]),
           message: match[5],
-          severity: match[4] as 'critical' | 'error' | 'warning' | 'info',
+          severity: severity as 'critical' | 'error' | 'warning' | 'info',
           category: 'style',
         });
       }
