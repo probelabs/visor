@@ -44,6 +44,8 @@ export class CLI {
       )
       .option('--debug', 'Enable debug mode for detailed output')
       .option('--fail-fast', 'Stop execution on first failure condition')
+      .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
+      .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
       .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -97,6 +99,8 @@ export class CLI {
         )
         .option('--debug', 'Enable debug mode for detailed output')
         .option('--fail-fast', 'Stop execution on first failure condition')
+        .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
+        .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
         .option(
           '--allowed-remote-patterns <patterns>',
           'Comma-separated list of allowed URL prefixes for remote config extends (e.g., "https://github.com/,https://raw.githubusercontent.com/")'
@@ -128,6 +132,17 @@ export class CLI {
           .map((p: string) => p.trim());
       }
 
+      // Parse tag filters
+      let tags: string[] | undefined;
+      if (options.tags) {
+        tags = options.tags.split(',').map((t: string) => t.trim());
+      }
+
+      let excludeTags: string[] | undefined;
+      if (options.excludeTags) {
+        excludeTags = options.excludeTags.split(',').map((t: string) => t.trim());
+      }
+
       return {
         checks: uniqueChecks,
         output: options.output as OutputFormat,
@@ -136,6 +151,8 @@ export class CLI {
         maxParallelism: options.maxParallelism,
         debug: options.debug,
         failFast: options.failFast,
+        tags,
+        excludeTags,
         allowedRemotePatterns,
         help: options.help,
         version: options.version,
@@ -273,7 +290,10 @@ Examples:
   visor --check all --timeout 300000 --output json           # 5 minute timeout
   visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
   visor --check all --debug --output markdown                # Enable debug mode
-  visor --check all --fail-fast --output json                # Stop on first failure`;
+  visor --check all --fail-fast --output json                # Stop on first failure
+  visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
+  visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones`;
   }
 
   /**

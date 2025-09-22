@@ -26,6 +26,10 @@ export interface CliOptions {
   debug?: boolean;
   /** Stop execution on first failure condition */
   failFast?: boolean;
+  /** Tags to include - checks must have at least one of these tags */
+  tags?: string[];
+  /** Tags to exclude - checks with any of these tags will be skipped */
+  excludeTags?: string[];
   /** Allowed URL patterns for remote config extends */
   allowedRemotePatterns?: string[];
   /** Show help text */

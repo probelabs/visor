@@ -27,6 +27,9 @@ export interface GitHubActionInputs {
   debug?: string;
   'ai-provider'?: string;
   'ai-model'?: string;
+  // Tag filtering
+  tags?: string;
+  'exclude-tags'?: string;
   // Legacy inputs for backward compatibility
   'visor-config-path'?: string;
   'visor-checks'?: string;
@@ -136,6 +139,15 @@ export class ActionCliBridge {
     // Add fail-fast flag if enabled
     if (inputs['fail-fast'] === 'true') {
       args.push('--fail-fast');
+    }
+
+    // Add tag filters if specified
+    if (inputs.tags) {
+      args.push('--tags', inputs.tags);
+    }
+
+    if (inputs['exclude-tags']) {
+      args.push('--exclude-tags', inputs['exclude-tags']);
     }
 
     return args;

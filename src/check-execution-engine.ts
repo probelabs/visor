@@ -84,6 +84,8 @@ export interface CheckExecutionOptions {
   outputFormat?: string;
   config?: import('./types/config').VisorConfig;
   debug?: boolean; // Enable debug mode to collect AI execution details
+  // Tag filter for selective check execution
+  tagFilter?: import('./types/config').TagFilter;
   // Webhook context for passing webhook data to http_input providers
   webhookContext?: {
     webhookData: Map<string, unknown>;
@@ -136,6 +138,51 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Filter checks based on tag filter configuration
+   */
+  private filterChecksByTags(
+    checks: string[],
+    config: import('./types/config').VisorConfig | undefined,
+    tagFilter: import('./types/config').TagFilter | undefined
+  ): string[] {
+    if (!tagFilter || (!tagFilter.include && !tagFilter.exclude)) {
+      return checks;
+    }
+
+    const logFn = this.config?.output?.pr_comment ? console.error : console.log;
+
+    return checks.filter(checkName => {
+      const checkConfig = config?.checks?.[checkName];
+      if (!checkConfig) {
+        // If no config for this check, include it by default
+        return true;
+      }
+
+      const checkTags = checkConfig.tags || [];
+
+      // Check exclude tags first (if any exclude tag matches, skip the check)
+      if (tagFilter.exclude && tagFilter.exclude.length > 0) {
+        const hasExcludedTag = tagFilter.exclude.some(tag => checkTags.includes(tag));
+        if (hasExcludedTag) {
+          logFn(`⏭️ Skipping check '${checkName}' - has excluded tag`);
+          return false;
+        }
+      }
+
+      // Check include tags (if specified, at least one must match)
+      if (tagFilter.include && tagFilter.include.length > 0) {
+        const hasIncludedTag = tagFilter.include.some(tag => checkTags.includes(tag));
+        if (!hasIncludedTag) {
+          logFn(`⏭️ Skipping check '${checkName}' - does not have required tags`);
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  /**
    * Execute checks on the local repository
    */
   async executeChecks(options: CheckExecutionOptions): Promise<AnalysisResult> {
@@ -179,16 +226,38 @@ export class CheckExecutionEngine {
       // Convert to PRInfo format for compatibility with existing reviewer
       const prInfo = this.gitAnalyzer.toPRInfo(repositoryInfo);
 
+      // Apply tag filtering if specified
+      const filteredChecks = this.filterChecksByTags(
+        options.checks,
+        options.config,
+        options.tagFilter || options.config?.tag_filter
+      );
+
+      if (filteredChecks.length === 0) {
+        logFn('⚠️ No checks match the tag filter criteria');
+        // Complete GitHub checks with no checks message if they were initialized
+        if (this.checkRunMap) {
+          await this.completeGitHubChecksWithError('No checks match the tag filter criteria');
+        }
+        return this.createErrorResult(
+          repositoryInfo,
+          'No checks match the tag filter criteria',
+          startTime,
+          timestamp,
+          options.checks
+        );
+      }
+
       // Update GitHub checks to in-progress status
       if (this.checkRunMap) {
         await this.updateGitHubChecksInProgress(options);
       }
 
       // Execute checks using the existing PRReviewer
-      logFn(`🤖 Executing checks: ${options.checks.join(', ')}`);
+      logFn(`🤖 Executing checks: ${filteredChecks.join(', ')}`);
       const reviewSummary = await this.executeReviewChecks(
         prInfo,
-        options.checks,
+        filteredChecks,
         options.timeout,
         options.config,
         options.outputFormat,
@@ -223,7 +292,7 @@ export class CheckExecutionEngine {
         reviewSummary,
         executionTime,
         timestamp,
-        checksExecuted: options.checks,
+        checksExecuted: filteredChecks,
         debug: debugInfo,
       };
     } catch (error) {
@@ -498,7 +567,8 @@ export class CheckExecutionEngine {
     outputFormat?: string,
     debug?: boolean,
     maxParallelism?: number,
-    failFast?: boolean
+    failFast?: boolean,
+    tagFilter?: import('./types/config').TagFilter
   ): Promise<GroupedCheckResults> {
     // Determine where to send log messages based on output format
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
@@ -517,8 +587,27 @@ export class CheckExecutionEngine {
       );
     }
 
+    // Apply tag filtering if specified
+    const tagFilteredChecks = this.filterChecksByTags(
+      filteredChecks,
+      config,
+      tagFilter || config?.tag_filter
+    );
+
+    if (tagFilteredChecks.length !== filteredChecks.length && debug) {
+      logFn(
+        `🔧 Debug: Tag filtering reduced checks from ${filteredChecks.length} to ${tagFilteredChecks.length}: ${JSON.stringify(tagFilteredChecks)}`
+      );
+    }
+
     // Use filtered checks for execution
-    checks = filteredChecks;
+    checks = tagFilteredChecks;
+
+    // Check if we have any checks left after filtering
+    if (checks.length === 0) {
+      logFn('⚠️ No checks remain after tag filtering');
+      return {};
+    }
 
     if (!config?.checks) {
       throw new Error('Config with check definitions required for grouped execution');

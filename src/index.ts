@@ -130,6 +130,9 @@ export async function run(): Promise<void> {
       'max-parallelism': getInput('max-parallelism') || undefined,
       'ai-provider': getInput('ai-provider') || undefined,
       'ai-model': getInput('ai-model') || undefined,
+      // Tag filtering inputs
+      tags: getInput('tags') || undefined,
+      'exclude-tags': getInput('exclude-tags') || undefined,
       // Legacy inputs for backward compatibility
       'visor-config-path': getInput('visor-config-path') || undefined,
       'visor-checks': getInput('visor-checks') || undefined,
