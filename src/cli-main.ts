@@ -117,8 +117,23 @@ export async function main(): Promise<void> {
       // For SARIF output, we need to convert to SARIF format
       // For now, output as JSON until proper SARIF formatting is implemented
       output = JSON.stringify(groupedResults, null, 2);
+    } else if (options.output === 'markdown') {
+      // Create analysis result for markdown formatting
+      const analysisResult: AnalysisResult = {
+        repositoryInfo,
+        reviewSummary: {
+          issues: Object.values(groupedResults)
+            .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
+            .flat(),
+          suggestions: [], // Suggestions are now embedded in issues
+        },
+        executionTime: 0,
+        timestamp: new Date().toISOString(),
+        checksExecuted: checksToRun,
+      };
+      output = OutputFormatters.formatAsMarkdown(analysisResult);
     } else {
-      // Create analysis result for table formatting
+      // Create analysis result for table formatting (default)
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
