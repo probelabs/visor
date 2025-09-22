@@ -15,6 +15,30 @@ import {
 } from './claude-code-types';
 
 /**
+ * Error thrown when Claude Code SDK is not installed
+ */
+export class ClaudeCodeSDKNotInstalledError extends Error {
+  constructor() {
+    super(
+      'Claude Code SDK is not installed. Install with: npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk'
+    );
+    this.name = 'ClaudeCodeSDKNotInstalledError';
+  }
+}
+
+/**
+ * Error thrown when Claude Code API key is not configured
+ */
+export class ClaudeCodeAPIKeyMissingError extends Error {
+  constructor() {
+    super(
+      'No API key found for Claude Code provider. Set CLAUDE_CODE_API_KEY or ANTHROPIC_API_KEY environment variable.'
+    );
+    this.name = 'ClaudeCodeAPIKeyMissingError';
+  }
+}
+
+/**
  * Claude Code check provider using the Claude Code TypeScript SDK
  * Supports MCP tools and streaming responses
  */
@@ -106,12 +130,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     }>('@anthropic/claude-code-sdk');
 
     if (!claudeCodeModule) {
-      console.error('\n❌ Error: Claude Code SDK is not installed.');
-      console.error('To use the claude-code provider, you need to install the required packages:');
-      console.error('\n  npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk');
-      console.error('\nOr if using yarn:');
-      console.error('\n  yarn add @anthropic/claude-code-sdk @modelcontextprotocol/sdk\n');
-      process.exit(1);
+      throw new ClaudeCodeSDKNotInstalledError();
     }
 
     const ClaudeCode = claudeCodeModule.ClaudeCode || claudeCodeModule.default?.ClaudeCode;
@@ -123,13 +142,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     // Initialize with API key from environment
     const apiKey = process.env.CLAUDE_CODE_API_KEY || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      console.error('\n❌ Error: No API key found for Claude Code provider.');
-      console.error('Please set one of the following environment variables:');
-      console.error('  - CLAUDE_CODE_API_KEY');
-      console.error('  - ANTHROPIC_API_KEY');
-      console.error('\nExample:');
-      console.error('  export CLAUDE_CODE_API_KEY="your-api-key-here"\n');
-      process.exit(1);
+      throw new ClaudeCodeAPIKeyMissingError();
     }
 
     try {
@@ -639,6 +652,14 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         issues: filteredIssues,
       };
     } catch (error) {
+      // Re-throw setup/configuration errors that should terminate the application
+      if (
+        error instanceof ClaudeCodeSDKNotInstalledError ||
+        error instanceof ClaudeCodeAPIKeyMissingError
+      ) {
+        throw error;
+      }
+
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Log detailed error information
@@ -649,9 +670,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         errorMessage.includes('API rate limit') ||
         errorMessage.includes('403') ||
         errorMessage.includes('401') ||
-        errorMessage.includes('authentication') ||
-        errorMessage.includes('API key') ||
-        errorMessage.includes('claude-code-sdk');
+        errorMessage.includes('authentication');
 
       if (isCriticalError) {
         console.error(

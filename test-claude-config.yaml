@@ -1,0 +1,6 @@
+version: "1.0"
+checks:
+  test-claude:
+    type: claude-code
+    prompt: "Test prompt"
+    on: [manual]

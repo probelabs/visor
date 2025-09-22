@@ -169,7 +169,28 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
   } catch (error) {
-    console.error('❌ Error:', error instanceof Error ? error.message : error);
+    // Import error classes dynamically to avoid circular dependencies
+    const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
+      './providers/claude-code-check-provider'
+    ).catch(() => ({ ClaudeCodeSDKNotInstalledError: null, ClaudeCodeAPIKeyMissingError: null }));
+
+    // Provide user-friendly error messages for known errors
+    if (ClaudeCodeSDKNotInstalledError && error instanceof ClaudeCodeSDKNotInstalledError) {
+      console.error('\n❌ Error: Claude Code SDK is not installed.');
+      console.error('To use the claude-code provider, you need to install the required packages:');
+      console.error('\n  npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk');
+      console.error('\nOr if using yarn:');
+      console.error('\n  yarn add @anthropic/claude-code-sdk @modelcontextprotocol/sdk\n');
+    } else if (ClaudeCodeAPIKeyMissingError && error instanceof ClaudeCodeAPIKeyMissingError) {
+      console.error('\n❌ Error: No API key found for Claude Code provider.');
+      console.error('Please set one of the following environment variables:');
+      console.error('  - CLAUDE_CODE_API_KEY');
+      console.error('  - ANTHROPIC_API_KEY');
+      console.error('\nExample:');
+      console.error('  export CLAUDE_CODE_API_KEY="your-api-key-here"\n');
+    } else {
+      console.error('❌ Error:', error instanceof Error ? error.message : error);
+    }
     process.exit(1);
   }
 }
