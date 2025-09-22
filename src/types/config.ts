@@ -201,6 +201,16 @@ export type EventTrigger =
 export type ConfigOutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 
 /**
+ * Tag filter configuration for selective check execution
+ */
+export interface TagFilter {
+  /** Tags that checks must have to be included (ANY match) */
+  include?: string[];
+  /** Tags that will exclude checks if present (ANY match) */
+  exclude?: string[];
+}
+
+/**
  * Valid grouping options
  */
 export type GroupByOption = 'check' | 'file' | 'severity';
@@ -325,6 +335,8 @@ export interface CheckConfig {
   fail_if?: string;
   /** Check-specific failure conditions - optional (deprecated, use fail_if) */
   failure_conditions?: FailureConditions;
+  /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
+  tags?: string[];
 }
 
 /**
@@ -501,6 +513,8 @@ export interface VisorConfig {
   fail_if?: string;
   /** Global failure conditions - optional (deprecated, use fail_if) */
   failure_conditions?: FailureConditions;
+  /** Tag filter for selective check execution */
+  tag_filter?: TagFilter;
 }
 
 /**

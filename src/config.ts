@@ -393,6 +393,11 @@ export class ConfigManager {
       }
     }
 
+    // Validate tag_filter if present
+    if (config.tag_filter) {
+      this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
+    }
+
     if (errors.length > 0) {
       throw new Error(errors[0].message);
     }
@@ -519,6 +524,99 @@ export class ConfigManager {
             value: checkConfig.reuse_ai_session,
           });
         }
+      }
+    }
+
+    // Validate tags configuration
+    if (checkConfig.tags !== undefined) {
+      if (!Array.isArray(checkConfig.tags)) {
+        errors.push({
+          field: `checks.${checkName}.tags`,
+          message: `Invalid tags value for "${checkName}": must be an array of strings`,
+          value: checkConfig.tags,
+        });
+      } else {
+        // Validate each tag
+        const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
+        checkConfig.tags.forEach((tag, index) => {
+          if (typeof tag !== 'string') {
+            errors.push({
+              field: `checks.${checkName}.tags[${index}]`,
+              message: `Invalid tag at index ${index} for "${checkName}": must be a string`,
+              value: tag,
+            });
+          } else if (!validTagPattern.test(tag)) {
+            errors.push({
+              field: `checks.${checkName}.tags[${index}]`,
+              message: `Invalid tag "${tag}" for "${checkName}": tags must be alphanumeric with hyphens or underscores (start with alphanumeric)`,
+              value: tag,
+            });
+          }
+        });
+      }
+    }
+  }
+
+  /**
+   * Validate tag filter configuration
+   */
+  private validateTagFilter(
+    tagFilter: Record<string, unknown>,
+    errors: ConfigValidationError[]
+  ): void {
+    const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
+
+    // Validate include tags
+    if (tagFilter.include !== undefined) {
+      if (!Array.isArray(tagFilter.include)) {
+        errors.push({
+          field: 'tag_filter.include',
+          message: 'tag_filter.include must be an array of strings',
+          value: tagFilter.include,
+        });
+      } else {
+        tagFilter.include.forEach((tag: unknown, index: number) => {
+          if (typeof tag !== 'string') {
+            errors.push({
+              field: `tag_filter.include[${index}]`,
+              message: `Invalid tag at index ${index}: must be a string`,
+              value: tag,
+            });
+          } else if (!validTagPattern.test(tag as string)) {
+            errors.push({
+              field: `tag_filter.include[${index}]`,
+              message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
+              value: tag,
+            });
+          }
+        });
+      }
+    }
+
+    // Validate exclude tags
+    if (tagFilter.exclude !== undefined) {
+      if (!Array.isArray(tagFilter.exclude)) {
+        errors.push({
+          field: 'tag_filter.exclude',
+          message: 'tag_filter.exclude must be an array of strings',
+          value: tagFilter.exclude,
+        });
+      } else {
+        tagFilter.exclude.forEach((tag: unknown, index: number) => {
+          if (typeof tag !== 'string') {
+            errors.push({
+              field: `tag_filter.exclude[${index}]`,
+              message: `Invalid tag at index ${index}: must be a string`,
+              value: tag,
+            });
+          } else if (!validTagPattern.test(tag as string)) {
+            errors.push({
+              field: `tag_filter.exclude[${index}]`,
+              message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
+              value: tag,
+            });
+          }
+        });
       }
     }
   }

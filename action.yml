@@ -93,6 +93,16 @@ inputs:
     required: false
     default: 'false'
 
+  tags:
+    description: 'Include checks with these tags (comma-separated)'
+    required: false
+    default: ''
+
+  exclude-tags:
+    description: 'Exclude checks with these tags (comma-separated)'
+    required: false
+    default: ''
+
   # Legacy inputs for backward compatibility
   owner:
     description: 'Repository owner (legacy)'

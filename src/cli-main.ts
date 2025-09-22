@@ -99,6 +99,15 @@ export async function main(): Promise<void> {
     // Create CheckExecutionEngine for running checks
     const engine = new CheckExecutionEngine();
 
+    // Build tag filter from CLI options
+    const tagFilter: import('./types/config').TagFilter | undefined =
+      options.tags || options.excludeTags
+        ? {
+            include: options.tags,
+            exclude: options.excludeTags,
+          }
+        : undefined;
+
     // Execute checks with proper parameters (cast to PRInfo)
     const groupedResults = await engine.executeGroupedChecks(
       repositoryInfo as unknown as PRInfo,
@@ -106,7 +115,10 @@ export async function main(): Promise<void> {
       options.timeout,
       config,
       options.output,
-      options.debug || false
+      options.debug || false,
+      options.maxParallelism,
+      options.failFast,
+      tagFilter
     );
 
     // Format output based on format type

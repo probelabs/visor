@@ -1,0 +1,95 @@
+# Production Environment Configuration
+# Comprehensive checks for production deployments
+
+version: "1.0"
+
+# Inherit all checks from base
+extends: ./visor.base.yaml
+
+# Filter for production-critical checks
+tag_filter:
+  include:
+    - prod
+    - security
+    - performance
+    - quality
+  exclude:
+    - experimental
+    - dev
+    - optional
+
+# Use most capable AI model for production
+ai_provider: google
+ai_model: gemini-1.5-pro  # Or claude-3-opus for Anthropic
+
+# Production-specific settings
+max_parallelism: 1  # Sequential for consistency
+fail_fast: true     # Stop on critical issues
+fail_if: "output.issues.some(i => i.severity === 'critical')"
+
+# Add production-specific validations
+checks:
+  prod-security-audit:
+    type: ai
+    group: production
+    prompt: |
+      Production security audit:
+      - Verify no sensitive data in code
+      - Check for secure communication protocols
+      - Validate authentication mechanisms
+      - Ensure proper error handling
+      - Check for rate limiting
+    tags: ["prod", "security", "critical"]
+    on: [pr_opened]
+    depends_on: [security-basic, security-advanced]
+
+  prod-performance-validation:
+    type: ai
+    group: production
+    prompt: |
+      Production performance validation:
+      - Verify resource limits are appropriate
+      - Check for potential memory leaks
+      - Validate caching strategies
+      - Ensure database query optimization
+    tags: ["prod", "performance", "critical"]
+    on: [pr_opened]
+    depends_on: [perf-basic]
+
+  prod-rollback-plan:
+    type: ai
+    group: production
+    prompt: "Verify rollback plan is documented and tested"
+    tags: ["prod", "deployment", "critical"]
+    on: [pr_opened]
+
+# Production output configuration
+output:
+  pr_comment:
+    format: markdown
+    group_by: group
+    collapse: false  # Show everything for production
+
+  github_checks:
+    enabled: true
+    per_check: true
+    name_prefix: "Production Validation"
+
+# Production failure conditions
+failure_conditions:
+  critical_issues:
+    condition: "output.issues.filter(i => i.severity === 'critical').length > 0"
+    message: "Critical issues found - cannot deploy to production"
+    severity: error
+    halt_execution: true
+
+  high_risk:
+    condition: "output.issues.filter(i => i.severity === 'error').length > 3"
+    message: "Too many errors - requires review before production"
+    severity: error
+
+  security_risk:
+    condition: "output.issues.filter(i => i.category === 'security').length > 0"
+    message: "Security issues must be resolved before production deployment"
+    severity: error
+    halt_execution: true
