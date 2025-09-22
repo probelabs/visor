@@ -1199,7 +1199,7 @@ export class CheckExecutionEngine {
 
             if (hasFailuresToReport) {
               log(
-                `🛑 Check "${checkName}" found critical/error issues and fail-fast is enabled - stopping execution`
+                `🛑 Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
               );
               shouldStopExecution = true;
               break;

@@ -39,7 +39,7 @@
           "severity": {
             "type": "string",
             "enum": ["info", "warning", "error", "critical"],
-            "description": "Issue severity level"
+            "description": "Issue severity level: info (suggestions/improvements), warning (should fix), error (must fix), critical (blocks deployment)"
           },
           "category": {
             "type": "string",

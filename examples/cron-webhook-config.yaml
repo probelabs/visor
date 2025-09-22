@@ -145,7 +145,7 @@ checks:
         "analysis": {
           "issues": {{ outputs['post-deploy-validation'].issues | json }},
           "recommendations": {{ outputs['post-deploy-validation'].suggestions | json }},
-          "severity": "{% if outputs['post-deploy-validation'].criticalIssues > 0 %}critical{% elsif outputs['post-deploy-validation'].errorIssues > 0 %}high{% elsif outputs['post-deploy-validation'].warningIssues > 0 %}medium{% else %}low{% endif %}"
+          "severity": "{% if outputs['post-deploy-validation'].criticalIssues > 0 %}critical{% elsif outputs['post-deploy-validation'].errorIssues > 0 %}error{% elsif outputs['post-deploy-validation'].warningIssues > 0 %}warning{% else %}info{% endif %}"
         },
         "timestamp": "{{ timestamp }}",
         "visor_version": "1.0"

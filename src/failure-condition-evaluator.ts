@@ -563,6 +563,7 @@ export class FailureConditionEvaluator {
     info: FailureConditionResult[];
   } {
     return {
+      // Only 'error' severity now (no backward compatibility needed here as this is internal)
       error: results.filter(r => r.severity === 'error'),
       warning: results.filter(r => r.severity === 'warning'),
       info: results.filter(r => r.severity === 'info'),
@@ -583,7 +584,7 @@ export class FailureConditionEvaluator {
     const sections: string[] = [];
 
     if (grouped.error.length > 0) {
-      sections.push(`❌ **Error conditions (${grouped.error.length}):**`);
+      sections.push(`❌ **Error severity conditions (${grouped.error.length}):**`);
       grouped.error.forEach(result => {
         sections.push(`  - ${result.conditionName}: ${result.message || result.expression}`);
       });
