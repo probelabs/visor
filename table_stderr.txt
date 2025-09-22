@@ -1,0 +1,7 @@
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0
+Configuration source: default search locations
+📂 Repository: main branch
+📁 Files changed: 3
+🔍 Analyzing local git repository...
+🤖 Executing checks: security

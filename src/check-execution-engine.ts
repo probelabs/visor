@@ -911,7 +911,7 @@ export class CheckExecutionEngine {
       }
     }
 
-    if (sessionReuseChecks.size > 0) {
+    if (sessionReuseChecks.size > 0 && debug) {
       log(
         `🔄 Debug: Found ${sessionReuseChecks.size} checks requiring session reuse: ${Array.from(sessionReuseChecks).join(', ')}`
       );

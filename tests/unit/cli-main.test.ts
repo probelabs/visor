@@ -54,12 +54,12 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(
+    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
+    expect(mockConsoleError).toHaveBeenCalledWith(
       expect.stringContaining('Configuration version: 1.0')
     );
     // CLI now shows repository status instead of config summary
-    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
+    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
   });
 
   it('should run CLI with check arguments', async () => {
@@ -89,8 +89,8 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleLog).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleLog).toHaveBeenCalledWith(
+    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
+    expect(mockConsoleError).toHaveBeenCalledWith(
       expect.stringContaining('Configuration version: 1.0')
     );
   });

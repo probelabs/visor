@@ -62,8 +62,10 @@ export class CheckProviderRegistry {
       throw new Error(`Provider '${name}' is already registered`);
     }
     this.providers.set(name, provider);
-    // Send provider registration messages to stderr to avoid contaminating JSON output
-    console.error(`Registered check provider: ${name}`);
+    // Only log provider registration in debug mode to avoid contaminating output
+    if (process.env.VISOR_DEBUG === 'true') {
+      console.error(`Registered check provider: ${name}`);
+    }
   }
 
   /**

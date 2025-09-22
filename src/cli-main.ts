@@ -21,8 +21,9 @@ export async function main(): Promise<void> {
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
 
-    // Set environment variable early for proper logging in all modules
+    // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
+    process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
 
     // Handle help and version flags
     if (options.help) {
@@ -76,9 +77,8 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Use stderr for status messages when outputting JSON to stdout
-    const logFn =
-      options.output === 'json' || options.output === 'sarif' ? console.error : console.log;
+    // Use stderr for status messages when outputting formatted results to stdout
+    const logFn = console.error;
 
     logFn('🔍 Visor - AI-powered code review tool');
     logFn(`Configuration version: ${config.version}`);
