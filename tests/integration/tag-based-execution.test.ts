@@ -58,7 +58,7 @@ describe('Tag-Based Execution Integration', () => {
         'experimental-ai-review': {
           type: 'noop',
           tags: ['experimental', 'ai', 'comprehensive'],
-          on: ['manual'],
+          on: ['pr_opened', 'pr_updated'],
         },
 
         // Dependency check example
@@ -94,7 +94,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       expect(executedChecks).toContain('local-security');
       expect(executedChecks).toContain('local-performance');
@@ -121,7 +129,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       expect(executedChecks).toContain('remote-security-comprehensive');
       expect(executedChecks).toContain('remote-performance-analysis');
@@ -147,7 +163,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       expect(executedChecks).toContain('local-security');
       expect(executedChecks).toContain('local-performance');
@@ -175,7 +199,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       expect(executedChecks).toContain('local-security');
       expect(executedChecks).toContain('local-performance');
@@ -199,7 +231,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       expect(executedChecks).toContain('local-security');
       expect(executedChecks).toContain('remote-security-comprehensive');
@@ -227,7 +267,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       // Should include the report and local-security
       expect(executedChecks).toContain('security-report');
@@ -260,7 +308,15 @@ describe('Tag-Based Execution Integration', () => {
         fastFilter
       );
 
-      const fastChecks = Object.keys(fastResult);
+      // Results are grouped by 'group' field, extract check names
+      const fastChecks: string[] = [];
+      for (const group of Object.values(fastResult)) {
+        for (const check of group) {
+          if (check.checkName) {
+            fastChecks.push(check.checkName);
+          }
+        }
+      }
 
       // Should only include fast checks
       expect(fastChecks).toContain('local-security');
@@ -285,7 +341,15 @@ describe('Tag-Based Execution Integration', () => {
         comprehensiveFilter
       );
 
-      const comprehensiveChecks = Object.keys(comprehensiveResult);
+      // Results are grouped by 'group' field, extract check names
+      const comprehensiveChecks: string[] = [];
+      for (const group of Object.values(comprehensiveResult)) {
+        for (const check of group) {
+          if (check.checkName) {
+            comprehensiveChecks.push(check.checkName);
+          }
+        }
+      }
 
       // Should include comprehensive checks
       expect(comprehensiveChecks).toContain('remote-security-comprehensive');
@@ -330,7 +394,15 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      const executedChecks = Object.keys(result);
+      // Results are grouped by 'group' field, extract check names
+      const executedChecks: string[] = [];
+      for (const group of Object.values(result)) {
+        for (const check of group) {
+          if (check.checkName) {
+            executedChecks.push(check.checkName);
+          }
+        }
+      }
 
       // Should include both security AND performance checks
       expect(executedChecks).toContain('local-security');
