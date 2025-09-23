@@ -12,25 +12,59 @@
 
 ---
 
+Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you immediately get:
+- A staged review pipeline (`overview → security → performance → quality → style`) that keeps AI context alive via session reuse while running checks sequentially (`max_parallelism: 1`).
+- Automatic failures whenever any check surfaces `critical` or `error` issues through the bundled `fail_if` guard.
+- Comment-driven automation: `/review` reruns the suite on demand and `/ask` engages an embedded issue assistant for triage.
+- A manual release-notes generator you can trigger in tagged release workflows.
+
 ## 🚀 Quick Start
+
+### Table of Contents
+- [Quick Start](#-quick-start)
+- [Features](#-features)
+- [Developer Experience Playbook](#-developer-experience-playbook)
+- [Tag-Based Filtering](#-tag-based-check-filtering)
+- [PR Comment Commands](#-pr-comment-commands)
+- [Suppress Warnings](#-suppressing-warnings)
+- [CLI Usage](#-cli-usage)
+- [AI Configuration](#-ai-configuration)
+- [MCP Support](#-mcp-model-context-protocol-support-for-ai-providers)
+- [Step Dependencies](#-step-dependencies--intelligent-execution)
+- [Troubleshooting](#-troubleshooting)
+- [Security Defaults](#-security-defaults)
+- [Performance & Cost](#-performance--cost-controls)
+- [Observability](#-observability)
+- [Examples & Recipes](#-examples--recipes)
+- [Contributing](#-contributing)
 
 ### As GitHub Action (Recommended)
 
 Create `.github/workflows/code-review.yml`:
 
-#### Option 1: Using GitHub Token (Default)
 ```yaml
 name: Code Review
-on: pull_request
+on:
+  pull_request:
 
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: ./  # or: gates-ai/visor-action@v1
+      - uses: actions/setup-node@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 20
+          cache: npm
+      - uses: ./  # or: gates-ai/visor-action@v1
+        # Optional: run Visor as a GitHub App instead of the workflow token identity
+        # with:
+        #   app-id: ${{ secrets.VISOR_APP_ID }}
+        #   private-key: ${{ secrets.VISOR_APP_PRIVATE_KEY }}
+        #   installation-id: ${{ secrets.VISOR_APP_INSTALLATION_ID }}
         env:
           # Choose one AI provider (see AI Configuration below)
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -38,43 +72,20 @@ jobs:
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-#### Option 2: Using GitHub App Authentication (Recommended for Production)
-For better security and to have comments appear from your custom GitHub App:
+The default `GITHUB_TOKEN` already exists in every workflow run, so you do **not** need to create a secret for it. Switch to a GitHub App when you want a dedicated bot identity, granular repo access, or org-wide deployment.
 
-```yaml
-name: Code Review with GitHub App
-on: pull_request
+If you don't commit a `.visor.yaml` yet, Visor automatically loads `defaults/.visor.yaml`, giving your team the full overview → security → performance → quality → style pipeline, critical/error failure stop, `/review` orchestration, and the optional release-notes check out of the box.
 
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./  # or: gates-ai/visor-action@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          # installation-id: ${{ secrets.APP_INSTALLATION_ID }}  # Optional, auto-detected
-        env:
-          # Choose one AI provider (see AI Configuration below)
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-```
-
-**Setting up GitHub App:**
-1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) with these permissions:
+**Optional GitHub App setup:**
+1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) with:
    - **Pull requests**: Read & Write
-   - **Issues**: Write  
+   - **Issues**: Write
    - **Metadata**: Read
-2. Generate and download a private key for your app
-3. Install the app on your repository
-4. Add these secrets to your repository:
-   - `APP_ID`: Your GitHub App's ID
-   - `APP_PRIVATE_KEY`: The private key you downloaded (entire contents)
-   - `APP_INSTALLATION_ID`: (Optional) The installation ID for this repository
+2. Generate and store the private key securely.
+3. Install the app on the repositories (or org) you want Visor to review.
+4. Add secrets for `VISOR_APP_ID`, `VISOR_APP_PRIVATE_KEY`, and optionally `VISOR_APP_INSTALLATION_ID` if you don't want auto-detection.
 
-That's it! Visor will automatically review your PRs with AI-powered analysis.
+Visor will now review pull requests automatically in the environments you configure.
 
 #### Advanced Configuration Options
 
@@ -91,7 +102,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./  # or: gates-ai/visor-action@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           max-parallelism: '5'      # Run up to 5 checks in parallel
           fail-fast: 'true'         # Stop on first failure
           checks: 'security,performance'  # Run specific checks only
@@ -102,19 +112,23 @@ jobs:
 ### As CLI Tool
 
 ```bash
-# Build the project
+# Install dependencies
 npm install
+
+# Build TypeScript sources (required when running from a clone)
 npm run build
 
-# Run analysis
-./dist/cli-main.js --check all
+# Run analysis from the compiled dist bundle
+node dist/index.js --cli --check all
 
-# Output as JSON
-./dist/cli-main.js --check security --output json
+# Or use the published package without building
+npx @probelabs/visor --check security --output json
 
-# Use custom config
-./dist/cli-main.js --config custom.yaml
+# Point to a custom config file
+npx @probelabs/visor --config custom.yaml --check all
 ```
+
+> Tip: `node dist/index.js --cli` forces CLI mode even inside GitHub Action environments. Install the package globally (`npm install --global @probelabs/visor`) if you prefer calling the `visor` binary directly.
 
 ## ✨ Features
 
@@ -122,12 +136,54 @@ npm run build
 - **Schema-Template System** - Flexible data validation with JSON Schema and Liquid templating
 - **Group-Based Comments** - Multiple GitHub comments organized by check groups
 - **Multiple Check Types** - Security, performance, style, and architecture analysis
-- **Flexible Output** - Table, JSON, Markdown, or SARIF format
+- **Flexible Output** - Table, JSON, Markdown, or SARIF format (SARIF emits standard 2.1.0)
 - **Step Dependencies** - Define execution order with `depends_on` relationships
 - **PR Commands** - Trigger reviews with `/review` comments
 - **GitHub Integration** - Creates check runs, adds labels, posts comments
 - **Warning Suppression** - Suppress false positives with `visor-disable` comments
 - **Tag-Based Filtering** - Run subsets of checks based on tags for different execution profiles
+
+## 🧭 Developer Experience Playbook
+
+- **Start with the shipping defaults** – Copy `dist/defaults/.visor.yaml` (after `npm run build`) or `examples/quick-start-tags.yaml` into your repo as `.visor.yaml`, run `npx @probelabs/visor --check all --debug`, and commit both the config and observed baseline so every contributor shares the same playbook.
+- **Treat configuration as code** – Review config edits in PRs, version Liquid prompt templates under `prompts/`, and pin AI provider/model in config to keep reviews reproducible.
+- **Roll out checks gradually** – Use tag filters (`local`, `fast`, `critical`) to gate heavier analysis behind branch rules and to stage new checks on a subset of teams before rolling out widely.
+- **Secure your credentials** – Prefer GitHub App auth in production for clearer audit trails; fall back to repo `GITHUB_TOKEN` only for sandboxes. Scope AI API keys to review-only projects and rotate them with GitHub secret scanning alerts enabled.
+- **Make feedback actionable** – Group related checks, enable `reuse_ai_session` for multi-turn follow-ups, and add `/review --check performance` comment triggers so reviewers can pull deeper insights on demand.
+- **Keep suppressions intentional** – Use `visor-disable` sparingly, add context in the adjacent comment, and review `visor-disable-file` entries during quarterly hygiene passes to avoid silencing real regressions.
+- **Validate locally before CI** – Reproduce findings with `node dist/index.js --cli --check security --output markdown`, run `npm test` for guardrails, and enable `--fail-fast` in fast lanes to surface blocking issues instantly.
+
+## 📚 Examples & Recipes
+
+- Minimal `.visor.yaml` starter
+```yaml
+version: "1.0"
+checks:
+  security:
+    type: ai
+    schema: code-review
+    prompt: "Identify security vulnerabilities in changed files"
+```
+
+- Fast local pre-commit hook (Husky)
+```bash
+npx husky add .husky/pre-commit "npx @probelabs/visor --tags local,fast --output table || exit 1"
+```
+
+- Deep dives and integrations
+- docs/NPM_USAGE.md – CLI usage and flags
+- GITHUB_CHECKS.md – Checks, outputs, and workflow integration
+- examples/ – MCP, Jira, and advanced configs
+
+## 🤝 Contributing
+
+- Requirements: Node.js 18+ (20 recommended) and npm.
+- Install and build: `npm install && npm run build`
+- Test: `npm test` (watch: `npm run test:watch`, coverage: `npm run test:coverage`)
+- Lint/format: `npm run lint` / `npm run lint:fix` and `npm run format`
+- Before opening PRs: run the test suite and ensure README examples remain accurate.
+
+Releases are handled via `scripts/release.sh` and follow semver.
 
 ## 🏷️ Tag-Based Check Filtering
 
@@ -221,7 +277,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: gates-ai/visor-action@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           tags: "local,fast"
           exclude-tags: "experimental"
         env:
@@ -235,7 +290,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: gates-ai/visor-action@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           tags: "remote,comprehensive"
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -470,7 +524,7 @@ Options:
   -o, --output <format>      Output format: table, json, markdown, sarif
                              Default: table
   --config <path>            Path to configuration file
-                             Default: visor.config.yaml
+                             Default search: ./.visor.yaml or ./.visor.yml
   --max-parallelism <count>  Maximum number of checks to run in parallel
                              Default: 3
   --fail-fast                Stop execution when any check fails
@@ -496,6 +550,31 @@ Examples:
   visor --check all --allowed-remote-patterns "https://github.com/myorg/"
 ```
 
+## 🛠️ Troubleshooting
+
+- Not a git repository or no changes: run inside a Git repo with a diff (PR or local changes), or supply a config that doesn’t require PR context.
+- No AI keys configured: Visor falls back to pattern checks. Set `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY` and optionally `MODEL_NAME`.
+- Claude Code provider errors: install optional peers `@anthropic/claude-code-sdk` and `@modelcontextprotocol/sdk`, then set `CLAUDE_CODE_API_KEY` or `ANTHROPIC_API_KEY`.
+- No PR comments posted: ensure workflow `permissions` include `pull-requests: write`; set `debug: true` (action input) or run `--debug` locally and inspect logs.
+- Remote extends blocked: confirm `--no-remote-extends` or `VISOR_NO_REMOTE_EXTENDS=true` is intended; otherwise remove.
+
+## 🔐 Security Defaults
+
+- Use the workflow token by default; prefer a GitHub App for production (bot identity, least-privilege scopes).
+- Lock remote configuration: set `VISOR_NO_REMOTE_EXTENDS=true` in CI or pass `--no-remote-extends` to avoid loading external configs.
+- Scope AI API keys to a review-only project; rotate regularly and enable GitHub secret scanning alerts.
+
+## ⚡ Performance & Cost Controls
+
+- Cache Node in CI: `actions/setup-node@v4` with `cache: npm` (included in Quick Start).
+- Separate fast vs. deep checks via tags: run `local,fast` in PRs, `remote,comprehensive` nightly.
+- Increase `max_parallelism` only when not using `reuse_ai_session` between dependent checks.
+
+## 👀 Observability
+
+- Machine-readable output: use `--output json` for pipelines; redirect SARIF for code scanning: `npx @probelabs/visor --check security --output sarif > visor-results.sarif`.
+- Verbose logs: set `--debug` (CLI) or `debug: true` in the action input.
+
 ## 🤖 AI Configuration
 
 Visor uses AI-powered code analysis to provide intelligent review feedback. Configure one of the following providers:
@@ -515,7 +594,7 @@ Add your API key as a repository secret:
 1. Go to Settings → Secrets and variables → Actions
 2. Click "New repository secret"
 3. Add one of: `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`
-4. (Optional) Add `AI_MODEL_NAME` to specify a model
+4. (Optional) Add `MODEL_NAME` to specify a model
 
 #### For Local Development
 Set environment variables:
@@ -547,6 +626,88 @@ If no API key is configured, Visor will fall back to basic pattern-matching anal
 - Basic style validation
 
 For best results, configure an AI provider for intelligent, context-aware code review.
+
+### MCP (Model Context Protocol) Support for AI Providers
+
+Visor supports MCP servers for AI providers, enabling enhanced code analysis with specialized tools. MCP servers can provide additional context and capabilities to AI models.
+
+MCP configuration follows the same pattern as AI provider configuration, supporting **global**, **check-level**, and **AI object-level** settings.
+
+#### Global MCP Configuration
+
+Configure MCP servers once globally for all AI checks:
+
+```yaml
+# Global configuration
+ai_provider: anthropic
+ai_model: claude-3-sonnet
+ai_mcp_servers:
+  probe:
+    command: "npx"
+    args: ["-y", "@probelabs/probe@latest", "mcp"]
+  filesystem:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+
+checks:
+  security_review:
+    type: ai
+    prompt: "Review code using available MCP tools"
+    # Inherits global MCP servers automatically
+```
+
+#### Check-Level MCP Configuration
+
+Override global MCP servers for specific checks:
+
+```yaml
+checks:
+  performance_review:
+    type: ai
+    prompt: "Analyze performance using specialized tools"
+    ai_mcp_servers:  # Overrides global servers
+      probe:
+        command: "npx"
+        args: ["-y", "@probelabs/probe@latest", "mcp"]
+      custom_profiler:
+        command: "python3"
+        args: ["./tools/performance-analyzer.py"]
+```
+
+#### AI Object-Level MCP Configuration
+
+Most specific level - overrides both global and check-level:
+
+```yaml
+checks:
+  comprehensive_review:
+    type: ai
+    prompt: "Comprehensive analysis with specific tools"
+    ai:
+      provider: anthropic
+      mcpServers:  # Overrides everything else
+        probe:
+          command: "npx"
+          args: ["-y", "@probelabs/probe@latest", "mcp"]
+        github:
+          command: "npx"
+          args: ["-y", "@modelcontextprotocol/server-github"]
+```
+
+#### Available MCP Servers
+
+- **Probe**: Advanced code search and analysis (`@probelabs/probe`)
+- **Jira**: Jira Cloud integration for issue management (`@orengrinker/jira-mcp-server`)
+- **Filesystem**: File system access (`@modelcontextprotocol/server-filesystem`)
+- **GitHub**: GitHub API access (coming soon)
+- **Custom**: Your own MCP servers
+
+#### Example Configurations
+
+- [Basic MCP with Probe](examples/ai-with-mcp.yaml) - Code analysis with multiple MCP servers
+- [Jira Workflow Automation](examples/jira-workflow-mcp.yaml) - Complete Jira integration examples
+- [Simple Jira Analysis](examples/jira-simple-example.yaml) - Basic JQL → analyze → label workflow
+- [Setup Guide](examples/JIRA_MCP_SETUP.md) - Detailed Jira MCP configuration instructions
 
 ## 📊 Step Dependencies & Intelligent Execution
 
@@ -2121,7 +2282,7 @@ All HTTP configurations support Liquid templating for dynamic content:
 Visor features a pluggable provider system for extensibility:
 
 ### Supported Check Types
-- **AI Provider**: Intelligent analysis using LLMs (Google Gemini, Anthropic Claude, OpenAI GPT)
+- **AI Provider**: Intelligent analysis using LLMs (Google Gemini, Anthropic Claude, OpenAI GPT) with MCP (Model Context Protocol) tools support
 - **Claude Code Provider**: Advanced AI analysis using Claude Code SDK with MCP tools and subagents
 - **Tool Provider**: Integration with external tools (ESLint, Prettier, SonarQube)
 - **HTTP Provider**: Send data to external HTTP endpoints
@@ -2152,7 +2313,7 @@ CheckProviderRegistry.getInstance().registerProvider(new CustomCheckProvider());
 
 ## ⚙️ Configuration
 
-Create `visor.config.yaml` in your project root:
+Create `.visor.yaml` in your project root:
 
 ```yaml
 # .visor.yaml
@@ -2238,11 +2399,11 @@ reporting:
 
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
-| `github-token` | GitHub token for API access | `${{ github.token }}` | Yes |
+| `github-token` | GitHub token for API access (auto-provided) | `${{ github.token }}` | No (defaults to workflow token) |
 | `auto-review` | Auto-review on PR open/update | `true` | No |
 | `checks` | Checks to run (comma-separated) | `all` | No |
 | `output-format` | Output format | `markdown` | No |
-| `config-path` | Path to config file | `visor.config.yaml` | No |
+| `config-path` | Path to config file | `.visor.yaml` | No |
 | `max-parallelism` | Maximum number of checks to run in parallel | `3` | No |
 | `fail-fast` | Stop execution when any check fails | `false` | No |
 | `comment-on-pr` | Post review as PR comment | `true` | No |
@@ -2280,7 +2441,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true  # Enable automatic review
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -2300,7 +2460,6 @@ jobs:
       - name: Run Visor Security Scan
         uses: ./
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           checks: security
           output-format: sarif
       
@@ -2323,7 +2482,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           min-score: 80
           fail-on-critical: true
 ```
@@ -2344,8 +2502,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        # Optional: configure inputs (e.g., tag filters, custom configs) with a `with:` block
 ```
 
 ## 📊 Output Formats
@@ -2368,7 +2525,7 @@ jobs:
   "summary": {
     "overallScore": 85,
     "totalIssues": 12,
-    "criticalIssues": 1
+  "criticalIssues": 1
   },
   "issues": [
     {
@@ -2412,7 +2569,7 @@ visor/
 ├── tests/                  # Test suites
 ├── .github/workflows/      # GitHub workflows
 ├── action.yml             # Action metadata
-└── visor.config.yaml      # Default config
+└── .visor.yaml            # Project config (overrides defaults/.visor.yaml)
 ```
 
 ### Available Scripts

@@ -23,13 +23,7 @@ export interface CheckProviderConfig {
   metadata?: Record<string, unknown>;
   workingDirectory?: string;
   env?: EnvConfig;
-  ai?: {
-    provider?: string;
-    model?: string;
-    apiKey?: string;
-    timeout?: number;
-    debug?: boolean;
-  };
+  ai?: import('../types/config').AIProviderConfig;
   /** AI model to use for this check - overrides global setting */
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */

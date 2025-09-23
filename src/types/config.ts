@@ -235,6 +235,10 @@ export interface AIProviderConfig {
   apiKey?: string;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** Enable debug mode */
+  debug?: boolean;
+  /** MCP servers configuration */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 /**
@@ -316,6 +320,8 @@ export interface CheckConfig {
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  /** MCP servers for this AI check - overrides global setting */
+  ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Claude Code configuration (for claude-code type checks) */
   claude_code?: ClaudeCodeConfig;
   /** Environment variables for this check */
@@ -506,6 +512,8 @@ export interface VisorConfig {
   ai_model?: string;
   /** Global AI provider setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code' | string;
+  /** Global MCP servers configuration for AI checks */
+  ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Maximum number of checks to run in parallel (default: 3) */
   max_parallelism?: number;
   /** Stop execution when any check fails (default: false) */

@@ -7,6 +7,8 @@ import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
+import { safeImport } from './claude-code-types';
+import type { AIProviderConfig } from '../types/config';
 
 /**
  * AI-powered check provider using probe agent
@@ -58,6 +60,44 @@ export class AICheckProvider extends CheckProvider {
         cfg.ai.provider &&
         !['google', 'anthropic', 'openai', 'mock'].includes(cfg.ai.provider as string)
       ) {
+        return false;
+      }
+
+      // Validate mcpServers if present
+      if (cfg.ai.mcpServers) {
+        if (!this.validateMcpServers(cfg.ai.mcpServers)) {
+          return false;
+        }
+      }
+    }
+
+    // Validate check-level MCP servers if present
+    if ((cfg as any).ai_mcp_servers) {
+      if (!this.validateMcpServers((cfg as any).ai_mcp_servers)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Validate MCP servers configuration
+   */
+  private validateMcpServers(mcpServers: unknown): boolean {
+    if (typeof mcpServers !== 'object' || mcpServers === null) {
+      return false;
+    }
+
+    for (const serverConfig of Object.values(mcpServers)) {
+      if (!serverConfig || typeof serverConfig !== 'object') {
+        return false;
+      }
+      const config = serverConfig as any;
+      if (!config.command || typeof config.command !== 'string') {
+        return false;
+      }
+      if (config.args && !Array.isArray(config.args)) {
         return false;
       }
     }
@@ -387,6 +427,71 @@ export class AICheckProvider extends CheckProvider {
     }
   }
 
+  /**
+   * Setup MCP tools based on AI configuration
+   */
+  private async setupMcpTools(
+    aiConfig: AIProviderConfig
+  ): Promise<Array<{ name: string; [key: string]: unknown }>> {
+    const tools: Array<{ name: string; [key: string]: unknown }> = [];
+
+    // Setup custom MCP servers if configured
+    if (aiConfig.mcpServers) {
+      try {
+        // Import MCP SDK for custom server creation using safe import
+        const mcpModule = await safeImport<{
+          createSdkMcpServer?: unknown;
+          default?: { createSdkMcpServer?: unknown };
+        }>('@modelcontextprotocol/sdk');
+
+        if (!mcpModule) {
+          console.warn('@modelcontextprotocol/sdk package not found. MCP servers disabled.');
+          return tools;
+        }
+
+        const createSdkMcpServer =
+          mcpModule.createSdkMcpServer || mcpModule.default?.createSdkMcpServer;
+
+        if (createSdkMcpServer) {
+          for (const [serverName, serverConfig] of Object.entries(aiConfig.mcpServers)) {
+            try {
+              // Create MCP server instance
+              const server = await (createSdkMcpServer as any)({
+                name: serverName,
+                command: serverConfig.command,
+                args: serverConfig.args || [],
+                env: { ...process.env, ...serverConfig.env },
+              });
+
+              // Add server tools to available tools
+              const serverTools = await server.listTools();
+              tools.push(
+                ...serverTools.map((tool: { name: string }) => ({
+                  name: tool.name,
+                  server: serverName,
+                }))
+              );
+            } catch (serverError) {
+              console.warn(
+                `Failed to setup MCP server ${serverName}: ${serverError instanceof Error ? serverError.message : 'Unknown error'}`
+              );
+            }
+          }
+        } else {
+          console.warn(
+            'createSdkMcpServer function not found in @modelcontextprotocol/sdk. MCP servers disabled.'
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `Failed to import MCP SDK: ${error instanceof Error ? error.message : 'Unknown error'}. MCP servers disabled.`
+        );
+      }
+    }
+
+    return tools;
+  }
+
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
@@ -453,6 +558,39 @@ export class AICheckProvider extends CheckProvider {
       throw new Error(
         `No prompt defined for check. All checks must have prompts defined in .visor.yaml configuration.`
       );
+    }
+
+    // Setup MCP tools from multiple configuration levels
+    const mcpServers: Record<string, import('../types/config').McpServerConfig> = {};
+
+    // 1. Start with global MCP servers (from visor config root)
+    const globalConfig = config as any; // Cast to access potential global config
+    if (globalConfig.ai_mcp_servers) {
+      Object.assign(mcpServers, globalConfig.ai_mcp_servers);
+    }
+
+    // 2. Add check-level MCP servers (overrides global)
+    if (config.ai_mcp_servers) {
+      Object.assign(mcpServers, config.ai_mcp_servers);
+    }
+
+    // 3. Add ai.mcpServers (overrides everything)
+    if (config.ai?.mcpServers) {
+      Object.assign(mcpServers, config.ai.mcpServers);
+    }
+
+    // Setup MCP tools if any servers are configured
+    if (Object.keys(mcpServers).length > 0) {
+      const mcpConfig: import('../types/config').AIProviderConfig = { mcpServers };
+      const mcpTools = await this.setupMcpTools(mcpConfig);
+      if (mcpTools.length > 0) {
+        aiConfig.tools = mcpTools;
+        if (aiConfig.debug) {
+          console.error(
+            `🔧 Debug: AI check configured with ${mcpTools.length} MCP tools from ${Object.keys(mcpServers).length} servers`
+          );
+        }
+      }
     }
 
     // Process prompt with Liquid templates and file loading
@@ -558,8 +696,10 @@ export class AICheckProvider extends CheckProvider {
       'ai.model',
       'ai.apiKey',
       'ai.timeout',
+      'ai.mcpServers',
       'ai_model',
       'ai_provider',
+      'ai_mcp_servers',
       'env',
     ];
   }

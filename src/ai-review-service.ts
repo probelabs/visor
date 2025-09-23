@@ -21,6 +21,7 @@ export interface AIReviewConfig {
   timeout?: number; // Default: 600000ms (10 minutes)
   provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
+  tools?: Array<{ name: string; [key: string]: unknown }>; // MCP tools from servers
 }
 
 export interface AIDebugInfo {
