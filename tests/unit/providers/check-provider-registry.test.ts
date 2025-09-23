@@ -66,7 +66,7 @@ describe('CheckProviderRegistry', () => {
     it('should register default providers', () => {
       const providers = registry.getAvailableProviders();
       expect(providers).toContain('ai');
-      expect(providers).toContain('tool');
+      expect(providers).toContain('command');
       expect(providers).toContain('http');
       expect(providers).toContain('http_input');
       expect(providers).toContain('http_client');
@@ -173,8 +173,8 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 9 default providers (ai, tool, script, http, http_input, http_client, noop, log, claude-code) + 2 custom = 11 total
-      expect(providers.length).toBe(11);
+      // Reset adds 8 default providers (ai, command, http, http_input, http_client, noop, log, claude-code) + 2 custom = 10 total
+      expect(providers.length).toBe(10);
     });
   });
 
@@ -220,7 +220,7 @@ describe('CheckProviderRegistry', () => {
 
       expect(registry.hasProvider('custom')).toBe(false);
       expect(registry.hasProvider('ai')).toBe(true);
-      expect(registry.hasProvider('tool')).toBe(true);
+      expect(registry.hasProvider('command')).toBe(true);
       expect(registry.hasProvider('http')).toBe(true);
       expect(registry.hasProvider('http_input')).toBe(true);
       expect(registry.hasProvider('http_client')).toBe(true);

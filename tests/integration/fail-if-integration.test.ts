@@ -102,9 +102,9 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
 }));
 
 // Mock other providers
-jest.mock('../../src/providers/tool-check-provider', () => ({
-  ToolCheckProvider: jest.fn().mockImplementation(() => ({
-    getName: jest.fn().mockReturnValue('tool'),
+jest.mock('../../src/providers/command-check-provider', () => ({
+  CommandCheckProvider: jest.fn().mockImplementation(() => ({
+    getName: jest.fn().mockReturnValue('command'),
     initialize: jest.fn().mockResolvedValue(undefined),
   })),
 }));

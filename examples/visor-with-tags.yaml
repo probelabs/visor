@@ -49,7 +49,7 @@ checks:
     depends_on: [security-quick]  # Build on quick findings
 
   security-dependencies:
-    type: tool
+    type: command
     group: security
     exec: "npm audit --json"
     tags: ["security", "dependencies", "fast", "local", "remote"]
@@ -119,7 +119,7 @@ checks:
     on: [pr_opened]
 
   test-coverage:
-    type: tool
+    type: command
     group: quality
     exec: "npm test -- --coverage --json"
     tags: ["testing", "fast", "local", "ci"]

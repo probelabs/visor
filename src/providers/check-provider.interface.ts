@@ -11,10 +11,9 @@ export interface CheckProviderConfig {
   eventContext?: Record<string, unknown>;
   focus?: string;
   command?: string; // For PR comment triggers
-  exec?: string; // For tool execution (supports Liquid templates)
+  exec?: string; // For command execution (supports Liquid templates)
   stdin?: string; // Optional stdin input (supports Liquid templates)
   args?: string[]; // Deprecated: use exec with inline args instead
-  script?: string;
   interpreter?: string;
   url?: string;
   method?: string;

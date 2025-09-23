@@ -57,7 +57,7 @@ describe('AICheckProvider', () => {
 
     it('should reject invalid type', async () => {
       const config = {
-        type: 'tool',
+        type: 'command',
         prompt: 'security',
       };
       expect(await provider.validateConfig(config)).toBe(false);

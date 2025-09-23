@@ -1,13 +1,12 @@
 import { CheckProvider } from './check-provider.interface';
 import { AICheckProvider } from './ai-check-provider';
-import { ToolCheckProvider } from './tool-check-provider';
 import { HttpCheckProvider } from './http-check-provider';
 import { HttpInputProvider } from './http-input-provider';
 import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
 import { LogCheckProvider } from './log-check-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
-import { ScriptCheckProvider } from './script-check-provider';
+import { CommandCheckProvider } from './command-check-provider';
 
 /**
  * Registry for managing check providers
@@ -37,8 +36,7 @@ export class CheckProviderRegistry {
   private registerDefaultProviders(): void {
     // Register all built-in providers
     this.register(new AICheckProvider());
-    this.register(new ToolCheckProvider());
-    this.register(new ScriptCheckProvider());
+    this.register(new CommandCheckProvider());
     this.register(new HttpCheckProvider());
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());

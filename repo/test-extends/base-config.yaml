@@ -27,7 +27,7 @@ checks:
     schema: code-review
 
   style:
-    type: tool
+    type: command
     exec: npx prettier --check .
     on: [pr_opened, pr_updated]
     group: formatting

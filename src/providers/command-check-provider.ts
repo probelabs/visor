@@ -4,10 +4,10 @@ import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
 
 /**
- * Check provider that executes shell scripts and captures their output
+ * Check provider that executes shell commands and captures their output
  * Supports JSON parsing and integration with forEach functionality
  */
-export class ScriptCheckProvider extends CheckProvider {
+export class CommandCheckProvider extends CheckProvider {
   private liquid: Liquid;
 
   constructor() {
@@ -20,11 +20,11 @@ export class ScriptCheckProvider extends CheckProvider {
   }
 
   getName(): string {
-    return 'script';
+    return 'command';
   }
 
   getDescription(): string {
-    return 'Execute shell scripts and capture output for processing';
+    return 'Execute shell commands and capture output for processing';
   }
 
   async validateConfig(config: unknown): Promise<boolean> {
@@ -34,8 +34,8 @@ export class ScriptCheckProvider extends CheckProvider {
 
     const cfg = config as CheckProviderConfig;
 
-    // Must have script specified
-    if (!cfg.script || typeof cfg.script !== 'string') {
+    // Must have exec specified
+    if (!cfg.exec || typeof cfg.exec !== 'string') {
       return false;
     }
 
@@ -47,7 +47,7 @@ export class ScriptCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
-    const script = config.script as string;
+    const command = config.exec as string;
     const transform = config.transform as string | undefined;
 
     // Prepare template context for Liquid rendering
@@ -66,10 +66,10 @@ export class ScriptCheckProvider extends CheckProvider {
     };
 
     try {
-      // Render the script with Liquid templates if needed
-      let renderedScript = script;
-      if (script.includes('{{') || script.includes('{%')) {
-        renderedScript = await this.liquid.parseAndRender(script, templateContext);
+      // Render the command with Liquid templates if needed
+      let renderedCommand = command;
+      if (command.includes('{{') || command.includes('{%')) {
+        renderedCommand = await this.liquid.parseAndRender(command, templateContext);
       }
 
       // Prepare environment variables - convert all to strings
@@ -92,14 +92,14 @@ export class ScriptCheckProvider extends CheckProvider {
       const { promisify } = await import('util');
       const execAsync = promisify(exec);
 
-      const { stdout, stderr } = await execAsync(renderedScript, {
+      const { stdout, stderr } = await execAsync(renderedCommand, {
         env: scriptEnv,
         timeout: 60000, // 60 second timeout
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
 
       if (stderr && process.env.DEBUG) {
-        console.error(`Script stderr: ${stderr}`);
+        console.error(`Command stderr: ${stderr}`);
       }
 
       // Try to parse output as JSON
@@ -133,9 +133,9 @@ export class ScriptCheckProvider extends CheckProvider {
           return {
             issues: [
               {
-                file: 'script',
+                file: 'command',
                 line: 0,
-                ruleId: 'script/transform_error',
+                ruleId: 'command/transform_error',
                 message: `Failed to apply transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
                 severity: 'error',
                 category: 'logic',
@@ -156,10 +156,10 @@ export class ScriptCheckProvider extends CheckProvider {
       return {
         issues: [
           {
-            file: 'script',
+            file: 'command',
             line: 0,
-            ruleId: 'script/execution_error',
-            message: `Script execution failed: ${errorMessage}`,
+            ruleId: 'command/execution_error',
+            message: `Command execution failed: ${errorMessage}`,
             severity: 'error',
             category: 'logic',
           },
@@ -206,17 +206,17 @@ export class ScriptCheckProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['type', 'script', 'transform', 'env', 'depends_on', 'on', 'if', 'group', 'forEach'];
+    return ['type', 'exec', 'transform', 'env', 'depends_on', 'on', 'if', 'group', 'forEach'];
   }
 
   async isAvailable(): Promise<boolean> {
-    // Script provider is always available as long as we can execute commands
+    // Command provider is always available as long as we can execute commands
     return true;
   }
 
   getRequirements(): string[] {
     return [
-      'Valid shell script to execute',
+      'Valid shell command to execute',
       'Shell environment available',
       'Optional: Transform template for processing output',
     ];

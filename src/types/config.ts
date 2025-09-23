@@ -175,8 +175,7 @@ export interface FailureConditionResult {
  */
 export type ConfigCheckType =
   | 'ai'
-  | 'tool'
-  | 'script'
+  | 'command'
   | 'http'
   | 'http_input'
   | 'http_client'
@@ -289,7 +288,7 @@ export interface CheckConfig {
   prompt?: string;
   /** Additional prompt to append when extending configurations - merged with parent prompt */
   appendPrompt?: string;
-  /** Tool execution command with Liquid template support - required for tool checks */
+  /** Command execution with Liquid template support - required for command checks */
   exec?: string;
   /** Stdin input for tools with Liquid template support - optional for tool checks */
   stdin?: string;
@@ -345,8 +344,6 @@ export interface CheckConfig {
   failure_conditions?: FailureConditions;
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
-  /** Script to execute for script provider - required for script checks */
-  script?: string;
   /** Process output as array and run dependent checks for each item */
   forEach?: boolean;
 }

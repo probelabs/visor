@@ -33,7 +33,7 @@ describe('Config Extends in GitHub Action Context', () => {
           on: ['pr_opened', 'pr_updated'],
         },
         'custom-check-2': {
-          type: 'tool',
+          type: 'command',
           exec: 'npm run custom-lint',
           on: ['pr_opened', 'pr_updated'],
         },

@@ -71,7 +71,7 @@ Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
 - Schema – JSON shape checks return (e.g., `code-review`).
 - Template – renders results (tables/markdown).
 - Group – which comment a check is posted into.
-- Provider – how a check runs (`ai`, `http`, `tool`, `script`, `claude-code`).
+- Provider – how a check runs (`ai`, `http`, `command`, `claude-code`).
 - Dependencies – `depends_on` controls order; independents run in parallel.
 - Tags – label checks (`fast`, `local`, `comprehensive`) and filter with `--tags`.
 - Events – PRs, issues, `/review` comments, webhooks, or cron schedules.
@@ -123,7 +123,7 @@ Visor is a general SDLC automation framework:
 - Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI — plus MCP tools and Claude Code SDK.
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
-- Extensible providers: `ai`, `http`, `http_client`, `log`, `tool`, `script`, `claude-code` — or add your own.
+- Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `claude-code` — or add your own.
 - Security by default: GitHub App support, scoped tokens, remote‑extends allowlist, opt‑in network usage.
 - Observability & control: JSON/SARIF outputs, fail‑fast and timeouts, parallelism and cost control.
 
@@ -360,7 +360,7 @@ Learn more: [docs/http.md](docs/http.md)
 
 ## 🔧 Pluggable Architecture
 
-Mix providers (`ai`, `http`, `http_client`, `log`, `tool`, `script`, `claude-code`) or add your own.
+Mix providers (`ai`, `http`, `http_client`, `log`, `command`, `claude-code`) or add your own.
 
 Learn more: [docs/pluggable.md](docs/pluggable.md)
 

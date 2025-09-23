@@ -1118,7 +1118,6 @@ export class CheckExecutionEngine {
           const providerConfig: CheckProviderConfig = {
             type: providerType,
             prompt: checkConfig.prompt,
-            script: checkConfig.script,
             exec: checkConfig.exec,
             focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
             schema: checkConfig.schema,
