@@ -126,9 +126,20 @@ export async function main(): Promise<void> {
     if (options.output === 'json') {
       output = JSON.stringify(groupedResults, null, 2);
     } else if (options.output === 'sarif') {
-      // For SARIF output, we need to convert to SARIF format
-      // For now, output as JSON until proper SARIF formatting is implemented
-      output = JSON.stringify(groupedResults, null, 2);
+      // Build analysis result and format as SARIF
+      const analysisResult: AnalysisResult = {
+        repositoryInfo,
+        reviewSummary: {
+          issues: Object.values(groupedResults)
+            .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
+            .flat(),
+          suggestions: [],
+        },
+        executionTime: 0,
+        timestamp: new Date().toISOString(),
+        checksExecuted: checksToRun,
+      };
+      output = OutputFormatters.formatAsSarif(analysisResult);
     } else if (options.output === 'markdown') {
       // Create analysis result for markdown formatting
       const analysisResult: AnalysisResult = {
