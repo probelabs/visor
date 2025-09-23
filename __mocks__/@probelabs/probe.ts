@@ -8,7 +8,6 @@ export class ProbeAgent {
     // Mock implementation that will be overridden in tests
     return JSON.stringify({
       issues: [],
-      suggestions: [],
     });
   }
 

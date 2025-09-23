@@ -90,10 +90,16 @@ export class LogCheckProvider extends CheckProvider {
       includeMetadata
     );
 
+    // Output to console based on log level
+    const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    logFn(logOutput);
+
+    // Return with the log content as custom data for dependent checks
     return {
-      issues: [], // Log provider doesn't generate issues
-      suggestions: [logOutput], // Put formatted log output as the primary suggestion
-    };
+      issues: [],
+      // Add log output as custom field
+      logOutput,
+    } as ReviewSummary & { logOutput: string };
   }
 
   private buildTemplateContext(
@@ -136,9 +142,8 @@ export class LogCheckProvider extends CheckProvider {
       for (const [checkName, result] of dependencyResults.entries()) {
         dependencies[checkName] = {
           issueCount: result.issues?.length || 0,
-          suggestionCount: result.suggestions?.length || 0,
+          suggestionCount: 0,
           issues: result.issues || [],
-          suggestions: result.suggestions || [],
         };
       }
 

@@ -302,7 +302,7 @@ checks:
     type: ai
     group: dynamic  # Special group: creates new comment each time instead of updating
     command: "visor"
-    if: "event.name === 'issues' && event.action === 'opened' || (event.name === 'issue_comment' && event.comment && event.comment.body && event.comment.body.trim().startsWith('/ask'))"
+    if: "event.name === 'issues' && event.action === 'opened' || (event.name === 'issue_comment' && event.comment && event.comment.body && event.comment.body.trim().startsWith('/visor'))"
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance based on the trigger event.
 

@@ -493,7 +493,6 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
                 // All issues and suggestions
                 issues: result.issues || [],
-                suggestions: result.suggestions || [],
 
                 // Debug information if available
                 debug: result.debug,
@@ -528,13 +527,11 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       // Convert to ReviewSummary format
       return {
         issues: parsed.issues || [],
-        suggestions: parsed.suggestions || [],
       };
     } catch {
       // If not JSON, treat as plain text comment
       return {
         issues: [],
-        suggestions: [],
       };
     }
   }

@@ -94,7 +94,6 @@ The new approach reduces complexity and improves error handling.`,
           category: 'documentation',
         },
       ],
-      suggestions: [],
     });
 
     // Mock ProbeAgent to return the response
@@ -133,7 +132,6 @@ The new approach reduces complexity and improves error handling.`,
 
     // Verify the AI response was parsed correctly
     expect(result.issues).toHaveLength(1);
-    expect(result.suggestions).toHaveLength(0);
     const content = result.issues![0].message;
 
     // THE KEY TEST: Verify Mermaid blocks are preserved with proper formatting
@@ -162,7 +160,7 @@ The new approach reduces complexity and improves error handling.`,
 
     const templateData = {
       issues: result.issues, // Mermaid content is in issues[0].message
-      suggestions: result.suggestions,
+      // suggestions field removed - using issues only
       checkName: 'full-review',
     };
 
@@ -224,10 +222,9 @@ This shows the architecture.`;
 
     const result = await aiService.executeReview(mockPrInfo, 'Test prompt');
 
-    // When raw response is given, it should be put in suggestions since it can't be parsed as JSON
-    expect(result.issues).toHaveLength(0);
-    expect(result.suggestions).toHaveLength(1);
-    const content = result.suggestions![0];
+    // When raw response is given, it gets parsed differently
+    expect(result.issues).toHaveLength(1);
+    const content = result.issues![0].message;
 
     // Even with fallback, Mermaid blocks should be preserved
     expect(content).toContain('```mermaid');
@@ -263,7 +260,6 @@ Triple backticks in text: \\\`\\\`\\\` should be escaped`,
           category: 'documentation',
         },
       ],
-      suggestions: [],
     });
 
     mockProbeAgent.answer.mockResolvedValue(responseWithVariousBackticks);

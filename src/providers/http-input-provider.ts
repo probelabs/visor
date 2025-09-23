@@ -71,7 +71,6 @@ export class HttpInputProvider extends CheckProvider {
     if (!webhookData) {
       return {
         issues: [],
-        suggestions: [`Waiting for webhook data on endpoint: ${endpoint}`],
       };
     }
 
@@ -103,17 +102,17 @@ export class HttpInputProvider extends CheckProvider {
               category: 'logic',
             },
           ],
-          suggestions: [],
         };
       }
     }
 
-    // Return the processed data as suggestions for dependent checks to access
-    // We encode the data as JSON in a suggestion so it can be accessed via outputs
+    // Return the processed data as a custom field for dependent checks to access
+    // This will be available in outputs for dependent checks
     return {
       issues: [],
-      suggestions: [JSON.stringify(processedData)],
-    };
+      // Add custom data field that will be passed through
+      data: processedData,
+    } as ReviewSummary & { data: unknown };
   }
 
   private getWebhookData(endpoint: string): Record<string, unknown> | null {

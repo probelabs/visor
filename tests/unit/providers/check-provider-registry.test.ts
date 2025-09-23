@@ -27,7 +27,6 @@ class MockCheckProvider extends CheckProvider {
   async execute(_prInfo: PRInfo, _config: CheckProviderConfig): Promise<ReviewSummary> {
     return {
       issues: [],
-      suggestions: [],
     };
   }
 

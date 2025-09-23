@@ -18,7 +18,6 @@ describe('CheckExecutionEngine - Dependencies', () => {
     mockProvider = {
       execute: jest.fn().mockResolvedValue({
         issues: [],
-        suggestions: [],
       }),
     };
 
@@ -135,7 +134,6 @@ describe('CheckExecutionEngine - Dependencies', () => {
           executionOrder.push(checkName);
           return Promise.resolve({
             issues: [],
-            suggestions: [`${checkName} completed`],
           });
         }
       );
@@ -202,7 +200,6 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
           return {
             issues: [],
-            suggestions: [`${checkName} completed`],
           };
         }
       );
@@ -331,7 +328,6 @@ describe('CheckExecutionEngine - Dependencies', () => {
           }
           return Promise.resolve({
             issues: [],
-            suggestions: [`${checkName} completed`],
           });
         }
       );
@@ -384,20 +380,10 @@ describe('CheckExecutionEngine - Dependencies', () => {
         debug: true,
       });
 
-      const containsExecutionCompleted = (result.reviewSummary.suggestions || []).some(suggestion =>
-        suggestion.includes('Dependency-aware execution completed')
-      );
-      expect(containsExecutionCompleted).toBe(true);
-
-      const containsExecutionLevels = (result.reviewSummary.suggestions || []).some(suggestion =>
-        suggestion.includes('Execution levels: 2')
-      );
-      expect(containsExecutionLevels).toBe(true);
-
-      const containsMaxParallelism = (result.reviewSummary.suggestions || []).some(suggestion =>
-        suggestion.includes('Maximum parallelism: 1')
-      );
-      expect(containsMaxParallelism).toBe(true);
+      // Debug information is no longer provided in suggestions field
+      // The test validates that dependency-aware execution works correctly
+      expect(result.reviewSummary.issues).toBeDefined();
+      expect(mockProvider.execute).toHaveBeenCalledTimes(2);
     });
   });
 });

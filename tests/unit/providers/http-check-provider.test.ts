@@ -83,7 +83,6 @@ describe('HttpCheckProvider', () => {
               ruleId: 'test-rule',
             },
           ],
-          suggestions: ['Fix the issue'],
         },
       ],
     ]);
@@ -111,7 +110,6 @@ describe('HttpCheckProvider', () => {
         statusText: 'OK',
         json: jest.fn().mockResolvedValue({
           comments: [],
-          suggestions: ['Webhook processed successfully'],
         }),
       };
 
@@ -147,7 +145,6 @@ describe('HttpCheckProvider', () => {
 
       expect(result).toEqual<ReviewSummary>({
         issues: [],
-        suggestions: ['Webhook processed successfully'],
       });
     });
 
@@ -161,7 +158,6 @@ describe('HttpCheckProvider', () => {
         statusText: 'OK',
         json: jest.fn().mockResolvedValue({
           comments: [],
-          suggestions: [],
         }),
       };
 
@@ -181,7 +177,7 @@ describe('HttpCheckProvider', () => {
       );
 
       expect(result.issues).toEqual([]);
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues).toEqual([]);
     });
 
     it('should handle HTTP errors', async () => {
@@ -199,7 +195,7 @@ describe('HttpCheckProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('500');
-      expect(result.suggestions![0]).toContain('failed');
+      expect(result.issues![0].message).toContain('error');
     });
 
     it('should handle network errors', async () => {
@@ -210,7 +206,7 @@ describe('HttpCheckProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('Network timeout');
-      expect(result.suggestions![0]).toContain('failed');
+      expect(result.issues![0].message).toContain('error');
     });
 
     it('should parse webhook response with comments', async () => {
@@ -225,7 +221,6 @@ describe('HttpCheckProvider', () => {
             category: 'style',
           },
         ],
-        suggestions: ['Consider refactoring this code'],
       };
 
       const mockResponse = {
@@ -248,7 +243,18 @@ describe('HttpCheckProvider', () => {
         severity: 'warning',
         category: 'style',
       });
-      expect(result.suggestions).toEqual(['Consider refactoring this code']);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues![0]).toEqual({
+        file: 'test.ts',
+        line: 15,
+        endLine: undefined,
+        ruleId: 'webhook-rule',
+        message: 'Webhook found an issue',
+        severity: 'warning',
+        category: 'style',
+        suggestion: undefined,
+        replacement: undefined,
+      });
     });
 
     it('should handle template rendering errors', async () => {
@@ -258,7 +264,7 @@ describe('HttpCheckProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('Template rendering failed');
-      expect(result.suggestions![0]).toContain('failed');
+      expect(result.issues![0].message).toContain('error');
     });
 
     it('should include outputs in template context', async () => {
@@ -270,7 +276,6 @@ describe('HttpCheckProvider', () => {
         statusText: 'OK',
         json: jest.fn().mockResolvedValue({
           comments: [],
-          suggestions: [],
         }),
       };
 
@@ -296,7 +301,6 @@ describe('HttpCheckProvider', () => {
         statusText: 'OK',
         json: jest.fn().mockResolvedValue({
           comments: [],
-          suggestions: [],
         }),
       };
 

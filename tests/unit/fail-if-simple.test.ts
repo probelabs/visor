@@ -25,7 +25,6 @@ describe('Simplified fail_if syntax', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: [],
       };
 
       // Test simple condition
@@ -54,7 +53,6 @@ describe('Simplified fail_if syntax', () => {
     it('should work with GitHub Actions-style functions', async () => {
       const reviewSummary: ReviewSummary = {
         issues: [],
-        suggestions: [],
       };
 
       // Test always() function
@@ -111,7 +109,6 @@ describe('Simplified fail_if syntax', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: ['Fix auth issue'],
       };
 
       // Complex condition with multiple checks
@@ -151,7 +148,6 @@ describe('Simplified fail_if syntax', () => {
     it('should use success() and failure() functions', async () => {
       const successSummary: ReviewSummary = {
         issues: [],
-        suggestions: [],
       };
 
       const failureSummary: ReviewSummary = {
@@ -165,7 +161,6 @@ describe('Simplified fail_if syntax', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: [],
       };
 
       // Test success function - no critical/error issues
@@ -194,7 +189,6 @@ describe('Simplified fail_if syntax', () => {
     it('should handle invalid expressions gracefully', async () => {
       const reviewSummary: ReviewSummary = {
         issues: [],
-        suggestions: [],
       };
 
       // Invalid expression should return false (not fail)
@@ -223,7 +217,6 @@ describe('Simplified fail_if syntax', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: [],
       };
 
       const reviewWithWarning: ReviewSummary = {
@@ -237,7 +230,6 @@ describe('Simplified fail_if syntax', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: [],
       };
 
       // Test security-check with its own fail_if

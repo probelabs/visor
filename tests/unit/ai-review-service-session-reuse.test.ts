@@ -59,7 +59,6 @@ describe('AIReviewService Session Reuse', () => {
     mockProbeAgent.answer.mockResolvedValue(
       JSON.stringify({
         issues: [],
-        suggestions: ['Mock suggestion'],
       })
     );
 
@@ -105,7 +104,6 @@ describe('AIReviewService Session Reuse', () => {
                 category: 'style',
               },
             ],
-            suggestions: ['Reused session suggestion'],
           })
         ),
       };
@@ -130,7 +128,6 @@ describe('AIReviewService Session Reuse', () => {
       );
 
       expect(result.issues).toHaveLength(1);
-      expect(result.suggestions).toContain('Reused session suggestion');
     });
 
     it('should throw error when parent session not found', async () => {
@@ -166,7 +163,6 @@ describe('AIReviewService Session Reuse', () => {
                 category: 'style',
               },
             ],
-            suggestions: ['Schema-based suggestion'],
           })
         ),
       };
@@ -215,9 +211,8 @@ describe('AIReviewService Session Reuse', () => {
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].ruleId).toBe('system/ai-session-reuse-error');
       expect(result.issues![0].message).toContain('AI service error');
-      expect(result.suggestions).toContain(
-        'Check session reuse configuration and ensure parent check completed successfully'
-      );
+      // Error should be captured in debug info
+      expect(result.debug?.errors?.[0]).toContain('AI service error');
       expect(result.debug).toBeDefined();
     });
   });
@@ -266,7 +261,6 @@ describe('AIReviewService Session Reuse', () => {
       // Should use mock response, not call the existing agent
       expect(existingAgent.answer).not.toHaveBeenCalled();
       expect(result.issues).toBeDefined();
-      expect(result.suggestions).toBeDefined();
     });
   });
 });

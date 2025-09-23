@@ -67,7 +67,6 @@ describe('Session Reuse Integration', () => {
               category: 'security',
             },
           ],
-          suggestions: ['Remove console.log statements'],
         })
       )
       .mockResolvedValueOnce(
@@ -82,7 +81,6 @@ describe('Session Reuse Integration', () => {
               category: 'security',
             },
           ],
-          suggestions: ['This is a follow-up suggestion based on session context'],
         })
       );
   });
@@ -212,7 +210,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: [],
           })
         )
         .mockResolvedValueOnce(
@@ -227,7 +224,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: [],
           })
         )
         .mockResolvedValueOnce(
@@ -242,7 +238,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: [],
           })
         );
 
@@ -295,9 +290,7 @@ describe('Session Reuse Integration', () => {
       };
 
       // Setup mock responses
-      mockProbeAgent.answer
-        .mockResolvedValueOnce(JSON.stringify({ issues: [], suggestions: [] }))
-        .mockResolvedValueOnce(JSON.stringify({ issues: [], suggestions: [] }));
+      mockProbeAgent.answer;
 
       // Verify no sessions before execution
       expect(sessionRegistry.getActiveSessionIds()).toHaveLength(0);
@@ -364,7 +357,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: ['Level 1 suggestion'],
           })
         )
         .mockResolvedValueOnce(
@@ -379,7 +371,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: ['Level 2 suggestion'],
           })
         )
         .mockResolvedValueOnce(
@@ -394,7 +385,6 @@ describe('Session Reuse Integration', () => {
                 category: 'style',
               },
             ],
-            suggestions: ['Level 3 suggestion'],
           })
         );
 

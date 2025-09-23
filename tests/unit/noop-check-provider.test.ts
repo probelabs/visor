@@ -77,7 +77,7 @@ describe('NoopCheckProvider', () => {
       const result = await provider.execute(prInfo, config);
 
       expect(result.issues).toEqual([]);
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues).toEqual([]);
     });
 
     it('should handle dependency results', async () => {
@@ -102,14 +102,13 @@ describe('NoopCheckProvider', () => {
         issues: [
           { severity: 'error', message: 'Test issue', file: 'test.js', line: 1, ruleId: 'test' },
         ],
-        suggestions: ['Fix security issue'],
       });
 
       const result = await provider.execute(prInfo, config, dependencyResults);
 
       // Noop provider should ignore dependency results
       expect(result.issues).toEqual([]);
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues).toEqual([]);
     });
   });
 

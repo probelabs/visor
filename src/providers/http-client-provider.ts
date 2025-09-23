@@ -122,18 +122,16 @@ export class HttpClientProvider extends CheckProvider {
                 category: 'logic',
               },
             ],
-            suggestions: [],
           };
         }
       }
 
-      // Return the fetched data as suggestions for dependent checks to access
+      // Return the fetched data as a custom field for dependent checks to access
       return {
         issues: [],
-        suggestions: [
-          typeof processedData === 'string' ? processedData : JSON.stringify(processedData),
-        ],
-      };
+        // Add custom data field that will be passed through to dependent checks
+        data: processedData,
+      } as ReviewSummary & { data: unknown };
     } catch (error) {
       return {
         issues: [
@@ -146,7 +144,6 @@ export class HttpClientProvider extends CheckProvider {
             category: 'logic',
           },
         ],
-        suggestions: [],
       };
     }
   }

@@ -48,7 +48,6 @@ describe('HTML Rendering Debug', () => {
           schema: 'code-review',
         },
       ],
-      suggestions: [],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -89,7 +88,6 @@ describe('HTML Rendering Debug', () => {
           schema: 'code-review',
         },
       ],
-      suggestions: [],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -134,7 +132,6 @@ describe('HTML Rendering Debug', () => {
           schema: 'plain',
         },
       ],
-      suggestions: ['[overview] This is overview analysis with detailed insights about the PR'],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -172,7 +169,6 @@ describe('HTML Rendering Debug', () => {
           schema: 'code-review',
         },
       ],
-      suggestions: [], // Empty suggestions
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);

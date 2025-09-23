@@ -135,7 +135,6 @@ describe('AIReviewService', () => {
               replacement: 'db.query("SELECT * FROM users WHERE id = ?", [userId])',
             },
           ],
-          suggestions: ['Fix SQL injection vulnerability'],
         })
       );
 
@@ -150,7 +149,6 @@ describe('AIReviewService', () => {
       const result = await service.executeReview(mockPRInfo, 'security', 'code-review');
 
       expect(result.issues).toHaveLength(1);
-      expect(result.suggestions).toContain('Fix SQL injection vulnerability');
       expect(result.issues![0].message).toBe('SQL injection risk');
       expect(result.issues![0].suggestion).toBe('Use parameterized queries');
       expect(result.issues![0].replacement).toContain('db.query');
@@ -236,13 +234,11 @@ describe('AIReviewService', () => {
             replacement: 'try {\n  // existing code\n} catch (error) {\n  console.error(error);\n}',
           },
         ],
-        suggestions: ['Add tests'],
       });
 
       const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(1);
-      expect(result.suggestions).toContain('Add tests');
       expect(result.issues[0].message).toBe('Missing error handling');
       expect(result.issues[0].suggestion).toBe('Add try-catch block to handle potential errors');
       expect(result.issues[0].replacement).toContain('try {');
@@ -254,14 +250,12 @@ describe('AIReviewService', () => {
         '```json\n' +
         JSON.stringify({
           issues: [],
-          suggestions: ['Code looks good overall'],
         }) +
         '\n```';
 
       const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(0);
-      expect(result.suggestions).toContain('Code looks good overall');
     });
 
     it('should parse enhanced response format with suggestions and replacements', () => {
@@ -291,13 +285,11 @@ describe('AIReviewService', () => {
             replacement: 'const userName = getValue();',
           },
         ],
-        suggestions: ['Add input validation', 'Consider adding tests'],
       });
 
       const result = (service as any).parseAIResponse(response, undefined, 'code-review');
 
       expect(result.issues).toHaveLength(2);
-      expect(result.suggestions).toHaveLength(2);
 
       // Check first issue (critical security)
       const securityIssue = result.issues[0];
@@ -319,7 +311,6 @@ describe('AIReviewService', () => {
     it('should preserve original severity levels', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        suggestions: [],
         issues: [
           {
             file: 'a.js',
@@ -343,7 +334,6 @@ describe('AIReviewService', () => {
     it('should preserve original categories', () => {
       const service = new AIReviewService();
       const response = JSON.stringify({
-        suggestions: [],
         issues: [
           { file: 'a.js', line: 1, message: 'Bug', severity: 'error', category: 'bug' },
           { file: 'b.js', line: 2, message: 'Docs', severity: 'info', category: 'docs' },
@@ -364,9 +354,8 @@ describe('AIReviewService', () => {
 
       // Should return a structured fallback instead of throwing
       expect(result).toHaveProperty('issues');
-      expect(result).toHaveProperty('suggestions');
-      expect(result.issues).toEqual([]);
-      expect(result.suggestions[0]).toBe('Not a JSON response');
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues![0].message).toBe('Not a JSON response');
     });
   });
 

@@ -177,7 +177,6 @@ export class FailureConditionEvaluator {
       // Required output property (empty for if conditions)
       output: {
         issues: [],
-        suggestions: [],
       },
 
       // Utility metadata
@@ -369,7 +368,7 @@ export class FailureConditionEvaluator {
       // Extract context variables
       const output = context.output || {};
       const issues = output.issues || [];
-      const suggestions = output.suggestions || [];
+      const suggestions: string[] = [];
 
       // Backward compatibility: provide metadata for transition period
       // TODO: Remove after all configurations are updated
@@ -498,7 +497,7 @@ export class FailureConditionEvaluator {
     reviewSummary: ReviewSummary,
     previousOutputs?: Record<string, ReviewSummary>
   ): FailureConditionContext {
-    const { issues, suggestions, debug } = reviewSummary;
+    const { issues, debug } = reviewSummary;
 
     const context: FailureConditionContext = {
       output: {
@@ -515,7 +514,6 @@ export class FailureConditionEvaluator {
           suggestion: issue.suggestion,
           replacement: issue.replacement,
         })),
-        suggestions,
         // Include additional schema-specific data from reviewSummary
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(reviewSummary as any), // Pass through any additional fields

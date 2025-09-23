@@ -25,7 +25,6 @@ describe('Schema-Template Integration Tests', () => {
                 message: 'Potential hardcoded API key detected',
                 severity: 'critical',
                 category: 'security',
-                suggestion: 'Use environment variables',
               },
             ],
           };
@@ -107,7 +106,6 @@ graph TD
             message: 'Potential hardcoded API key detected',
             severity: 'critical',
             category: 'security',
-            suggestion: 'Use environment variables',
           },
         ],
       };
@@ -276,7 +274,6 @@ graph TD
             message: 'Hardcoded API key found',
             severity: 'critical',
             category: 'security',
-            suggestion: 'Use environment variables',
           },
         ],
       };
@@ -310,10 +307,10 @@ graph TD
       // No validation errors should occur since no schema is enforced
       const processedResponse = {
         issues: [],
-        suggestions: [responseContent],
+        content: responseContent,
       };
 
-      expect(processedResponse.suggestions).toContain('# PR Analysis\n\nThis PR looks good!');
+      expect(processedResponse.content).toContain('# PR Analysis\n\nThis PR looks good!');
     });
   });
 

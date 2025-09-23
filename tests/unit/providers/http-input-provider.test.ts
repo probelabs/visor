@@ -90,9 +90,9 @@ describe('HttpInputProvider', () => {
       ).set('/webhook/test', webhookData);
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result).toEqual<ReviewSummary>({
+      expect(result).toEqual<ReviewSummary & { data: unknown }>({
         issues: [],
-        suggestions: [JSON.stringify(webhookData)],
+        data: webhookData,
       });
     });
 
@@ -101,7 +101,6 @@ describe('HttpInputProvider', () => {
 
       expect(result).toEqual<ReviewSummary>({
         issues: [],
-        suggestions: ['Waiting for webhook data on endpoint: /webhook/test'],
       });
     });
 
@@ -133,7 +132,7 @@ describe('HttpInputProvider', () => {
         })
       );
 
-      expect(result.suggestions).toEqual(['{"transformed":"value"}']);
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual({ transformed: 'value' });
     });
 
     it('should handle transformation errors', async () => {
@@ -153,7 +152,8 @@ describe('HttpInputProvider', () => {
       expect(result.issues![0].message).toContain(
         'Failed to transform webhook data: Template error'
       );
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues![0].severity).toBe('error');
+      expect(result.issues![0].category).toBe('logic');
     });
 
     it('should handle invalid JSON transformation result', async () => {
@@ -171,7 +171,8 @@ describe('HttpInputProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('Failed to transform webhook data');
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues![0].severity).toBe('error');
+      expect(result.issues![0].category).toBe('logic');
     });
 
     it('should process webhook data without clearing it', async () => {
@@ -184,7 +185,7 @@ describe('HttpInputProvider', () => {
       ).set('/webhook/test', webhookData);
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result.suggestions![0]).toBe(JSON.stringify(webhookData));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(webhookData);
       // Data remains available for other checks
       const webhookStore = (global as Record<string, unknown>).__visor_webhook_data as Map<
         string,
@@ -198,7 +199,8 @@ describe('HttpInputProvider', () => {
 
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result.suggestions![0]).toBe('Waiting for webhook data on endpoint: undefined');
+      expect(result.issues).toEqual([]);
+      expect((result as ReviewSummary & { data?: unknown }).data).toBeUndefined();
     });
 
     it('should process webhook data without logging', async () => {
@@ -211,7 +213,7 @@ describe('HttpInputProvider', () => {
       ).set('/webhook/test', webhookData);
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result.suggestions![0]).toBe(JSON.stringify(webhookData));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(webhookData);
     });
 
     it('should handle complex nested webhook data', async () => {
@@ -241,7 +243,7 @@ describe('HttpInputProvider', () => {
 
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result.suggestions?.[0]).toBe(JSON.stringify(complexData));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(complexData);
     });
 
     it('should pass headers to transformation context', async () => {
@@ -290,7 +292,7 @@ describe('HttpInputProvider', () => {
 
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
-      expect(result.suggestions?.[0]).toBe(JSON.stringify(data));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(data);
     });
   });
 

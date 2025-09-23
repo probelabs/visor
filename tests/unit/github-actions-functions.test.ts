@@ -31,7 +31,6 @@ describe('GitHub Actions-like Functions', () => {
           category: 'security',
         },
       ],
-      suggestions: ['Add input validation', 'Use parameterized queries'],
     };
   });
 
@@ -109,7 +108,6 @@ describe('GitHub Actions-like Functions', () => {
     it('should detect success state', async () => {
       const successSummary: ReviewSummary = {
         issues: [],
-        suggestions: [],
       };
 
       const conditions: FailureConditions = {

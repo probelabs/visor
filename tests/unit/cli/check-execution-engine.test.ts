@@ -108,7 +108,7 @@ describe('CheckExecutionEngine', () => {
       default: [
         {
           checkName: 'security',
-          content: `## Security Issues Found\n\n- **ERROR**: Potential security issue (src/test.ts:10)\n\n## Style Issues Found\n\n- **INFO**: Style improvement needed (src/test.ts:15)\n\n## Suggestions\n\n- Add input validation\n- Improve error handling`,
+          content: `## Security Issues Found\n\n- **ERROR**: Potential security issue (src/test.ts:10)\n\n## Style Issues Found\n\n- **INFO**: Style improvement needed (src/test.ts:15)`,
           group: 'default',
         },
       ],
@@ -124,7 +124,6 @@ describe('CheckExecutionEngine', () => {
           line: 10,
         },
       ],
-      suggestions: ['Add input validation', 'Improve error handling'],
     };
 
     beforeEach(() => {
@@ -507,7 +506,7 @@ describe('CheckExecutionEngine', () => {
       const result = await checkEngine.executeChecks(options);
 
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.suggestions).toEqual([`Error: ${errorMessage}`]);
+      expect(result.reviewSummary.issues![0].message).toBe(errorMessage);
       expect(result.reviewSummary.issues![0].severity).toBe('error');
       expect(result.reviewSummary.issues![0].category).toBe('logic');
       expect(result.reviewSummary.issues![0].file).toBe('system');
@@ -572,7 +571,6 @@ describe('CheckExecutionEngine', () => {
           ruleId: 'style-001',
         },
       ],
-      suggestions: ['Add input validation', 'Improve error handling'],
     };
 
     beforeEach(() => {
@@ -624,9 +622,7 @@ describe('CheckExecutionEngine', () => {
         checkConfig
       );
 
-      expect(result).toBe(
-        'Potential security vulnerabilityAdd input validation\n\nImprove error handling'
-      );
+      expect(result).toBe('Potential security vulnerability');
       expect(mockLiquidInstance.parseAndRender).not.toHaveBeenCalled();
       expect(mockFs.readFile).not.toHaveBeenCalled();
     });
@@ -647,14 +643,11 @@ describe('CheckExecutionEngine', () => {
     it('should use custom template content when provided', async () => {
       const checkConfig = {
         template: {
-          content:
-            'Check: {{ checkName }}\nIssues: {{ issues.size }}\nSuggestions: {{ suggestions | join: ", " }}',
+          content: 'Check: {{ checkName }}\nIssues: {{ issues.size }}',
         },
       };
 
-      mockLiquidInstance.parseAndRender.mockResolvedValue(
-        'Check: security\nIssues: 2\nSuggestions: Add input validation, Improve error handling'
-      );
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Check: security\nIssues: 2');
 
       const result = await (checkEngine as any).renderCheckContent(
         'security',
@@ -665,11 +658,8 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
-        suggestions: mockReviewSummary.suggestions,
       });
-      expect(result).toBe(
-        'Check: security\nIssues: 2\nSuggestions: Add input validation, Improve error handling'
-      );
+      expect(result).toBe('Check: security\nIssues: 2');
     });
 
     it('should read custom template from file when file path is provided', async () => {
@@ -712,7 +702,6 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
-        suggestions: mockReviewSummary.suggestions,
       });
       expect(result).toBe('Template from file: security');
     });
@@ -742,7 +731,6 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
-        suggestions: mockReviewSummary.suggestions,
       });
       expect(result).toBe('Built-in template: security');
     });
@@ -979,7 +967,6 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
-        suggestions: mockReviewSummary.suggestions,
       });
     });
 
@@ -1024,15 +1011,14 @@ describe('CheckExecutionEngine', () => {
     it('should handle empty issues and suggestions arrays in template data', async () => {
       const emptyReviewSummary: ReviewSummary = {
         issues: [],
-        suggestions: [],
       };
       const checkConfig = {
         template: {
-          content: 'Issues: {{ issues.size }}, Suggestions: {{ suggestions.size }}',
+          content: 'Issues: {{ issues.size }}',
         },
       };
 
-      mockLiquidInstance.parseAndRender.mockResolvedValue('Issues: 0, Suggestions: 0');
+      mockLiquidInstance.parseAndRender.mockResolvedValue('Issues: 0');
 
       const result = await (checkEngine as any).renderCheckContent(
         'security',
@@ -1043,9 +1029,8 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
         issues: [],
         checkName: 'security',
-        suggestions: [],
       });
-      expect(result).toBe('Issues: 0, Suggestions: 0');
+      expect(result).toBe('Issues: 0');
     });
 
     it('should pass PRInfo to template if provided', async () => {
@@ -1068,7 +1053,6 @@ describe('CheckExecutionEngine', () => {
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(checkConfig.template.content, {
         issues: mockReviewSummary.issues,
         checkName: 'security',
-        suggestions: mockReviewSummary.suggestions,
       });
       expect(result).toBe('Check: security');
     });

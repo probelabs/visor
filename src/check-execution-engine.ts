@@ -764,15 +764,9 @@ export class CheckExecutionEngine {
         issue.ruleId?.startsWith(`${checkName}/`)
       );
 
-      // Extract suggestions for this check
-      const checkSuggestions = (reviewSummary.suggestions || []).filter(suggestion =>
-        suggestion.startsWith(`[${checkName}]`)
-      );
-
       // Create a mini ReviewSummary for this check
       const checkSummary: ReviewSummary = {
         issues: checkIssues,
-        suggestions: checkSuggestions,
         debug: reviewSummary.debug,
       };
 
@@ -915,12 +909,7 @@ export class CheckExecutionEngine {
       }
     } else if (schema === 'plain') {
       // Plain schema - return raw content directly
-      // Strip [checkName] prefixes from suggestions before joining
-      const cleanedSuggestions = (reviewSummary.suggestions || []).map(suggestion => {
-        // Remove [checkName] prefix if present
-        return suggestion.replace(/^\[[^\]]+\]\s*/, '');
-      });
-      return (reviewSummary.issues?.[0]?.message || '') + (cleanedSuggestions.join('\n\n') || '');
+      return reviewSummary.issues?.[0]?.message || '';
     } else {
       // Use built-in schema template
       const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
@@ -935,7 +924,6 @@ export class CheckExecutionEngine {
     const templateData = {
       issues: reviewSummary.issues || [],
       checkName: checkName,
-      suggestions: reviewSummary.suggestions || [],
     };
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
@@ -1020,7 +1008,6 @@ export class CheckExecutionEngine {
             category: 'logic' as const,
           },
         ],
-        suggestions: [],
       };
     }
 
@@ -1039,7 +1026,6 @@ export class CheckExecutionEngine {
             category: 'logic' as const,
           },
         ],
-        suggestions: [],
       };
     }
 
@@ -1119,7 +1105,6 @@ export class CheckExecutionEngine {
                 error: null,
                 result: {
                   issues: [],
-                  suggestions: [`Check '${checkName}' was skipped - condition not met`],
                 },
               };
             }
@@ -1261,7 +1246,6 @@ export class CheckExecutionEngine {
                 replacement: undefined,
               },
             ],
-            suggestions: [],
           };
           results.set(checkName, errorSummary);
 
@@ -1400,7 +1384,6 @@ export class CheckExecutionEngine {
               error: null,
               result: {
                 issues: [],
-                suggestions: [`Check '${checkName}' was skipped - condition not met`],
               },
             };
           }
@@ -1562,7 +1545,6 @@ export class CheckExecutionEngine {
     stoppedEarly?: boolean
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
-    const aggregatedSuggestions: string[] = [];
     const debugInfo: string[] = [];
 
     // Add execution plan info
@@ -1606,17 +1588,8 @@ export class CheckExecutionEngine {
 
         // Issues are already prefixed and enriched with group/schema info
         aggregatedIssues.push(...(result.issues || []));
-
-        // Add suggestions with check name prefix
-        const prefixedSuggestions = (result.suggestions || []).map(
-          suggestion => `[${checkName}] ${suggestion}`
-        );
-        aggregatedSuggestions.push(...prefixedSuggestions);
       }
     }
-
-    // Add summary information
-    aggregatedSuggestions.unshift(...debugInfo);
 
     console.error(
       `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
@@ -1678,7 +1651,6 @@ export class CheckExecutionEngine {
 
     return {
       issues: filteredIssues,
-      suggestions: aggregatedSuggestions,
       debug: aggregatedDebug,
     };
   }
@@ -1694,14 +1666,10 @@ export class CheckExecutionEngine {
     }>[],
     checkNames: string[],
     debug?: boolean,
-    stoppedEarly?: boolean
+    _stoppedEarly?: boolean
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
-    const aggregatedSuggestions: string[] = [];
     const debugInfo: string[] = [];
-
-    let successfulChecks = 0;
-    let failedChecks = 0;
 
     results.forEach((result, index) => {
       const checkName = checkNames[index];
@@ -1710,7 +1678,6 @@ export class CheckExecutionEngine {
         const checkResult = result.value;
 
         if (checkResult.error) {
-          failedChecks++;
           const log = console.error;
           log(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
           debugInfo.push(`❌ Check "${checkName}" failed: ${checkResult.error}`);
@@ -1738,7 +1705,6 @@ export class CheckExecutionEngine {
             replacement: undefined,
           });
         } else if (checkResult.result) {
-          successfulChecks++;
           console.error(
             `🔧 Debug: Check ${checkName} succeeded with ${(checkResult.result.issues || []).length} issues`
           );
@@ -1748,15 +1714,8 @@ export class CheckExecutionEngine {
 
           // Issues are already prefixed and enriched with group/schema info
           aggregatedIssues.push(...(checkResult.result.issues || []));
-
-          // Add suggestions with check name prefix
-          const prefixedSuggestions = (checkResult.result.suggestions || []).map(
-            suggestion => `[${checkName}] ${suggestion}`
-          );
-          aggregatedSuggestions.push(...prefixedSuggestions);
         }
       } else {
-        failedChecks++;
         const errorMessage =
           result.reason instanceof Error ? result.reason.message : String(result.reason);
         const log = console.error;
@@ -1786,14 +1745,6 @@ export class CheckExecutionEngine {
         });
       }
     });
-
-    // Add summary information
-    debugInfo.unshift(
-      stoppedEarly
-        ? `🛑 Parallel execution stopped early (fail-fast): ${successfulChecks} successful, ${failedChecks} failed`
-        : `🔍 Parallel execution completed: ${successfulChecks} successful, ${failedChecks} failed`
-    );
-    aggregatedSuggestions.unshift(...debugInfo);
 
     console.error(
       `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
@@ -1905,7 +1856,6 @@ export class CheckExecutionEngine {
 
     return {
       issues: filteredIssues,
-      suggestions: aggregatedSuggestions,
       debug: aggregatedDebug,
     };
   }
@@ -2040,7 +1990,6 @@ export class CheckExecutionEngine {
             replacement: undefined,
           },
         ],
-        suggestions: [`Error: ${errorMessage}`],
       },
       executionTime,
       timestamp,
@@ -2336,7 +2285,7 @@ export class CheckExecutionEngine {
         // Evaluate failure conditions for this specific check
         const failureResults = await this.evaluateFailureConditions(
           checkName,
-          { issues: checkIssues, suggestions: [] },
+          { issues: checkIssues },
           options.config
         );
 

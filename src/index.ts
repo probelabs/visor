@@ -1310,7 +1310,6 @@ async function completeIndividualChecks(
       // Create a ReviewSummary for this check's issues
       const checkReviewSummary = {
         issues: checkIssues,
-        suggestions: [],
       };
 
       // Determine which fail_if to use: check-specific overrides global
@@ -1387,7 +1386,6 @@ async function completeCombinedCheck(
     // Create a combined ReviewSummary with all issues
     const combinedReviewSummary = {
       issues: allIssues,
-      suggestions: [],
     };
 
     // Evaluate global fail_if for the combined check

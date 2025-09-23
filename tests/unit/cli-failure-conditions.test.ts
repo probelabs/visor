@@ -139,7 +139,6 @@ describe('CLI Failure Conditions Integration', () => {
     // Setup OutputFormatters mock
     mockOutputFormatters.formatAsJSON = jest.fn().mockReturnValue(
       JSON.stringify({
-        reviewSummary: { issues: [], suggestions: [] },
         repositoryInfo: {},
         executionTime: 1000,
         timestamp: '2023-01-01T00:00:00Z',
@@ -182,7 +181,6 @@ describe('CLI Failure Conditions Integration', () => {
     process.argv = ['node', 'cli-main.js', '--check', 'security'];
 
     mockExecuteChecks.mockResolvedValue({
-      reviewSummary: { issues: [], suggestions: [] },
       repositoryInfo: {},
       executionTime: 1000,
       timestamp: '2023-01-01T00:00:00Z',
@@ -234,7 +232,6 @@ describe('CLI Failure Conditions Integration', () => {
     mockExecuteChecks.mockResolvedValue({
       reviewSummary: {
         issues: [{ severity: 'critical', message: 'Test issue', file: 'test.js', line: 1 }],
-        suggestions: [],
       },
       repositoryInfo: {},
       executionTime: 1000,
@@ -331,7 +328,6 @@ describe('CLI Failure Conditions Integration', () => {
     mockExecuteChecks.mockResolvedValue({
       reviewSummary: {
         issues: [{ severity: 'critical', message: 'Critical issue', file: 'test.js', line: 1 }],
-        suggestions: [],
       },
       repositoryInfo: {},
       executionTime: 1000,
@@ -441,7 +437,6 @@ describe('CLI Failure Conditions Integration', () => {
     );
 
     mockExecuteChecks.mockResolvedValue({
-      reviewSummary: { issues: [], suggestions: [] },
       repositoryInfo: {},
       executionTime: 1000,
       timestamp: '2023-01-01T00:00:00Z',

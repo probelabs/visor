@@ -55,11 +55,6 @@ describe('FailureConditionEvaluator', () => {
 
     mockReviewSummary = {
       issues: mockIssues,
-      suggestions: [
-        'Consider adding unit tests',
-        'Review error handling patterns',
-        'Check for SQL injection vulnerabilities',
-      ],
       debug: {
         provider: 'anthropic',
         model: 'claude-3-sonnet',
@@ -164,11 +159,11 @@ describe('FailureConditionEvaluator', () => {
       expect(fileResult?.failed).toBe(true); // Has auth file
     });
 
-    it('should evaluate conditions with suggestion analysis', async () => {
+    it('should evaluate conditions based on issue analysis', async () => {
       const conditions: FailureConditions = {
-        missing_tests: 'hasSuggestion(suggestions, "test")',
-        sql_suggestions: 'hasSuggestion(suggestions, "SQL")',
-        error_handling: 'hasSuggestion(suggestions, "error")',
+        security_issues: 'output.issues.some(i => i.category === "security")',
+        sql_related: 'output.issues.some(i => i.ruleId.includes("sql"))',
+        high_severity: 'output.issues.some(i => ["critical", "error"].includes(i.severity))',
       };
 
       const results = await evaluator.evaluateConditions(
@@ -181,14 +176,14 @@ describe('FailureConditionEvaluator', () => {
 
       expect(results).toHaveLength(3);
 
-      const testResult = results.find(r => r.conditionName === 'missing_tests');
-      expect(testResult?.failed).toBe(true);
+      const securityResult = results.find(r => r.conditionName === 'security_issues');
+      expect(securityResult?.failed).toBe(true);
 
-      const sqlResult = results.find(r => r.conditionName === 'sql_suggestions');
+      const sqlResult = results.find(r => r.conditionName === 'sql_related');
       expect(sqlResult?.failed).toBe(true);
 
-      const errorResult = results.find(r => r.conditionName === 'error_handling');
-      expect(errorResult?.failed).toBe(true);
+      const severityResult = results.find(r => r.conditionName === 'high_severity');
+      expect(severityResult?.failed).toBe(true);
     });
 
     it('should evaluate complex failure conditions with metadata', async () => {

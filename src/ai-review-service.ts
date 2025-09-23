@@ -82,7 +82,6 @@ interface AIResponseFormat {
     suggestion?: string;
     replacement?: string;
   }>;
-  suggestions?: string[];
 }
 
 export class AIReviewService {
@@ -185,9 +184,6 @@ export class AIReviewService {
                 category: 'logic',
               },
             ],
-            suggestions: [
-              'Configure API keys in your GitHub repository secrets or environment variables',
-            ],
             debug: debugInfo,
           };
         }
@@ -236,7 +232,6 @@ export class AIReviewService {
               category: 'logic',
             },
           ],
-          suggestions: ['Check AI service configuration and API key validity'],
           debug: debugInfo,
         };
       }
@@ -331,9 +326,6 @@ export class AIReviewService {
               severity: 'error',
               category: 'logic',
             },
-          ],
-          suggestions: [
-            'Check session reuse configuration and ensure parent check completed successfully',
           ],
           debug: debugInfo,
         };
@@ -1001,27 +993,19 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           `📋 ${_schema === 'plain' ? 'Plain' : 'No'} schema detected - returning raw response without JSON parsing`
         );
 
-        // Strip common XML wrapper tags that AI might add when given XML-formatted prompts
-        let cleanedResponse = response.trim();
-
-        // Remove <result>...</result> tags if present
-        cleanedResponse = cleanedResponse
-          .replace(/^<result>\s*/i, '')
-          .replace(/\s*<\/result>$/i, '');
-
-        // Remove <response>...</response> tags if present
-        cleanedResponse = cleanedResponse
-          .replace(/^<response>\s*/i, '')
-          .replace(/\s*<\/response>$/i, '');
-
-        // Remove <answer>...</answer> tags if present
-        cleanedResponse = cleanedResponse
-          .replace(/^<answer>\s*/i, '')
-          .replace(/\s*<\/answer>$/i, '');
+        // For plain schema, return the raw response as an issue
 
         return {
-          issues: [],
-          suggestions: [cleanedResponse.trim()],
+          issues: [
+            {
+              file: 'AI_RESPONSE',
+              line: 1,
+              ruleId: 'ai/raw_response',
+              message: response,
+              severity: 'info',
+              category: 'documentation',
+            },
+          ],
           debug: debugInfo,
         };
       }
@@ -1046,9 +1030,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             console.error('🚫 AI refused to analyze - returning empty result');
             return {
               issues: [],
-              suggestions: [
-                'AI was unable to analyze this code. Please check the content or try again.',
-              ],
             };
           }
 
@@ -1067,25 +1048,32 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
               if (!response.includes('{') && !response.includes('}')) {
                 log('🔧 Plain text response detected, creating structured fallback...');
 
-                const isNoChanges =
-                  response.toLowerCase().includes('no') &&
-                  (response.toLowerCase().includes('changes') ||
-                    response.toLowerCase().includes('code'));
-
                 reviewData = {
-                  issues: [],
-                  suggestions: isNoChanges
-                    ? ['No code changes detected in this analysis']
-                    : [
-                        `AI response: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`,
-                      ],
+                  issues: [
+                    {
+                      file: 'AI_RESPONSE',
+                      line: 1,
+                      ruleId: 'ai/raw_response',
+                      message: response,
+                      severity: 'info',
+                      category: 'documentation',
+                    },
+                  ],
                 };
               } else {
-                // Fallback: treat the entire response as a suggestion
+                // Fallback: treat the entire response as an issue
                 log('🔧 Creating fallback response from non-JSON content...');
                 reviewData = {
-                  issues: [],
-                  suggestions: [response.trim()],
+                  issues: [
+                    {
+                      file: 'AI_RESPONSE',
+                      line: 1,
+                      ruleId: 'ai/raw_response',
+                      message: response,
+                      severity: 'info',
+                      category: 'documentation',
+                    },
+                  ],
                 };
               }
             }
@@ -1093,8 +1081,16 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             // No JSON found at all - treat as plain text response
             log('🔧 No JSON found in response, treating as plain text...');
             reviewData = {
-              issues: [],
-              suggestions: [response.trim()],
+              issues: [
+                {
+                  file: 'AI_RESPONSE',
+                  line: 1,
+                  ruleId: 'ai/raw_response',
+                  message: response,
+                  severity: 'info',
+                  category: 'documentation',
+                },
+              ],
             };
           }
         }
@@ -1106,9 +1102,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
       log(
         `🚨 Critical issues: ${reviewData.issues?.filter((i: { severity?: string }) => i.severity === 'critical').length || 0}`
-      );
-      log(
-        `💡 Suggestions count: ${Array.isArray(reviewData.suggestions) ? reviewData.suggestions.length : 0}`
       );
       log(`💬 Comments count: ${Array.isArray(reviewData.issues) ? reviewData.issues.length : 0}`);
 
@@ -1133,7 +1126,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Validate and convert to ReviewSummary format
       const result: ReviewSummary = {
         issues: processedIssues,
-        suggestions: Array.isArray(reviewData.suggestions) ? reviewData.suggestions : [],
       };
 
       // Log issue counts
