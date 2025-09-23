@@ -144,7 +144,7 @@ Example:
 npx @probelabs/visor --check all --debug
 ```
 
-Learn more: docs/dev-playbook.md
+Learn more: [docs/dev-playbook.md](docs/dev-playbook.md)
 
 ## 🏷️ Tag-Based Check Filtering
 
@@ -164,7 +164,7 @@ CLI:
 visor --tags local,fast
 ```
 
-Learn more: docs/tag-filtering.md
+Learn more: [docs/tag-filtering.md](docs/tag-filtering.md)
 
 ## 💬 PR Comment Commands
 
@@ -177,7 +177,7 @@ Examples:
 /visor how does caching work?
 ```
 
-Learn more: docs/commands.md
+Learn more: [docs/commands.md](docs/commands.md)
 
 ## 🔇 Suppressing Warnings
 
@@ -188,7 +188,7 @@ Example (JS):
 const testPassword = "demo123"; // visor-disable
 ```
 
-Learn more: docs/suppressions.md
+Learn more: [docs/suppressions.md](docs/suppressions.md)
 
 ## 📋 CLI Usage
 
@@ -199,7 +199,7 @@ Example:
 npx @probelabs/visor --check all --output table
 ```
 
-See docs/NPM_USAGE.md for full options and examples.
+See [docs/NPM_USAGE.md](docs/NPM_USAGE.md) for full options and examples.
 
 ## 🛠️ Troubleshooting
 
@@ -210,7 +210,7 @@ Example:
 node dist/index.js --cli --check all --debug
 ```
 
-Learn more: docs/troubleshooting.md
+Learn more: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## 🔐 Security Defaults
 
@@ -222,7 +222,7 @@ visor --no-remote-extends
 visor --allowed-remote-patterns "https://raw.githubusercontent.com/myorg/"
 ```
 
-Learn more: docs/security.md
+Learn more: [docs/security.md](docs/security.md)
 
 ## ⚡ Performance & Cost Controls
 
@@ -233,7 +233,7 @@ Example:
 visor --tags local,fast --max-parallelism 5
 ```
 
-Learn more: docs/performance.md
+Learn more: [docs/performance.md](docs/performance.md)
 
 ## 👀 Observability
 
@@ -245,7 +245,7 @@ visor --check security --output json
 visor --check security --output sarif > visor-results.sarif
 ```
 
-Learn more: docs/observability.md
+Learn more: [docs/observability.md](docs/observability.md)
 
 ## 🤖 AI Configuration
 
@@ -258,7 +258,7 @@ Example (Action):
     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
 
-Learn more: docs/ai-configuration.md
+Learn more: [docs/ai-configuration.md](docs/ai-configuration.md)
 
 ## 📊 Step Dependencies & Intelligent Execution
 
@@ -271,7 +271,7 @@ checks:
   performance:{ type: ai, depends_on: [security] }
 ```
 
-Learn more: docs/dependencies.md
+Learn more: [docs/dependencies.md](docs/dependencies.md)
 
 ## 🤖 Claude Code Provider
 
@@ -285,7 +285,7 @@ checks:
     prompt: "Analyze code complexity"
 ```
 
-Learn more: docs/claude-code.md
+Learn more: [docs/claude-code.md](docs/claude-code.md)
 
 ## 🔄 AI Session Reuse
 
@@ -301,7 +301,7 @@ checks:
     reuse_ai_session: true
 ```
 
-Learn more: docs/advanced-ai.md
+Learn more: [docs/advanced-ai.md](docs/advanced-ai.md)
 
 ## 📋 Schema-Template System
 
@@ -316,7 +316,7 @@ checks:
     prompt: "Return JSON matching code-review schema"
 ```
 
-Learn more: docs/schema-templates.md
+Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
 ## 🎯 Enhanced Prompts
 
@@ -330,7 +330,7 @@ checks:
     prompt: ./prompts/overview.liquid
 ```
 
-Learn more: docs/schema-templates.md
+Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
 ## 🔧 Advanced Configuration
 
@@ -343,7 +343,7 @@ extends:
   - ./team-standards.yaml
 ```
 
-Learn more: docs/configuration.md
+Learn more: [docs/configuration.md](docs/configuration.md)
 
 ## 🌐 HTTP Integration & Scheduling
 
@@ -356,13 +356,13 @@ checks:
   nightly: { type: ai, schedule: "0 2 * * *" }
 ```
 
-Learn more: docs/http.md
+Learn more: [docs/http.md](docs/http.md)
 
 ## 🔧 Pluggable Architecture
 
 Mix providers (`ai`, `http`, `http_client`, `log`, `tool`, `script`, `claude-code`) or add your own.
 
-Learn more: docs/pluggable.md
+Learn more: [docs/pluggable.md](docs/pluggable.md)
 
 ## 🎯 GitHub Action Reference
 
@@ -375,7 +375,7 @@ Example:
     max-parallelism: 5
 ```
 
-Learn more: docs/action-reference.md
+Learn more: [docs/action-reference.md](docs/action-reference.md)
 
 ## 📊 Output Formats
 
@@ -386,15 +386,15 @@ Example:
 visor --check security --output json
 ```
 
-Learn more: docs/output-formats.md
+Learn more: [docs/output-formats.md](docs/output-formats.md)
 
 ## 🤝 Contributing
 
-Learn more: docs/contributing.md
+Learn more: [docs/contributing.md](docs/contributing.md)
 
 ## 📄 License
 
-MIT License - see LICENSE
+MIT License — see [LICENSE](LICENSE)
 
 ---
 
