@@ -26,6 +26,7 @@ export class ConfigManager {
     'ai',
     'claude-code',
     'tool',
+    'script',
     'http',
     'http_input',
     'http_client',

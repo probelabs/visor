@@ -7,6 +7,7 @@ import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
 import { LogCheckProvider } from './log-check-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
+import { ScriptCheckProvider } from './script-check-provider';
 
 /**
  * Registry for managing check providers
@@ -37,6 +38,7 @@ export class CheckProviderRegistry {
     // Register all built-in providers
     this.register(new AICheckProvider());
     this.register(new ToolCheckProvider());
+    this.register(new ScriptCheckProvider());
     this.register(new HttpCheckProvider());
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());

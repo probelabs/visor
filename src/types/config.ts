@@ -176,6 +176,7 @@ export interface FailureConditionResult {
 export type ConfigCheckType =
   | 'ai'
   | 'tool'
+  | 'script'
   | 'http'
   | 'http_input'
   | 'http_client'
@@ -344,6 +345,10 @@ export interface CheckConfig {
   failure_conditions?: FailureConditions;
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
+  /** Script to execute for script provider - required for script checks */
+  script?: string;
+  /** Process output as array and run dependent checks for each item */
+  forEach?: boolean;
 }
 
 /**

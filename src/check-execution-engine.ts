@@ -1038,8 +1038,7 @@ export class CheckExecutionEngine {
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
-    const provider = this.providerRegistry.getProviderOrThrow('ai');
-    this.setProviderWebhookContext(provider);
+    // Note: We'll get the provider dynamically per check, not a single one for all
     const sessionIds = new Map<string, string>(); // checkName -> sessionId
     let shouldStopExecution = false;
 
@@ -1110,15 +1109,26 @@ export class CheckExecutionEngine {
             }
           }
 
+          // Get the appropriate provider for this check type
+          const providerType = checkConfig.type || 'ai';
+          const provider = this.providerRegistry.getProviderOrThrow(providerType);
+          this.setProviderWebhookContext(provider);
+
           // Create provider config for this specific check
           const providerConfig: CheckProviderConfig = {
-            type: 'ai',
+            type: providerType,
             prompt: checkConfig.prompt,
+            script: checkConfig.script,
+            exec: checkConfig.exec,
             focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
             schema: checkConfig.schema,
             group: checkConfig.group,
             checkName: checkName, // Add checkName for sessionID
             eventContext: prInfo.eventContext, // Pass event context for templates
+            transform: checkConfig.transform,
+            level: (checkConfig as any).level,
+            message: (checkConfig as any).message,
+            env: checkConfig.env,
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -1128,9 +1138,21 @@ export class CheckExecutionEngine {
 
           // Pass results from dependencies if needed
           const dependencyResults = new Map<string, ReviewSummary>();
+          let isForEachDependent = false;
+          let forEachItems: any[] = [];
+          let forEachParentName: string | undefined;
+
           for (const depId of checkConfig.depends_on || []) {
             if (results.has(depId)) {
-              dependencyResults.set(depId, results.get(depId)!);
+              const depResult = results.get(depId)!;
+              dependencyResults.set(depId, depResult);
+
+              // Check if this dependency has forEach enabled
+              if ((depResult as any).isForEach && (depResult as any).forEachItems) {
+                isForEachDependent = true;
+                forEachItems = (depResult as any).forEachItems;
+                forEachParentName = depId;
+              }
             }
           }
 
@@ -1169,18 +1191,81 @@ export class CheckExecutionEngine {
             providerConfig.sessionId = currentSessionId;
           }
 
-          const result = await provider.execute(
-            prInfo,
-            providerConfig,
-            dependencyResults,
-            sessionInfo
-          );
-          log(
-            `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
-          );
+          // Handle forEach dependent execution
+          let finalResult: ReviewSummary;
+
+          if (isForEachDependent && forEachParentName) {
+            log(
+              `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
+            );
+
+            const allIssues: any[] = [];
+            const allOutputs: any[] = [];
+
+            // Execute check for each item in the forEach array
+            for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
+              const item = forEachItems[itemIndex];
+
+              // Create modified dependency results with current item
+              const forEachDependencyResults = new Map<string, ReviewSummary>();
+              for (const [depName, depResult] of dependencyResults) {
+                if (depName === forEachParentName) {
+                  // Replace the forEach parent's output with the current item
+                  const modifiedResult = {
+                    ...depResult,
+                    output: item,
+                  } as any;
+                  forEachDependencyResults.set(depName, modifiedResult);
+                } else {
+                  forEachDependencyResults.set(depName, depResult);
+                }
+              }
+
+              log(
+                `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
+              );
+
+              const itemResult = await provider.execute(
+                prInfo,
+                providerConfig,
+                forEachDependencyResults,
+                sessionInfo
+              );
+
+              // Collect issues from each iteration
+              if (itemResult.issues) {
+                allIssues.push(...itemResult.issues);
+              }
+
+              // Collect outputs from each iteration
+              if ((itemResult as any).output) {
+                allOutputs.push((itemResult as any).output);
+              }
+            }
+
+            finalResult = {
+              issues: allIssues,
+              output: allOutputs.length > 0 ? allOutputs : undefined,
+            } as any;
+
+            log(
+              `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+            );
+          } else {
+            // Normal single execution
+            finalResult = await provider.execute(
+              prInfo,
+              providerConfig,
+              dependencyResults,
+              sessionInfo
+            );
+            log(
+              `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+            );
+          }
 
           // Add group, schema, template info and timestamp to issues from config
-          const enrichedIssues = (result.issues || []).map(issue => ({
+          const enrichedIssues = (finalResult.issues || []).map(issue => ({
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
@@ -1190,7 +1275,7 @@ export class CheckExecutionEngine {
           }));
 
           const enrichedResult = {
-            ...result,
+            ...finalResult,
             issues: enrichedIssues,
           };
 
@@ -1222,9 +1307,40 @@ export class CheckExecutionEngine {
       for (let i = 0; i < levelResults.length; i++) {
         const checkName = executionGroup.parallel[i];
         const result = levelResults[i];
+        const checkConfig = config.checks[checkName];
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
-          results.set(checkName, result.value.result);
+          const reviewResult = result.value.result;
+
+          // Handle forEach logic - process array outputs
+          if (checkConfig?.forEach && (reviewResult as any).output) {
+            let outputArray = (reviewResult as any).output;
+
+            // Ensure output is an array
+            if (!Array.isArray(outputArray)) {
+              // Try to parse as JSON if it's a string
+              if (typeof outputArray === 'string') {
+                try {
+                  const parsed = JSON.parse(outputArray);
+                  outputArray = Array.isArray(parsed) ? parsed : [parsed];
+                } catch {
+                  outputArray = [outputArray];
+                }
+              } else {
+                outputArray = [outputArray];
+              }
+            }
+
+            log(
+              `🔄 Debug: Check "${checkName}" has forEach enabled, processing ${outputArray.length} items`
+            );
+
+            // Store the array for iteration by dependent checks
+            (reviewResult as any).forEachItems = outputArray;
+            (reviewResult as any).isForEach = true;
+          }
+
+          results.set(checkName, reviewResult);
         } else {
           // Store error result for dependency tracking
           const errorSummary: ReviewSummary = {
