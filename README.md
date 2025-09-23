@@ -1,22 +1,27 @@
 <div align="center">
   <img src="site/visor.png" alt="Visor Logo" width="500" />
   
-  # Visor - AI-Powered Code Review with Schema-Template System
+  # Visor — Open‑source, configurable code review
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-blue)]()
   
-  **Intelligent code analysis for GitHub Pull Requests**
+  Native GitHub checks and annotations. Runs in any CI.
+  Configure everything in `.visor.yaml` and templates — no hidden logic.
+  Use as an Action or CLI; schedule with cron; react to webhooks.
+  AI‑assisted when you want it, predictable when you don’t.
 </div>
 
 ---
 
 Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you immediately get:
-- A staged review pipeline (`overview → security → performance → quality → style`) that keeps AI context alive via session reuse while running checks sequentially (`max_parallelism: 1`).
-- Automatic failures whenever any check surfaces `critical` or `error` issues through the bundled `fail_if` guard.
-- Comment-driven automation: `/review` reruns the suite on demand and `/ask` engages an embedded issue assistant for triage.
+- A staged review pipeline (`overview → security → performance → quality → style`).
+- Native GitHub integration: check runs, annotations, and PR comments out of the box.
+- Built-in code answering assistant: trigger from any issue or PR comment, for example: `/visor how it works?`.
 - A manual release-notes generator you can trigger in tagged release workflows.
+- No magic: everything is config‑driven in `.visor.yaml`; prompts and context are visible, templatable, and the code is fully open source.
+- Built for scale: composable checks, tag-based profiles, and configuration reuse with local or remote `extends` (allowlisted) for shared, centrally managed policies.
 
 ## 🚀 Quick Start
 
@@ -40,41 +45,56 @@ Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you 
 
 ### As GitHub Action (Recommended)
 
-Create `.github/workflows/code-review.yml`:
+Create `.github/workflows/visor.yml`:
 
 ```yaml
-name: Code Review
+name: Visor
+
 on:
+  # PR reviews: opened (new PR) and synchronize (new commits pushed)
   pull_request:
+    types: [opened, synchronize]
+  # Issue assistant: triage and help on new issues
+  issues:
+    types: [opened]
+  # Commands: /review (rerun checks) and /visor ... (ask the assistant) via comments
+  issue_comment:
+    types: [created]
+
+# Minimal permissions Visor needs
+permissions:
+  contents: read         # Read code, diffs, and .visor.yaml
+  pull-requests: write   # Post/update PR comments and reviews
+  issues: write          # Comment on issues (assistant via /visor ...)
+  checks: write          # Create check runs and annotations
 
 jobs:
-  review:
+  visor:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - uses: ./  # or: gates-ai/visor-action@v1
-        # Optional: run Visor as a GitHub App instead of the workflow token identity
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run Visor
+        uses: probelabs/visor@main
+        # Optional: Use a GitHub App for custom bot identity/branding and granular org-level permissions
+        # (otherwise the default workflow token posts as github-actions[bot]).
+        # Uncomment the block below and add secrets if you want your own bot name/avatar:
         # with:
         #   app-id: ${{ secrets.VISOR_APP_ID }}
         #   private-key: ${{ secrets.VISOR_APP_PRIVATE_KEY }}
-        #   installation-id: ${{ secrets.VISOR_APP_INSTALLATION_ID }}
+        #   installation-id: ${{ secrets.VISOR_APP_INSTALLATION_ID }}  # Optional; auto-detected if omitted
         env:
-          # Choose one AI provider (see AI Configuration below)
+          # Configure exactly one provider (see AI Configuration below)
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-The default `GITHUB_TOKEN` already exists in every workflow run, so you do **not** need to create a secret for it. Switch to a GitHub App when you want a dedicated bot identity, granular repo access, or org-wide deployment.
+The default `GITHUB_TOKEN` already exists in every workflow run, so you do **not** need to create a secret for it. Switch to a GitHub App when you want a dedicated bot identity (custom name/avatar), granular repo/org permissions, or org‑wide deployment.
 
-If you don't commit a `.visor.yaml` yet, Visor automatically loads `defaults/.visor.yaml`, giving your team the full overview → security → performance → quality → style pipeline, critical/error failure stop, `/review` orchestration, and the optional release-notes check out of the box.
+Events explained: `pull_request` runs automatic PR reviews; `issues` enables the built‑in assistant on new issues; `issue_comment` powers `/review` (rerun checks on PRs) and `/visor ...` (assistant Q&A on issues or PRs).
+
+If you don't commit a `.visor.yaml` yet, Visor automatically loads `defaults/.visor.yaml`, giving your team the full overview → security → performance → quality → style pipeline, native GitHub checks and comments, assistant commands (e.g., `/visor how it works?`), and an optional release‑notes check out of the box.
 
 **Optional GitHub App setup:**
 1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) with:
@@ -100,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./  # or: gates-ai/visor-action@v1
+      - uses: ./  # or: probelabs/visor@main
         with:
           max-parallelism: '5'      # Run up to 5 checks in parallel
           fail-fast: 'true'         # Stop on first failure
@@ -140,6 +160,8 @@ npx @probelabs/visor --config custom.yaml --check all
 - **Step Dependencies** - Define execution order with `depends_on` relationships
 - **PR Commands** - Trigger reviews with `/review` comments
 - **GitHub Integration** - Creates check runs, adds labels, posts comments
+- **Any CI** - Use the CLI in any CI system alongside GitHub Actions
+- **Cron & Webhooks** - Schedule recurring checks or trigger from external events
 - **Warning Suppression** - Suppress false positives with `visor-disable` comments
 - **Tag-Based Filtering** - Run subsets of checks based on tags for different execution profiles
 
@@ -275,7 +297,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gates-ai/visor-action@v1
+      - uses: probelabs/visor@main
         with:
           tags: "local,fast"
           exclude-tags: "experimental"
@@ -288,7 +310,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gates-ai/visor-action@v1
+      - uses: probelabs/visor@main
         with:
           tags: "remote,comprehensive"
         env:
@@ -348,7 +370,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gates-ai/visor-action@v1
+      - uses: probelabs/visor@main
         with:
           tags: "fast,critical"
           fail-fast: "true"  # Stop if critical issues found
@@ -358,7 +380,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gates-ai/visor-action@v1
+      - uses: probelabs/visor@main
         with:
           tags: "security"
           exclude-tags: "fast"  # Run deeper security checks
@@ -368,7 +390,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gates-ai/visor-action@v1
+      - uses: probelabs/visor@main
         with:
           tags: "comprehensive"
           exclude-tags: "fast,security"  # Run remaining checks
@@ -417,12 +439,13 @@ checks:
 
 ## 💬 PR Comment Commands
 
-Add comments to your PR to trigger Visor:
+Add comments to issues or PRs:
 
-- `/review` - Run all checks
-- `/review --check security` - Run security checks only
-- `/review --check performance` - Run performance checks only
-- `/review --help` - Show available commands
+- `/review` – Rerun all configured checks on the pull request
+- `/review --check security` – Run only security checks
+- `/review --check performance` – Run only performance checks
+- `/visor how it works?` – Ask the built‑in assistant a question about the code or context
+- `/review --help` – Show available review commands
 
 ## 🔇 Suppressing Warnings
 
