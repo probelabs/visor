@@ -126,9 +126,8 @@ describe('LogCheckProvider', () => {
       const result = await provider.execute(mockPRInfo, config);
 
       expect(result.issues).toEqual([]);
-      expect(result.suggestions).toBeDefined();
-      expect(result.suggestions!.length).toBe(1);
-      expect(result.suggestions![0]).toContain('ℹ️ **INFO**: Simple test message');
+      expect((result as any).logOutput).toBeDefined();
+      expect((result as any).logOutput).toContain('ℹ️ **INFO**: Simple test message');
     });
 
     it('should render liquid templates', async () => {
@@ -140,7 +139,7 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config);
 
-      expect(result.suggestions![0]).toContain('PR #123 by testuser');
+      expect((result as any).logOutput).toContain('PR #123 by testuser');
     });
 
     it('should include PR context when enabled', async () => {
@@ -153,7 +152,7 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config);
 
-      const output = result.suggestions![0];
+      const output = (result as any).logOutput;
       expect(output).toContain('PR Context');
       expect(output).toContain('PR #123');
       expect(output).toContain('testuser');
@@ -169,7 +168,7 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config);
 
-      const output = result.suggestions![0];
+      const output = (result as any).logOutput;
       expect(output).toContain('Execution Metadata');
       expect(output).toContain('Timestamp');
       expect(output).toContain('Node Version');
@@ -188,7 +187,6 @@ describe('LogCheckProvider', () => {
             category: 'security',
           },
         ],
-        suggestions: ['Fix security issue'],
       });
 
       const config: CheckProviderConfig = {
@@ -200,11 +198,11 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config, mockDeps);
 
-      const output = result.suggestions![0];
+      const output = (result as any).logOutput;
       expect(output).toContain('Dependency Results');
       expect(output).toContain('security-check');
       expect(output).toContain('1 issues');
-      expect(output).toContain('1 suggestions');
+      expect(output).toContain('0 suggestions');
     });
 
     it('should support different log levels with correct emojis', async () => {
@@ -223,7 +221,7 @@ describe('LogCheckProvider', () => {
         };
 
         const result = await provider.execute(mockPRInfo, config);
-        expect(result.suggestions![0]).toContain(`${emoji} **${level.toUpperCase()}**`);
+        expect((result as any).logOutput).toContain(`${emoji} **${level.toUpperCase()}**`);
       }
     });
 
@@ -236,14 +234,13 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config);
 
-      expect(result.suggestions![0]).toContain('Analyzing 1 files');
+      expect((result as any).logOutput).toContain('Analyzing 1 files');
     });
 
     it('should access dependency data in templates', async () => {
       const mockDeps = new Map<string, ReviewSummary>();
       mockDeps.set('test-check', {
         issues: [],
-        suggestions: ['test suggestion'],
       });
 
       const config: CheckProviderConfig = {
@@ -255,7 +252,7 @@ describe('LogCheckProvider', () => {
 
       const result = await provider.execute(mockPRInfo, config, mockDeps);
 
-      expect(result.suggestions![0]).toContain('Dependency count: 1');
+      expect((result as any).logOutput).toContain('Dependency count: 1');
     });
   });
 });

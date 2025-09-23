@@ -45,7 +45,6 @@ export class NoopCheckProvider extends CheckProvider {
     // It exists purely for command orchestration and dependency triggering
     return {
       issues: [],
-      suggestions: [],
     };
   }
 

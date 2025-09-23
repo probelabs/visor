@@ -195,7 +195,6 @@ export class HttpCheckProvider extends CheckProvider {
 
     return {
       issues,
-      suggestions: Array.isArray(response.suggestions) ? response.suggestions : [],
     };
   }
 
@@ -216,7 +215,6 @@ export class HttpCheckProvider extends CheckProvider {
           replacement: undefined,
         },
       ],
-      suggestions: [`Webhook ${url} failed: ${errorMessage}`],
     };
   }
 

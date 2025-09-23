@@ -46,7 +46,6 @@ describe('HTML Whitespace Fix Test', () => {
           schema: 'code-review',
         },
       ],
-      suggestions: [],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -97,7 +96,6 @@ describe('HTML Whitespace Fix Test', () => {
           schema: 'code-review',
         },
       ],
-      suggestions: [],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);

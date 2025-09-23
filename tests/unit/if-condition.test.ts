@@ -235,11 +235,9 @@ describe('If condition evaluation', () => {
             ruleId: 'test',
           },
         ],
-        suggestions: [],
       });
       previousResults.set('style-check', {
         issues: [],
-        suggestions: [],
       });
 
       // First, test a simple check to see if outputs are accessible

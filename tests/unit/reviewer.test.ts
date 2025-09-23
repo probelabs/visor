@@ -16,7 +16,6 @@ jest.mock('../../src/check-execution-engine', () => {
         .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
           // Return mock results similar to AIReviewService mock
           const issues: any[] = [];
-          const suggestions: string[] = [];
 
           // Generate mock issues based on check names
           if (_checks.includes('security-review') || _checks.includes('basic-review')) {
@@ -49,22 +48,8 @@ jest.mock('../../src/check-execution-engine', () => {
             });
           }
 
-          // Test file suggestions
-          const hasTestFiles = _prInfo.files.some(
-            (f: any) => f.filename.includes('.test.') || f.filename.includes('.spec.')
-          );
-          const hasSourceFiles = _prInfo.files.some(
-            (f: any) =>
-              f.filename.includes('src/') &&
-              !f.filename.includes('.test.') &&
-              !f.filename.includes('.spec.')
-          );
-
-          if (hasSourceFiles && !hasTestFiles) {
-            suggestions.push('Consider adding unit tests for the new functionality');
-          } else if (hasTestFiles) {
-            suggestions.push('Great job including tests with your changes!');
-          }
+          // Test file handling (removed suggestions)
+          // Test file detection logic removed as suggestions field is deprecated
 
           // Default response if no specific conditions met
           if (issues.length === 0) {
@@ -79,18 +64,15 @@ jest.mock('../../src/check-execution-engine', () => {
             });
           }
 
-          if (suggestions.length === 0) {
-            suggestions.push('Add unit tests', 'Consider performance optimization');
-          }
+          // Default suggestions logic removed as suggestions field is deprecated
 
-          return { issues, suggestions };
+          return { issues };
         }),
       executeGroupedChecks: jest
         .fn()
         .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
           // Return GroupedCheckResults format
           const issues: any[] = [];
-          const suggestions: string[] = [];
 
           // Generate mock issues based on check names
           if (_checks.includes('security-review') || _checks.includes('basic-review')) {
@@ -123,22 +105,8 @@ jest.mock('../../src/check-execution-engine', () => {
             });
           }
 
-          // Test file suggestions
-          const hasTestFiles = _prInfo.files.some(
-            (f: any) => f.filename.includes('.test.') || f.filename.includes('.spec.')
-          );
-          const hasSourceFiles = _prInfo.files.some(
-            (f: any) =>
-              f.filename.includes('src/') &&
-              !f.filename.includes('.test.') &&
-              !f.filename.includes('.spec.')
-          );
-
-          if (hasSourceFiles && !hasTestFiles) {
-            suggestions.push('Consider adding unit tests for the new functionality');
-          } else if (hasTestFiles) {
-            suggestions.push('Great job including tests with your changes!');
-          }
+          // Test file handling (removed suggestions)
+          // Test file detection logic removed as suggestions field is deprecated
 
           // Default response if no specific conditions met
           if (issues.length === 0) {
@@ -153,9 +121,7 @@ jest.mock('../../src/check-execution-engine', () => {
             });
           }
 
-          if (suggestions.length === 0) {
-            suggestions.push('Add unit tests', 'Consider performance optimization');
-          }
+          // Default suggestions logic removed as suggestions field is deprecated
 
           // Convert to GroupedCheckResults format
           const groupedResults: any = {};
@@ -169,9 +135,7 @@ jest.mock('../../src/check-execution-engine', () => {
             const checkIssues = issues.filter(
               i => i.ruleId?.startsWith(`${checkName}/`) || !i.ruleId?.includes('/')
             );
-            const checkSuggestions = suggestions.filter(
-              s => s.includes(checkName) || suggestions.length <= 2
-            );
+            // Check suggestions filtering removed as suggestions field is deprecated
 
             let content = '';
             if (checkIssues.length > 0) {
@@ -179,10 +143,7 @@ jest.mock('../../src/check-execution-engine', () => {
                 .map(i => `- **${i.severity.toUpperCase()}**: ${i.message} (${i.file}:${i.line})`)
                 .join('\n');
             }
-            if (checkSuggestions.length > 0) {
-              if (content) content += '\n\n';
-              content += checkSuggestions.map(s => `- ${s}`).join('\n');
-            }
+            // Suggestions content generation removed as suggestions field is deprecated
             if (!content) {
               content = 'No issues found.';
             }
@@ -266,11 +227,9 @@ jest.mock('../../src/ai-review-service', () => {
           });
         }
 
-        if (suggestions.length === 0) {
-          suggestions.push('Add unit tests', 'Consider performance optimization');
-        }
+        // Default suggestions logic removed as suggestions field is deprecated
 
-        return Promise.resolve({ issues, suggestions });
+        return Promise.resolve({ issues });
       }),
     })),
   };
@@ -550,7 +509,6 @@ describe('PRReviewer', () => {
             category: 'style' as const,
           },
         ],
-        suggestions: ['Add unit tests', 'Consider performance optimization'],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -570,9 +528,10 @@ describe('PRReviewer', () => {
       expect(callArgs.body).toContain(
         '- **INFO**: Consider using const instead of let (src/test.ts:10)'
       );
-      expect(callArgs.body).toContain('## Suggestions');
-      expect(callArgs.body).toContain('- Add unit tests');
-      expect(callArgs.body).toContain('- Consider performance optimization');
+      // Suggestions section should not be present as suggestions field was removed
+      expect(callArgs.body).not.toContain('## Suggestions');
+      expect(callArgs.body).not.toContain('- Add unit tests');
+      expect(callArgs.body).not.toContain('- Consider performance optimization');
       // Should not contain the old table format
       expect(callArgs.body).not.toContain('<table>');
       expect(callArgs.body).not.toContain('<th>');
@@ -621,7 +580,6 @@ describe('PRReviewer', () => {
             category: 'style' as const,
           },
         ],
-        suggestions: [],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -664,7 +622,6 @@ describe('PRReviewer', () => {
             category: 'style' as const,
           },
         ],
-        suggestions: ['Add unit tests'],
         debug: {
           prompt: 'Test prompt for AI review',
           rawResponse: '{"issues":[{"file":"src/test.ts","line":10,"message":"test"}]}',
@@ -722,7 +679,6 @@ describe('PRReviewer', () => {
             category: 'style' as const,
           },
         ],
-        suggestions: ['Add unit tests'],
         // No debug field
       };
 
@@ -776,7 +732,6 @@ describe('PRReviewer', () => {
 </table>`,
           },
         ],
-        suggestions: ['Consider using semantic HTML'],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -787,8 +742,9 @@ describe('PRReviewer', () => {
       // Check that the simple format is used and issue message appears
       expect(callArgs.body).toContain('## Issues Found (1)');
       expect(callArgs.body).toContain('- **WARNING**: HTML table structure needs improvement');
-      expect(callArgs.body).toContain('## Suggestions');
-      expect(callArgs.body).toContain('- Consider using semantic HTML');
+      // Suggestions section should not be present as suggestions field was removed
+      expect(callArgs.body).not.toContain('## Suggestions');
+      expect(callArgs.body).not.toContain('- Consider using semantic HTML');
 
       // The new format should not contain HTML tables or escaped HTML
       expect(callArgs.body).not.toContain('<table>');
@@ -846,7 +802,6 @@ describe('PRReviewer', () => {
             category: 'performance' as const,
           },
         ],
-        suggestions: [],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -893,7 +848,6 @@ describe('PRReviewer', () => {
 
       const summary: ReviewSummary = {
         issues: [issueWithLine],
-        suggestions: [],
       };
 
       // Pass commit SHA in options
@@ -941,7 +895,6 @@ describe('PRReviewer', () => {
 
       const summary: ReviewSummary = {
         issues: [issueWithLine],
-        suggestions: [],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(summary);
@@ -1000,7 +953,6 @@ describe('PRReviewer', () => {
             category: 'style' as const,
           },
         ],
-        suggestions: [],
       };
 
       const groupedResults = convertReviewSummaryToGroupedResults(mockReview);

@@ -103,9 +103,9 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect(result).toEqual<ReviewSummary>({
+      expect(result).toEqual<ReviewSummary & { data: unknown }>({
         issues: [],
-        suggestions: [JSON.stringify(responseData)],
+        data: responseData,
       });
     });
 
@@ -150,7 +150,7 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect(result.suggestions![0]).toBe(JSON.stringify(responseData));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(responseData);
     });
 
     it('should handle HTTP errors', async () => {
@@ -171,7 +171,9 @@ describe('HttpClientProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('500');
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues![0].severity).toBe('error');
+      expect(result.issues![0].category).toBe('logic');
     });
 
     it('should handle network errors', async () => {
@@ -181,7 +183,9 @@ describe('HttpClientProvider', () => {
 
       expect(result.issues).toHaveLength(1);
       expect(result.issues![0].message).toContain('Network timeout');
-      expect(result.suggestions).toEqual([]);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues![0].severity).toBe('error');
+      expect(result.issues![0].category).toBe('logic');
     });
 
     it('should apply transformation', async () => {
@@ -214,7 +218,7 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect(result.suggestions?.[0]).toBe(JSON.stringify(transformedData));
+      expect((result as ReviewSummary & { data: unknown }).data).toEqual(transformedData);
     });
   });
 

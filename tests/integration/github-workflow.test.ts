@@ -142,7 +142,6 @@ jest.mock('../../src/ai-review-service', () => {
             category: 'performance',
           },
         ],
-        suggestions: ['Consider adding input validation', 'Add unit tests for new functionality'],
       }),
     })),
   };

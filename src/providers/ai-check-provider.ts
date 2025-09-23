@@ -401,9 +401,8 @@ export class AICheckProvider extends CheckProvider {
                 documentationIssues:
                   result.issues?.filter(i => i.category === 'documentation') || [],
 
-                // All issues and suggestions
+                // All issues
                 issues: result.issues || [],
-                suggestions: result.suggestions || [],
 
                 // Debug information if available
                 debug: result.debug,

@@ -46,7 +46,6 @@ describe('GitHub Comment Promise Fix', () => {
           replacement: 'fixed code',
         },
       ],
-      suggestions: ['General suggestion'],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);
@@ -59,11 +58,9 @@ describe('GitHub Comment Promise Fix', () => {
 
     // Should contain actual rendered content
     expect(callArgs.body).toContain('Test security issue');
-    expect(callArgs.body).toContain('General suggestion');
 
     // Should have simple format
     expect(callArgs.body).toContain('## Issues Found (1)');
-    expect(callArgs.body).toContain('## Suggestions');
   });
 
   test('should handle async template rendering correctly', async () => {
@@ -78,7 +75,6 @@ describe('GitHub Comment Promise Fix', () => {
           category: 'performance' as const,
         },
       ],
-      suggestions: [],
     };
 
     // This should not throw and should return proper string content
@@ -116,7 +112,6 @@ describe('GitHub Comment Promise Fix', () => {
           category: 'performance' as const,
         },
       ],
-      suggestions: [],
     };
 
     const groupedResults = convertReviewSummaryToGroupedResults(mockReview);

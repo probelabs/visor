@@ -108,7 +108,7 @@ describe('AICheckProvider', () => {
         overallScore: 85,
         totalIssues: 2,
         criticalIssues: 0,
-        suggestions: ['Consider refactoring'],
+
         comments: [],
         issues: [],
       };
@@ -141,7 +141,6 @@ describe('AICheckProvider', () => {
         overallScore: 75,
         totalIssues: 3,
         criticalIssues: 1,
-        suggestions: [],
         comments: [],
       };
 
@@ -172,7 +171,6 @@ describe('AICheckProvider', () => {
         overallScore: 90,
         totalIssues: 0,
         criticalIssues: 0,
-        suggestions: [],
         comments: [],
       };
 

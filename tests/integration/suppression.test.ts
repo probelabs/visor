@@ -99,7 +99,6 @@ function test() {
             category: 'security',
           },
         ],
-        suggestions: [],
       });
 
       const mockDependencyGraph: DependencyGraph = {
@@ -168,7 +167,6 @@ function test() {
             category: 'security',
           },
         ],
-        suggestions: [],
       });
 
       const mockDependencyGraph: DependencyGraph = {

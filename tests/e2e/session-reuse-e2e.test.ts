@@ -265,7 +265,6 @@ max_parallelism: 3
 
     // Verify results structure
     expect(result.reviewSummary.issues).toBeDefined();
-    expect(result.reviewSummary.suggestions).toBeDefined();
     expect(result.executionTime).toBeGreaterThan(0);
   });
 

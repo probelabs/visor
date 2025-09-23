@@ -35,11 +35,14 @@ describe('Mermaid Diagram Preservation', () => {
 
   describe('Structured Schema with Mermaid Diagrams', () => {
     test('should preserve mermaid diagrams from AI response to GitHub comment', async () => {
-      // Mock AI response with Mermaid diagram in suggestions
+      // Mock AI response with Mermaid diagram in issues
       const aiResponseWithMermaid = JSON.stringify({
-        issues: [],
-        suggestions: [
-          `# Pull Request Analysis
+        issues: [
+          {
+            file: 'PR_OVERVIEW',
+            line: 1,
+            ruleId: 'analysis/overview',
+            message: `# Pull Request Analysis
 
 ## Overview
 This PR introduces authentication improvements with JWT tokens.
@@ -56,6 +59,9 @@ graph TD
 
 ## Summary
 The implementation follows security best practices and includes proper error handling.`,
+            severity: 'info',
+            category: 'documentation',
+          },
         ],
       });
 
@@ -93,29 +99,28 @@ The implementation follows security best practices and includes proper error han
         'code-review'
       );
 
-      // Verify the AI response was parsed correctly (should have no issues since no schema)
-      expect(result.issues).toHaveLength(0);
-      expect(result.suggestions).toHaveLength(1);
-      expect(result.suggestions![0]).toContain('```mermaid');
-      expect(result.suggestions![0]).toContain('graph TD');
-      expect(result.suggestions![0]).toContain('A[Client Request] --> B[Auth Middleware]');
+      // Verify the AI response was parsed correctly
+      expect(result.issues).toHaveLength(1);
+      const content = result.issues![0].message;
+      expect(content).toContain('```mermaid');
+      expect(content).toContain('graph TD');
+      expect(content).toContain('A[Client Request] --> B[Auth Middleware]');
 
-      // Verify Mermaid diagram is preserved in the suggestion content
-      const suggestionContent = result.suggestions![0];
-      expect(suggestionContent).toContain('```mermaid');
-      expect(suggestionContent).toContain('graph TD');
-      expect(suggestionContent).toContain('A[Client Request] --> B[Auth Middleware]');
-      expect(suggestionContent).toContain('B --> C[JWT Validation]');
-      expect(suggestionContent).toContain('```');
+      // Verify Mermaid diagram is preserved in the issue content
+      expect(content).toContain('```mermaid');
+      expect(content).toContain('graph TD');
+      expect(content).toContain('A[Client Request] --> B[Auth Middleware]');
+      expect(content).toContain('B --> C[JWT Validation]');
+      expect(content).toContain('```');
 
       // Verify no code block stripping occurred
-      const mermaidBlockStart = suggestionContent.indexOf('```mermaid');
-      const mermaidBlockEnd = suggestionContent.indexOf('```', mermaidBlockStart + 3);
+      const mermaidBlockStart = content.indexOf('```mermaid');
+      const mermaidBlockEnd = content.indexOf('```', mermaidBlockStart + 3);
       expect(mermaidBlockStart).toBeGreaterThan(-1);
       expect(mermaidBlockEnd).toBeGreaterThan(mermaidBlockStart);
 
       // Extract the full mermaid block content
-      const mermaidBlock = suggestionContent.substring(mermaidBlockStart, mermaidBlockEnd + 3);
+      const mermaidBlock = content.substring(mermaidBlockStart, mermaidBlockEnd + 3);
       expect(mermaidBlock).toContain('graph TD');
       expect(mermaidBlock).toContain('A[Client Request]');
       expect(mermaidBlock).toContain('--> B[Auth Middleware]');
@@ -123,9 +128,12 @@ The implementation follows security best practices and includes proper error han
 
     test('should handle multiple mermaid diagrams in AI response', async () => {
       const aiResponseWithMultipleMermaid = JSON.stringify({
-        issues: [],
-        suggestions: [
-          `# System Architecture
+        issues: [
+          {
+            file: 'SYSTEM_ARCHITECTURE',
+            line: 1,
+            ruleId: 'architecture/overview',
+            message: `# System Architecture
 
 ## Component Overview
 \`\`\`mermaid
@@ -150,6 +158,9 @@ erDiagram
 \`\`\`
 
 Both diagrams show the system architecture and data relationships.`,
+            severity: 'info',
+            category: 'architecture',
+          },
         ],
       });
 
@@ -185,7 +196,8 @@ Both diagrams show the system architecture and data relationships.`,
       );
 
       // Verify both Mermaid diagrams are preserved
-      const content = result.suggestions![0];
+      expect(result.issues).toHaveLength(1);
+      const content = result.issues![0].message;
       const mermaidBlocks = content.match(/```mermaid[\s\S]*?```/g);
       expect(mermaidBlocks).toHaveLength(2);
 
@@ -197,9 +209,12 @@ Both diagrams show the system architecture and data relationships.`,
 
     test('should preserve mermaid diagrams with complex syntax', async () => {
       const complexMermaidResponse = JSON.stringify({
-        issues: [],
-        suggestions: [
-          `# Flow Analysis
+        issues: [
+          {
+            file: 'PROCESS_FLOW',
+            line: 1,
+            ruleId: 'flow/analysis',
+            message: `# Flow Analysis
 
 ## Process Flow
 \`\`\`mermaid
@@ -217,6 +232,9 @@ flowchart TB
 \`\`\`
 
 The flow includes error handling and logging.`,
+            severity: 'info',
+            category: 'documentation',
+          },
         ],
       });
 
@@ -251,7 +269,8 @@ The flow includes error handling and logging.`,
         'code-review'
       );
 
-      const content = result.suggestions![0];
+      expect(result.issues).toHaveLength(1);
+      const content = result.issues![0].message;
 
       // Verify complex Mermaid syntax is preserved (now in structured response)
       expect(content).toContain('```mermaid');
@@ -284,7 +303,6 @@ The flow includes error handling and logging.`,
             category: 'documentation',
           },
         ],
-        suggestions: ['Add architecture documentation'],
       });
 
       mockProbeAgent.answer.mockResolvedValue(codeReviewWithMermaid);

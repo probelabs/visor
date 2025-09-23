@@ -32,7 +32,6 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
               ruleId: 'sql-injection',
             },
           ],
-          suggestions: ['Use parameterized queries'],
         });
       } else if (focus.includes('style') || prompt.includes('Style') || prompt.includes('style')) {
         return Promise.resolve({
@@ -46,7 +45,6 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
               ruleId: 'semi',
             },
           ],
-          suggestions: ['Add semicolon'],
         });
       } else if (
         focus.includes('performance') ||
@@ -55,7 +53,6 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
       ) {
         return Promise.resolve({
           issues: [],
-          suggestions: ['Code looks performant'],
         });
       } else if (prompt.includes('Quality') || prompt.includes('quality')) {
         // Quality check - return critical issue
@@ -70,7 +67,6 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
               ruleId: 'quality',
             },
           ],
-          suggestions: ['Fix quality'],
         });
       } else if (prompt.includes('Auth') || prompt.includes('auth')) {
         // Auth check
@@ -85,7 +81,6 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
               ruleId: 'auth-security',
             },
           ],
-          suggestions: ['Fix auth'],
         });
       } else if (prompt.includes('Complex') || prompt.includes('API')) {
         // Complex or API check - return error issues
@@ -100,10 +95,8 @@ jest.mock('../../src/providers/ai-check-provider', () => ({
               ruleId: 'api-error',
             },
           ],
-          suggestions: ['Fix API'],
         });
       }
-      return Promise.resolve({ issues: [], suggestions: [] });
     }),
   })),
 }));
@@ -113,7 +106,6 @@ jest.mock('../../src/providers/tool-check-provider', () => ({
   ToolCheckProvider: jest.fn().mockImplementation(() => ({
     getName: jest.fn().mockReturnValue('tool'),
     initialize: jest.fn().mockResolvedValue(undefined),
-    execute: jest.fn().mockResolvedValue({ issues: [], suggestions: [] }),
   })),
 }));
 
@@ -121,7 +113,6 @@ jest.mock('../../src/providers/http-check-provider', () => ({
   HttpCheckProvider: jest.fn().mockImplementation(() => ({
     getName: jest.fn().mockReturnValue('http'),
     initialize: jest.fn().mockResolvedValue(undefined),
-    execute: jest.fn().mockResolvedValue({ issues: [], suggestions: [] }),
   })),
 }));
 
@@ -556,10 +547,8 @@ describe('fail_if Integration Tests', () => {
                     ruleId: 'combined',
                   },
                 ],
-                suggestions: ['Fix security issues first'],
               });
             }
-            return Promise.resolve({ issues: [], suggestions: [] });
           }
 
           // Return original mock results for other checks
@@ -580,7 +569,6 @@ describe('fail_if Integration Tests', () => {
                   ruleId: 'sql-injection',
                 },
               ],
-              suggestions: ['Use parameterized queries'],
             });
           } else if (
             focus.includes('performance') ||
@@ -589,10 +577,8 @@ describe('fail_if Integration Tests', () => {
           ) {
             return Promise.resolve({
               issues: [],
-              suggestions: ['Code looks performant'],
             });
           }
-          return Promise.resolve({ issues: [], suggestions: [] });
         }),
       }));
 

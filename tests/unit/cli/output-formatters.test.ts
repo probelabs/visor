@@ -72,7 +72,6 @@ describe('OutputFormatters', () => {
               'const cache = new Map();\nif (cache.has(key)) {\n  return cache.get(key);\n}\nconst result = expensiveOperation();\ncache.set(key, result);\nreturn result;',
           },
         ],
-        suggestions: ['Consider adding input validation', 'Add error handling for edge cases'],
       },
       executionTime: 1500,
       timestamp: '2025-01-15T10:30:00.000Z',
@@ -116,12 +115,12 @@ describe('OutputFormatters', () => {
       expect(result).not.toContain('... and'); // No truncation message
     });
 
-    it('should include suggestions table', () => {
+    it('should not include suggestions table as it has been removed', () => {
       const result = OutputFormatters.formatAsTable(mockAnalysisResult);
 
-      expect(result).toContain('Suggestions');
-      expect(result).toContain('Consider adding input validation');
-      expect(result).toContain('Add error handling for edge cases');
+      expect(result).not.toContain('Suggestions');
+      expect(result).not.toContain('Consider adding input validation');
+      expect(result).not.toContain('Add error handling for edge cases');
     });
 
     it('should include issue suggestions without emoji', () => {
@@ -170,7 +169,6 @@ describe('OutputFormatters', () => {
         ...mockAnalysisResult,
         reviewSummary: {
           issues: [],
-          suggestions: [],
         },
       };
 
@@ -189,7 +187,7 @@ describe('OutputFormatters', () => {
       expect(parsed).toHaveProperty('summary');
       expect(parsed).toHaveProperty('repository');
       expect(parsed).toHaveProperty('issues');
-      expect(parsed).toHaveProperty('suggestions');
+      expect(parsed).not.toHaveProperty('suggestions');
 
       expect(parsed.summary.totalIssues).toBe(3);
       expect(parsed.summary.criticalIssues).toBe(0);
@@ -330,7 +328,6 @@ describe('OutputFormatters', () => {
             suggestion: undefined,
             replacement: undefined,
           })),
-          suggestions: [],
         },
       };
 
@@ -344,12 +341,12 @@ describe('OutputFormatters', () => {
       expect(result).toContain('</details>');
     });
 
-    it('should include recommendations section', () => {
+    it('should not include recommendations section as it has been removed', () => {
       const result = OutputFormatters.formatAsMarkdown(mockAnalysisResult);
 
-      expect(result).toContain('## Recommendations');
-      expect(result).toContain('1. Consider adding input validation');
-      expect(result).toContain('2. Add error handling for edge cases');
+      expect(result).not.toContain('## Recommendations');
+      expect(result).not.toContain('1. Consider adding input validation');
+      expect(result).not.toContain('2. Add error handling for edge cases');
     });
 
     it('should include files table when requested', () => {
@@ -377,7 +374,6 @@ describe('OutputFormatters', () => {
         ...mockAnalysisResult,
         reviewSummary: {
           issues: [],
-          suggestions: [],
         },
       };
 
@@ -466,7 +462,6 @@ describe('OutputFormatters', () => {
         ...mockAnalysisResult,
         reviewSummary: {
           issues: [],
-          suggestions: [],
         },
       };
 
@@ -511,7 +506,6 @@ describe('OutputFormatters', () => {
         },
         reviewSummary: {
           issues: [],
-          suggestions: [],
         },
         executionTime: 0,
         timestamp: '',
@@ -540,7 +534,6 @@ describe('OutputFormatters', () => {
               replacement: undefined,
             },
           ],
-          suggestions: [],
         },
       };
 

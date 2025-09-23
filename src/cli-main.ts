@@ -133,7 +133,6 @@ export async function main(): Promise<void> {
           issues: Object.values(groupedResults)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
-          suggestions: [],
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
@@ -148,7 +147,6 @@ export async function main(): Promise<void> {
           issues: Object.values(groupedResults)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
-          suggestions: [], // Suggestions are now embedded in issues
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
@@ -163,7 +161,6 @@ export async function main(): Promise<void> {
           issues: Object.values(groupedResults)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
-          suggestions: [], // Suggestions are now embedded in issues
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),

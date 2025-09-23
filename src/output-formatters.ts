@@ -185,26 +185,6 @@ export class OutputFormatters {
       output += 'No issues found!\n\n';
     }
 
-    // Suggestions table
-    if ((result.reviewSummary.suggestions || []).length > 0) {
-      const suggestionsTable = new CliTable3({
-        head: ['#', 'Suggestion'],
-        colWidths: [5, 70],
-        style: {
-          head: ['cyan', 'bold'],
-          border: ['grey'],
-        },
-      });
-
-      output += 'Suggestions\n';
-
-      (result.reviewSummary.suggestions || []).forEach((suggestion, index) => {
-        suggestionsTable.push([(index + 1).toString(), this.wrapText(suggestion, 65)]);
-      });
-
-      output += suggestionsTable.toString() + '\n\n';
-    }
-
     // Files table (if requested)
     if (options.includeFiles && result.repositoryInfo.files.length > 0) {
       const filesTable = new CliTable3({
@@ -269,7 +249,6 @@ export class OutputFormatters {
       issues: options.groupByCategory
         ? this.groupCommentsByCategory(convertIssuesToComments(issues || []))
         : issues || [],
-      suggestions: result.reviewSummary.suggestions || [],
       files: options.includeFiles ? result.repositoryInfo.files : undefined,
       debug: result.debug, // Include debug information when available
       failureConditions: result.failureConditions || [], // Include failure condition results
@@ -606,16 +585,6 @@ export class OutputFormatters {
     } else {
       output += `## No Issues Found\n\n`;
       output += `Great job! No issues were detected in the analyzed code.\n\n`;
-    }
-
-    // Suggestions
-    if ((result.reviewSummary.suggestions || []).length > 0) {
-      output += `## Recommendations\n\n`;
-
-      (result.reviewSummary.suggestions || []).forEach((suggestion, index) => {
-        output += `${index + 1}. ${suggestion}\n`;
-      });
-      output += '\n';
     }
 
     // Files (if requested)

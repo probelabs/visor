@@ -109,7 +109,6 @@ describe('Failure Conditions Integration', () => {
             category: 'performance' as const,
           },
         ],
-        suggestions: ['Add input validation', 'Review database queries'],
       };
 
       const results = await engine.evaluateFailureConditions(
@@ -143,7 +142,6 @@ describe('Failure Conditions Integration', () => {
             category: 'security' as const,
           },
         ],
-        suggestions: [],
       };
 
       const performanceSummary = {
@@ -157,7 +155,6 @@ describe('Failure Conditions Integration', () => {
             category: 'performance' as const,
           },
         ],
-        suggestions: [],
       };
 
       // Security check has specific conditions
@@ -212,7 +209,6 @@ describe('Failure Conditions Integration', () => {
           severity: 'info' as const,
           category: 'logic' as const,
         })),
-        suggestions: [],
       };
 
       const results = await engine.evaluateFailureConditions(
@@ -383,7 +379,7 @@ describe('Failure Conditions Integration', () => {
             category: 'performance' as const,
           },
         ],
-        suggestions: ['Consider database indexing', 'Optimize algorithm complexity'],
+
         debug: {
           provider: 'anthropic',
           model: 'claude-3-sonnet',

@@ -52,7 +52,6 @@ export interface GroupedCheckResults {
 // Legacy interface - only for backward compatibility
 export interface ReviewSummary {
   issues?: ReviewIssue[];
-  suggestions?: string[];
   debug?: AIDebugInfo;
 }
 
@@ -63,7 +62,7 @@ export function convertReviewSummaryToGroupedResults(
   checkName: string = 'test-check',
   groupName: string = 'default'
 ): GroupedCheckResults {
-  // Create a simple content string from issues and suggestions
+  // Create a simple content string from issues
   let content = '';
 
   if (reviewSummary.issues && reviewSummary.issues.length > 0) {
@@ -72,13 +71,6 @@ export function convertReviewSummaryToGroupedResults(
       content += `- **${issue.severity.toUpperCase()}**: ${issue.message} (${issue.file}:${issue.line})\n`;
     });
     content += '\n';
-  }
-
-  if (reviewSummary.suggestions && reviewSummary.suggestions.length > 0) {
-    content += `## Suggestions\n\n`;
-    reviewSummary.suggestions.forEach(suggestion => {
-      content += `- ${suggestion}\n`;
-    });
   }
 
   if (!content) {

@@ -24,7 +24,6 @@ jest.mock('../src/check-execution-engine', () => {
                 replacement: 'mockFixedCode();',
               },
             ],
-            suggestions: ['Mock suggestion'],
           };
         }),
     })),
@@ -48,7 +47,6 @@ jest.mock('../src/ai-review-service', () => ({
           replacement: 'mockFixedCode();',
         },
       ],
-      suggestions: ['Mock suggestion'],
     }),
   })),
 }));
@@ -66,7 +64,6 @@ jest.mock('../src/reviewer', () => ({
           category: 'security',
         },
       ],
-      suggestions: ['Mock suggestion'],
       debug: {
         provider: 'mock',
         model: 'test-model',

@@ -115,7 +115,6 @@ export class ToolCheckProvider extends CheckProvider {
 
     return {
       issues: filteredIssues,
-      suggestions: this.generateSuggestions(comments, renderedCommand),
     };
   }
 
@@ -180,21 +179,6 @@ export class ToolCheckProvider extends CheckProvider {
     }
 
     return comments;
-  }
-
-  private generateSuggestions(comments: ReviewComment[], command: string): string[] {
-    const suggestions: string[] = [];
-
-    if (comments.length > 0) {
-      suggestions.push(`Fix ${comments.length} issues found by ${command}`);
-
-      const errorCount = comments.filter(c => c.severity === 'error').length;
-      if (errorCount > 0) {
-        suggestions.push(`Priority: Fix ${errorCount} errors before merging`);
-      }
-    }
-
-    return suggestions;
   }
 
   getSupportedConfigKeys(): string[] {
