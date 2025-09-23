@@ -1,11 +1,7 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Liquid } from 'liquidjs';
-
-const execAsync = promisify(exec);
 
 /**
  * Check provider that executes shell scripts and captures their output
@@ -91,7 +87,11 @@ export class ScriptCheckProvider extends CheckProvider {
         }
       }
 
-      // Execute the script
+      // Execute the script using dynamic import to avoid Jest issues
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
       const { stdout, stderr } = await execAsync(renderedScript, {
         env: scriptEnv,
         timeout: 60000, // 60 second timeout
