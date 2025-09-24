@@ -428,6 +428,21 @@ ${prContext}
     // Check if this is an issue (not a PR)
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
+    // Check if we should include code context (diffs)
+    const isPRContext = (prInfo as any).isPRContext === true;
+    // In PR context, always include diffs. Otherwise check the flag.
+    const includeCodeContext = isPRContext || (prInfo as any).includeCodeContext !== false;
+
+    // Log the decision for transparency
+    const log = this.config.debug ? console.error : () => {};
+    if (isPRContext) {
+      log('🔍 Including full code diffs in AI context (PR mode)');
+    } else if (!includeCodeContext) {
+      log('📊 Including only file summary in AI context (no diffs)');
+    } else {
+      log('🔍 Including code diffs in AI context');
+    }
+
     if (isIssue) {
       // Format as issue context
       let context = `<issue>
@@ -589,30 +604,37 @@ ${this.escapeXml(prInfo.body)}
   </description>`;
     }
 
-    // Add full diff if available (for complete PR review)
-    if (prInfo.fullDiff) {
-      context += `
+    // Add diffs only if includeCodeContext is true (or in PR mode)
+    if (includeCodeContext) {
+      // Add full diff if available (for complete PR review)
+      if (prInfo.fullDiff) {
+        context += `
   <!-- Complete unified diff showing all changes in the pull request -->
   <full_diff>
 ${this.escapeXml(prInfo.fullDiff)}
   </full_diff>`;
-    }
+      }
 
-    // Add incremental commit diff if available (for new commit analysis)
-    if (prInfo.isIncremental) {
-      if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
-        context += `
+      // Add incremental commit diff if available (for new commit analysis)
+      if (prInfo.isIncremental) {
+        if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
+          context += `
   <!-- Diff of only the latest commit for incremental analysis -->
   <commit_diff>
 ${this.escapeXml(prInfo.commitDiff)}
   </commit_diff>`;
-      } else {
-        context += `
+        } else {
+          context += `
   <!-- Commit diff could not be retrieved - falling back to full diff analysis -->
   <commit_diff>
 ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   </commit_diff>`;
+        }
       }
+    } else {
+      // When not including diffs, add a note about it
+      context += `
+  <!-- Code diffs excluded to reduce token usage (no code-review schema detected or disabled by flag) -->`;
     }
 
     // Add file summary for context

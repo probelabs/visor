@@ -710,6 +710,9 @@ async function handleIssueComment(
           prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
           // Add event context for templates and XML generation
           (prInfo as any).eventContext = context.event;
+          // PR context always includes code diffs
+          (prInfo as any).includeCodeContext = true;
+          (prInfo as any).isPRContext = true;
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -846,11 +849,16 @@ async function handlePullRequestWithConfig(
   const eventType = mapGitHubEventToTrigger('pull_request', action);
 
   // Fetch PR diff (handle test scenarios gracefully)
+  // In PR context, ALWAYS include full diffs for proper code review
+  console.log('📝 Code context: ENABLED (PR context - always included)');
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
     // Add event context for templates and XML generation
     (prInfo as any).eventContext = context.event;
+    // Mark that we're in PR context and should always include diffs
+    (prInfo as any).includeCodeContext = true;
+    (prInfo as any).isPRContext = true;
   } catch (error) {
     // Handle test scenarios with mock repos
     if (inputs['ai-provider'] === 'mock' || inputs['ai-model'] === 'mock') {

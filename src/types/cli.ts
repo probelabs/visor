@@ -36,6 +36,8 @@ export interface CliOptions {
   help?: boolean;
   /** Show version */
   version?: boolean;
+  /** Code context mode: auto (default), enabled (force include), disabled (force exclude) */
+  codeContext?: 'auto' | 'enabled' | 'disabled';
 }
 
 /**

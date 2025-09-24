@@ -202,6 +202,43 @@ describe('CLI Argument Parser', () => {
     });
   });
 
+  describe('Code Context Flags', () => {
+    it('should parse --enable-code-context flag', () => {
+      const result = cli.parseArgs(['--enable-code-context']);
+      expect(result.codeContext).toBe('enabled');
+    });
+
+    it('should parse --disable-code-context flag', () => {
+      const result = cli.parseArgs(['--disable-code-context']);
+      expect(result.codeContext).toBe('disabled');
+    });
+
+    it('should default to auto when no code context flag is provided', () => {
+      const result = cli.parseArgs(['--check', 'performance']);
+      expect(result.codeContext).toBe('auto');
+    });
+
+    it('should handle --enable-code-context with other arguments', () => {
+      const result = cli.parseArgs([
+        '--check',
+        'security',
+        '--enable-code-context',
+        '--output',
+        'json',
+      ]);
+      expect(result.codeContext).toBe('enabled');
+      expect(result.checks).toEqual(['security']);
+      expect(result.output).toBe('json');
+    });
+
+    it('should handle --disable-code-context with other arguments', () => {
+      const result = cli.parseArgs(['--check', 'performance', '--disable-code-context', '--debug']);
+      expect(result.codeContext).toBe('disabled');
+      expect(result.checks).toEqual(['performance']);
+      expect(result.debug).toBe(true);
+    });
+  });
+
   describe('Integration with Configuration', () => {
     it('should return parsed options in expected format', () => {
       const result = cli.parseArgs(['--check', 'performance', '--output', 'json']);

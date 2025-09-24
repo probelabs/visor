@@ -38,7 +38,7 @@ export class GitRepositoryAnalyzer {
   /**
    * Analyze the current git repository state and return data compatible with PRInfo interface
    */
-  async analyzeRepository(): Promise<GitRepositoryInfo> {
+  async analyzeRepository(includeContext: boolean = true): Promise<GitRepositoryInfo> {
     // Check if we're in a git repository
     const isRepo = await this.isGitRepository();
     if (!isRepo) {
@@ -53,17 +53,37 @@ export class GitRepositoryAnalyzer {
       ]);
 
       // Get uncommitted changes
-      const uncommittedFiles = await this.getUncommittedChanges();
+      const uncommittedFiles = await this.getUncommittedChanges(includeContext);
 
-      // Get recent commit info
-      const recentCommits = await this.git.log({ maxCount: 1 });
-      const lastCommit = recentCommits.latest;
+      // Get recent commit info (handle repos with no commits)
+      let lastCommit: any = null;
+      try {
+        const recentCommits = await this.git.log({ maxCount: 1 });
+        lastCommit = recentCommits.latest;
+      } catch {
+        // Repository has no commits yet - this is OK
+        console.log('📝 Repository has no commits yet, analyzing uncommitted changes');
+      }
+
+      // Get author from git config if no commits exist
+      let author = lastCommit?.author_name;
+      if (!author) {
+        try {
+          const [userName, userEmail] = await Promise.all([
+            this.git.raw(['config', 'user.name']).catch(() => null),
+            this.git.raw(['config', 'user.email']).catch(() => null),
+          ]);
+          author = userName?.trim() || userEmail?.trim() || 'unknown';
+        } catch {
+          author = 'unknown';
+        }
+      }
 
       // Create repository info
       const repositoryInfo: GitRepositoryInfo = {
         title: this.generateTitle(status, currentBranch),
         body: this.generateDescription(status, lastCommit),
-        author: lastCommit?.author_name || 'unknown',
+        author,
         base: await this.getBaseBranch(),
         head: currentBranch,
         files: uncommittedFiles,
@@ -75,7 +95,9 @@ export class GitRepositoryAnalyzer {
 
       return repositoryInfo;
     } catch (error) {
-      console.error('Error analyzing git repository:', error);
+      // Don't log the full error object to avoid confusing stack traces
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Error analyzing git repository:', errorMessage);
       return this.createEmptyRepositoryInfo('Error analyzing git repository');
     }
   }
@@ -83,7 +105,27 @@ export class GitRepositoryAnalyzer {
   /**
    * Convert GitRepositoryInfo to PRInfo format for compatibility with existing PRReviewer
    */
-  toPRInfo(repositoryInfo: GitRepositoryInfo): PRInfo {
+  toPRInfo(repositoryInfo: GitRepositoryInfo, includeContext: boolean = true): PRInfo {
+    const files = repositoryInfo.files.map(
+      (file): PRDiff => ({
+        filename: file.filename,
+        additions: file.additions,
+        deletions: file.deletions,
+        changes: file.changes,
+        patch: includeContext ? file.patch : undefined,
+        status: file.status,
+      })
+    );
+
+    // Generate fullDiff from patches if includeContext is true
+    let fullDiff: string | undefined;
+    if (includeContext) {
+      fullDiff = files
+        .filter(file => file.patch)
+        .map(file => `--- ${file.filename}\n${file.patch}`)
+        .join('\n\n');
+    }
+
     return {
       number: 0, // Local analysis doesn't have PR number
       title: repositoryInfo.title,
@@ -91,18 +133,10 @@ export class GitRepositoryAnalyzer {
       author: repositoryInfo.author,
       base: repositoryInfo.base,
       head: repositoryInfo.head,
-      files: repositoryInfo.files.map(
-        (file): PRDiff => ({
-          filename: file.filename,
-          additions: file.additions,
-          deletions: file.deletions,
-          changes: file.changes,
-          patch: file.patch,
-          status: file.status,
-        })
-      ),
+      files,
       totalAdditions: repositoryInfo.totalAdditions,
       totalDeletions: repositoryInfo.totalDeletions,
+      fullDiff,
     };
   }
 
@@ -155,7 +189,7 @@ export class GitRepositoryAnalyzer {
     }
   }
 
-  private async getUncommittedChanges(): Promise<GitFileChange[]> {
+  private async getUncommittedChanges(includeContext: boolean = true): Promise<GitFileChange[]> {
     try {
       const status = await this.git.status();
       const changes: GitFileChange[] = [];
@@ -173,7 +207,7 @@ export class GitRepositoryAnalyzer {
 
       for (const { file, status } of fileChanges) {
         const filePath = path.join(this.cwd, file);
-        const fileChange = await this.analyzeFileChange(file, status, filePath);
+        const fileChange = await this.analyzeFileChange(file, status, filePath, includeContext);
         changes.push(fileChange);
       }
 
@@ -187,7 +221,8 @@ export class GitRepositoryAnalyzer {
   private async analyzeFileChange(
     filename: string,
     status: 'added' | 'removed' | 'modified' | 'renamed',
-    filePath: string
+    filePath: string,
+    includeContext: boolean = true
   ): Promise<GitFileChange> {
     let additions = 0;
     let deletions = 0;
@@ -196,7 +231,7 @@ export class GitRepositoryAnalyzer {
 
     try {
       // Get diff for the file if it exists and is not binary
-      if (status !== 'added' && fs.existsSync(filePath)) {
+      if (includeContext && status !== 'added' && fs.existsSync(filePath)) {
         const diff = await this.git.diff(['--', filename]).catch(() => '');
         if (diff) {
           patch = diff;
@@ -205,17 +240,29 @@ export class GitRepositoryAnalyzer {
           additions = lines.filter(line => line.startsWith('+')).length;
           deletions = lines.filter(line => line.startsWith('-')).length;
         }
+      } else if (status !== 'added' && fs.existsSync(filePath)) {
+        // If not including context, still count changes for statistics
+        const diff = await this.git.diff(['--', filename]).catch(() => '');
+        if (diff) {
+          const lines = diff.split('\n');
+          additions = lines.filter(line => line.startsWith('+')).length;
+          deletions = lines.filter(line => line.startsWith('-')).length;
+        }
       }
 
-      // For added files, count lines as additions
+      // For added files
       if (status === 'added' && fs.existsSync(filePath)) {
         try {
           const stats = fs.statSync(filePath);
           if (stats.isFile() && stats.size < 1024 * 1024) {
             // Skip files larger than 1MB
-            content = fs.readFileSync(filePath, 'utf8');
-            additions = content.split('\n').length;
-            patch = content; // For new files, the entire content is the "patch"
+            if (includeContext) {
+              content = fs.readFileSync(filePath, 'utf8');
+              patch = content; // For new files, the entire content is the "patch"
+            }
+            // Always count additions for statistics
+            const fileContent = includeContext ? content : fs.readFileSync(filePath, 'utf8');
+            additions = fileContent!.split('\n').length;
           }
         } catch {
           // Skip binary or unreadable files
