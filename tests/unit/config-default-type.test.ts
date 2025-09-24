@@ -33,7 +33,7 @@ describe('Default Check Type Behavior', () => {
         } as CheckConfig, // Cast to CheckConfig to bypass TypeScript check
         'another-check': {
           // Explicitly set type
-          type: 'tool',
+          type: 'command',
           exec: 'npm test',
           on: ['pr_opened'],
         },
@@ -49,7 +49,7 @@ describe('Default Check Type Behavior', () => {
     // Check that the type defaulted to 'ai'
     expect(loadedConfig.checks['test-check'].type).toBe('ai');
     // Check that explicitly set type is preserved
-    expect(loadedConfig.checks['another-check'].type).toBe('tool');
+    expect(loadedConfig.checks['another-check'].type).toBe('command');
   });
 
   it('should default to "ai" when merging configs without type', () => {
@@ -159,7 +159,7 @@ describe('Default Check Type Behavior', () => {
           // No 'on' specified - should default to ['manual']
         } as CheckConfig,
         'another-check': {
-          type: 'tool',
+          type: 'command',
           exec: 'npm test',
           on: ['pr_opened'], // Explicitly set
         },

@@ -25,7 +25,7 @@ export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = [
     'ai',
     'claude-code',
-    'tool',
+    'command',
     'http',
     'http_input',
     'http_client',
@@ -433,11 +433,11 @@ export class ConfigManager {
       });
     }
 
-    // Tool checks require exec field
-    if (checkConfig.type === 'tool' && !checkConfig.exec) {
+    // Command checks require exec field
+    if (checkConfig.type === 'command' && !checkConfig.exec) {
       errors.push({
         field: `checks.${checkName}.exec`,
-        message: `Invalid check configuration for "${checkName}": missing exec field (required for tool checks)`,
+        message: `Invalid check configuration for "${checkName}": missing exec field (required for command checks)`,
       });
     }
 

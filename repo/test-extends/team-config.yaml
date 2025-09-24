@@ -25,21 +25,21 @@ checks:
 
   # Add team-specific check
   typescript:
-    type: tool
+    type: command
     exec: npx tsc --noEmit
     on: [pr_opened, pr_updated]
     group: validation
 
   # Add custom test runner
   tests:
-    type: tool
+    type: command
     exec: npm test -- --coverage
     on: [pr_opened]
     group: testing
 
   # Disable style check from base by setting empty 'on' array
   style:
-    type: tool
+    type: command
     exec: npx prettier --check .
     on: []
 

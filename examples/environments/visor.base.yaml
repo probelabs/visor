@@ -44,7 +44,7 @@ checks:
     on: [pr_opened, pr_updated]
 
   perf-load-testing:
-    type: tool
+    type: command
     group: performance
     exec: "npm run test:load"
     tags: ["performance", "load-testing", "slow", "staging"]
@@ -54,21 +54,21 @@ checks:
   # Quality Checks
   # ====================
   lint:
-    type: tool
+    type: command
     group: quality
     exec: "npm run lint"
     tags: ["quality", "lint", "fast", "dev", "staging", "prod"]
     on: [pr_opened, pr_updated]
 
   test-unit:
-    type: tool
+    type: command
     group: quality
     exec: "npm test"
     tags: ["quality", "testing", "fast", "dev", "staging", "prod"]
     on: [pr_opened, pr_updated]
 
   test-integration:
-    type: tool
+    type: command
     group: quality
     exec: "npm run test:integration"
     tags: ["quality", "testing", "slow", "staging", "prod"]

@@ -1,6 +1,6 @@
 ## 🔧 Pluggable Architecture
 
-Visor supports multiple provider types (ai, http, http_client, log, script, tool, claude-code). You can also add custom providers.
+Visor supports multiple provider types (ai, http, http_client, log, command, claude-code). You can also add custom providers.
 
 ### Custom Provider Skeleton (TypeScript)
 

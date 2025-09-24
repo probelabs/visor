@@ -211,7 +211,7 @@ describe('Config Extends Functionality', () => {
             on: ['pr_opened', 'pr_updated'],
           },
           performance: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm run perf',
             on: ['pr_opened'],
           },
@@ -464,7 +464,7 @@ describe('Config Extends Functionality', () => {
         extends: './base.yaml',
         checks: {
           child: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm test',
             on: ['pr_opened'],
           },
@@ -514,7 +514,7 @@ describe('Config Extends Functionality', () => {
         ai_provider: 'openai',
         checks: {
           performance: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm run perf',
             on: ['pr_opened'],
           },
@@ -949,7 +949,7 @@ describe('Config Extends Functionality', () => {
         ai_model: 'gpt-4',
         checks: {
           middle: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm test',
             on: ['pr_opened'],
           },
@@ -1038,7 +1038,7 @@ describe('Config Extends Functionality', () => {
         extends: ['./local.yaml', 'https://example.com/remote.yaml'],
         checks: {
           child: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm test',
             on: ['pr_opened'],
           },
@@ -1099,7 +1099,7 @@ describe('Config Extends Functionality', () => {
         extends: '../parent.yaml',
         checks: {
           child: {
-            type: 'tool',
+            type: 'command',
             exec: 'npm test',
             on: ['pr_opened'],
           },
@@ -1516,7 +1516,7 @@ describe('Config Extends Functionality', () => {
             group: 'security',
           },
           style: {
-            type: 'tool',
+            type: 'command',
             exec: 'eslint --format json',
             on: ['pr_opened'],
             group: 'quality',
@@ -1699,7 +1699,7 @@ describe('Config Extends Functionality', () => {
         extends: path.join(testConfigDir, 'absolute-parent.yaml'), // Absolute path
         checks: {
           child: {
-            type: 'tool',
+            type: 'command',
             exec: 'echo test',
             on: ['pr_opened'],
           },
@@ -1754,7 +1754,7 @@ describe('Config Extends Functionality', () => {
         extends: '../root-config.yaml',
         checks: {
           level1: {
-            type: 'tool',
+            type: 'command',
             exec: 'echo level1',
             on: ['pr_opened'],
           },
@@ -1822,7 +1822,7 @@ describe('Config Extends Functionality', () => {
         version: '1.0',
         checks: {
           config2: {
-            type: 'tool',
+            type: 'command',
             exec: 'echo config2',
             on: ['pr_opened'],
           },

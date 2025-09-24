@@ -188,7 +188,7 @@ checks:
 
   # Hourly monitoring check (business hours only)
   business-hours-monitor:
-    type: tool
+    type: command
     schedule: "0 9-17 * * 1-5"  # Every hour 9 AM - 5 PM, Monday-Friday
     exec: "curl -s https://api.example.com/health"
     group: monitoring

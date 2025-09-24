@@ -9,7 +9,7 @@ extends:
 checks:
   # Re-enable style check that was disabled in team config
   style:
-    type: tool
+    type: command
     exec: npm run lint
     on: [pr_opened]
     group: formatting
@@ -31,7 +31,7 @@ checks:
 
   # Project-specific integration tests
   integration:
-    type: tool
+    type: command
     exec: npm run test:integration
     on: [pr_opened]
     depends_on: [tests]

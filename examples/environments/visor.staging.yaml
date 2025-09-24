@@ -27,7 +27,7 @@ fail_fast: false  # Run all checks to get full picture
 # Add staging-specific check
 checks:
   staging-integration:
-    type: tool
+    type: command
     group: staging
     exec: "npm run test:staging"
     tags: ["staging", "integration"]
