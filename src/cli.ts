@@ -47,6 +47,8 @@ export class CLI {
       .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
       .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
+      .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
+      .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -105,6 +107,8 @@ export class CLI {
           '--allowed-remote-patterns <patterns>',
           'Comma-separated list of allowed URL prefixes for remote config extends (e.g., "https://github.com/,https://raw.githubusercontent.com/")'
         )
+        .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
+        .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -143,6 +147,14 @@ export class CLI {
         excludeTags = options.excludeTags.split(',').map((t: string) => t.trim());
       }
 
+      // Determine code context mode
+      let codeContext: 'auto' | 'enabled' | 'disabled' = 'auto';
+      if (options.enableCodeContext) {
+        codeContext = 'enabled';
+      } else if (options.disableCodeContext) {
+        codeContext = 'disabled';
+      }
+
       return {
         checks: uniqueChecks,
         output: options.output as OutputFormat,
@@ -156,6 +168,7 @@ export class CLI {
         allowedRemotePatterns,
         help: options.help,
         version: options.version,
+        codeContext,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -253,6 +266,10 @@ export class CLI {
       )
       .option('--debug', 'Enable debug mode for detailed output')
       .option('--fail-fast', 'Stop execution on first failure condition')
+      .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
+      .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
+      .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
+      .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

@@ -4,7 +4,6 @@ import { CLI } from './cli';
 import { ConfigManager } from './config';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
-import { PRInfo } from './pr-analyzer';
 import { CheckResult } from './reviewer';
 
 /**
@@ -54,11 +53,6 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
-    // Get repository info using GitRepositoryAnalyzer
-    const { GitRepositoryAnalyzer } = await import('./git-repository-analyzer');
-    const analyzer = new GitRepositoryAnalyzer(process.cwd());
-    const repositoryInfo = await analyzer.analyzeRepository();
-
     // Determine checks to run and validate check types early
     const checksToRun =
       options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
@@ -71,14 +65,61 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Check if we're in a git repository and handle error early
-    if (!repositoryInfo.isGitRepository) {
-      console.error('❌ Error: Not a git repository or no changes found');
+    // Use stderr for status messages when outputting formatted results to stdout
+    const logFn = console.error;
+
+    // Determine if we should include code context (diffs)
+    // In CLI mode (local), we do smart detection. PR mode always includes context.
+    const isPRContext = false; // This is CLI mode, not GitHub Action
+    let includeCodeContext = false;
+
+    if (isPRContext) {
+      // ALWAYS include full context in PR/GitHub Action mode
+      includeCodeContext = true;
+      logFn('📝 Code context: ENABLED (PR context - always included)');
+    } else if (options.codeContext === 'enabled') {
+      includeCodeContext = true;
+      logFn('📝 Code context: ENABLED (forced by --enable-code-context)');
+    } else if (options.codeContext === 'disabled') {
+      includeCodeContext = false;
+      logFn('📝 Code context: DISABLED (forced by --disable-code-context)');
+    } else {
+      // Auto-detect based on schemas (CLI mode only)
+      const hasCodeReviewSchema = checksToRun.some(
+        check => config.checks?.[check]?.schema === 'code-review'
+      );
+      includeCodeContext = hasCodeReviewSchema;
+      if (hasCodeReviewSchema) {
+        logFn('📝 Code context: ENABLED (code-review schema detected in local mode)');
+      } else {
+        logFn('📝 Code context: DISABLED (no code-review schema found in local mode)');
+      }
+    }
+
+    // Get repository info using GitRepositoryAnalyzer
+    const { GitRepositoryAnalyzer } = await import('./git-repository-analyzer');
+    const analyzer = new GitRepositoryAnalyzer(process.cwd());
+
+    let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
+    try {
+      repositoryInfo = await analyzer.analyzeRepository(includeCodeContext);
+    } catch (error) {
+      console.error('❌ Error analyzing git repository:', error);
+      console.error('💡 Make sure you are in a git repository or initialize one with "git init"');
       process.exit(1);
     }
 
-    // Use stderr for status messages when outputting formatted results to stdout
-    const logFn = console.error;
+    // Check if we're in a git repository
+    if (!repositoryInfo.isGitRepository) {
+      console.error('❌ Error: Not a git repository. Run "git init" to initialize a repository.');
+      process.exit(1);
+    }
+
+    // Check if there are any changes to analyze
+    if (repositoryInfo.files.length === 0) {
+      console.error('❌ Error: No changes to analyze. Make some file changes first.');
+      process.exit(1);
+    }
 
     logFn('🔍 Visor - AI-powered code review tool');
     logFn(`Configuration version: ${config.version}`);
@@ -108,9 +149,15 @@ export async function main(): Promise<void> {
           }
         : undefined;
 
-    // Execute checks with proper parameters (cast to PRInfo)
+    // Convert repository info to PRInfo format
+    const prInfo = analyzer.toPRInfo(repositoryInfo, includeCodeContext);
+
+    // Store the includeCodeContext flag in prInfo for downstream use
+    (prInfo as any).includeCodeContext = includeCodeContext;
+
+    // Execute checks with proper parameters
     const groupedResults = await engine.executeGroupedChecks(
-      repositoryInfo as unknown as PRInfo,
+      prInfo,
       checksToRun,
       options.timeout,
       config,

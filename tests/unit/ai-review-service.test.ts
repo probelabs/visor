@@ -393,4 +393,92 @@ describe('AIReviewService', () => {
       expect((service as any).config.timeout).toBe(5000);
     });
   });
+
+  describe('Code Context Handling', () => {
+    let service: AIReviewService;
+    let mockPRInfo: PRInfo;
+
+    beforeEach(() => {
+      service = new AIReviewService({ provider: 'mock' });
+      mockPRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature-branch',
+        files: [
+          {
+            filename: 'test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            status: 'modified',
+            patch: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new',
+          },
+        ],
+        totalAdditions: 10,
+        totalDeletions: 5,
+        fullDiff: '--- test.ts\n--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new',
+      };
+    });
+
+    it('should include diffs when includeCodeContext is true', () => {
+      (mockPRInfo as any).includeCodeContext = true;
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).toContain('<full_diff>');
+      expect(context).toContain('--- test.ts');
+      expect(context).not.toContain('Code diffs excluded');
+    });
+
+    it('should exclude diffs when includeCodeContext is false', () => {
+      (mockPRInfo as any).includeCodeContext = false;
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).not.toContain('<full_diff>');
+      expect(context).not.toContain('--- test.ts');
+      expect(context).toContain('Code diffs excluded to reduce token usage');
+    });
+
+    it('should always include diffs when isPRContext is true', () => {
+      (mockPRInfo as any).includeCodeContext = false;
+      (mockPRInfo as any).isPRContext = true;
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      // Even though includeCodeContext is false, PR context should include diffs
+      expect(context).toContain('<full_diff>');
+      expect(context).toContain('--- test.ts');
+    });
+
+    it('should include diffs by default when no flags are set', () => {
+      // No includeCodeContext flag set - should default to true
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).toContain('<full_diff>');
+      expect(context).toContain('--- test.ts');
+    });
+
+    it('should handle incremental diff when available', () => {
+      (mockPRInfo as any).includeCodeContext = true;
+      (mockPRInfo as any).isIncremental = true;
+      (mockPRInfo as any).commitDiff =
+        '--- a/test.ts\n+++ b/test.ts\n@@ -2 +2 @@\n-line2\n+line2-modified';
+
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).toContain('<commit_diff>');
+      expect(context).toContain('line2-modified');
+    });
+
+    it('should always include files_summary regardless of includeCodeContext', () => {
+      (mockPRInfo as any).includeCodeContext = false;
+      const context = (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).toContain('<files_summary>');
+      expect(context).toContain('<filename>test.ts</filename>');
+      expect(context).toContain('<additions>10</additions>');
+      expect(context).toContain('<deletions>5</deletions>');
+    });
+  });
 });

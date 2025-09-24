@@ -14,6 +14,7 @@ jest.mock('simple-git', () => {
       log: jest.fn(),
       diff: jest.fn(),
       getRemotes: jest.fn(),
+      raw: jest.fn(),
     })),
   };
 });
@@ -25,6 +26,7 @@ interface MockGit {
   log: jest.Mock;
   diff: jest.Mock;
   getRemotes: jest.Mock;
+  raw: jest.Mock;
 }
 
 describe('GitRepositoryAnalyzer', () => {
@@ -45,6 +47,7 @@ describe('GitRepositoryAnalyzer', () => {
       log: jest.fn(),
       diff: jest.fn(),
       getRemotes: jest.fn(),
+      raw: jest.fn(),
     };
 
     simpleGit.mockReturnValue(mockGit);
@@ -122,6 +125,49 @@ describe('GitRepositoryAnalyzer', () => {
       expect(result.isGitRepository).toBe(false);
       expect(result.files.length).toBe(0);
       expect(result.files).toHaveLength(0);
+    });
+
+    it('should handle repository with no commits but with uncommitted files', async () => {
+      mockGit.checkIsRepo.mockResolvedValue(true);
+      mockGit.status.mockResolvedValue({
+        files: [
+          {
+            path: 'new-file.ts',
+            index: 'A',
+            working_dir: ' ',
+          },
+        ],
+        created: ['new-file.ts'],
+        deleted: [],
+        modified: [],
+        renamed: [],
+        staged: ['new-file.ts'],
+        not_added: [],
+        conflicted: [],
+      });
+      mockGit.branch.mockResolvedValue({
+        current: 'main',
+        all: ['main'],
+      });
+      // Simulate no commits yet
+      mockGit.log.mockRejectedValue(
+        new Error("your current branch 'main' does not have any commits yet")
+      );
+      // Mock git config for author
+      mockGit.raw = jest
+        .fn()
+        .mockResolvedValueOnce('John Doe\n') // user.name
+        .mockResolvedValueOnce('john@example.com\n'); // user.email
+
+      const testFile = path.join(tempDir, 'new-file.ts');
+      fs.writeFileSync(testFile, 'console.log("test");\n');
+
+      const result = await gitAnalyzer.analyzeRepository();
+
+      expect(result.isGitRepository).toBe(true);
+      expect(result.author).toBe('John Doe');
+      expect(result.files.length).toBe(1);
+      expect(result.files[0].filename).toBe('new-file.ts');
     });
 
     it('should handle repository with no changes', async () => {
@@ -501,6 +547,127 @@ describe('GitRepositoryAnalyzer', () => {
       expect(result.totalAdditions).toBeGreaterThan(0);
       // Should complete within reasonable time (less than 5 seconds for file I/O)
       expect(executionTime).toBeLessThan(5000);
+    });
+  });
+
+  describe('includeContext parameter', () => {
+    it('should include patches when includeContext is true', async () => {
+      mockGit.checkIsRepo.mockResolvedValue(true);
+      mockGit.status.mockResolvedValue({
+        files: [
+          {
+            path: 'test.ts',
+            index: 'M',
+            working_dir: ' ',
+          },
+        ],
+        created: [],
+        deleted: [],
+        modified: ['test.ts'],
+        renamed: [],
+        staged: ['test.ts'],
+        not_added: [],
+        conflicted: [],
+      });
+      mockGit.branch.mockResolvedValue({
+        current: 'main',
+        all: ['main'],
+      });
+      mockGit.log.mockResolvedValue({
+        latest: {
+          message: 'Test commit',
+          author_name: 'Test User',
+          author_email: 'test@example.com',
+          date: '2023-01-01',
+        },
+      });
+      mockGit.diff.mockResolvedValue('--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new');
+
+      const testFile = path.join(tempDir, 'test.ts');
+      fs.writeFileSync(testFile, 'new\n');
+
+      const result = await gitAnalyzer.analyzeRepository(true);
+      const prInfo = gitAnalyzer.toPRInfo(result, true);
+
+      expect(result.files[0].patch).toBeDefined();
+      expect(prInfo.files[0].patch).toBeDefined();
+      expect(prInfo.fullDiff).toBeDefined();
+      expect(prInfo.fullDiff).toContain('test.ts');
+    });
+
+    it('should exclude patches when includeContext is false', async () => {
+      mockGit.checkIsRepo.mockResolvedValue(true);
+      mockGit.status.mockResolvedValue({
+        files: [
+          {
+            path: 'test.ts',
+            index: 'M',
+            working_dir: ' ',
+          },
+        ],
+        created: [],
+        deleted: [],
+        modified: ['test.ts'],
+        renamed: [],
+        staged: ['test.ts'],
+        not_added: [],
+        conflicted: [],
+      });
+      mockGit.branch.mockResolvedValue({
+        current: 'main',
+        all: ['main'],
+      });
+      mockGit.log.mockResolvedValue({
+        latest: {
+          message: 'Test commit',
+          author_name: 'Test User',
+          author_email: 'test@example.com',
+          date: '2023-01-01',
+        },
+      });
+      mockGit.diff.mockResolvedValue('--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new');
+
+      const testFile = path.join(tempDir, 'test.ts');
+      fs.writeFileSync(testFile, 'new\n');
+
+      const result = await gitAnalyzer.analyzeRepository(false);
+      const prInfo = gitAnalyzer.toPRInfo(result, false);
+
+      expect(result.files[0].patch).toBeUndefined();
+      expect(prInfo.files[0].patch).toBeUndefined();
+      expect(prInfo.fullDiff).toBeUndefined();
+    });
+
+    it('should handle repository with no commits and get git config user', async () => {
+      mockGit.checkIsRepo.mockResolvedValue(true);
+      mockGit.status.mockResolvedValue({
+        files: [],
+        created: [],
+        deleted: [],
+        modified: [],
+        renamed: [],
+        staged: [],
+        not_added: [],
+        conflicted: [],
+      });
+      mockGit.branch.mockResolvedValue({
+        current: 'main',
+        all: ['main'],
+      });
+      // Simulate no commits yet
+      mockGit.log.mockRejectedValue(
+        new Error("your current branch 'main' does not have any commits yet")
+      );
+      // Mock git config - only email available
+      mockGit.raw = jest
+        .fn()
+        .mockResolvedValueOnce(null) // no user.name
+        .mockResolvedValueOnce('jane@example.com\n'); // user.email
+
+      const result = await gitAnalyzer.analyzeRepository();
+
+      expect(result.isGitRepository).toBe(true);
+      expect(result.author).toBe('jane@example.com');
     });
   });
 });
