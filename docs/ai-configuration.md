@@ -9,6 +9,7 @@ Visor supports multiple AI providers. Configure one via environment variables.
 | Google Gemini | `GOOGLE_API_KEY` | `gemini-2.0-flash-exp`, `gemini-1.5-pro` |
 | Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-3-opus`, `claude-3-sonnet` |
 | OpenAI GPT | `OPENAI_API_KEY` | `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo` |
+| AWS Bedrock | AWS credentials (see below) | `anthropic.claude-sonnet-4-20250514-v1:0` (default) |
 
 ### GitHub Actions Setup
 Add the provider key as a secret (Settings → Secrets → Actions), then expose it:
@@ -20,13 +21,142 @@ steps:
     env:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+      # For AWS Bedrock:
+      # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # AWS_REGION: us-east-1
 ```
 
 ### Local Development
 
 ```bash
-export GOOGLE_API_KEY="your-api-key"   # or ANTHROPIC/OPENAI
+# Google Gemini
+export GOOGLE_API_KEY="your-api-key"
 export MODEL_NAME="gemini-2.0-flash-exp"
+
+# AWS Bedrock
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-east-1"
+# Optional: Use specific model
+export MODEL_NAME="anthropic.claude-sonnet-4-20250514-v1:0"
+```
+
+### AWS Bedrock Configuration
+
+Bedrock supports multiple authentication methods:
+
+1. **IAM Credentials** (recommended):
+   ```bash
+   export AWS_ACCESS_KEY_ID="your-access-key"
+   export AWS_SECRET_ACCESS_KEY="your-secret-key"
+   export AWS_REGION="us-east-1"
+   ```
+
+2. **Temporary Session Credentials**:
+   ```bash
+   export AWS_ACCESS_KEY_ID="your-access-key"
+   export AWS_SECRET_ACCESS_KEY="your-secret-key"
+   export AWS_SESSION_TOKEN="your-session-token"
+   export AWS_REGION="us-east-1"
+   ```
+
+3. **API Key Authentication** (if configured):
+   ```bash
+   export AWS_BEDROCK_API_KEY="your-api-key"
+   export AWS_BEDROCK_BASE_URL="https://your-custom-endpoint.com"  # Optional
+   ```
+
+To force Bedrock provider:
+```bash
+export FORCE_PROVIDER=bedrock
+```
+
+### YAML Configuration
+
+#### Global Provider Settings
+
+Configure a default AI provider in `.visor.yaml`:
+
+```yaml
+# Global configuration for all checks
+ai_provider: bedrock  # or google, anthropic, openai
+ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Optional, uses default if not specified
+
+checks:
+  security-review:
+    type: ai
+    prompt: "Analyze code for security vulnerabilities"
+```
+
+#### Per-Check Provider Configuration
+
+Override the provider for specific checks:
+
+```yaml
+# Use different providers for different checks
+checks:
+  security-review:
+    type: ai
+    ai_provider: bedrock
+    ai_model: anthropic.claude-sonnet-4-20250514-v1:0
+    prompt: "Analyze code for security vulnerabilities using AWS Bedrock"
+
+  performance-review:
+    type: ai
+    ai_provider: google
+    ai_model: gemini-2.0-flash-exp
+    prompt: "Analyze code for performance issues using Gemini"
+
+  style-review:
+    type: ai
+    ai:
+      provider: openai
+      model: gpt-4-turbo
+    prompt: "Review code style and best practices"
+```
+
+#### AWS Bedrock Specific Configuration
+
+Complete example for Bedrock with all options:
+
+```yaml
+version: "1.0"
+
+# Global Bedrock settings
+ai_provider: bedrock
+ai_model: anthropic.claude-sonnet-4-20250514-v1:0
+
+# Environment variables can be referenced
+env:
+  AWS_REGION: us-east-1
+  # AWS credentials should be set as environment variables, not in config
+
+checks:
+  comprehensive-review:
+    type: ai
+    ai_provider: bedrock
+    prompt: |
+      Perform a comprehensive code review including:
+      - Security vulnerabilities
+      - Performance optimizations
+      - Code quality and best practices
+      - Architectural concerns
+    schema: code-review  # Use structured output format
+
+  custom-bedrock-model:
+    type: ai
+    ai:
+      provider: bedrock
+      model: anthropic.claude-3-opus-20240229  # Use a different Bedrock model
+      timeout: 120000  # 2 minute timeout for complex analysis
+    prompt: "Perform deep architectural analysis"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
 ```
 
 ### Fallback Behavior

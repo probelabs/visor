@@ -120,7 +120,7 @@ Visor is a general SDLC automation framework:
 - Config‑first: One `.visor.yaml` defines checks, prompts, schemas, and templates — no hidden logic.
 - Structured outputs: JSON Schema validation drives deterministic rendering, annotations, and SARIF.
 - Orchestrated pipelines: Dependencies, parallelism, and tag‑based profiles; run in Actions or any CI.
-- Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI — plus MCP tools and Claude Code SDK.
+- Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI, AWS Bedrock — plus MCP tools and Claude Code SDK.
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
 - Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `claude-code` — or add your own.
@@ -249,13 +249,17 @@ Learn more: [docs/observability.md](docs/observability.md)
 
 ## 🤖 AI Configuration
 
-Set one provider key (Google/Anthropic/OpenAI) via env.
+Set one provider key (Google/Anthropic/OpenAI/AWS Bedrock) via env.
 
 Example (Action):
 ```yaml
 - uses: probelabs/visor@v1
   env:
     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    # Or for AWS Bedrock:
+    # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    # AWS_REGION: us-east-1
 ```
 
 Learn more: [docs/ai-configuration.md](docs/ai-configuration.md)

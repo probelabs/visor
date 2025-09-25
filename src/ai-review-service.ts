@@ -16,10 +16,10 @@ function log(...args: unknown[]): void {
 }
 
 export interface AIReviewConfig {
-  apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or CLAUDE_CODE_API_KEY
+  apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_API_KEY, or AWS credentials
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 600000ms (10 minutes)
-  provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code';
+  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
   tools?: Array<{ name: string; [key: string]: unknown }>; // MCP tools from servers
 }
@@ -110,6 +110,16 @@ export class AIReviewService {
       } else if (process.env.OPENAI_API_KEY) {
         this.config.apiKey = process.env.OPENAI_API_KEY;
         this.config.provider = 'openai';
+      } else if (
+        // Check for AWS Bedrock credentials
+        (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+        process.env.AWS_BEDROCK_API_KEY
+      ) {
+        // For Bedrock, we don't set apiKey as it uses AWS credentials
+        // ProbeAgent will handle the authentication internally
+        this.config.provider = 'bedrock';
+        // Set a placeholder to pass validation
+        this.config.apiKey = 'AWS_CREDENTIALS';
       }
     }
 
@@ -165,7 +175,7 @@ export class AIReviewService {
       // Check if API key is available for real AI models
       if (!this.config.apiKey) {
         const errorMessage =
-          'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.';
+          'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).';
 
         // In debug mode, return a review with the error captured
         if (debugInfo) {
@@ -840,6 +850,10 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         process.env.ANTHROPIC_API_KEY = this.config.apiKey;
       } else if (this.config.provider === 'openai' && this.config.apiKey) {
         process.env.OPENAI_API_KEY = this.config.apiKey;
+      } else if (this.config.provider === 'bedrock') {
+        // For Bedrock, ProbeAgent will use AWS credentials from environment
+        // No need to set apiKey as it uses AWS SDK authentication
+        // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
       const options: ProbeAgentOptions = {
         sessionId: sessionId,
@@ -851,8 +865,13 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Add provider-specific options if configured
       if (this.config.provider) {
         // Map claude-code to anthropic for ProbeAgent compatibility
+        // Map bedrock to anthropic temporarily until ProbeAgent adds bedrock type
         options.provider =
-          this.config.provider === 'claude-code' ? 'anthropic' : this.config.provider;
+          this.config.provider === 'claude-code'
+            ? 'anthropic'
+            : this.config.provider === 'bedrock'
+              ? ('anthropic' as any)
+              : (this.config.provider as any);
       }
       if (this.config.model) {
         options.model = this.config.model;
@@ -1343,6 +1362,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
     if (process.env.OPENAI_API_KEY && this.config.provider === 'openai') {
       return 'OPENAI_API_KEY';
+    }
+    if (this.config.provider === 'bedrock') {
+      if (process.env.AWS_BEDROCK_API_KEY) {
+        return 'AWS_BEDROCK_API_KEY';
+      }
+      if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+        return 'AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY';
+      }
     }
     return 'unknown';
   }

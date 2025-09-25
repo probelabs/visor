@@ -228,7 +228,7 @@ export interface EnvConfig {
  */
 export interface AIProviderConfig {
   /** AI provider to use */
-  provider?: 'google' | 'anthropic' | 'openai' | 'mock';
+  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
   /** Model name to use */
   model?: string;
   /** API key (usually from environment variables) */
@@ -319,7 +319,7 @@ export interface CheckConfig {
   /** AI model to use for this check - overrides global setting */
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | string;
   /** MCP servers for this AI check - overrides global setting */
   ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Claude Code configuration (for claude-code type checks) */
@@ -513,7 +513,7 @@ export interface VisorConfig {
   /** Global AI model setting */
   ai_model?: string;
   /** Global AI provider setting */
-  ai_provider?: 'google' | 'anthropic' | 'openai' | 'mock' | 'claude-code' | string;
+  ai_provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code' | string;
   /** Global MCP servers configuration for AI checks */
   ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Maximum number of checks to run in parallel (default: 3) */
