@@ -92,9 +92,13 @@ export class CommandCheckProvider extends CheckProvider {
       const { promisify } = await import('util');
       const execAsync = promisify(exec);
 
+      // Get timeout from config (in seconds) or use default (60 seconds)
+      const timeoutSeconds = (config.timeout as number) || 60;
+      const timeoutMs = timeoutSeconds * 1000;
+
       const { stdout, stderr } = await execAsync(renderedCommand, {
         env: scriptEnv,
-        timeout: 60000, // 60 second timeout
+        timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
 
@@ -206,7 +210,18 @@ export class CommandCheckProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['type', 'exec', 'transform', 'env', 'depends_on', 'on', 'if', 'group', 'forEach'];
+    return [
+      'type',
+      'exec',
+      'transform',
+      'env',
+      'timeout',
+      'depends_on',
+      'on',
+      'if',
+      'group',
+      'forEach',
+    ];
   }
 
   async isAvailable(): Promise<boolean> {

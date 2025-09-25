@@ -366,7 +366,8 @@ Learn more: [docs/http.md](docs/http.md)
 
 Mix providers (`ai`, `http`, `http_client`, `log`, `command`, `claude-code`) or add your own.
 
-Learn more: [docs/pluggable.md](docs/pluggable.md)
+- **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
+- **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)
 
 ## 🎯 GitHub Action Reference
 
