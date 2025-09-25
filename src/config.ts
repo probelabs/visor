@@ -372,10 +372,7 @@ export class ConfigManager {
         if (!checkConfig.type) {
           checkConfig.type = 'ai';
         }
-        // Default 'on' to ['manual'] if not specified
-        if (!checkConfig.on) {
-          checkConfig.on = ['manual'];
-        }
+        // 'on' field is optional - if not specified, check can run on any event
         this.validateCheckConfig(checkName, checkConfig, errors);
       }
     }
@@ -500,20 +497,23 @@ export class ConfigManager {
       }
     }
 
-    if (!checkConfig.on || !Array.isArray(checkConfig.on)) {
-      errors.push({
-        field: `checks.${checkName}.on`,
-        message: `Invalid check configuration for "${checkName}": missing or invalid 'on' field`,
-      });
-    } else {
-      // Validate event triggers
-      for (const event of checkConfig.on) {
-        if (!this.validEventTriggers.includes(event)) {
-          errors.push({
-            field: `checks.${checkName}.on`,
-            message: `Invalid event "${event}". Must be one of: ${this.validEventTriggers.join(', ')}`,
-            value: event,
-          });
+    // 'on' field is optional - if not specified, check can be triggered by any event
+    if (checkConfig.on) {
+      if (!Array.isArray(checkConfig.on)) {
+        errors.push({
+          field: `checks.${checkName}.on`,
+          message: `Invalid check configuration for "${checkName}": 'on' field must be an array`,
+        });
+      } else {
+        // Validate event triggers
+        for (const event of checkConfig.on) {
+          if (!this.validEventTriggers.includes(event)) {
+            errors.push({
+              field: `checks.${checkName}.on`,
+              message: `Invalid event "${event}". Must be one of: ${this.validEventTriggers.join(', ')}`,
+              value: event,
+            });
+          }
         }
       }
     }

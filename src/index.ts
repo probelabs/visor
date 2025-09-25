@@ -315,8 +315,8 @@ async function handleEvent(
   const eventChecks: string[] = [];
   for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
     // Check if this check should run for this event
-    const checkEvents = checkConfig.on || ['pr_opened', 'pr_updated'];
-    if (checkEvents.includes(eventType)) {
+    // If 'on' is not specified, the check can run on any event
+    if (!checkConfig.on || checkConfig.on.includes(eventType)) {
       eventChecks.push(checkName);
     }
   }
@@ -780,13 +780,16 @@ async function handleIssueComment(
         const filteredCheckIds = checkIds.filter(checkId => {
           if (!config?.checks?.[checkId]) return false;
           const checkConfig = config.checks[checkId];
-          const checkEvents = checkConfig.on || ['pr_opened', 'pr_updated'];
+          // If 'on' is not specified, the check can run on any event
+          if (!checkConfig.on) {
+            return true;
+          }
           // For issue comments, only run checks that are configured for issue_comment events
           if (!isPullRequest) {
-            return checkEvents.includes('issue_comment');
+            return checkConfig.on.includes('issue_comment');
           }
           // For PR comments, run checks configured for PR events or issue_comment
-          return checkEvents.includes('pr_updated') || checkEvents.includes('issue_comment');
+          return checkConfig.on.includes('pr_updated') || checkConfig.on.includes('issue_comment');
         });
 
         if (filteredCheckIds.length === 0) {
