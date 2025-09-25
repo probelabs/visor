@@ -17,6 +17,31 @@ checks:
       timeout: 60000
       debug: false
 
+  # Performance check for CI testing - no 'on' field to test optional behavior
+  performance:
+    type: ai
+    group: test
+    schema: plain
+    prompt: "This is a mock performance analysis for CI testing. No real analysis is performed."
+    ai:
+      provider: mock
+      model: mock
+      timeout: 60000
+      debug: false
+
+  # Style check for CI testing
+  style:
+    type: ai
+    group: test
+    schema: plain
+    prompt: "This is a mock style analysis for CI testing. No real analysis is performed."
+    on: [manual]
+    ai:
+      provider: mock
+      model: mock
+      timeout: 60000
+      debug: false
+
 output:
   pr_comment:
     enabled: false  # Disable PR comments during CI testing

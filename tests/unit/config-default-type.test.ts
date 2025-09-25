@@ -149,14 +149,14 @@ describe('Default Check Type Behavior', () => {
     expect(loadedConfig.checks['simple-check'].prompt).toBe('Just a simple prompt');
   });
 
-  it('should default to ["manual"] when on is not specified', async () => {
+  it('should keep on field undefined when not specified', async () => {
     const config: Partial<VisorConfig> = {
       version: '1.0',
       checks: {
         'test-check': {
           type: 'ai',
           prompt: 'Test prompt',
-          // No 'on' specified - should default to ['manual']
+          // No 'on' specified - remains undefined (can run on any event)
         } as CheckConfig,
         'another-check': {
           type: 'command',
@@ -172,8 +172,8 @@ describe('Default Check Type Behavior', () => {
     const configManager = new ConfigManager();
     const loadedConfig = await configManager.loadConfig(configPath);
 
-    // Check that the on field defaulted to ['manual']
-    expect(loadedConfig.checks['test-check'].on).toEqual(['manual']);
+    // Check that the on field is undefined (not defaulted)
+    expect(loadedConfig.checks['test-check'].on).toBeUndefined();
     // Check that explicitly set on is preserved
     expect(loadedConfig.checks['another-check'].on).toEqual(['pr_opened']);
   });
@@ -184,7 +184,7 @@ describe('Default Check Type Behavior', () => {
       checks: {
         'minimal-check': {
           // No type specified - should default to 'ai'
-          // No on specified - should default to ['manual']
+          // No on specified - remains undefined (can run on any event)
           prompt: 'Minimal check prompt',
         } as CheckConfig,
       },
@@ -196,9 +196,9 @@ describe('Default Check Type Behavior', () => {
     const configManager = new ConfigManager();
     const loadedConfig = await configManager.loadConfig(configPath);
 
-    // Check that both defaults are applied
+    // Check that type defaults to 'ai' but 'on' remains undefined
     expect(loadedConfig.checks['minimal-check'].type).toBe('ai');
-    expect(loadedConfig.checks['minimal-check'].on).toEqual(['manual']);
+    expect(loadedConfig.checks['minimal-check'].on).toBeUndefined();
     expect(loadedConfig.checks['minimal-check'].prompt).toBe('Minimal check prompt');
   });
 

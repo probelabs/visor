@@ -37,6 +37,12 @@ jobs:
           echo "Testing Visor CLI version..."
           ./dist/index.js --cli --version
       
+      - name: 🧪 Create test changes for analysis
+        run: |
+          echo "Creating dummy changes for CLI tests..."
+          echo "test content for CI" > test-file.txt
+          git add test-file.txt
+
       - name: 🧪 Test JSON Output
         run: |
           echo "Testing JSON output format..."
@@ -44,7 +50,7 @@ jobs:
             echo "JSON output test failed"
             exit 1
           }
-      
+
       - name: 🧪 Test SARIF Output
         run: |
           echo "Testing SARIF output format..."
@@ -88,6 +94,12 @@ jobs:
             sample-report.txt
           retention-days: 7
       
+      - name: 🧹 Clean up test files
+        run: |
+          echo "Cleaning up test files..."
+          git reset HEAD test-file.txt 2>/dev/null || true
+          rm -f test-file.txt
+
       - name: ✅ Verify Configuration
         run: |
           echo "Verifying configuration..."

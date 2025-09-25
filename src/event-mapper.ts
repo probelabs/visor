@@ -184,9 +184,9 @@ export class EventMapper {
     eventTrigger: EventTrigger,
     fileContext?: FileChangeContext
   ): boolean {
-    // Check if event trigger matches (default to ['manual'] if not specified)
-    const triggers = checkConfig.on || ['manual'];
-    if (!triggers.includes(eventTrigger)) {
+    // Check if event trigger matches
+    // If 'on' is not specified, the check can run on any event
+    if (checkConfig.on && !checkConfig.on.includes(eventTrigger)) {
       return false;
     }
 
@@ -341,8 +341,8 @@ export class EventMapper {
 
     // Check if any configured checks match this event
     return Object.values(this.config.checks || {}).some(checkConfig => {
-      const triggers = checkConfig.on || ['manual'];
-      return triggers.includes(eventTrigger);
+      // If 'on' is not specified, the check can run on any event
+      return !checkConfig.on || checkConfig.on.includes(eventTrigger);
     });
   }
 
