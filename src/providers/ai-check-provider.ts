@@ -614,7 +614,7 @@ export class AICheckProvider extends CheckProvider {
     const service = new AIReviewService(aiConfig);
 
     // Pass the custom prompt and schema - no fallbacks
-    const schema = config.schema as string | undefined;
+    const schema = config.schema as string | Record<string, unknown> | undefined;
 
     // Only output debug messages if debug mode is enabled
     if (aiConfig.debug) {

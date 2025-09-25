@@ -893,7 +893,9 @@ export class CheckExecutionEngine {
     });
 
     // Determine template to use
-    const schema = checkConfig.schema || 'plain';
+    // If schema is an object (inline JSON schema), use 'plain' rendering
+    const schemaName =
+      typeof checkConfig.schema === 'object' ? 'plain' : checkConfig.schema || 'plain';
     let templateContent: string;
 
     if (checkConfig.template) {
@@ -907,12 +909,12 @@ export class CheckExecutionEngine {
       } else {
         throw new Error('Custom template must specify either "file" or "content"');
       }
-    } else if (schema === 'plain') {
+    } else if (schemaName === 'plain') {
       // Plain schema - return raw content directly
       return reviewSummary.issues?.[0]?.message || '';
     } else {
       // Use built-in schema template
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, '');
+      const sanitizedSchema = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
       if (!sanitizedSchema) {
         throw new Error('Invalid schema name');
       }
@@ -1268,7 +1270,7 @@ export class CheckExecutionEngine {
             ...issue,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
-            schema: checkConfig.schema,
+            schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
             template: checkConfig.template,
             timestamp: Date.now(),
           }));
@@ -1529,7 +1531,7 @@ export class CheckExecutionEngine {
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
           group: checkConfig.group,
-          schema: checkConfig.schema,
+          schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
           template: checkConfig.template,
           timestamp: Date.now(),
         }));
@@ -1625,7 +1627,7 @@ export class CheckExecutionEngine {
       ...issue,
       ruleId: `${checkName}/${issue.ruleId}`,
       group: checkConfig.group,
-      schema: checkConfig.schema,
+      schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
       timestamp: Date.now(),
     }));
 
@@ -2159,7 +2161,8 @@ export class CheckExecutionEngine {
     }
 
     const checkConfig = config.checks[checkName];
-    const checkSchema = checkConfig?.schema || '';
+    const checkSchema =
+      typeof checkConfig?.schema === 'object' ? 'custom' : checkConfig?.schema || '';
     const checkGroup = checkConfig?.group || '';
 
     // Handle new simple fail_if syntax

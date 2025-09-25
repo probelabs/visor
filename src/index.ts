@@ -1337,7 +1337,9 @@ async function completeIndividualChecks(
       if (effectiveFailIf) {
         const failed = await failureEvaluator.evaluateSimpleCondition(
           checkName,
-          config?.checks?.[checkName]?.schema || 'plain',
+          typeof config?.checks?.[checkName]?.schema === 'object'
+            ? 'custom'
+            : config?.checks?.[checkName]?.schema || 'plain',
           config?.checks?.[checkName]?.group || 'default',
           checkReviewSummary,
           effectiveFailIf
