@@ -8,11 +8,6 @@ version: "1.0"
 ai_provider: bedrock
 ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Default Bedrock model
 
-# Environment variables for AWS authentication
-# These should be set in your environment or CI/CD secrets
-env:
-  AWS_REGION: us-east-1  # Specify your AWS region
-
 checks:
   # Basic check using global Bedrock settings
   security-analysis:
