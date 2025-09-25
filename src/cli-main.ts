@@ -40,14 +40,39 @@ export async function main(): Promise<void> {
     if (options.configPath) {
       try {
         config = await configManager.loadConfig(options.configPath);
-      } catch {
-        console.error(`⚠️ Warning: Configuration file not found: ${options.configPath}`);
-        console.error('Falling back to default configuration');
-        config = await configManager
-          .findAndLoadConfig()
-          .catch(() => configManager.getDefaultConfig());
+      } catch (error) {
+        // Show the actual error message, not just assume "file not found"
+        if (error instanceof Error) {
+          console.error(`❌ Error loading configuration from ${options.configPath}:`);
+          console.error(`   ${error.message}`);
+
+          // Provide helpful hints based on the error type
+          if (error.message.includes('not found')) {
+            console.error('\n💡 Hint: Check that the file path is correct and the file exists.');
+            console.error('   You can use an absolute path: --config $(pwd)/.visor.yaml');
+          } else if (error.message.includes('Invalid YAML')) {
+            console.error(
+              '\n💡 Hint: Check your YAML syntax. You can validate it at https://www.yamllint.com/'
+            );
+          } else if (error.message.includes('extends')) {
+            console.error(
+              '\n💡 Hint: Check that extended configuration files exist and are accessible.'
+            );
+          } else if (error.message.includes('permission')) {
+            console.error('\n💡 Hint: Check file permissions. The file must be readable.');
+          }
+        } else {
+          console.error(`❌ Error loading configuration: ${error}`);
+        }
+
+        // Exit with error when explicit config path fails
+        console.error(
+          '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
+        );
+        process.exit(1);
       }
     } else {
+      // Auto-discovery mode - fallback to defaults is OK
       config = await configManager
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());

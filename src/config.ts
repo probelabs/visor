@@ -119,10 +119,24 @@ export class ConfigManager {
       return finalConfig as VisorConfig;
     } catch (error) {
       if (error instanceof Error) {
-        if (error.message.includes('not found') || error.message.includes('Invalid YAML')) {
+        // Pass through detailed error messages unchanged
+        if (
+          error.message.includes('not found') ||
+          error.message.includes('Invalid YAML') ||
+          error.message.includes('extends') ||
+          error.message.includes('EACCES') ||
+          error.message.includes('EISDIR')
+        ) {
           throw error;
         }
-        throw new Error(`Failed to read configuration file: ${error.message}`);
+        // Add more context for generic errors
+        if (error.message.includes('ENOENT')) {
+          throw new Error(`Configuration file not found: ${configPath}`);
+        }
+        if (error.message.includes('EPERM')) {
+          throw new Error(`Permission denied reading configuration file: ${configPath}`);
+        }
+        throw new Error(`Failed to read configuration file ${configPath}: ${error.message}`);
       }
       throw error;
     }

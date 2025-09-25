@@ -388,10 +388,10 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
         timeout: 45000,
       });
 
-      // Config file not found will fall back to default config, but will still fail
-      // due to authentication issues with mock API keys or timeouts
+      // Config file not found will now exit with error immediately (no fallback)
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Warning:');
+      expect(result.stderr).toContain('Error loading configuration from non-existent-config.yaml');
+      expect(result.stderr).toContain('Configuration file not found');
     }, 45000);
 
     it(
