@@ -243,6 +243,14 @@ export async function run(): Promise<void> {
         'Set CLAUDE_CODE_API_KEY or ANTHROPIC_API_KEY in your GitHub secrets.',
       ].join(' ');
       setFailed(errorMessage);
+    } else if (error instanceof Error && error.message.includes('No API key configured')) {
+      const errorMessage = [
+        'No API key or credentials configured for AI provider.',
+        'Set one of the following in GitHub secrets:',
+        'GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,',
+        'or AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).',
+      ].join(' ');
+      setFailed(errorMessage);
     } else {
       setFailed(error instanceof Error ? error.message : 'Unknown error');
     }

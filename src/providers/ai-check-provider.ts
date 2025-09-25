@@ -28,7 +28,7 @@ export class AICheckProvider extends CheckProvider {
   }
 
   getDescription(): string {
-    return 'AI-powered code review using Google Gemini, Anthropic Claude, or OpenAI GPT models';
+    return 'AI-powered code review using Google Gemini, Anthropic Claude, OpenAI GPT, or AWS Bedrock models';
   }
 
   async validateConfig(config: unknown): Promise<boolean> {
@@ -58,7 +58,7 @@ export class AICheckProvider extends CheckProvider {
     if (cfg.ai) {
       if (
         cfg.ai.provider &&
-        !['google', 'anthropic', 'openai', 'mock'].includes(cfg.ai.provider as string)
+        !['google', 'anthropic', 'openai', 'bedrock', 'mock'].includes(cfg.ai.provider as string)
       ) {
         return false;
       }
@@ -535,7 +535,12 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.timeout = config.ai.timeout as number;
       }
       if (config.ai.provider !== undefined) {
-        aiConfig.provider = config.ai.provider as 'google' | 'anthropic' | 'openai' | 'mock';
+        aiConfig.provider = config.ai.provider as
+          | 'google'
+          | 'anthropic'
+          | 'openai'
+          | 'bedrock'
+          | 'mock';
       }
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
@@ -547,7 +552,12 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.model = config.ai_model as string;
     }
     if (config.ai_provider !== undefined) {
-      aiConfig.provider = config.ai_provider as 'google' | 'anthropic' | 'openai' | 'mock';
+      aiConfig.provider = config.ai_provider as
+        | 'google'
+        | 'anthropic'
+        | 'openai'
+        | 'bedrock'
+        | 'mock';
     }
 
     // Get custom prompt from config - REQUIRED, no fallbacks
@@ -708,14 +718,18 @@ export class AICheckProvider extends CheckProvider {
     return !!(
       process.env.GOOGLE_API_KEY ||
       process.env.ANTHROPIC_API_KEY ||
-      process.env.OPENAI_API_KEY
+      process.env.OPENAI_API_KEY ||
+      // AWS Bedrock credentials check
+      (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+      process.env.AWS_BEDROCK_API_KEY
     );
   }
 
   getRequirements(): string[] {
     return [
-      'At least one of: GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY',
+      'At least one of: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)',
       'Optional: MODEL_NAME environment variable',
+      'Optional: AWS_REGION for Bedrock provider',
       'Network access to AI provider APIs',
     ];
   }

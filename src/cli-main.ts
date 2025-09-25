@@ -255,6 +255,21 @@ export async function main(): Promise<void> {
       console.error('  - ANTHROPIC_API_KEY');
       console.error('\nExample:');
       console.error('  export CLAUDE_CODE_API_KEY="your-api-key-here"\n');
+    } else if (error instanceof Error && error.message.includes('No API key configured')) {
+      console.error('\n❌ Error: No API key or credentials configured for AI provider.');
+      console.error('Please set one of the following:');
+      console.error('\nFor Google Gemini:');
+      console.error('  export GOOGLE_API_KEY="your-api-key"');
+      console.error('\nFor Anthropic Claude:');
+      console.error('  export ANTHROPIC_API_KEY="your-api-key"');
+      console.error('\nFor OpenAI:');
+      console.error('  export OPENAI_API_KEY="your-api-key"');
+      console.error('\nFor AWS Bedrock:');
+      console.error('  export AWS_ACCESS_KEY_ID="your-access-key"');
+      console.error('  export AWS_SECRET_ACCESS_KEY="your-secret-key"');
+      console.error('  export AWS_REGION="us-east-1"');
+      console.error('\nOr use API key authentication for Bedrock:');
+      console.error('  export AWS_BEDROCK_API_KEY="your-api-key"\n');
     } else {
       console.error('❌ Error:', error instanceof Error ? error.message : error);
     }
