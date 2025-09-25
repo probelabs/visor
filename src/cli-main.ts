@@ -140,8 +140,8 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Check if there are any changes to analyze
-    if (repositoryInfo.files.length === 0) {
+    // Check if there are any changes to analyze (only when code context is needed)
+    if (includeCodeContext && repositoryInfo.files.length === 0) {
       console.error('❌ Error: No changes to analyze. Make some file changes first.');
       process.exit(1);
     }
