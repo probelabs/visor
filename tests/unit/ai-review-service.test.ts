@@ -113,7 +113,7 @@ describe('AIReviewService', () => {
       const service = new AIReviewService();
 
       await expect(service.executeReview(mockPRInfo, 'security')).rejects.toThrow(
-        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.'
+        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).'
       );
     });
 
@@ -375,7 +375,7 @@ describe('AIReviewService', () => {
       };
 
       await expect(service.executeReview(prInfo, 'security')).rejects.toThrow(
-        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable.'
+        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).'
       );
     });
 

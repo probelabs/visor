@@ -8,7 +8,7 @@ Override global AI settings at the check level:
 
 ```yaml
 # Global AI settings (optional)
-ai_provider: anthropic
+ai_provider: anthropic  # or google, openai, bedrock
 ai_model: claude-3-sonnet
 ai_temperature: 0.2
 
@@ -20,6 +20,12 @@ checks:
       model: gemini-1.5-pro
       temperature: 0.1
     prompt: "Analyze performance metrics and provide optimization suggestions"
+
+  security-review:
+    type: ai
+    ai_provider: bedrock  # Use AWS Bedrock for this check
+    ai_model: anthropic.claude-sonnet-4-20250514-v1:0
+    prompt: "Analyze code for security vulnerabilities"
 ```
 
 ### Environment Variables
@@ -32,6 +38,10 @@ env:
   OPENAI_API_KEY: "${{ env.OPENAI_API_KEY }}"
   ANTHROPIC_API_KEY: "${{ env.ANTHROPIC_API_KEY }}"
   GOOGLE_API_KEY: "${{ env.GOOGLE_API_KEY }}"
+  # AWS Bedrock credentials
+  AWS_ACCESS_KEY_ID: "${{ env.AWS_ACCESS_KEY_ID }}"
+  AWS_SECRET_ACCESS_KEY: "${{ env.AWS_SECRET_ACCESS_KEY }}"
+  AWS_REGION: "${{ env.AWS_REGION }}"
   SLACK_WEBHOOK: "${{ env.SLACK_WEBHOOK }}"
 
 checks:

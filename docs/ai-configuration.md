@@ -72,6 +72,93 @@ To force Bedrock provider:
 export FORCE_PROVIDER=bedrock
 ```
 
+### YAML Configuration
+
+#### Global Provider Settings
+
+Configure a default AI provider in `.visor.yaml`:
+
+```yaml
+# Global configuration for all checks
+ai_provider: bedrock  # or google, anthropic, openai
+ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Optional, uses default if not specified
+
+checks:
+  security-review:
+    type: ai
+    prompt: "Analyze code for security vulnerabilities"
+```
+
+#### Per-Check Provider Configuration
+
+Override the provider for specific checks:
+
+```yaml
+# Use different providers for different checks
+checks:
+  security-review:
+    type: ai
+    ai_provider: bedrock
+    ai_model: anthropic.claude-sonnet-4-20250514-v1:0
+    prompt: "Analyze code for security vulnerabilities using AWS Bedrock"
+
+  performance-review:
+    type: ai
+    ai_provider: google
+    ai_model: gemini-2.0-flash-exp
+    prompt: "Analyze code for performance issues using Gemini"
+
+  style-review:
+    type: ai
+    ai:
+      provider: openai
+      model: gpt-4-turbo
+    prompt: "Review code style and best practices"
+```
+
+#### AWS Bedrock Specific Configuration
+
+Complete example for Bedrock with all options:
+
+```yaml
+version: "1.0"
+
+# Global Bedrock settings
+ai_provider: bedrock
+ai_model: anthropic.claude-sonnet-4-20250514-v1:0
+
+# Environment variables can be referenced
+env:
+  AWS_REGION: us-east-1
+  # AWS credentials should be set as environment variables, not in config
+
+checks:
+  comprehensive-review:
+    type: ai
+    ai_provider: bedrock
+    prompt: |
+      Perform a comprehensive code review including:
+      - Security vulnerabilities
+      - Performance optimizations
+      - Code quality and best practices
+      - Architectural concerns
+    schema: code-review  # Use structured output format
+
+  custom-bedrock-model:
+    type: ai
+    ai:
+      provider: bedrock
+      model: anthropic.claude-3-opus-20240229  # Use a different Bedrock model
+      timeout: 120000  # 2 minute timeout for complex analysis
+    prompt: "Perform deep architectural analysis"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+```
+
 ### Fallback Behavior
 
 If no key is configured, Visor falls back to fast, heuristic checks (simple patterns, basic style/perf). For best results, set a provider.
