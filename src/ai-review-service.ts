@@ -1006,7 +1006,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     }
 
     // Check if it's a file path (starts with ./ or contains .json but not absolute paths)
-    if ((schema.startsWith('./') || schema.includes('.json')) && !schema.startsWith('/')) {
+    if ((schema.startsWith('./') || schema.includes('.json')) && !path.isAbsolute(schema)) {
       // It's a relative file path to a custom schema
       // Validate the path to prevent traversal attacks
       if (schema.includes('..') || schema.includes('\x00')) {
