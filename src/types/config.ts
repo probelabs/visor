@@ -330,8 +330,8 @@ export interface CheckConfig {
   depends_on?: string[];
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
-  /** Schema type for template rendering (e.g., "code-review", "markdown") - optional */
-  schema?: string;
+  /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
+  schema?: string | Record<string, unknown>;
   /** Custom template configuration - optional */
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */

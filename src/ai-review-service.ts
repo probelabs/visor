@@ -135,7 +135,7 @@ export class AIReviewService {
   async executeReview(
     prInfo: PRInfo,
     customPrompt: string,
-    schema?: string,
+    schema?: string | Record<string, unknown>,
     _checkName?: string,
     sessionId?: string
   ): Promise<ReviewSummary> {
@@ -163,7 +163,7 @@ export class AIReviewService {
         errors: [],
         jsonParseSuccess: false,
         timestamp,
-        schemaName: schema,
+        schemaName: typeof schema === 'object' ? 'custom' : schema,
         schema: undefined, // Will be populated when schema is loaded
       };
     }
@@ -256,7 +256,7 @@ export class AIReviewService {
     prInfo: PRInfo,
     customPrompt: string,
     parentSessionId: string,
-    schema?: string,
+    schema?: string | Record<string, unknown>,
     checkName?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
@@ -291,7 +291,7 @@ export class AIReviewService {
         errors: [],
         jsonParseSuccess: false,
         timestamp,
-        schemaName: schema,
+        schemaName: typeof schema === 'object' ? 'custom' : schema,
         schema: undefined, // Will be populated when schema is loaded
       };
     }
@@ -364,7 +364,7 @@ export class AIReviewService {
   private async buildCustomPrompt(
     prInfo: PRInfo,
     customInstructions: string,
-    _schema?: string
+    _schema?: string | Record<string, unknown>
   ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
@@ -731,7 +731,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   private async callProbeAgentWithExistingSession(
     agent: ProbeAgent,
     prompt: string,
-    schema?: string,
+    schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
     _checkName?: string
   ): Promise<{ response: string; effectiveSchema?: string }> {
@@ -739,7 +739,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
       const response = await this.generateMockResponse(prompt);
-      return { response, effectiveSchema: schema };
+      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
     }
 
     log('🔄 Reusing existing ProbeAgent session for AI review...');
@@ -751,7 +751,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
-      let effectiveSchema = schema;
+      let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -804,7 +804,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
    */
   private async callProbeAgent(
     prompt: string,
-    schema?: string,
+    schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     providedSessionId?: string
@@ -813,7 +813,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing');
       const response = await this.generateMockResponse(prompt);
-      return { response, effectiveSchema: schema };
+      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
     }
 
     // Create ProbeAgent instance with proper options
@@ -882,7 +882,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
-      let effectiveSchema = schema;
+      let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -979,19 +979,60 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
   }
 
   /**
-   * Load schema content from schema files
+   * Load schema content from schema files or inline definitions
    */
-  private async loadSchemaContent(schemaName: string): Promise<string> {
+  private async loadSchemaContent(schema: string | Record<string, unknown>): Promise<string> {
     const fs = require('fs').promises;
     const path = require('path');
 
+    // Check if schema is already an object (inline definition from YAML)
+    if (typeof schema === 'object' && schema !== null) {
+      // It's already a schema object, convert to JSON string
+      log('📋 Using inline schema object from configuration');
+      return JSON.stringify(schema);
+    }
+
+    // Check if schema string is already a JSON schema (inline JSON string)
+    // This happens when a schema is passed directly as JSON instead of a reference
+    try {
+      const parsed = JSON.parse(schema);
+      if (typeof parsed === 'object' && parsed !== null) {
+        // It's already a valid JSON schema, return it as-is
+        log('📋 Using inline schema JSON string');
+        return schema;
+      }
+    } catch {
+      // Not JSON, treat as schema name reference or file path
+    }
+
+    // Check if it's a file path (starts with ./ or contains .json but not absolute paths)
+    if ((schema.startsWith('./') || schema.includes('.json')) && !path.isAbsolute(schema)) {
+      // It's a relative file path to a custom schema
+      // Validate the path to prevent traversal attacks
+      if (schema.includes('..') || schema.includes('\x00')) {
+        throw new Error('Invalid schema path: path traversal not allowed');
+      }
+
+      try {
+        const schemaPath = path.resolve(process.cwd(), schema);
+        log(`📋 Loading custom schema from file: ${schemaPath}`);
+        const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+        return schemaContent.trim();
+      } catch (error) {
+        throw new Error(
+          `Failed to load custom schema from ${schema}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    // Otherwise, treat as a built-in schema name
     // Sanitize schema name to prevent path traversal attacks
-    const sanitizedSchemaName = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
-    if (!sanitizedSchemaName || sanitizedSchemaName !== schemaName) {
+    const sanitizedSchemaName = schema.replace(/[^a-zA-Z0-9-]/g, '');
+    if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
       throw new Error('Invalid schema name');
     }
 
-    // Construct path to schema file using sanitized name
+    // Construct path to built-in schema file
     const schemaPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
 
     try {
