@@ -281,16 +281,39 @@ export class CLI {
    * Get version from package.json
    */
   public getVersion(): string {
+    // First, try environment variable (set during build/publish)
+    if (process.env.VISOR_VERSION) {
+      return process.env.VISOR_VERSION;
+    }
+
     try {
-      const packageJsonPath = path.join(__dirname, '../../package.json');
-      if (fs.existsSync(packageJsonPath)) {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-        return packageJson.version || '1.0.0';
+      // Try multiple possible locations for package.json
+      const possiblePaths = [
+        path.join(__dirname, '../../package.json'), // Development
+        path.join(__dirname, '../package.json'), // Alternate bundled
+        path.join(process.cwd(), 'package.json'), // Current directory
+        '/snapshot/visor/package.json', // Vercel pkg snapshot
+      ];
+
+      for (const packageJsonPath of possiblePaths) {
+        if (fs.existsSync(packageJsonPath)) {
+          try {
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            // Only use if it's the visor package
+            if (packageJson.name === '@probelabs/visor' && packageJson.version) {
+              return packageJson.version;
+            }
+          } catch {
+            // Try next path
+          }
+        }
       }
     } catch {
-      // Fallback to default version
+      // Continue to fallback
     }
-    return '1.0.0';
+
+    // Fallback to the actual current version in package.json
+    return '0.1.42';
   }
 
   /**

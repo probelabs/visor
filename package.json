@@ -1,6 +1,6 @@
 {
   "name": "@probelabs/visor",
-  "version": "0.1.0",
+  "version": "0.1.42",
   "main": "dist/index.js",
   "bin": {
     "visor": "./dist/index.js"
@@ -17,7 +17,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/ && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "test": "jest",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
