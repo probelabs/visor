@@ -1,7 +1,7 @@
 version: "1.0"
 
 # Basic failure conditions example
-# This shows simple single-line JEXL expressions for common quality gates
+# This shows simple single-line JavaScript expressions for common quality gates
 
 # Global failure conditions that apply to all checks
 failure_conditions:

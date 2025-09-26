@@ -288,11 +288,12 @@ checks:
 
 ### Liquid Template Support
 
-All HTTP configurations support Liquid templating for dynamic content:
+All HTTP configurations support Liquid templating for dynamic content. See [Liquid Templates Guide](./liquid-templates.md) for complete reference.
 
+Common patterns:
 - Access webhook data: `{{ webhook.field }}`
 - Access headers: `{{ headers['x-custom-header'] }}`
 - Access previous outputs: `{{ outputs['check-name'].suggestions | first }}`
 - Date formatting: `{{ 'now' | date: '%Y-%m-%d' }}`
-- JSON encoding: `{{ data | json }}`
+- JSON encoding: `{{ data | json }}` (useful for debugging objects)
 

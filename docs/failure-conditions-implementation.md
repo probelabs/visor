@@ -52,9 +52,9 @@ checks:
       security_gate: "metadata.errorIssues >= 1"
 ```
 
-## JEXL Expression Context
+## JavaScript Expression Context
 
-The context object available to all JEXL expressions includes:
+The context object available to all JavaScript expressions (evaluated in a secure sandbox) includes:
 
 ```typescript
 {
@@ -150,12 +150,12 @@ failure_conditions:
 3. **Multiple conditions** are evaluated independently
 
 ### Error Handling
-- Malformed JEXL expressions result in error-level condition results
-- Missing helper functions gracefully degrade to basic JEXL evaluation
+- Malformed JavaScript expressions result in error-level condition results
+- Missing helper functions gracefully degrade to basic JavaScript evaluation
 - All evaluation errors are captured and reported
 
 ### Performance Considerations
-- JEXL evaluation is fast for typical expressions
+- JavaScript evaluation in sandbox is fast for typical expressions
 - Helper functions are optimized for common use cases
 - Condition evaluation happens after check completion (non-blocking)
 
@@ -218,7 +218,7 @@ checks:
 1. Use debug mode to see evaluation results
 2. Start with simple conditions and gradually add complexity
 3. Test with various issue scenarios
-4. Validate JEXL expressions before deployment
+4. Validate JavaScript expressions before deployment
 
 ## Best Practices
 
@@ -244,7 +244,7 @@ checks:
 
 ### Unit Tests
 - Comprehensive coverage of FailureConditionEvaluator
-- Test various JEXL expression patterns
+- Test various JavaScript expression patterns
 - Validate helper function behavior
 - Error handling scenarios
 
@@ -270,6 +270,6 @@ checks:
 
 ## Summary
 
-The enhanced failure condition system provides a flexible, powerful foundation for implementing custom quality gates and policies in Visor. By leveraging JEXL expressions with comprehensive context access, teams can create sophisticated review workflows that adapt to their specific needs and standards.
+The enhanced failure condition system provides a flexible, powerful foundation for implementing custom quality gates and policies in Visor. By leveraging JavaScript expressions (evaluated in a secure sandbox) with comprehensive context access, teams can create sophisticated review workflows that adapt to their specific needs and standards.
 
 The system maintains full backward compatibility while opening new possibilities for automated code quality enforcement and intelligent review assistance.

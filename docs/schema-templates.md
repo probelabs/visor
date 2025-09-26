@@ -62,6 +62,7 @@ Unstructured (none/plain) → posted as-is, no status checks.
 ### Enhanced Prompts
 - Smart auto‑detection, Liquid templating, file‑based prompts
 - Template context: `pr`, `files`, `event`, `outputs`, `utils`
+- See [Liquid Templates Guide](./liquid-templates.md) for available variables and filters
 
 See full examples in `defaults/.visor.yaml`.
 

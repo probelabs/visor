@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
+import Sandbox from '@nyariv/sandboxjs';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -9,6 +10,7 @@ import { Liquid } from 'liquidjs';
  */
 export class CommandCheckProvider extends CheckProvider {
   private liquid: Liquid;
+  private sandbox: Sandbox;
 
   constructor() {
     super();
@@ -17,6 +19,18 @@ export class CommandCheckProvider extends CheckProvider {
       strictFilters: false,
       strictVariables: false,
     });
+    this.sandbox = this.createSecureSandbox();
+  }
+
+  private createSecureSandbox(): Sandbox {
+    const globals = {
+      ...Sandbox.SAFE_GLOBALS,
+      console: console,
+      JSON: JSON,
+    };
+
+    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
+    return new Sandbox({ globals, prototypeWhitelist });
   }
 
   getName(): string {
@@ -49,6 +63,7 @@ export class CommandCheckProvider extends CheckProvider {
   ): Promise<ReviewSummary> {
     const command = config.exec as string;
     const transform = config.transform as string | undefined;
+    const transformJs = config.transform_js as string | undefined;
 
     // Prepare template context for Liquid rendering
     const templateContext = {
@@ -117,8 +132,10 @@ export class CommandCheckProvider extends CheckProvider {
         output = stdout.trim();
       }
 
-      // Apply transform if specified
+      // Apply transform if specified (Liquid or JavaScript)
       let finalOutput = output;
+
+      // First apply Liquid transform if present
       if (transform) {
         try {
           const transformContext = {
@@ -140,7 +157,43 @@ export class CommandCheckProvider extends CheckProvider {
                 file: 'command',
                 line: 0,
                 ruleId: 'command/transform_error',
-                message: `Failed to apply transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                message: `Failed to apply Liquid transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                severity: 'error',
+                category: 'logic',
+              },
+            ],
+          };
+        }
+      }
+
+      // Then apply JavaScript transform if present
+      if (transformJs) {
+        try {
+          const jsContext = {
+            output: finalOutput,
+            pr: templateContext.pr,
+            files: templateContext.files,
+            outputs: templateContext.outputs,
+            env: templateContext.env,
+            // Helper functions
+            JSON: JSON,
+          };
+
+          // Compile and execute the JavaScript expression
+          const exec = this.sandbox.compile(`
+            const { output, pr, files, outputs, env, JSON } = scope;
+            return (${transformJs.trim()});
+          `);
+
+          finalOutput = exec({ scope: jsContext }).run();
+        } catch (error) {
+          return {
+            issues: [
+              {
+                file: 'command',
+                line: 0,
+                ruleId: 'command/transform_js_error',
+                message: `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
                 severity: 'error',
                 category: 'logic',
               },
@@ -214,6 +267,7 @@ export class CommandCheckProvider extends CheckProvider {
       'type',
       'exec',
       'transform',
+      'transform_js',
       'env',
       'timeout',
       'depends_on',

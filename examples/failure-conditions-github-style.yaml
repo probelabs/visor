@@ -91,25 +91,25 @@ checks:
 # GitHub Actions:
 #   if: contains(github.event.head_commit.message, 'skip-ci')
 #
-# Visor (JEXL):
+# Visor (JavaScript):
 #   condition: "contains(commit.message, 'skip-ci')"
 #
 # GitHub Actions:
 #   if: success() && github.event_name == 'pull_request'
 #
-# Visor (JEXL):
+# Visor (JavaScript):
 #   condition: "success() && event.name == 'pull_request'"
 #
 # GitHub Actions:
 #   if: failure() || cancelled()
 #
-# Visor (JEXL):
+# Visor (JavaScript):
 #   condition: "failure() || metadata.cancelled"
 #
 # GitHub Actions:
 #   if: startsWith(github.ref, 'refs/heads/release')
 #
-# Visor (JEXL):
+# Visor (JavaScript):
 #   condition: "startsWith(event.ref, 'refs/heads/release')"
 
 output:

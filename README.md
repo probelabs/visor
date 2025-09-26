@@ -324,7 +324,7 @@ Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
 ## 🎯 Enhanced Prompts
 
-Write prompts inline or in files; Liquid variables provide PR context.
+Write prompts inline or in files; Liquid variables provide PR context. See [Liquid Templates Guide](./docs/liquid-templates.md) for debugging with `json` filter and full reference.
 
 Example:
 ```yaml

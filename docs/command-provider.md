@@ -27,6 +27,7 @@ checks:
 | `type` | string | Yes | Must be `"command"` |
 | `exec` | string | Yes | The shell command to execute |
 | `transform` | string | No | Liquid template to transform output |
+| `transform_js` | string | No | JavaScript expression to transform output (evaluated in sandbox) |
 | `env` | object | No | Environment variables to pass to the command |
 | `timeout` | number | No | Command timeout in seconds (default: 60) |
 | `depends_on` | array | No | Other checks this depends on |
@@ -101,7 +102,7 @@ checks:
 
 ### Transform Output
 
-Transform command output using Liquid templates:
+Transform command output using Liquid templates (see [Liquid Templates Guide](./liquid-templates.md) for full reference):
 
 ```yaml
 checks:
@@ -114,6 +115,58 @@ checks:
         "summary": "Coverage: {{ output.coverageSummary.total.lines.pct }}%"
       }
 ```
+
+### JavaScript Transform
+
+Transform command output using JavaScript expressions (evaluated in secure sandbox):
+
+```yaml
+checks:
+  # Extract specific fields using JavaScript
+  extract-vulnerabilities:
+    type: command
+    exec: "security-scan --json"
+    transform_js: |
+      output.vulnerabilities.filter(v => v.severity === 'critical')
+    forEach: true
+
+  # Complex data manipulation
+  aggregate-metrics:
+    type: command
+    exec: "get-metrics --json"
+    transform_js: |
+      ({
+        total: output.metrics.reduce((sum, m) => sum + m.value, 0),
+        average: output.metrics.reduce((sum, m) => sum + m.value, 0) / output.metrics.length,
+        critical: output.metrics.filter(m => m.level === 'critical').map(m => m.name)
+      })
+
+  # Array extraction with conditions
+  get-failed-tests:
+    type: command
+    exec: "npm test --json"
+    transform_js: |
+      output.tests
+        .filter(t => !t.passed)
+        .map(t => ({ name: t.name, error: t.error }))
+
+  # Combine with Liquid transform (Liquid runs first, then JavaScript)
+  process-data:
+    type: command
+    exec: "api-call --json"
+    transform: |
+      {{ output.data | json }}
+    transform_js: |
+      output.filter(item => item.active && item.priority > 5)
+```
+
+**Available in JavaScript transform context:**
+- `output` - The command output (or result of Liquid transform if present)
+- `pr` - Pull request context (number, title, author, branch, base)
+- `files` - Array of changed files
+- `outputs` - Results from dependency checks
+- `env` - Environment variables
+- `JSON` - JSON object for parsing/stringifying
 
 ### Environment Variables
 
