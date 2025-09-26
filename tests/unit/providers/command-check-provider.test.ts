@@ -380,7 +380,7 @@ describe('CommandCheckProvider', () => {
     it('should include dependency outputs in template context', async () => {
       const config: CheckProviderConfig = {
         type: 'command',
-        exec: 'echo "Dep count: {{ outputs.dep1.issueCount }}"',
+        exec: 'echo "Dep count: {{ outputs.dep1.issues.size }}"',
       };
 
       const dependencyResults = new Map<string, ReviewSummary>();
