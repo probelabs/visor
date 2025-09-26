@@ -234,14 +234,9 @@ export class CommandCheckProvider extends CheckProvider {
 
     const outputs: Record<string, unknown> = {};
     for (const [checkName, result] of dependencyResults) {
-      if ((result as any).output !== undefined) {
-        outputs[checkName] = (result as any).output;
-      } else {
-        outputs[checkName] = {
-          issueCount: result.issues?.length || 0,
-          issues: result.issues || [],
-        };
-      }
+      // If the result has a direct output field, use it directly
+      // Otherwise, expose the entire result as-is
+      outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
     }
     return outputs;
   }
