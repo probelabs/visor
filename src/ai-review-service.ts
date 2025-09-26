@@ -364,10 +364,13 @@ export class AIReviewService {
   private async buildCustomPrompt(
     prInfo: PRInfo,
     customInstructions: string,
-    _schema?: string | Record<string, unknown>
+    schema?: string | Record<string, unknown>
   ): Promise<string> {
     const prContext = this.formatPRContext(prInfo);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
+
+    // Check if we're using the code-review schema
+    const isCodeReviewSchema = schema === 'code-review';
 
     if (isIssue) {
       // Issue context - no code analysis needed
@@ -392,10 +395,12 @@ ${prContext}
 </review_request>`;
     }
 
-    // PR context - structured XML format
-    const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
+    // Only add review_request wrapper and PR-specific rules for code-review schema
+    if (isCodeReviewSchema) {
+      // PR context with code-review schema - structured XML format
+      const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
-    return `<review_request>
+      return `<review_request>
   <analysis_type>${analysisType}</analysis_type>
 
   <analysis_focus>
@@ -425,6 +430,16 @@ ${prContext}
     <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
   </rules>
 </review_request>`;
+    }
+
+    // For non-code-review schemas, just provide instructions and context without review-specific wrapper
+    return `<instructions>
+${customInstructions}
+</instructions>
+
+<context>
+${prContext}
+</context>`;
   }
 
   // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
