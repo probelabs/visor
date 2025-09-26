@@ -1,6 +1,6 @@
 # Enhanced Failure Condition Configuration Schema
 
-This document describes the enhanced failure condition configuration system for Visor that supports JEXL expressions for flexible and powerful failure evaluation.
+This document describes the enhanced failure condition configuration system for Visor that supports JavaScript expressions (evaluated in a secure sandbox) for flexible and powerful failure evaluation.
 
 ## YAML Configuration Schema
 
@@ -11,7 +11,7 @@ version: "1.0"
 
 # Global failure conditions apply to all checks
 failure_conditions:
-  # Simple JEXL expression for basic failure conditions
+  # Simple JavaScript expression for basic failure conditions
   critical_threshold: "metadata.criticalIssues > 0"
 
   # Complex conditions with multiple criteria
@@ -65,7 +65,7 @@ checks:
       performance_regression: "metadata.errorIssues > 1 && issues.some(i => i.category == 'performance')"
 ```
 
-### Advanced JEXL Expression Examples
+### Advanced JavaScript Expression Examples
 
 ```yaml
 failure_conditions:

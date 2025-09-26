@@ -103,11 +103,11 @@ function anotherFunction(param) {
   }, 15000);
 
   it('should handle invalid failure conditions gracefully', async () => {
-    // Create config with invalid JEXL expression
+    // Create config with invalid JavaScript expression
     const invalidConfig = `version: "1.0"
 
 failure_conditions:
-  # Invalid JEXL syntax
+  # Invalid JavaScript syntax
   invalid_condition: "metadata.totalIssues ++ 0"
 
 checks:

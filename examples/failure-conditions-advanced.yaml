@@ -1,7 +1,7 @@
 version: "1.0"
 
 # Advanced failure conditions example
-# This shows complex JEXL expressions with metadata access and business logic
+# This shows complex JavaScript expressions with metadata access and business logic
 
 # Global failure conditions with schema-based logic
 failure_conditions:

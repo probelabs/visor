@@ -471,35 +471,14 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       },
 
       // Previous check outputs (dependency results)
+      // Expose raw output directly if available, otherwise expose the result as-is
       outputs: dependencyResults
         ? Object.fromEntries(
             Array.from(dependencyResults.entries()).map(([checkName, result]) => [
               checkName,
-              {
-                // Summary data
-                totalIssues: result.issues?.length || 0,
-                criticalIssues: result.issues?.filter(i => i.severity === 'critical').length || 0,
-                errorIssues: result.issues?.filter(i => i.severity === 'error').length || 0,
-                warningIssues: result.issues?.filter(i => i.severity === 'warning').length || 0,
-                infoIssues: result.issues?.filter(i => i.severity === 'info').length || 0,
-
-                // Issues grouped by category
-                securityIssues: result.issues?.filter(i => i.category === 'security') || [],
-                performanceIssues: result.issues?.filter(i => i.category === 'performance') || [],
-                styleIssues: result.issues?.filter(i => i.category === 'style') || [],
-                logicIssues: result.issues?.filter(i => i.category === 'logic') || [],
-                documentationIssues:
-                  result.issues?.filter(i => i.category === 'documentation') || [],
-
-                // All issues and suggestions
-                issues: result.issues || [],
-
-                // Debug information if available
-                debug: result.debug,
-
-                // Raw data for advanced use
-                raw: result,
-              },
+              // If the result has a direct output field, use it directly
+              // Otherwise, expose the entire result
+              (result as any).output !== undefined ? (result as any).output : result,
             ])
           )
         : {},

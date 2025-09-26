@@ -304,6 +304,8 @@ export interface CheckConfig {
   endpoint?: string;
   /** Transform template for http_input data (Liquid) - optional */
   transform?: string;
+  /** Transform using JavaScript expressions (evaluated in secure sandbox) - optional */
+  transform_js?: string;
   /** Cron schedule expression (e.g., "0 2 * * *") - optional for any check type */
   schedule?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
