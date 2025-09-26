@@ -137,6 +137,7 @@ export class LogCheckProvider extends CheckProvider {
 
     if (includeDependencies && dependencyResults) {
       const dependencies: Record<string, unknown> = {};
+      const outputs: Record<string, unknown> = {};
       context.dependencyCount = dependencyResults.size;
 
       for (const [checkName, result] of dependencyResults.entries()) {
@@ -145,9 +146,13 @@ export class LogCheckProvider extends CheckProvider {
           suggestionCount: 0,
           issues: result.issues || [],
         };
+
+        // Add outputs namespace for accessing dependency results directly
+        outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
       }
 
       context.dependencies = dependencies;
+      context.outputs = outputs;
     }
 
     if (includeMetadata) {

@@ -1211,11 +1211,9 @@ export class CheckExecutionEngine {
               const forEachDependencyResults = new Map<string, ReviewSummary>();
               for (const [depName, depResult] of dependencyResults) {
                 if (depName === forEachParentName) {
-                  // Replace the forEach parent's output with the current item
-                  const modifiedResult = {
-                    ...depResult,
-                    output: item,
-                  } as any;
+                  // Replace the entire forEach parent result with just the current item
+                  // This ensures that outputs.fetch-tickets contains the individual item
+                  const modifiedResult = item as any;
                   forEachDependencyResults.set(depName, modifiedResult);
                 } else {
                   forEachDependencyResults.set(depName, depResult);
