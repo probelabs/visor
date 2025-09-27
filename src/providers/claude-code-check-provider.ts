@@ -14,6 +14,12 @@ import {
   safeImport,
 } from './claude-code-types';
 
+type ClaudeCodeConstructor = new (options: { apiKey: string }) => ClaudeCodeClient;
+
+function isClaudeCodeConstructor(value: unknown): value is ClaudeCodeConstructor {
+  return typeof value === 'function';
+}
+
 /**
  * Error thrown when Claude Code SDK is not installed
  */
@@ -135,7 +141,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
     const ClaudeCodeCtor = claudeCodeModule.ClaudeCode || claudeCodeModule.default?.ClaudeCode;
 
-    if (typeof ClaudeCodeCtor !== 'function') {
+    if (!isClaudeCodeConstructor(ClaudeCodeCtor)) {
       throw new Error('ClaudeCode class not found in @anthropic/claude-code-sdk');
     }
 
@@ -598,7 +604,12 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
       // Parse the response
       const result = this.parseStructuredResponse(response.content) as ReviewSummary & {
-        debug?: Record<string, unknown>;
+        debug?: import('../ai-review-service').AIDebugInfo & {
+          sessionId?: string;
+          turnCount?: number;
+          usage?: unknown;
+          toolsUsed?: string[];
+        };
       };
 
       result.debug = {
@@ -614,7 +625,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         errors: [],
         checksExecuted: [config.checkName || 'claude-code-check'],
         parallelExecution: false,
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
         // Claude Code specific debug info
         sessionId: response.session_id,
         turnCount: response.turn_count,
