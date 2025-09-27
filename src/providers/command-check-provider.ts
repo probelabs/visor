@@ -121,15 +121,18 @@ export class CommandCheckProvider extends CheckProvider {
         console.error(`Command stderr: ${stderr}`);
       }
 
-      // Try to parse output as JSON
-      let output: unknown = stdout.trim();
+      // Keep raw output for transforms
+      const rawOutput = stdout.trim();
+
+      // Try to parse output as JSON for default behavior
+      let output: unknown = rawOutput;
       try {
         // Attempt to parse as JSON
-        const parsed = JSON.parse(stdout.trim());
+        const parsed = JSON.parse(rawOutput);
         output = parsed;
       } catch {
         // If not JSON, keep as string
-        output = stdout.trim();
+        output = rawOutput;
       }
 
       // Apply transform if specified (Liquid or JavaScript)
@@ -140,7 +143,7 @@ export class CommandCheckProvider extends CheckProvider {
         try {
           const transformContext = {
             ...templateContext,
-            output,
+            output: rawOutput, // Use raw string for Liquid
           };
           const rendered = await this.liquid.parseAndRender(transform, transformContext);
 
@@ -169,8 +172,9 @@ export class CommandCheckProvider extends CheckProvider {
       // Then apply JavaScript transform if present
       if (transformJs) {
         try {
+          // For transform_js, always use raw string output so JSON.parse() works as expected
           const jsContext = {
-            output: finalOutput,
+            output: rawOutput, // Always use raw string for JavaScript transform
             pr: templateContext.pr,
             files: templateContext.files,
             outputs: templateContext.outputs,

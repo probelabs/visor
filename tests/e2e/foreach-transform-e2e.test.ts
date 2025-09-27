@@ -55,7 +55,7 @@ output:
     // Run the dependent check
     let result: string;
     try {
-      result = execSync(`${cliPath} --check analyze-ticket --output json`, {
+      result = execSync(`${cliPath} --check analyze-ticket --output json 2>/dev/null`, {
         cwd: tempDir,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -67,11 +67,17 @@ output:
       throw error;
     }
 
+    // Extract JSON from output (may contain other messages)
+    const lines = result.split('\n');
+    const jsonStart = lines.findIndex(line => line.trim().startsWith('{'));
+    const jsonString = jsonStart >= 0 ? lines.slice(jsonStart).join('\n') : result;
+
     let output: any;
     try {
-      output = JSON.parse(result);
+      output = JSON.parse(jsonString);
     } catch (error) {
-      console.error('Failed to parse JSON:', result);
+      console.error('Failed to parse JSON:', jsonString);
+      console.error('Full output:', result);
       throw error;
     }
 

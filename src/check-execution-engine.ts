@@ -1323,7 +1323,7 @@ export class CheckExecutionEngine {
           const reviewResult = result.value.result;
 
           // Handle forEach logic - process array outputs
-          if (checkConfig?.forEach && (reviewResult as any).output) {
+          if (checkConfig?.forEach && (reviewResult as any).output !== undefined) {
             let outputArray = (reviewResult as any).output;
 
             // Ensure output is an array
@@ -1340,10 +1340,6 @@ export class CheckExecutionEngine {
                 outputArray = [outputArray];
               }
             }
-
-            log(
-              `🔄 Debug: Check "${checkName}" has forEach enabled, processing ${outputArray.length} items`
-            );
 
             // Store the array for iteration by dependent checks
             (reviewResult as any).forEachItems = outputArray;

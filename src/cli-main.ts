@@ -79,8 +79,7 @@ export async function main(): Promise<void> {
     }
 
     // Determine checks to run and validate check types early
-    const checksToRun =
-      options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
+    let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
     // Validate that all requested checks exist in the configuration
     const availableChecks = Object.keys(config.checks || {});
@@ -89,6 +88,28 @@ export async function main(): Promise<void> {
       console.error(`❌ Error: No configuration found for check: ${invalidChecks[0]}`);
       process.exit(1);
     }
+
+    // Include dependencies of requested checks
+    const checksWithDependencies = new Set(checksToRun);
+    const addDependencies = (checkName: string) => {
+      const checkConfig = config.checks?.[checkName];
+      if (checkConfig?.depends_on) {
+        for (const dep of checkConfig.depends_on) {
+          if (!checksWithDependencies.has(dep)) {
+            checksWithDependencies.add(dep);
+            addDependencies(dep); // Recursively add dependencies of dependencies
+          }
+        }
+      }
+    };
+
+    // Add all dependencies
+    for (const check of checksToRun) {
+      addDependencies(check);
+    }
+
+    // Update checksToRun to include dependencies
+    checksToRun = Array.from(checksWithDependencies);
 
     // Use stderr for status messages when outputting formatted results to stdout
     const logFn = console.error;
