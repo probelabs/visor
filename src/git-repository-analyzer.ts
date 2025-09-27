@@ -1,4 +1,4 @@
-import { simpleGit, SimpleGit } from 'simple-git';
+import { simpleGit, SimpleGit, type DefaultLogFields, type ListLogLine } from 'simple-git';
 import * as path from 'path';
 import * as fs from 'fs';
 import { PRInfo, PRDiff } from './pr-analyzer';
@@ -56,7 +56,7 @@ export class GitRepositoryAnalyzer {
       const uncommittedFiles = await this.getUncommittedChanges(includeContext);
 
       // Get recent commit info (handle repos with no commits)
-      let lastCommit: any = null;
+      let lastCommit: (ListLogLine & DefaultLogFields) | null = null;
       try {
         const recentCommits = await this.git.log({ maxCount: 1 });
         lastCommit = recentCommits.latest;

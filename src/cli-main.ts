@@ -5,6 +5,7 @@ import { ConfigManager } from './config';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
+import { PRInfo } from './pr-analyzer';
 
 /**
  * Main CLI entry point for Visor
@@ -204,7 +205,8 @@ export async function main(): Promise<void> {
     const prInfo = analyzer.toPRInfo(repositoryInfo, includeCodeContext);
 
     // Store the includeCodeContext flag in prInfo for downstream use
-    (prInfo as any).includeCodeContext = includeCodeContext;
+    const prInfoWithContext = prInfo as PRInfo & { includeCodeContext?: boolean };
+    prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
     const groupedResults = await engine.executeGroupedChecks(

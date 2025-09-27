@@ -260,7 +260,10 @@ export class CommandCheckProvider extends CheckProvider {
 
       const trimmedRawOutput = typeof rawOutput === 'string' ? rawOutput.trim() : undefined;
 
-      if (!(config as any).forEach) {
+      const commandConfig = config as CheckProviderConfig & { forEach?: boolean };
+      const isForEachParent = commandConfig.forEach === true;
+
+      if (!isForEachParent) {
         extracted = this.extractIssuesFromOutput(finalOutput);
         if (!extracted && typeof finalOutput === 'string') {
           // Attempt to parse string output as JSON and extract issues again
@@ -289,7 +292,7 @@ export class CommandCheckProvider extends CheckProvider {
         }
       }
 
-      if (!content && this.shouldTreatAsTextOutput(trimmedRawOutput) && !(config as any).forEach) {
+      if (!content && this.shouldTreatAsTextOutput(trimmedRawOutput) && !isForEachParent) {
         content = trimmedRawOutput;
       }
 
@@ -303,7 +306,7 @@ export class CommandCheckProvider extends CheckProvider {
       if (process.env.DEBUG && transformJs) {
         console.log(
           `🔧 Debug: Command provider returning output:`,
-          JSON.stringify((result as any).output).slice(0, 200)
+          JSON.stringify((result as ReviewSummary & { output?: unknown }).output).slice(0, 200)
         );
       }
 
@@ -336,7 +339,8 @@ export class CommandCheckProvider extends CheckProvider {
     for (const [checkName, result] of dependencyResults) {
       // If the result has a direct output field, use it directly
       // Otherwise, expose the entire result as-is
-      outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkName] = summary.output !== undefined ? summary.output : summary;
     }
     return outputs;
   }

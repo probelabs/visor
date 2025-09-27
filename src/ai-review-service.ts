@@ -451,12 +451,16 @@ ${prContext}
    */
   private formatPRContext(prInfo: PRInfo): string {
     // Check if this is an issue (not a PR)
-    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
+    const prContextInfo = prInfo as PRInfo & {
+      isPRContext?: boolean;
+      includeCodeContext?: boolean;
+    };
+    const isIssue = prContextInfo.isIssue === true;
 
     // Check if we should include code context (diffs)
-    const isPRContext = (prInfo as any).isPRContext === true;
+    const isPRContext = prContextInfo.isPRContext === true;
     // In PR context, always include diffs. Otherwise check the flag.
-    const includeCodeContext = isPRContext || (prInfo as any).includeCodeContext !== false;
+    const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
 
     // Log the decision for transparency
     const log = this.config.debug ? console.error : () => {};
@@ -881,12 +885,18 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       if (this.config.provider) {
         // Map claude-code to anthropic for ProbeAgent compatibility
         // Map bedrock to anthropic temporarily until ProbeAgent adds bedrock type
-        options.provider =
-          this.config.provider === 'claude-code'
+        const providerOverride: ProbeAgentOptions['provider'] | undefined =
+          this.config.provider === 'claude-code' || this.config.provider === 'bedrock'
             ? 'anthropic'
-            : this.config.provider === 'bedrock'
-              ? ('anthropic' as any)
-              : (this.config.provider as any);
+            : this.config.provider === 'anthropic' ||
+                this.config.provider === 'openai' ||
+                this.config.provider === 'google'
+              ? this.config.provider
+              : undefined;
+
+        if (providerOverride) {
+          options.provider = providerOverride;
+        }
       }
       if (this.config.model) {
         options.model = this.config.model;

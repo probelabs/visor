@@ -133,9 +133,9 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       throw new ClaudeCodeSDKNotInstalledError();
     }
 
-    const ClaudeCode = claudeCodeModule.ClaudeCode || claudeCodeModule.default?.ClaudeCode;
+    const ClaudeCodeCtor = claudeCodeModule.ClaudeCode || claudeCodeModule.default?.ClaudeCode;
 
-    if (!ClaudeCode) {
+    if (typeof ClaudeCodeCtor !== 'function') {
       throw new Error('ClaudeCode class not found in @anthropic/claude-code-sdk');
     }
 
@@ -146,7 +146,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     }
 
     try {
-      const client = new (ClaudeCode as any)({
+      const client = new ClaudeCodeCtor({
         apiKey,
       }) as ClaudeCodeClient;
 
@@ -191,11 +191,11 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         const createSdkMcpServer =
           mcpModule.createSdkMcpServer || mcpModule.default?.createSdkMcpServer;
 
-        if (createSdkMcpServer) {
+        if (typeof createSdkMcpServer === 'function') {
           for (const [serverName, serverConfig] of Object.entries(config.mcpServers)) {
             try {
               // Create MCP server instance
-              const server = await (createSdkMcpServer as any)({
+              const server = await createSdkMcpServer({
                 name: serverName,
                 command: serverConfig.command,
                 args: serverConfig.args || [],
@@ -203,9 +203,9 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
               });
 
               // Add server tools to available tools
-              const serverTools = await server.listTools();
+              const serverTools = (await server.listTools()) as Array<{ name: string }>;
               tools.push(
-                ...serverTools.map((tool: { name: string }) => ({
+                ...serverTools.map(tool => ({
                   name: tool.name,
                   server: serverName,
                 }))
@@ -478,7 +478,10 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
               checkName,
               // If the result has a direct output field, use it directly
               // Otherwise, expose the entire result
-              (result as any).output !== undefined ? (result as any).output : result,
+              (() => {
+                const summary = result as ReviewSummary & { output?: unknown };
+                return summary.output !== undefined ? summary.output : summary;
+              })(),
             ])
           )
         : {},
@@ -594,10 +597,11 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       }
 
       // Parse the response
-      const result = this.parseStructuredResponse(response.content);
+      const result = this.parseStructuredResponse(response.content) as ReviewSummary & {
+        debug?: Record<string, unknown>;
+      };
 
-      // Add debug information if needed by casting to any
-      (result as any).debug = {
+      result.debug = {
         prompt: processedPrompt,
         rawResponse: response.content,
         provider: 'claude-code',

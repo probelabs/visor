@@ -366,7 +366,6 @@ export class CheckExecutionEngine {
           results[taskIndex] = { status: 'fulfilled', value: result };
 
           // Check if we should stop due to fail-fast
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (failFast && this.shouldFailFast(result)) {
             shouldStop = true;
             break;
