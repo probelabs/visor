@@ -73,15 +73,11 @@ checks:
       total_count="{{ outputs['fetch-items-raw'] | size }}"
 
       # Generate issue that includes both individual and aggregate information
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"item-$current_id.txt\\",
-          \\"line\\": 1,
-          \\"severity\\": \\"info\\",
-          \\"message\\": \\"Processing $current_name (item $current_id of $total_count)\\",
-          \\"ruleId\\": \\"raw-access-test\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"item-%s.txt","line":1,"severity":"info","message":"Processing %s (item %s of %s)","ruleId":"raw-access-test"}]}' \
+        "$current_id" \
+        "$current_name" \
+        "$current_id" \
+        "$total_count"
 
 output:
   pr_comment:
@@ -156,15 +152,11 @@ checks:
         message="Value $current_value is at or below baseline $first_value"
       fi
 
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"{{ outputs['fetch-data'].id }}.txt\\",
-          \\"line\\": {{ outputs['fetch-data'].value }},
-          \\"severity\\": \\"$severity\\",
-          \\"message\\": \\"$message\\",
-          \\"ruleId\\": \\"compare-test\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"%s.txt","line":%s,"severity":"%s","message":"%s","ruleId":"compare-test"}]}' \
+        "{{ outputs['fetch-data'].id }}" \
+        "{{ outputs['fetch-data'].value }}" \
+        "$severity" \
+        "$message"
 
 output:
   pr_comment:
@@ -224,15 +216,11 @@ checks:
     depends_on: [fetch-categories]
     exec: |
       # Can access both current category and all categories
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"{{ outputs['fetch-categories'].category }}.txt\\",
-          \\"line\\": 1,
-          \\"severity\\": \\"info\\",
-          \\"message\\": \\"Category {{ outputs['fetch-categories'].category }} has {{ outputs['fetch-categories'].items }} items. Total categories: {{ outputs['fetch-categories-raw'] | size }}\\",
-          \\"ruleId\\": \\"category-info\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"%s.txt","line":1,"severity":"info","message":"Category %s has %s items. Total categories: %s","ruleId":"category-info"}]}' \
+        "{{ outputs['fetch-categories'].category }}" \
+        "{{ outputs['fetch-categories'].category }}" \
+        "{{ outputs['fetch-categories'].items }}" \
+        "{{ outputs['fetch-categories-raw'] | size }}"
 
 output:
   pr_comment:

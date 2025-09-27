@@ -340,7 +340,7 @@ checks:
           issues="$issues{\\"file\\":\\"{{ outputs["fetch-files"].name }}\\",\\"line\\":$i,\\"severity\\":\\"warning\\",\\"message\\":\\"Issue $i in {{ outputs["fetch-files"].name }}\\",\\"ruleId\\":\\"scan\\"}"
         done
         issues="$issues]"
-        echo "{\\"issues\\":$issues}"
+        printf '{"issues":%s}' "$issues"
       else
         echo '{"issues":[]}'
       fi
@@ -353,7 +353,6 @@ output:
 `;
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
-
     const result = execCLI(`node ${cliPath} --check scan-file --output json 2>/dev/null || true`, {
       cwd: tempDir,
       encoding: 'utf-8',
