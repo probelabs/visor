@@ -69,10 +69,10 @@ output:
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
     // Run the dependent check
-    const result = execSync(
-      `${cliPath} --check analyze-item --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check analyze-item --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -148,10 +148,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check compare-item --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check compare-item --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];

@@ -55,10 +55,10 @@ output:
     // Run the dependent check
     let result: string;
     try {
-      result = execSync(
-        `${cliPath} --check analyze-ticket --output json 2>&1`,
-        { cwd: tempDir, encoding: 'utf-8' }
-      );
+      result = execSync(`${cliPath} --check analyze-ticket --output json 2>&1`, {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      });
     } catch (error: any) {
       // On error, still try to parse the output
       result = error.stdout || error.output?.join('') || '{}';
@@ -125,10 +125,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check validate-data --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check validate-data --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -186,10 +186,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-item --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check process-item --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
@@ -230,10 +230,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-empty --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check process-empty --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -321,10 +321,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check scan-file --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check scan-file --output json 2>/dev/null || true`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];

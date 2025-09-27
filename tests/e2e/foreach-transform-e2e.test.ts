@@ -55,10 +55,11 @@ output:
     // Run the dependent check
     let result: string;
     try {
-      result = execSync(
-        `${cliPath} --check analyze-ticket --output json`,
-        { cwd: tempDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
+      result = execSync(`${cliPath} --check analyze-ticket --output json`, {
+        cwd: tempDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
     } catch (error: any) {
       console.error('Command failed:', error.message);
       console.error('Output:', error.stdout?.toString());
@@ -117,10 +118,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-item --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check process-item --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
     const checkResult = output.default[0];
@@ -158,10 +159,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-single --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check process-single --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
     const checkResult = output.default[0];
@@ -204,10 +205,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check summarize --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check summarize --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
     expect(output.default).toBeDefined();
@@ -246,10 +247,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-empty --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check process-empty --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
 
@@ -289,10 +290,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check check-file --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check check-file --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
     const checkResult = output.default[0];
@@ -340,10 +341,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check analyze-post --output json 2>/dev/null`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execSync(`${cliPath} --check analyze-post --output json 2>/dev/null`, {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result);
     const checkResult = output.default[0];
@@ -383,17 +384,17 @@ output:
 
       fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-      const result = execSync(
-        `${cliPath} --check process-invalid --output json 2>/dev/null`,
-        { cwd: tempDir, encoding: 'utf-8' }
-      );
+      const result = execSync(`${cliPath} --check process-invalid --output json 2>/dev/null`, {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      });
 
       const output = JSON.parse(result);
 
       // Should handle the error and report it
       expect(output.default).toBeDefined();
-      const checkResult = output.default.find((r: any) =>
-        r.checkName === 'fetch-invalid' || r.checkName === 'process-invalid'
+      const checkResult = output.default.find(
+        (r: any) => r.checkName === 'fetch-invalid' || r.checkName === 'process-invalid'
       );
       expect(checkResult).toBeDefined();
     });
@@ -425,19 +426,21 @@ output:
 
       fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-      const result = execSync(
-        `${cliPath} --check process-malformed --output json 2>/dev/null`,
-        { cwd: tempDir, encoding: 'utf-8' }
-      );
+      const result = execSync(`${cliPath} --check process-malformed --output json 2>/dev/null`, {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      });
 
       const output = JSON.parse(result);
 
       // Should report the parse error
       const fetchResult = output.default.find((r: any) => r.checkName === 'fetch-malformed');
       if (fetchResult && fetchResult.issues) {
-        expect(fetchResult.issues.some((i: any) =>
-          i.message.includes('transform_js_error') || i.message.includes('error')
-        )).toBe(true);
+        expect(
+          fetchResult.issues.some(
+            (i: any) => i.message.includes('transform_js_error') || i.message.includes('error')
+          )
+        ).toBe(true);
       }
     });
   });
