@@ -1423,32 +1423,33 @@ export class CheckExecutionEngine {
                   : typeof reviewSummaryWithOutput.output
               );
             }
-            let outputArray = reviewSummaryWithOutput.output;
+            const rawOutput = reviewSummaryWithOutput.output;
+            let normalizedOutput: unknown[];
+
+            if (Array.isArray(rawOutput)) {
+              normalizedOutput = rawOutput;
+            } else if (typeof rawOutput === 'string') {
+              try {
+                const parsed = JSON.parse(rawOutput);
+                normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                normalizedOutput = [rawOutput];
+              }
+            } else if (rawOutput === undefined || rawOutput === null) {
+              normalizedOutput = [];
+            } else {
+              normalizedOutput = [rawOutput];
+            }
 
             if (process.env.DEBUG) {
               console.log(
                 `🔧 Debug: Check "${checkName}" forEach output:`,
-                JSON.stringify(outputArray).slice(0, 200)
+                JSON.stringify(normalizedOutput).slice(0, 200)
               );
             }
 
-            // Ensure output is an array
-            if (!Array.isArray(outputArray)) {
-              // Try to parse as JSON if it's a string
-              if (typeof outputArray === 'string') {
-                try {
-                  const parsed = JSON.parse(outputArray);
-                  outputArray = Array.isArray(parsed) ? parsed : [parsed];
-                } catch {
-                  outputArray = [outputArray];
-                }
-              } else {
-                outputArray = [outputArray];
-              }
-            }
-
             // Store the array for iteration by dependent checks
-            reviewSummaryWithOutput.forEachItems = outputArray;
+            reviewSummaryWithOutput.forEachItems = normalizedOutput;
             reviewSummaryWithOutput.isForEach = true;
           }
 
