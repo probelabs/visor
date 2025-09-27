@@ -7,6 +7,28 @@ describe('forEach with transform_js E2E Tests', () => {
   let tempDir: string;
   let cliPath: string;
 
+  // Helper function to execute CLI with clean environment
+  const execCLI = (command: string, options: any = {}): string => {
+    // Clear Jest environment variables so the CLI runs properly
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.JEST_WORKER_ID;
+    delete cleanEnv.NODE_ENV;
+
+    // Merge options with clean environment
+    const finalOptions = {
+      ...options,
+      env: cleanEnv,
+    };
+
+    const result = execSync(command, finalOptions);
+
+    // Convert Buffer to string if needed
+    if (Buffer.isBuffer(result)) {
+      return result.toString('utf-8');
+    }
+    return result as string;
+  };
+
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-'));
     cliPath = path.join(__dirname, '../../dist/index.js');
@@ -22,6 +44,13 @@ describe('forEach with transform_js E2E Tests', () => {
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('should execute CLI with clean environment', () => {
+    // Simple test to verify the CLI runs
+    expect(fs.existsSync(cliPath)).toBe(true);
+    const helpResult = execCLI(`node ${cliPath} --help`, { encoding: 'utf-8' });
+    expect(helpResult).toContain('Usage: visor');
   });
 
   it('should propagate individual forEach items to dependent checks with transform_js', () => {
@@ -55,7 +84,7 @@ output:
     // Run the dependent check
     let result: string;
     try {
-      result = execSync(`${cliPath} --check analyze-ticket --output json 2>&1`, {
+      result = execCLI(`node ${cliPath} --check analyze-ticket --output json 2>&1`, {
         cwd: tempDir,
         encoding: 'utf-8',
       });
@@ -74,6 +103,8 @@ output:
     // Handle empty result
     if (!result || result.trim() === '') {
       console.error('Empty result from CLI command');
+      console.error('CLI Path:', cliPath);
+      console.error('Temp Dir:', tempDir);
       throw new Error('CLI returned empty output');
     }
 
@@ -135,7 +166,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check process-item --output json 2>/dev/null || true`, {
+    const result = execCLI(`node ${cliPath} --check process-item --output json 2>/dev/null || true`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -176,7 +207,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check process-single --output json 2>/dev/null`, {
+    const result = execCLI(`node ${cliPath} --check process-single --output json 2>/dev/null`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -222,7 +253,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check summarize --output json 2>/dev/null`, {
+    const result = execCLI(`node ${cliPath} --check summarize --output json 2>/dev/null`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -264,7 +295,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check process-empty --output json 2>/dev/null`, {
+    const result = execCLI(`node ${cliPath} --check process-empty --output json 2>/dev/null`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -307,7 +338,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check check-file --output json 2>/dev/null`, {
+    const result = execCLI(`node ${cliPath} --check check-file --output json 2>/dev/null`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -358,7 +389,7 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check analyze-post --output json 2>/dev/null`, {
+    const result = execCLI(`node ${cliPath} --check analyze-post --output json 2>/dev/null`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
@@ -401,7 +432,7 @@ output:
 
       fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-      const result = execSync(`${cliPath} --check process-invalid --output json 2>/dev/null`, {
+      const result = execCLI(`node ${cliPath} --check process-invalid --output json 2>/dev/null`, {
         cwd: tempDir,
         encoding: 'utf-8',
       });
@@ -443,7 +474,7 @@ output:
 
       fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-      const result = execSync(`${cliPath} --check process-malformed --output json 2>/dev/null`, {
+      const result = execCLI(`node ${cliPath} --check process-malformed --output json 2>/dev/null`, {
         cwd: tempDir,
         encoding: 'utf-8',
       });

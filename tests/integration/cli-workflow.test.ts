@@ -73,23 +73,36 @@ describe('CLI Workflow Integration Tests', () => {
         commandArgs = ['ts-node', SOURCE_CLI_PATH, ...args];
       }
 
+      let stdout = '';
+      let stderr = '';
+      let timeoutHandle: NodeJS.Timeout;
+
+      // Clean environment for CLI to run properly (remove Jest variables)
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.JEST_WORKER_ID;
+      delete cleanEnv.NODE_ENV;
+
       const child = spawn(command, commandArgs, {
         cwd: options.cwd || tempDir,
         stdio: 'pipe',
+        env: cleanEnv,
       });
 
-      let stdout = '';
-      let stderr = '';
+      // Attach listeners immediately to avoid race conditions
+      if (child.stdout) {
+        child.stdout.on('data', (data: any) => {
+          stdout += data.toString();
+        });
+      }
 
-      child.stdout?.on('data', (data: any) => {
-        stdout += data.toString();
-      });
-
-      child.stderr?.on('data', (data: any) => {
-        stderr += data.toString();
-      });
+      if (child.stderr) {
+        child.stderr.on('data', (data: any) => {
+          stderr += data.toString();
+        });
+      }
 
       child.on('close', (code: any) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         resolve({
           stdout,
           stderr,
@@ -98,12 +111,13 @@ describe('CLI Workflow Integration Tests', () => {
       });
 
       child.on('error', (error: any) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         reject(error);
       });
 
       // Set timeout
       const timeoutMs = options.timeout || timeout;
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         child.kill('SIGTERM');
         reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
       }, timeoutMs);

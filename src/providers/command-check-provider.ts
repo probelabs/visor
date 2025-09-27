@@ -143,7 +143,7 @@ export class CommandCheckProvider extends CheckProvider {
         try {
           const transformContext = {
             ...templateContext,
-            output: rawOutput, // Use raw string for Liquid
+            output: output, // Use parsed output for Liquid (object if JSON, string otherwise)
           };
           const rendered = await this.liquid.parseAndRender(transform, transformContext);
 

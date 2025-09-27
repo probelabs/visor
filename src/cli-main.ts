@@ -112,7 +112,8 @@ export async function main(): Promise<void> {
     checksToRun = Array.from(checksWithDependencies);
 
     // Use stderr for status messages when outputting formatted results to stdout
-    const logFn = console.error;
+    // Suppress all status messages when outputting JSON to avoid breaking parsers
+    const logFn = options.output === 'json' ? () => {} : console.error;
 
     // Determine if we should include code context (diffs)
     // In CLI mode (local), we do smart detection. PR mode always includes context.
