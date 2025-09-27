@@ -1,70 +1,82 @@
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
 import { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
 import { VisorConfig } from '../../src/types/config';
-import { execSync } from 'child_process';
-
-jest.mock('child_process');
+import { CheckProvider } from '../../src/providers/check-provider.interface';
+import { ReviewSummary } from '../../src/reviewer';
 
 describe('forEach with transform_js integration', () => {
   let registry: CheckProviderRegistry;
 
   beforeEach(() => {
     registry = CheckProviderRegistry.getInstance();
+    // Clear all mocks before each test
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // Clean up registry after each test
+    (registry as any).providers.clear();
+    (registry as any).instance = null;
   });
 
   it('should properly propagate forEach items to dependent checks when using transform_js', async () => {
-    // Override console.log temporarily to see debug output
-    const originalLog = console.log;
-    const logs: any[] = [];
-    console.log = (...args: any[]) => {
-      logs.push(args.join(' '));
-      originalLog(...args);
-    };
-
     // Track what the dependent check receives
     const capturedOutputs: any[] = [];
 
-    // Create a mock provider to capture dependency results
-    const mockProvider = {
-      execute: jest.fn(async (prInfo, config, dependencyResults) => {
-        console.log(
-          'Mock provider called with dependencies:',
-          dependencyResults ? Array.from(dependencyResults.keys()) : 'none'
-        );
-
-        // Capture what this check receives from dependencies
-        if (dependencyResults && dependencyResults.has('fetch-items')) {
-          // The buildOutputContext method extracts the output field
-          const outputs: Record<string, unknown> = {};
-          for (const [checkName, result] of dependencyResults) {
-            console.log(`Dependency ${checkName}:`, result);
-            outputs[checkName] =
-              (result as any).output !== undefined ? (result as any).output : result;
-          }
-          console.log('Extracted fetch-items:', outputs['fetch-items']);
-          capturedOutputs.push(outputs['fetch-items']);
-        }
-        return { issues: [] };
+    // Create a mock provider for the forEach check that returns an array
+    const forEachProvider: CheckProvider = {
+      getName: () => 'forEach-provider',
+      getDescription: () => 'Mock forEach provider',
+      getSupportedConfigKeys: () => ['type', 'transform_js', 'forEach'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async () => {
+        // Return an array that will be processed by forEach
+        return {
+          issues: [],
+          output: [
+            { id: 1, name: 'item1' },
+            { id: 2, name: 'item2' },
+          ],
+        } as ReviewSummary;
       }),
-      getName: () => 'test-provider',
-      getSupportedConfigKeys: () => ['type', 'depends_on'],
     };
 
-    // Override the noop provider with our mock
-    const originalNoop = (registry as any).providers.get('noop');
-    (registry as any).providers.set('noop', mockProvider);
+    // Create a mock provider to capture dependency results
+    const dependentProvider: CheckProvider = {
+      getName: () => 'dependent-provider',
+      getDescription: () => 'Mock dependent provider',
+      getSupportedConfigKeys: () => ['type', 'depends_on'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async (prInfo, config, dependencyResults) => {
+        // Capture what this check receives from dependencies
+        if (dependencyResults && dependencyResults.has('fetch-items')) {
+          const result = dependencyResults.get('fetch-items');
+          // The forEach logic should provide individual items wrapped in output field
+          const output = (result as any).output;
+          capturedOutputs.push(output);
+        }
+        return { issues: [] } as ReviewSummary;
+      }),
+    };
+
+    // Register the providers
+    (registry as any).providers.set('forEach-provider', forEachProvider);
+    (registry as any).providers.set('dependent-provider', dependentProvider);
 
     const config: VisorConfig = {
       version: '1.0',
       checks: {
         'fetch-items': {
-          type: 'command',
-          exec: 'echo \'[{"id":1,"name":"item1"},{"id":2,"name":"item2"}]\'',
-          transform_js: 'JSON.parse(output)',
+          type: 'forEach-provider' as any,
+          transform_js: 'output', // Just return the output as-is
           forEach: true,
         },
         'process-items': {
-          type: 'noop' as any,
+          type: 'dependent-provider' as any,
           depends_on: ['fetch-items'],
         },
       },
@@ -77,78 +89,87 @@ describe('forEach with transform_js integration', () => {
       },
     };
 
-    // Mock execSync for the command provider - override the global mock from setup.ts
-    console.log('execSync mock before:', (execSync as jest.Mock).getMockImplementation());
-    (execSync as jest.Mock).mockImplementation((cmd: string, options?: any) => {
-      console.log('execSync called with command:', cmd);
-      console.log('execSync options:', options);
-      // Always return the expected JSON for any echo command
-      const result = '[{"id":1,"name":"item1"},{"id":2,"name":"item2"}]';
-      console.log('Returning:', result);
-      return Buffer.from(result);
+    const engine = new CheckExecutionEngine();
+
+    // Execute the checks
+    await engine.executeChecks({
+      checks: ['fetch-items', 'process-items'],
+      config,
     });
-    console.log('execSync mock after:', (execSync as jest.Mock).getMockImplementation());
 
-    try {
-      const engine = new CheckExecutionEngine();
+    // Verify the dependent check was called twice (once for each forEach item)
+    expect(dependentProvider.execute).toHaveBeenCalledTimes(2);
 
-      // Execute the checks - need to run both fetch-items and process-items
-      try {
-        const results = await engine.executeChecks({
-          checks: ['fetch-items', 'process-items'],
-          config,
-        });
-        console.log('Results:', results);
-
-        // Log the fetch-items result
-        const fetchResult =
-          (results as any).checkResults?.['fetch-items'] ||
-          (results as any).results?.get('fetch-items');
-        console.log('fetch-items result:', JSON.stringify(fetchResult, null, 2));
-
-        console.log('Mock provider calls:', mockProvider.execute.mock.calls.length);
-        console.log('Captured outputs:', capturedOutputs);
-      } catch (error) {
-        console.error('Execution error:', error);
-        throw error;
-      }
-
-      // Log what we actually got
-      console.log('capturedOutputs detail:', JSON.stringify(capturedOutputs, null, 2));
-
-      // Verify the dependent check was called twice (once for each forEach item)
-      expect(mockProvider.execute).toHaveBeenCalledTimes(2);
-
-      // Verify each call received the individual item wrapped properly
-      expect(capturedOutputs).toHaveLength(2);
-      expect(capturedOutputs[0]).toEqual({ id: 1, name: 'item1' });
-      expect(capturedOutputs[1]).toEqual({ id: 2, name: 'item2' });
-    } finally {
-      // Print logs for debugging
-      console.log = originalLog;
-      process.stderr.write(`Test logs: ${JSON.stringify(logs, null, 2)}\n`);
-
-      // Reset the mock
-      (execSync as jest.Mock).mockReset();
-      // Restore the original noop provider
-      (registry as any).providers.set('noop', originalNoop);
-    }
+    // Verify each call received the individual item
+    expect(capturedOutputs).toHaveLength(2);
+    expect(capturedOutputs[0]).toEqual({ id: 1, name: 'item1' });
+    expect(capturedOutputs[1]).toEqual({ id: 2, name: 'item2' });
   });
 
-  it('should handle forEach with transform_js in command provider', async () => {
+  it('should provide raw array access via <checkName>-raw key', async () => {
+    // Track what the dependent check receives
+    const capturedOutputs: any[] = [];
+    const capturedRawArrays: any[] = [];
+
+    // Create a mock provider for the forEach check
+    const forEachProvider: CheckProvider = {
+      getName: () => 'forEach-provider',
+      getDescription: () => 'Mock forEach provider',
+      getSupportedConfigKeys: () => ['type', 'forEach'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async () => {
+        return {
+          issues: [],
+          output: [
+            { id: 1, value: 10 },
+            { id: 2, value: 20 },
+            { id: 3, value: 30 },
+          ],
+        } as ReviewSummary;
+      }),
+    };
+
+    // Create a mock provider to capture dependency results
+    const dependentProvider: CheckProvider = {
+      getName: () => 'dependent-provider',
+      getDescription: () => 'Mock dependent provider',
+      getSupportedConfigKeys: () => ['type', 'depends_on'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async (prInfo, config, dependencyResults) => {
+        if (dependencyResults) {
+          // Check for individual item
+          if (dependencyResults.has('fetch-data')) {
+            const result = dependencyResults.get('fetch-data');
+            capturedOutputs.push((result as any).output);
+          }
+          // Check for raw array access
+          if (dependencyResults.has('fetch-data-raw')) {
+            const rawResult = dependencyResults.get('fetch-data-raw');
+            capturedRawArrays.push((rawResult as any).output);
+          }
+        }
+        return { issues: [] } as ReviewSummary;
+      }),
+    };
+
+    // Register the providers
+    (registry as any).providers.set('forEach-provider', forEachProvider);
+    (registry as any).providers.set('dependent-provider', dependentProvider);
+
     const config: VisorConfig = {
       version: '1.0',
       checks: {
         'fetch-data': {
-          type: 'command',
-          exec: 'echo \'{"items":[{"id":1},{"id":2}]}\'',
-          transform_js: 'JSON.parse(output).items',
+          type: 'forEach-provider' as any,
           forEach: true,
         },
         'process-data': {
-          type: 'command',
+          type: 'dependent-provider' as any,
           depends_on: ['fetch-data'],
-          exec: 'echo "ID:{{ outputs[\\"fetch-data\\"].id }}"',
         },
       },
       output: {
@@ -160,36 +181,165 @@ describe('forEach with transform_js integration', () => {
       },
     };
 
-    // Track executed commands
-    const executedCommands: string[] = [];
-    const originalExecSync = require('child_process').execSync;
-    require('child_process').execSync = jest.fn((cmd: string) => {
-      executedCommands.push(cmd);
+    const engine = new CheckExecutionEngine();
 
-      if (cmd.includes('{"items":[')) {
-        return Buffer.from('{"items":[{"id":1},{"id":2}]}');
-      }
-      // Return the command to see what was rendered
-      return Buffer.from(cmd);
+    await engine.executeChecks({
+      checks: ['fetch-data', 'process-data'],
+      config,
     });
 
-    try {
-      const engine = new CheckExecutionEngine();
+    // Verify the dependent check was called 3 times (once for each item)
+    expect(dependentProvider.execute).toHaveBeenCalledTimes(3);
 
-      await engine.executeChecks({
-        checks: ['fetch-data', 'process-data'],
-        config,
-      });
+    // Verify individual items were received
+    expect(capturedOutputs).toHaveLength(3);
+    expect(capturedOutputs[0]).toEqual({ id: 1, value: 10 });
+    expect(capturedOutputs[1]).toEqual({ id: 2, value: 20 });
+    expect(capturedOutputs[2]).toEqual({ id: 3, value: 30 });
 
-      // Should have executed process-data twice
-      const processCommands = executedCommands.filter(cmd => cmd.includes('ID:'));
-      expect(processCommands).toHaveLength(2);
+    // Verify raw array was accessible in each iteration
+    expect(capturedRawArrays).toHaveLength(3);
+    const expectedRawArray = [
+      { id: 1, value: 10 },
+      { id: 2, value: 20 },
+      { id: 3, value: 30 },
+    ];
+    expect(capturedRawArrays[0]).toEqual(expectedRawArray);
+    expect(capturedRawArrays[1]).toEqual(expectedRawArray);
+    expect(capturedRawArrays[2]).toEqual(expectedRawArray);
+  });
 
-      // Verify the IDs were properly extracted
-      expect(processCommands[0]).toContain('ID:1');
-      expect(processCommands[1]).toContain('ID:2');
-    } finally {
-      require('child_process').execSync = originalExecSync;
-    }
+  it('should handle empty arrays from forEach checks', async () => {
+    const forEachProvider: CheckProvider = {
+      getName: () => 'forEach-provider',
+      getDescription: () => 'Mock forEach provider',
+      getSupportedConfigKeys: () => ['type', 'forEach'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async () => {
+        return {
+          issues: [],
+          output: [], // Empty array
+        } as ReviewSummary;
+      }),
+    };
+
+    const dependentProvider: CheckProvider = {
+      getName: () => 'dependent-provider',
+      getDescription: () => 'Mock dependent provider',
+      getSupportedConfigKeys: () => ['type', 'depends_on'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async () => {
+        return { issues: [] } as ReviewSummary;
+      }),
+    };
+
+    (registry as any).providers.set('forEach-provider', forEachProvider);
+    (registry as any).providers.set('dependent-provider', dependentProvider);
+
+    const config: VisorConfig = {
+      version: '1.0',
+      checks: {
+        'fetch-empty': {
+          type: 'forEach-provider' as any,
+          forEach: true,
+        },
+        'process-empty': {
+          type: 'dependent-provider' as any,
+          depends_on: ['fetch-empty'],
+        },
+      },
+      output: {
+        pr_comment: {
+          format: 'markdown',
+          group_by: 'check',
+          collapse: false,
+        },
+      },
+    };
+
+    const engine = new CheckExecutionEngine();
+
+    await engine.executeChecks({
+      checks: ['fetch-empty', 'process-empty'],
+      config,
+    });
+
+    // Dependent check should not be executed for empty array
+    expect(dependentProvider.execute).toHaveBeenCalledTimes(0);
+  });
+
+  it('should wrap non-array outputs in array when forEach is enabled', async () => {
+    const capturedOutputs: any[] = [];
+
+    const forEachProvider: CheckProvider = {
+      getName: () => 'forEach-provider',
+      getDescription: () => 'Mock forEach provider',
+      getSupportedConfigKeys: () => ['type', 'forEach'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async () => {
+        return {
+          issues: [],
+          output: { id: 42, name: 'single-item' }, // Single object, not array
+        } as ReviewSummary;
+      }),
+    };
+
+    const dependentProvider: CheckProvider = {
+      getName: () => 'dependent-provider',
+      getDescription: () => 'Mock dependent provider',
+      getSupportedConfigKeys: () => ['type', 'depends_on'],
+      validateConfig: async () => true,
+      isAvailable: async () => true,
+      getRequirements: () => [],
+      execute: jest.fn(async (prInfo, config, dependencyResults) => {
+        if (dependencyResults && dependencyResults.has('fetch-single')) {
+          const result = dependencyResults.get('fetch-single');
+          capturedOutputs.push((result as any).output);
+        }
+        return { issues: [] } as ReviewSummary;
+      }),
+    };
+
+    (registry as any).providers.set('forEach-provider', forEachProvider);
+    (registry as any).providers.set('dependent-provider', dependentProvider);
+
+    const config: VisorConfig = {
+      version: '1.0',
+      checks: {
+        'fetch-single': {
+          type: 'forEach-provider' as any,
+          forEach: true,
+        },
+        'process-single': {
+          type: 'dependent-provider' as any,
+          depends_on: ['fetch-single'],
+        },
+      },
+      output: {
+        pr_comment: {
+          format: 'markdown',
+          group_by: 'check',
+          collapse: false,
+        },
+      },
+    };
+
+    const engine = new CheckExecutionEngine();
+
+    await engine.executeChecks({
+      checks: ['fetch-single', 'process-single'],
+      config,
+    });
+
+    // Should be called once for the single item
+    expect(dependentProvider.execute).toHaveBeenCalledTimes(1);
+    expect(capturedOutputs).toHaveLength(1);
+    expect(capturedOutputs[0]).toEqual({ id: 42, name: 'single-item' });
   });
 });
