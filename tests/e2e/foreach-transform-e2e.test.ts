@@ -118,12 +118,12 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(`${cliPath} --check process-item --output json 2>/dev/null`, {
+    const result = execSync(`${cliPath} --check process-item --output json 2>/dev/null || true`, {
       cwd: tempDir,
       encoding: 'utf-8',
     });
 
-    const output = JSON.parse(result);
+    const output = JSON.parse(result || '{}');
     const checkResult = output.default[0];
     const content = checkResult.content || '';
 

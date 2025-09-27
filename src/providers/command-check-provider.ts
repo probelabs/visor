@@ -175,15 +175,25 @@ export class CommandCheckProvider extends CheckProvider {
             files: templateContext.files,
             outputs: templateContext.outputs,
             env: templateContext.env,
-            // Helper functions
-            JSON: JSON,
           };
 
           // Compile and execute the JavaScript expression
-          const exec = this.sandbox.compile(`
-            const { output, pr, files, outputs, env, JSON } = scope;
+          // Use direct property access instead of destructuring to avoid syntax issues
+          const code = `
+            const output = scope.output;
+            const pr = scope.pr;
+            const files = scope.files;
+            const outputs = scope.outputs;
+            const env = scope.env;
             return (${transformJs.trim()});
-          `);
+          `;
+
+          if (process.env.DEBUG) {
+            console.log('🔧 Debug: JavaScript transform code:', code);
+            console.log('🔧 Debug: JavaScript context:', jsContext);
+          }
+
+          const exec = this.sandbox.compile(code);
 
           finalOutput = exec({ scope: jsContext }).run();
         } catch (error) {
