@@ -1,18 +1,20 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 describe('forEach with transform_js E2E Verification Tests', () => {
   let tempDir: string;
-  let cliPath: string;
+  let cliCommand: string;
+  let cliArgsPrefix: string[];
 
   // Helper function to execute CLI with clean environment
-  const execCLI = (command: string, options: any = {}): string => {
+  const execCLI = (args: string[], options: any = {}): string => {
     // Clear Jest environment variables so the CLI runs properly
     const cleanEnv = { ...process.env };
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
+    delete cleanEnv.GITHUB_ACTIONS;
 
     // Merge options with clean environment
     const finalOptions = {
@@ -20,18 +22,36 @@ describe('forEach with transform_js E2E Verification Tests', () => {
       env: cleanEnv,
     };
 
-    const result = execSync(command, finalOptions);
+    const cliArgs = ['--cli', ...args];
 
-    // Convert Buffer to string if needed
-    if (Buffer.isBuffer(result)) {
-      return result.toString('utf-8');
+    try {
+      const result = execFileSync(cliCommand, [...cliArgsPrefix, ...cliArgs], {
+        ...finalOptions,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return result;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'stdout' in error) {
+        const stdout = (error as { stdout?: Buffer | string }).stdout;
+        if (stdout) {
+          return Buffer.isBuffer(stdout) ? stdout.toString('utf-8') : stdout;
+        }
+      }
+      throw error;
     }
-    return result as string;
   };
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-'));
-    cliPath = path.join(__dirname, '../../dist/index.js');
+    const distCli = path.join(__dirname, '../../dist/index.js');
+    if (fs.existsSync(distCli)) {
+      cliCommand = 'node';
+      cliArgsPrefix = [distCli];
+    } else {
+      cliCommand = 'node';
+      cliArgsPrefix = ['-r', 'ts-node/register', path.join(__dirname, '../../src/index.ts')];
+    }
 
     // Initialize git repository
     execSync('git init -q', { cwd: tempDir });
@@ -77,21 +97,12 @@ output:
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
     // Run the dependent check
-    let result: string;
-    try {
-      result = execCLI(`node ${cliPath} --check analyze-ticket --output json 2>&1`, {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      });
-    } catch (error: any) {
-      // On error, still try to parse the output
-      result = error.stdout || error.output?.join('') || '{}';
-    }
+    const result = execCLI(['--check', 'analyze-ticket', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
-    // Extract JSON from the output (may contain other messages)
-    const jsonMatch = result.match(/\{[\s\S]*\}/);
-    const jsonString = jsonMatch ? jsonMatch[0] : '{}';
-    const output = JSON.parse(jsonString);
+    const output = JSON.parse(result || '{}');
 
     // Verify the check ran successfully
     expect(output.default).toBeDefined();
@@ -149,13 +160,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check validate-data --output json 2>/dev/null || true`,
-      {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      }
-    );
+    const result = execCLI(['--check', 'validate-data', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -213,13 +221,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check process-item --output json 2>/dev/null || true`,
-      {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      }
-    );
+    const result = execCLI(['--check', 'process-item', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
@@ -260,13 +265,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check process-empty --output json 2>/dev/null || true`,
-      {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      }
-    );
+    const result = execCLI(['--check', 'process-empty', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -302,10 +304,10 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check process-invalid --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execCLI(['--check', 'process-invalid', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
 
@@ -340,7 +342,7 @@ checks:
           issues="$issues{\\"file\\":\\"{{ outputs["fetch-files"].name }}\\",\\"line\\":$i,\\"severity\\":\\"warning\\",\\"message\\":\\"Issue $i in {{ outputs["fetch-files"].name }}\\",\\"ruleId\\":\\"scan\\"}"
         done
         issues="$issues]"
-        echo "{\\"issues\\":$issues}"
+        printf '{"issues":%s}' "$issues"
       else
         echo '{"issues":[]}'
       fi
@@ -353,8 +355,7 @@ output:
 `;
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
-
-    const result = execCLI(`node ${cliPath} --check scan-file --output json 2>/dev/null || true`, {
+    const result = execCLI(['--check', 'scan-file', '--output', 'json'], {
       cwd: tempDir,
       encoding: 'utf-8',
     });

@@ -1,18 +1,20 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 
 describe('forEach raw array access E2E Tests', () => {
   let tempDir: string;
-  let cliPath: string;
+  let cliCommand: string;
+  let cliArgsPrefix: string[];
 
   // Helper function to execute CLI with clean environment
-  const execCLI = (command: string, options: any = {}): string => {
+  const execCLI = (args: string[], options: any = {}): string => {
     // Clear Jest environment variables so the CLI runs properly
     const cleanEnv = { ...process.env };
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
+    delete cleanEnv.GITHUB_ACTIONS;
 
     // Merge options with clean environment
     const finalOptions = {
@@ -20,18 +22,35 @@ describe('forEach raw array access E2E Tests', () => {
       env: cleanEnv,
     };
 
-    const result = execSync(command, finalOptions);
-
-    // Convert Buffer to string if needed
-    if (Buffer.isBuffer(result)) {
-      return result.toString('utf-8');
+    const cliArgs = ['--cli', ...args];
+    try {
+      const result = execFileSync(cliCommand, [...cliArgsPrefix, ...cliArgs], {
+        ...finalOptions,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return result;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'stdout' in error) {
+        const stdout = (error as { stdout?: Buffer | string }).stdout;
+        if (stdout) {
+          return Buffer.isBuffer(stdout) ? stdout.toString('utf-8') : stdout;
+        }
+      }
+      throw error;
     }
-    return result as string;
   };
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-'));
-    cliPath = path.join(__dirname, '../../dist/index.js');
+    const distCli = path.join(__dirname, '../../dist/index.js');
+    if (fs.existsSync(distCli)) {
+      cliCommand = 'node';
+      cliArgsPrefix = [distCli];
+    } else {
+      cliCommand = 'node';
+      cliArgsPrefix = ['-r', 'ts-node/register', path.join(__dirname, '../../src/index.ts')];
+    }
 
     // Initialize git repository
     execSync('git init -q', { cwd: tempDir });
@@ -73,15 +92,11 @@ checks:
       total_count="{{ outputs['fetch-items-raw'] | size }}"
 
       # Generate issue that includes both individual and aggregate information
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"item-$current_id.txt\\",
-          \\"line\\": 1,
-          \\"severity\\": \\"info\\",
-          \\"message\\": \\"Processing $current_name (item $current_id of $total_count)\\",
-          \\"ruleId\\": \\"raw-access-test\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"item-%s.txt","line":1,"severity":"info","message":"Processing %s (item %s of %s)","ruleId":"raw-access-test"}]}' \
+        "$current_id" \
+        "$current_name" \
+        "$current_id" \
+        "$total_count"
 
 output:
   pr_comment:
@@ -93,17 +108,18 @@ output:
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
     // Run the dependent check
-    const result = execCLI(
-      `node ${cliPath} --check analyze-item --output json 2>/dev/null || true`,
-      {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      }
-    );
+    const result = execCLI(['--check', 'analyze-item', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
     const issues = checkResult?.issues || [];
+
+    if (issues.length !== 3) {
+      process.stderr.write(`DEBUG analyze-item raw result: ${result}\n`);
+    }
 
     // Should have 3 issues, one for each item
     expect(issues.length).toBe(3);
@@ -156,15 +172,11 @@ checks:
         message="Value $current_value is at or below baseline $first_value"
       fi
 
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"{{ outputs['fetch-data'].id }}.txt\\",
-          \\"line\\": {{ outputs['fetch-data'].value }},
-          \\"severity\\": \\"$severity\\",
-          \\"message\\": \\"$message\\",
-          \\"ruleId\\": \\"compare-test\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"%s.txt","line":%s,"severity":"%s","message":"%s","ruleId":"compare-test"}]}' \
+        "{{ outputs['fetch-data'].id }}" \
+        "{{ outputs['fetch-data'].value }}" \
+        "$severity" \
+        "$message"
 
 output:
   pr_comment:
@@ -175,18 +187,18 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check compare-item --output json 2>/dev/null || true`,
-      {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      }
-    );
+    const result = execCLI(['--check', 'compare-item', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
 
     // Should have 3 issues
+    if (issues.length !== 3) {
+      process.stderr.write(`DEBUG compare-item result: ${result}\n`);
+    }
     expect(issues.length).toBe(3);
 
     // First item should be at baseline (info)
@@ -224,15 +236,11 @@ checks:
     depends_on: [fetch-categories]
     exec: |
       # Can access both current category and all categories
-      echo "{
-        \\"issues\\": [{
-          \\"file\\": \\"{{ outputs['fetch-categories'].category }}.txt\\",
-          \\"line\\": 1,
-          \\"severity\\": \\"info\\",
-          \\"message\\": \\"Category {{ outputs['fetch-categories'].category }} has {{ outputs['fetch-categories'].items }} items. Total categories: {{ outputs['fetch-categories-raw'] | size }}\\",
-          \\"ruleId\\": \\"category-info\\"
-        }]
-      }"
+      printf '{"issues":[{"file":"%s.txt","line":1,"severity":"info","message":"Category %s has %s items. Total categories: %s","ruleId":"category-info"}]}' \
+        "{{ outputs['fetch-categories'].category }}" \
+        "{{ outputs['fetch-categories'].category }}" \
+        "{{ outputs['fetch-categories'].items }}" \
+        "{{ outputs['fetch-categories-raw'] | size }}"
 
 output:
   pr_comment:
@@ -243,15 +251,18 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(
-      `node ${cliPath} --check process-category --output json 2>/dev/null || true`,
-      { cwd: tempDir, encoding: 'utf-8' }
-    );
+    const result = execCLI(['--check', 'process-category', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
 
     // Should have 2 issues
+    if (issues.length !== 2) {
+      process.stderr.write(`DEBUG process-category result: ${result}\n`);
+    }
     expect(issues.length).toBe(2);
 
     // Both should mention total categories
