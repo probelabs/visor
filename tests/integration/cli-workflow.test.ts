@@ -75,7 +75,6 @@ describe('CLI Workflow Integration Tests', () => {
 
       let stdout = '';
       let stderr = '';
-      let timeoutHandle: NodeJS.Timeout;
 
       // Clean environment for CLI to run properly (remove Jest variables)
       const cleanEnv = { ...process.env };
@@ -101,8 +100,15 @@ describe('CLI Workflow Integration Tests', () => {
         });
       }
 
+      // Set timeout
+      const timeoutMs = options.timeout || timeout;
+      const timeoutHandle = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
       child.on('close', (code: any) => {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        clearTimeout(timeoutHandle);
         resolve({
           stdout,
           stderr,
@@ -111,16 +117,9 @@ describe('CLI Workflow Integration Tests', () => {
       });
 
       child.on('error', (error: any) => {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        clearTimeout(timeoutHandle);
         reject(error);
       });
-
-      // Set timeout
-      const timeoutMs = options.timeout || timeout;
-      timeoutHandle = setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
     });
   };
 
