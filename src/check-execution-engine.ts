@@ -1212,9 +1212,20 @@ export class CheckExecutionEngine {
               for (const [depName, depResult] of dependencyResults) {
                 if (depName === forEachParentName) {
                   // Replace the entire forEach parent result with just the current item
+                  // Wrap the item in a ReviewSummary structure with an output field
                   // This ensures that outputs.fetch-tickets contains the individual item
-                  const modifiedResult = item as any;
+                  const modifiedResult: ReviewSummary = {
+                    issues: [],
+                    output: item,
+                  } as any;
                   forEachDependencyResults.set(depName, modifiedResult);
+
+                  // Also provide access to the full array via <checkName>-raw key
+                  const rawResult: ReviewSummary = {
+                    issues: [],
+                    output: forEachItems,
+                  } as any;
+                  forEachDependencyResults.set(`${depName}-raw`, rawResult);
                 } else {
                   forEachDependencyResults.set(depName, depResult);
                 }
