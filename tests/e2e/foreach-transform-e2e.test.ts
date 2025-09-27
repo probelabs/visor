@@ -166,10 +166,13 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(`node ${cliPath} --check process-item --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check process-item --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default[0];
@@ -474,22 +477,28 @@ output:
 
       fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-      const result = execCLI(`node ${cliPath} --check process-malformed --output json 2>/dev/null`, {
-        cwd: tempDir,
-        encoding: 'utf-8',
-      });
+      const result = execCLI(
+        `node ${cliPath} --check process-malformed --output json 2>/dev/null`,
+        {
+          cwd: tempDir,
+          encoding: 'utf-8',
+        }
+      );
 
       const output = JSON.parse(result);
 
       // Should report the parse error
       const fetchResult = output.default.find((r: any) => r.checkName === 'fetch-malformed');
-      if (fetchResult && fetchResult.issues) {
-        expect(
-          fetchResult.issues.some(
-            (i: any) => i.message.includes('transform_js_error') || i.message.includes('error')
-          )
-        ).toBe(true);
-      }
+      expect(fetchResult).toBeDefined();
+      const issues = fetchResult?.issues || [];
+      expect(issues.length).toBeGreaterThan(0);
+      expect(
+        issues.some((i: any) => {
+          const message = typeof i.message === 'string' ? i.message : '';
+          const ruleId = typeof i.ruleId === 'string' ? i.ruleId : '';
+          return message.toLowerCase().includes('error') || ruleId.includes('transform_js_error');
+        })
+      ).toBe(true);
     });
   });
 });

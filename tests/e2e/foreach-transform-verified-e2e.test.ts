@@ -147,10 +147,13 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(`node ${cliPath} --check validate-data --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check validate-data --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -208,10 +211,13 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(`node ${cliPath} --check process-item --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check process-item --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
@@ -252,10 +258,13 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(`node ${cliPath} --check process-empty --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check process-empty --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -291,8 +300,8 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-invalid --output json 2>/dev/null || true`,
+    const result = execCLI(
+      `node ${cliPath} --check process-invalid --output json 2>/dev/null || true`,
       { cwd: tempDir, encoding: 'utf-8' }
     );
 

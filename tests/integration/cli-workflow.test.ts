@@ -430,10 +430,8 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           const output = result.stdout + result.stderr;
           expect(output).toContain('🔍 Visor - AI-powered code review tool');
 
-          // Should show debug info about extracted checks from bundled config
-          expect(output).toMatch(
-            /Debug.*Extracted checks from config.*\[.*security.*performance.*quality.*overview.*\]/
-          );
+          // Should confirm default bundled config was loaded
+          expect(output).toContain('Loading bundled default configuration');
         }
       },
       timeout

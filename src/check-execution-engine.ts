@@ -406,7 +406,12 @@ export class CheckExecutionEngine {
     this.config = config;
 
     // Determine where to send log messages based on output format
-    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -571,7 +576,12 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter
   ): Promise<GroupedCheckResults> {
     // Determine where to send log messages based on output format
-    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -699,6 +709,7 @@ export class CheckExecutionEngine {
       // Pass any provider-specific config
       ...checkConfig,
     };
+    providerConfig.forEach = checkConfig.forEach;
 
     const result = await provider.execute(prInfo, providerConfig);
 
@@ -753,6 +764,9 @@ export class CheckExecutionEngine {
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
     const groupedResults: GroupedCheckResults = {};
+    const contentMap = (reviewSummary as any).__contents as
+      | Record<string, string | undefined>
+      | undefined;
 
     // Process each check individually
     for (const checkName of checks) {
@@ -769,6 +783,10 @@ export class CheckExecutionEngine {
         issues: checkIssues,
         debug: reviewSummary.debug,
       };
+
+      if (contentMap?.[checkName]) {
+        (checkSummary as any).content = contentMap[checkName];
+      }
 
       // Render content for this check
       const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
@@ -879,6 +897,11 @@ export class CheckExecutionEngine {
     checkConfig: CheckConfig,
     _prInfo?: PRInfo
   ): Promise<string> {
+    const directContent = (reviewSummary as any).content;
+    if (typeof directContent === 'string' && directContent.trim()) {
+      return directContent.trim();
+    }
+
     // Import the liquid template system
     const { Liquid } = await import('liquidjs');
     const fs = await import('fs/promises');
@@ -1131,6 +1154,7 @@ export class CheckExecutionEngine {
             level: (checkConfig as any).level,
             message: (checkConfig as any).message,
             env: checkConfig.env,
+            forEach: checkConfig.forEach,
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -1203,6 +1227,7 @@ export class CheckExecutionEngine {
 
             const allIssues: any[] = [];
             const allOutputs: any[] = [];
+            const aggregatedContents: string[] = [];
 
             // Execute check for each item in the forEach array
             for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
@@ -1252,12 +1277,21 @@ export class CheckExecutionEngine {
               if ((itemResult as any).output) {
                 allOutputs.push((itemResult as any).output);
               }
+
+              const itemContent = (itemResult as any).content;
+              if (typeof itemContent === 'string' && itemContent.trim()) {
+                aggregatedContents.push(itemContent.trim());
+              }
             }
 
             finalResult = {
               issues: allIssues,
               output: allOutputs.length > 0 ? allOutputs : undefined,
             } as any;
+
+            if (aggregatedContents.length > 0) {
+              (finalResult as any).content = aggregatedContents.join('\n');
+            }
 
             log(
               `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
@@ -1333,6 +1367,14 @@ export class CheckExecutionEngine {
 
           // Handle forEach logic - process array outputs
           if (checkConfig?.forEach && (reviewResult as any).output !== undefined) {
+            if (process.env.DEBUG) {
+              console.log(
+                `🔧 Debug: Raw output for forEach check ${checkName}:`,
+                Array.isArray((reviewResult as any).output)
+                  ? `array(${(reviewResult as any).output.length})`
+                  : typeof (reviewResult as any).output
+              );
+            }
             let outputArray = (reviewResult as any).output;
 
             if (process.env.DEBUG) {
@@ -1684,6 +1726,7 @@ export class CheckExecutionEngine {
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const debugInfo: string[] = [];
+    const contentMap: Record<string, string> = {};
 
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
@@ -1726,12 +1769,19 @@ export class CheckExecutionEngine {
 
         // Issues are already prefixed and enriched with group/schema info
         aggregatedIssues.push(...(result.issues || []));
+
+        const resultContent = (result as any).content;
+        if (typeof resultContent === 'string' && resultContent.trim()) {
+          contentMap[checkName] = resultContent.trim();
+        }
       }
     }
 
-    console.error(
-      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
-    );
+    if (debug) {
+      console.error(
+        `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
+      );
+    }
 
     // Apply issue suppression filtering
     const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
@@ -1787,10 +1837,16 @@ export class CheckExecutionEngine {
       }
     }
 
-    return {
+    const summary: ReviewSummary & { __contents?: Record<string, string> } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
     };
+
+    if (Object.keys(contentMap).length > 0) {
+      summary.__contents = contentMap;
+    }
+
+    return summary;
   }
 
   /**
@@ -1884,9 +1940,11 @@ export class CheckExecutionEngine {
       }
     });
 
-    console.error(
-      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
-    );
+    if (debug) {
+      console.error(
+        `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
+      );
+    }
 
     // Apply issue suppression filtering
     const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;

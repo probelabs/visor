@@ -91,10 +91,13 @@ output:
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
     // Run the dependent check
-    const result = execCLI(`node ${cliPath} --check analyze-item --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check analyze-item --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const checkResult = output.default?.[0];
@@ -170,10 +173,13 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execCLI(`node ${cliPath} --check compare-item --output json 2>/dev/null || true`, {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
+    const result = execCLI(
+      `node ${cliPath} --check compare-item --output json 2>/dev/null || true`,
+      {
+        cwd: tempDir,
+        encoding: 'utf-8',
+      }
+    );
 
     const output = JSON.parse(result || '{}');
     const issues = output.default?.[0]?.issues || [];
@@ -235,8 +241,8 @@ output:
 
     fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
 
-    const result = execSync(
-      `${cliPath} --check process-category --output json 2>/dev/null || true`,
+    const result = execCLI(
+      `node ${cliPath} --check process-category --output json 2>/dev/null || true`,
       { cwd: tempDir, encoding: 'utf-8' }
     );
 
