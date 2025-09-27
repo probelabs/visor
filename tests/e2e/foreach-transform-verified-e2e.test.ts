@@ -9,7 +9,7 @@ describe('forEach with transform_js E2E Verification Tests', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-'));
-    cliPath = path.join(__dirname, '../../dist/cli-main.js');
+    cliPath = path.join(__dirname, '../../dist/index.js');
 
     // Initialize git repository
     execSync('git init -q', { cwd: tempDir });

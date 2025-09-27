@@ -1326,6 +1326,13 @@ export class CheckExecutionEngine {
           if (checkConfig?.forEach && (reviewResult as any).output !== undefined) {
             let outputArray = (reviewResult as any).output;
 
+            if (process.env.DEBUG) {
+              console.log(
+                `🔧 Debug: Check "${checkName}" forEach output:`,
+                JSON.stringify(outputArray).slice(0, 200)
+              );
+            }
+
             // Ensure output is an array
             if (!Array.isArray(outputArray)) {
               // Try to parse as JSON if it's a string

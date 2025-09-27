@@ -7,8 +7,8 @@ import * as os from 'os';
 
 describe('CLI Workflow Integration Tests', () => {
   // Check if compiled version exists for faster test execution
-  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/cli-main.js');
-  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/cli-main.ts');
+  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/index.js');
+  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/index.ts');
   const useCompiledVersion = fs.existsSync(COMPILED_CLI_PATH);
 
   // Log which version we're using (helpful for debugging CI issues)

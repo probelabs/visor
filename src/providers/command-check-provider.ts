@@ -200,6 +200,13 @@ export class CommandCheckProvider extends CheckProvider {
           const exec = this.sandbox.compile(code);
 
           finalOutput = exec({ scope: jsContext }).run();
+
+          if (process.env.DEBUG) {
+            console.log(
+              '🔧 Debug: transform_js result:',
+              JSON.stringify(finalOutput).slice(0, 200)
+            );
+          }
         } catch (error) {
           return {
             issues: [
