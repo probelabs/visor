@@ -72,8 +72,10 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Validate check-level MCP servers if present
-    if ((cfg as any).ai_mcp_servers) {
-      if (!this.validateMcpServers((cfg as any).ai_mcp_servers)) {
+    const checkLevelMcpServers = (cfg as CheckProviderConfig & { ai_mcp_servers?: unknown })
+      .ai_mcp_servers;
+    if (checkLevelMcpServers) {
+      if (!this.validateMcpServers(checkLevelMcpServers)) {
         return false;
       }
     }
@@ -93,11 +95,11 @@ export class AICheckProvider extends CheckProvider {
       if (!serverConfig || typeof serverConfig !== 'object') {
         return false;
       }
-      const config = serverConfig as any;
-      if (!config.command || typeof config.command !== 'string') {
+      const config = serverConfig as { command?: unknown; args?: unknown };
+      if (typeof config.command !== 'string') {
         return false;
       }
-      if (config.args && !Array.isArray(config.args)) {
+      if (config.args !== undefined && !Array.isArray(config.args)) {
         return false;
       }
     }
@@ -386,9 +388,10 @@ export class AICheckProvider extends CheckProvider {
         ? Object.fromEntries(
             Array.from(dependencyResults.entries()).map(([checkName, result]) => [
               checkName,
-              // If the result has a direct output field, use it directly
-              // Otherwise, expose the entire result
-              (result as any).output !== undefined ? (result as any).output : result,
+              (() => {
+                const summary = result as ReviewSummary & { output?: unknown };
+                return summary.output !== undefined ? summary.output : summary;
+              })(),
             ])
           )
         : {},
@@ -430,11 +433,11 @@ export class AICheckProvider extends CheckProvider {
         const createSdkMcpServer =
           mcpModule.createSdkMcpServer || mcpModule.default?.createSdkMcpServer;
 
-        if (createSdkMcpServer) {
+        if (typeof createSdkMcpServer === 'function') {
           for (const [serverName, serverConfig] of Object.entries(aiConfig.mcpServers)) {
             try {
               // Create MCP server instance
-              const server = await (createSdkMcpServer as any)({
+              const server = await createSdkMcpServer({
                 name: serverName,
                 command: serverConfig.command,
                 args: serverConfig.args || [],
@@ -442,9 +445,9 @@ export class AICheckProvider extends CheckProvider {
               });
 
               // Add server tools to available tools
-              const serverTools = await server.listTools();
+              const serverTools = (await server.listTools()) as Array<{ name: string }>;
               tools.push(
-                ...serverTools.map((tool: { name: string }) => ({
+                ...serverTools.map(tool => ({
                   name: tool.name,
                   server: serverName,
                 }))
@@ -552,7 +555,9 @@ export class AICheckProvider extends CheckProvider {
     const mcpServers: Record<string, import('../types/config').McpServerConfig> = {};
 
     // 1. Start with global MCP servers (from visor config root)
-    const globalConfig = config as any; // Cast to access potential global config
+    const globalConfig = config as CheckProviderConfig & {
+      ai_mcp_servers?: Record<string, import('../types/config').McpServerConfig>;
+    };
     if (globalConfig.ai_mcp_servers) {
       Object.assign(mcpServers, globalConfig.ai_mcp_servers);
     }

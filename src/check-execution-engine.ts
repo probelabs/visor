@@ -4,6 +4,7 @@ import {
   ReviewOptions,
   GroupedCheckResults,
   CheckResult,
+  ReviewIssue,
 } from './reviewer';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
@@ -15,6 +16,13 @@ import { FailureConditionEvaluator } from './failure-condition-evaluator';
 import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
+
+type ExtendedReviewSummary = ReviewSummary & {
+  output?: unknown;
+  content?: string;
+  isForEach?: boolean;
+  forEachItems?: unknown[];
+};
 
 /**
  * Filter environment variables to only include safe ones for sandbox evaluation
@@ -358,8 +366,7 @@ export class CheckExecutionEngine {
           results[taskIndex] = { status: 'fulfilled', value: result };
 
           // Check if we should stop due to fail-fast
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (failFast && this.shouldFailFast(result as any)) {
+          if (failFast && this.shouldFailFast(result)) {
             shouldStop = true;
             break;
           }
@@ -406,7 +413,12 @@ export class CheckExecutionEngine {
     this.config = config;
 
     // Determine where to send log messages based on output format
-    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -571,7 +583,12 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter
   ): Promise<GroupedCheckResults> {
     // Determine where to send log messages based on output format
-    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -699,6 +716,7 @@ export class CheckExecutionEngine {
       // Pass any provider-specific config
       ...checkConfig,
     };
+    providerConfig.forEach = checkConfig.forEach;
 
     const result = await provider.execute(prInfo, providerConfig);
 
@@ -753,6 +771,11 @@ export class CheckExecutionEngine {
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
     const groupedResults: GroupedCheckResults = {};
+    const contentMap = (
+      reviewSummary as ReviewSummary & {
+        __contents?: Record<string, string | undefined>;
+      }
+    ).__contents;
 
     // Process each check individually
     for (const checkName of checks) {
@@ -769,6 +792,11 @@ export class CheckExecutionEngine {
         issues: checkIssues,
         debug: reviewSummary.debug,
       };
+
+      if (contentMap?.[checkName]) {
+        const summaryWithContent = checkSummary as ReviewSummary & { content?: string };
+        summaryWithContent.content = contentMap[checkName];
+      }
 
       // Render content for this check
       const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
@@ -879,6 +907,11 @@ export class CheckExecutionEngine {
     checkConfig: CheckConfig,
     _prInfo?: PRInfo
   ): Promise<string> {
+    const directContent = (reviewSummary as ReviewSummary & { content?: string }).content;
+    if (typeof directContent === 'string' && directContent.trim()) {
+      return directContent.trim();
+    }
+
     // Import the liquid template system
     const { Liquid } = await import('liquidjs');
     const fs = await import('fs/promises');
@@ -1117,6 +1150,11 @@ export class CheckExecutionEngine {
           this.setProviderWebhookContext(provider);
 
           // Create provider config for this specific check
+          const extendedCheckConfig = checkConfig as CheckConfig & {
+            level?: string;
+            message?: string;
+          };
+
           const providerConfig: CheckProviderConfig = {
             type: providerType,
             prompt: checkConfig.prompt,
@@ -1127,9 +1165,11 @@ export class CheckExecutionEngine {
             checkName: checkName, // Add checkName for sessionID
             eventContext: prInfo.eventContext, // Pass event context for templates
             transform: checkConfig.transform,
-            level: (checkConfig as any).level,
-            message: (checkConfig as any).message,
+            transform_js: checkConfig.transform_js,
+            level: extendedCheckConfig.level,
+            message: extendedCheckConfig.message,
             env: checkConfig.env,
+            forEach: checkConfig.forEach,
             ai: {
               timeout: timeout || 600000,
               debug: debug,
@@ -1140,7 +1180,7 @@ export class CheckExecutionEngine {
           // Pass results from dependencies if needed
           const dependencyResults = new Map<string, ReviewSummary>();
           let isForEachDependent = false;
-          let forEachItems: any[] = [];
+          let forEachItems: unknown[] = [];
           let forEachParentName: string | undefined;
 
           for (const depId of checkConfig.depends_on || []) {
@@ -1149,9 +1189,14 @@ export class CheckExecutionEngine {
               dependencyResults.set(depId, depResult);
 
               // Check if this dependency has forEach enabled
-              if ((depResult as any).isForEach && (depResult as any).forEachItems) {
+              const depForEachResult = depResult as ReviewSummary & {
+                isForEach?: boolean;
+                forEachItems?: unknown[];
+              };
+
+              if (depForEachResult.isForEach && Array.isArray(depForEachResult.forEachItems)) {
                 isForEachDependent = true;
-                forEachItems = (depResult as any).forEachItems;
+                forEachItems = depForEachResult.forEachItems;
                 forEachParentName = depId;
               }
             }
@@ -1200,21 +1245,26 @@ export class CheckExecutionEngine {
               `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
             );
 
-            const allIssues: any[] = [];
-            const allOutputs: any[] = [];
+            const allIssues: ReviewIssue[] = [];
+            const allOutputs: unknown[] = [];
+            const aggregatedContents: string[] = [];
 
-            // Execute check for each item in the forEach array
-            for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
-              const item = forEachItems[itemIndex];
-
+            const itemTasks = forEachItems.map((item, itemIndex) => async () => {
               // Create modified dependency results with current item
               const forEachDependencyResults = new Map<string, ReviewSummary>();
               for (const [depName, depResult] of dependencyResults) {
                 if (depName === forEachParentName) {
-                  // Replace the entire forEach parent result with just the current item
-                  // This ensures that outputs.fetch-tickets contains the individual item
-                  const modifiedResult = item as any;
+                  const modifiedResult: ReviewSummary & { output?: unknown } = {
+                    issues: [],
+                    output: item,
+                  };
                   forEachDependencyResults.set(depName, modifiedResult);
+
+                  const rawResult: ReviewSummary & { output?: unknown } = {
+                    issues: [],
+                    output: forEachItems,
+                  };
+                  forEachDependencyResults.set(`${depName}-raw`, rawResult);
                 } else {
                   forEachDependencyResults.set(depName, depResult);
                 }
@@ -1231,21 +1281,63 @@ export class CheckExecutionEngine {
                 sessionInfo
               );
 
-              // Collect issues from each iteration
+              return { index: itemIndex, itemResult };
+            });
+
+            const forEachConcurrency = Math.max(
+              1,
+              Math.min(forEachItems.length, effectiveMaxParallelism)
+            );
+
+            if (debug && forEachConcurrency > 1) {
+              log(
+                `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
+              );
+            }
+
+            const forEachResults = await this.executeWithLimitedParallelism(
+              itemTasks,
+              forEachConcurrency,
+              false
+            );
+
+            for (const result of forEachResults) {
+              if (result.status === 'rejected') {
+                throw result.reason;
+              }
+
+              const { itemResult } = result.value;
+
               if (itemResult.issues) {
                 allIssues.push(...itemResult.issues);
               }
 
-              // Collect outputs from each iteration
-              if ((itemResult as any).output) {
-                allOutputs.push((itemResult as any).output);
+              const resultWithOutput = itemResult as ReviewSummary & {
+                output?: unknown;
+                content?: string;
+              };
+
+              if (resultWithOutput.output !== undefined) {
+                allOutputs.push(resultWithOutput.output);
+              }
+
+              const itemContent = resultWithOutput.content;
+              if (typeof itemContent === 'string' && itemContent.trim()) {
+                aggregatedContents.push(itemContent.trim());
               }
             }
 
+            const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
+
             finalResult = {
               issues: allIssues,
-              output: allOutputs.length > 0 ? allOutputs : undefined,
-            } as any;
+              ...(finalOutput !== undefined ? { output: finalOutput } : {}),
+            } as ReviewSummary & { output?: unknown };
+
+            if (aggregatedContents.length > 0) {
+              (finalResult as ReviewSummary & { content?: string }).content =
+                aggregatedContents.join('\n');
+            }
 
             log(
               `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
@@ -1258,6 +1350,13 @@ export class CheckExecutionEngine {
               dependencyResults,
               sessionInfo
             );
+
+            if (process.env.DEBUG && checkConfig.forEach) {
+              const finalResultWithOutput = finalResult as ExtendedReviewSummary;
+              const outputPreview = JSON.stringify(finalResultWithOutput.output).slice(0, 200);
+              console.log(`🔧 Debug: Check "${checkName}" provider returned:`, outputPreview);
+            }
+
             log(
               `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
             );
@@ -1312,31 +1411,45 @@ export class CheckExecutionEngine {
           const reviewResult = result.value.result;
 
           // Handle forEach logic - process array outputs
-          if (checkConfig?.forEach && (reviewResult as any).output) {
-            let outputArray = (reviewResult as any).output;
+          const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
 
-            // Ensure output is an array
-            if (!Array.isArray(outputArray)) {
-              // Try to parse as JSON if it's a string
-              if (typeof outputArray === 'string') {
-                try {
-                  const parsed = JSON.parse(outputArray);
-                  outputArray = Array.isArray(parsed) ? parsed : [parsed];
-                } catch {
-                  outputArray = [outputArray];
-                }
-              } else {
-                outputArray = [outputArray];
+          if (checkConfig?.forEach && reviewSummaryWithOutput.output !== undefined) {
+            if (process.env.DEBUG) {
+              console.log(
+                `🔧 Debug: Raw output for forEach check ${checkName}:`,
+                Array.isArray(reviewSummaryWithOutput.output)
+                  ? `array(${reviewSummaryWithOutput.output.length})`
+                  : typeof reviewSummaryWithOutput.output
+              );
+            }
+            const rawOutput = reviewSummaryWithOutput.output;
+            let normalizedOutput: unknown[];
+
+            if (Array.isArray(rawOutput)) {
+              normalizedOutput = rawOutput;
+            } else if (typeof rawOutput === 'string') {
+              try {
+                const parsed = JSON.parse(rawOutput);
+                normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                normalizedOutput = [rawOutput];
               }
+            } else if (rawOutput === undefined || rawOutput === null) {
+              normalizedOutput = [];
+            } else {
+              normalizedOutput = [rawOutput];
             }
 
-            log(
-              `🔄 Debug: Check "${checkName}" has forEach enabled, processing ${outputArray.length} items`
-            );
+            if (process.env.DEBUG) {
+              console.log(
+                `🔧 Debug: Check "${checkName}" forEach output:`,
+                JSON.stringify(normalizedOutput).slice(0, 200)
+              );
+            }
 
             // Store the array for iteration by dependent checks
-            (reviewResult as any).forEachItems = outputArray;
-            (reviewResult as any).isForEach = true;
+            reviewSummaryWithOutput.forEachItems = normalizedOutput;
+            reviewSummaryWithOutput.isForEach = true;
           }
 
           results.set(checkName, reviewResult);
@@ -1661,6 +1774,7 @@ export class CheckExecutionEngine {
   ): ReviewSummary {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const debugInfo: string[] = [];
+    const contentMap: Record<string, string> = {};
 
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
@@ -1703,12 +1817,20 @@ export class CheckExecutionEngine {
 
         // Issues are already prefixed and enriched with group/schema info
         aggregatedIssues.push(...(result.issues || []));
+
+        const resultSummary = result as ExtendedReviewSummary;
+        const resultContent = resultSummary.content;
+        if (typeof resultContent === 'string' && resultContent.trim()) {
+          contentMap[checkName] = resultContent.trim();
+        }
       }
     }
 
-    console.error(
-      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
-    );
+    if (debug) {
+      console.error(
+        `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
+      );
+    }
 
     // Apply issue suppression filtering
     const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
@@ -1764,10 +1886,16 @@ export class CheckExecutionEngine {
       }
     }
 
-    return {
+    const summary: ReviewSummary & { __contents?: Record<string, string> } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
     };
+
+    if (Object.keys(contentMap).length > 0) {
+      summary.__contents = contentMap;
+    }
+
+    return summary;
   }
 
   /**
@@ -1861,9 +1989,11 @@ export class CheckExecutionEngine {
       }
     });
 
-    console.error(
-      `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
-    );
+    if (debug) {
+      console.error(
+        `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
+      );
+    }
 
     // Apply issue suppression filtering
     const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
@@ -2115,20 +2245,50 @@ export class CheckExecutionEngine {
   /**
    * Check if a task result should trigger fail-fast behavior
    */
-  private shouldFailFast(result: {
+  private isFailFastCandidate(value: unknown): value is {
     error?: string;
-    result?: { issues?: Array<{ severity: string }> };
-  }): boolean {
-    // If the result has an error property, it's a failed check
-    if (result?.error) {
+    result?: { issues?: Array<{ severity?: string }> };
+  } {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+
+    const candidate = value as {
+      error?: unknown;
+      result?: unknown;
+    };
+
+    if (candidate.error !== undefined && typeof candidate.error !== 'string') {
+      return false;
+    }
+
+    if (candidate.result !== undefined) {
+      if (typeof candidate.result !== 'object' || candidate.result === null) {
+        return false;
+      }
+
+      const issues = (candidate.result as { issues?: unknown }).issues;
+      if (issues !== undefined && !Array.isArray(issues)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private shouldFailFast(result: unknown): boolean {
+    if (!this.isFailFastCandidate(result)) {
+      return false;
+    }
+
+    if (result.error) {
       return true;
     }
 
     // If the result has a result with critical or error issues, it should fail fast
-    if (result?.result?.issues) {
-      return (result.result.issues || []).some(
-        (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
-      );
+    const issues = result.result?.issues;
+    if (Array.isArray(issues)) {
+      return issues.some(issue => issue?.severity === 'error' || issue?.severity === 'critical');
     }
 
     return false;

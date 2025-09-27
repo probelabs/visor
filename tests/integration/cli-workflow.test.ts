@@ -7,8 +7,8 @@ import * as os from 'os';
 
 describe('CLI Workflow Integration Tests', () => {
   // Check if compiled version exists for faster test execution
-  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/cli-main.js');
-  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/cli-main.ts');
+  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/index.js');
+  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/index.ts');
   const useCompiledVersion = fs.existsSync(COMPILED_CLI_PATH);
 
   // Log which version we're using (helpful for debugging CI issues)
@@ -73,23 +73,42 @@ describe('CLI Workflow Integration Tests', () => {
         commandArgs = ['ts-node', SOURCE_CLI_PATH, ...args];
       }
 
-      const child = spawn(command, commandArgs, {
-        cwd: options.cwd || tempDir,
-        stdio: 'pipe',
-      });
-
       let stdout = '';
       let stderr = '';
 
-      child.stdout?.on('data', (data: any) => {
-        stdout += data.toString();
+      // Clean environment for CLI to run properly (remove Jest variables)
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.JEST_WORKER_ID;
+      delete cleanEnv.NODE_ENV;
+
+      const child = spawn(command, commandArgs, {
+        cwd: options.cwd || tempDir,
+        stdio: 'pipe',
+        env: cleanEnv,
       });
 
-      child.stderr?.on('data', (data: any) => {
-        stderr += data.toString();
-      });
+      // Attach listeners immediately to avoid race conditions
+      if (child.stdout) {
+        child.stdout.on('data', (data: any) => {
+          stdout += data.toString();
+        });
+      }
+
+      if (child.stderr) {
+        child.stderr.on('data', (data: any) => {
+          stderr += data.toString();
+        });
+      }
+
+      // Set timeout
+      const timeoutMs = options.timeout || timeout;
+      const timeoutHandle = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
 
       child.on('close', (code: any) => {
+        clearTimeout(timeoutHandle);
         resolve({
           stdout,
           stderr,
@@ -98,15 +117,9 @@ describe('CLI Workflow Integration Tests', () => {
       });
 
       child.on('error', (error: any) => {
+        clearTimeout(timeoutHandle);
         reject(error);
       });
-
-      // Set timeout
-      const timeoutMs = options.timeout || timeout;
-      setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
     });
   };
 
@@ -417,10 +430,8 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           const output = result.stdout + result.stderr;
           expect(output).toContain('🔍 Visor - AI-powered code review tool');
 
-          // Should show debug info about extracted checks from bundled config
-          expect(output).toMatch(
-            /Debug.*Extracted checks from config.*\[.*security.*performance.*quality.*overview.*\]/
-          );
+          // Should confirm default bundled config was loaded
+          expect(output).toContain('Loading bundled default configuration');
         }
       },
       timeout

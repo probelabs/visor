@@ -67,10 +67,8 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    // For JSON output, decorative messages go to stderr
-    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    // CLI now performs actual analysis, expect either JSON output or process exit
-    // The output depends on whether code context is needed and files are available
+    // For JSON output, status messages are suppressed to keep output clean
+    // The tool should either exit with an error or produce JSON output
     if (!mockProcessExit.mock.calls.length) {
       // If it didn't exit, it should have produced JSON output
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringMatching(/^\{[\s\S]*\}$/));

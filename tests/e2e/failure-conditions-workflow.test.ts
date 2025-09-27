@@ -134,7 +134,7 @@ output:
       const child = spawn(
         'node',
         [
-          join(__dirname, '..', '..', 'dist', 'cli-main.js'),
+          join(__dirname, '..', '..', 'dist', 'index.js'),
           '--config',
           invalidConfigPath,
           '--check',

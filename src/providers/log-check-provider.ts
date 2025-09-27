@@ -148,7 +148,8 @@ export class LogCheckProvider extends CheckProvider {
         };
 
         // Add outputs namespace for accessing dependency results directly
-        outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
+        const summary = result as import('../reviewer').ReviewSummary & { output?: unknown };
+        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
       }
 
       context.dependencies = dependencies;

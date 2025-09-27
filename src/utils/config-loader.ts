@@ -213,18 +213,17 @@ export class ConfigLoader {
     const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
     logFn(`⬇️  Fetching remote configuration from: ${url}`);
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.options.timeout || 30000);
+    const controller = new AbortController();
+    const timeoutMs = this.options.timeout ?? 30000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+    try {
       const response = await fetch(url, {
         signal: controller.signal,
         headers: {
           'User-Agent': 'Visor/1.0',
         },
       });
-
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}`);
@@ -253,11 +252,13 @@ export class ConfigLoader {
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
-          throw new Error(`Timeout fetching configuration from ${url} (${this.options.timeout}ms)`);
+          throw new Error(`Timeout fetching configuration from ${url} (${timeoutMs}ms)`);
         }
         throw new Error(`Failed to fetch remote configuration from ${url}: ${error.message}`);
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

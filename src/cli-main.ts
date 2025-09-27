@@ -4,7 +4,8 @@ import { CLI } from './cli';
 import { ConfigManager } from './config';
 import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
-import { CheckResult } from './reviewer';
+import { CheckResult, GroupedCheckResults } from './reviewer';
+import { PRInfo } from './pr-analyzer';
 
 /**
  * Main CLI entry point for Visor
@@ -19,6 +20,10 @@ export async function main(): Promise<void> {
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
+    const explicitChecks =
+      options.checks.length > 0
+        ? new Set<string>(options.checks.map(check => check.toString()))
+        : null;
 
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
@@ -79,8 +84,7 @@ export async function main(): Promise<void> {
     }
 
     // Determine checks to run and validate check types early
-    const checksToRun =
-      options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
+    let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
     // Validate that all requested checks exist in the configuration
     const availableChecks = Object.keys(config.checks || {});
@@ -90,8 +94,31 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
+    // Include dependencies of requested checks
+    const checksWithDependencies = new Set(checksToRun);
+    const addDependencies = (checkName: string) => {
+      const checkConfig = config.checks?.[checkName];
+      if (checkConfig?.depends_on) {
+        for (const dep of checkConfig.depends_on) {
+          if (!checksWithDependencies.has(dep)) {
+            checksWithDependencies.add(dep);
+            addDependencies(dep); // Recursively add dependencies of dependencies
+          }
+        }
+      }
+    };
+
+    // Add all dependencies
+    for (const check of checksToRun) {
+      addDependencies(check);
+    }
+
+    // Update checksToRun to include dependencies
+    checksToRun = Array.from(checksWithDependencies);
+
     // Use stderr for status messages when outputting formatted results to stdout
-    const logFn = console.error;
+    // Suppress all status messages when outputting JSON to avoid breaking parsers
+    const logFn = options.output === 'json' ? () => {} : console.error;
 
     // Determine if we should include code context (diffs)
     // In CLI mode (local), we do smart detection. PR mode always includes context.
@@ -140,15 +167,15 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
+    logFn('🔍 Visor - AI-powered code review tool');
+    logFn(`Configuration version: ${config.version}`);
+    logFn(`Configuration source: ${options.configPath || 'default search locations'}`);
+
     // Check if there are any changes to analyze (only when code context is needed)
     if (includeCodeContext && repositoryInfo.files.length === 0) {
       console.error('❌ Error: No changes to analyze. Make some file changes first.');
       process.exit(1);
     }
-
-    logFn('🔍 Visor - AI-powered code review tool');
-    logFn(`Configuration version: ${config.version}`);
-    logFn(`Configuration source: ${options.configPath || 'default search locations'}`);
 
     // Show registered providers if in debug mode
     if (options.debug) {
@@ -178,7 +205,8 @@ export async function main(): Promise<void> {
     const prInfo = analyzer.toPRInfo(repositoryInfo, includeCodeContext);
 
     // Store the includeCodeContext flag in prInfo for downstream use
-    (prInfo as any).includeCodeContext = includeCodeContext;
+    const prInfoWithContext = prInfo as PRInfo & { includeCodeContext?: boolean };
+    prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
     const groupedResults = await engine.executeGroupedChecks(
@@ -193,22 +221,62 @@ export async function main(): Promise<void> {
       tagFilter
     );
 
+    const shouldFilterResults =
+      explicitChecks && explicitChecks.size > 0 && !explicitChecks.has('all');
+
+    const groupedResultsToUse: GroupedCheckResults = shouldFilterResults
+      ? (Object.fromEntries(
+          Object.entries(groupedResults)
+            .map(([group, checkResults]) => [
+              group,
+              checkResults.filter(check => explicitChecks!.has(check.checkName)),
+            ])
+            .filter(([, checkResults]) => checkResults.length > 0)
+        ) as GroupedCheckResults)
+      : groupedResults;
+
+    if (shouldFilterResults) {
+      for (const [group, checkResults] of Object.entries(groupedResults)) {
+        for (const check of checkResults) {
+          if (check.issues && check.issues.length > 0 && !explicitChecks!.has(check.checkName)) {
+            if (!groupedResultsToUse[group]) {
+              groupedResultsToUse[group] = [];
+            }
+            const alreadyIncluded = groupedResultsToUse[group].some(
+              existing => existing.checkName === check.checkName
+            );
+            if (!alreadyIncluded) {
+              groupedResultsToUse[group].push(check);
+            }
+          }
+        }
+      }
+    }
+
+    const executedCheckNames = Array.from(
+      new Set(
+        Object.values(groupedResultsToUse).flatMap((checks: CheckResult[]) =>
+          checks.map(check => check.checkName)
+        )
+      )
+    );
+
     // Format output based on format type
     let output: string;
     if (options.output === 'json') {
-      output = JSON.stringify(groupedResults, null, 2);
+      output = JSON.stringify(groupedResultsToUse, null, 2);
     } else if (options.output === 'sarif') {
       // Build analysis result and format as SARIF
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResults)
+          issues: Object.values(groupedResultsToUse)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
-        checksExecuted: checksToRun,
+        checksExecuted: executedCheckNames,
       };
       output = OutputFormatters.formatAsSarif(analysisResult);
     } else if (options.output === 'markdown') {
@@ -216,13 +284,13 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResults)
+          issues: Object.values(groupedResultsToUse)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
-        checksExecuted: checksToRun,
+        checksExecuted: executedCheckNames,
       };
       output = OutputFormatters.formatAsMarkdown(analysisResult);
     } else {
@@ -230,13 +298,13 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResults)
+          issues: Object.values(groupedResultsToUse)
             .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
-        checksExecuted: checksToRun,
+        checksExecuted: executedCheckNames,
       };
       output = OutputFormatters.formatAsTable(analysisResult, { showDetails: true });
     }
@@ -244,7 +312,7 @@ export async function main(): Promise<void> {
     console.log(output);
 
     // Check for critical issues
-    const allResults = Object.values(groupedResults).flat();
+    const allResults = Object.values(groupedResultsToUse).flat();
     const criticalCount = allResults.reduce((sum, result: CheckResult) => {
       const issues = result.issues || [];
       return (
