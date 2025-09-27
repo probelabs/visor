@@ -225,10 +225,19 @@ export class CommandCheckProvider extends CheckProvider {
 
       // Return the output as part of the review summary
       // The output will be available to dependent checks
-      return {
+      const result = {
         issues: [],
         output: finalOutput,
       } as ReviewSummary;
+
+      if (process.env.DEBUG && transformJs) {
+        console.log(
+          `🔧 Debug: Command provider returning output:`,
+          JSON.stringify((result as any).output).slice(0, 200)
+        );
+      }
+
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {

@@ -1127,6 +1127,7 @@ export class CheckExecutionEngine {
             checkName: checkName, // Add checkName for sessionID
             eventContext: prInfo.eventContext, // Pass event context for templates
             transform: checkConfig.transform,
+            transform_js: checkConfig.transform_js,
             level: (checkConfig as any).level,
             message: (checkConfig as any).message,
             env: checkConfig.env,
@@ -1269,6 +1270,14 @@ export class CheckExecutionEngine {
               dependencyResults,
               sessionInfo
             );
+
+            if (process.env.DEBUG && checkConfig.forEach) {
+              console.log(
+                `🔧 Debug: Check "${checkName}" provider returned:`,
+                JSON.stringify((finalResult as any).output).slice(0, 200)
+              );
+            }
+
             log(
               `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
             );

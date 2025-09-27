@@ -55,28 +55,39 @@ output:
     // Run the dependent check
     let result: string;
     try {
-      result = execSync(`${cliPath} --check analyze-ticket --output json 2>/dev/null`, {
+      result = execSync(`${cliPath} --check analyze-ticket --output json 2>&1`, {
         cwd: tempDir,
         encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error: any) {
-      console.error('Command failed:', error.message);
-      console.error('Output:', error.stdout?.toString());
-      console.error('Error:', error.stderr?.toString());
-      throw error;
+      // If command fails, try to get output anyway from the error
+      if (error.stdout) {
+        result = error.stdout.toString();
+      } else if (error.output) {
+        result = error.output.filter(Boolean).join('');
+      } else {
+        console.error('Command failed:', error.message);
+        throw error;
+      }
     }
 
-    // Extract JSON from output (may contain other messages)
-    const lines = result.split('\n');
-    const jsonStart = lines.findIndex(line => line.trim().startsWith('{'));
-    const jsonString = jsonStart >= 0 ? lines.slice(jsonStart).join('\n') : result;
+    // Handle empty result
+    if (!result || result.trim() === '') {
+      console.error('Empty result from CLI command');
+      throw new Error('CLI returned empty output');
+    }
+
+    // Extract JSON from output (may contain debug messages)
+    // The JSON output starts with { and should be valid JSON to the end
+    const jsonMatch = result.match(/\{[\s\S]*\}$/);
+    const jsonString = jsonMatch ? jsonMatch[0] : result;
 
     let output: any;
     try {
       output = JSON.parse(jsonString);
     } catch (error) {
       console.error('Failed to parse JSON:', jsonString);
+      console.error('Full output length:', result.length);
       console.error('Full output:', result);
       throw error;
     }
