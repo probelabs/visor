@@ -35,6 +35,8 @@ describe('forEach with transform_js E2E Tests', () => {
 
     // Initialize git repository
     execSync('git init -q', { cwd: tempDir });
+    execSync('git config user.email "test@example.com"', { cwd: tempDir });
+    execSync('git config user.name "Test User"', { cwd: tempDir });
     fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
     execSync('git add .', { cwd: tempDir });
     execSync('git commit -q -m "initial"', { cwd: tempDir });

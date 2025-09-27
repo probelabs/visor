@@ -1229,24 +1229,17 @@ export class CheckExecutionEngine {
             const allOutputs: any[] = [];
             const aggregatedContents: string[] = [];
 
-            // Execute check for each item in the forEach array
-            for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
-              const item = forEachItems[itemIndex];
-
+            const itemTasks = forEachItems.map((item, itemIndex) => async () => {
               // Create modified dependency results with current item
               const forEachDependencyResults = new Map<string, ReviewSummary>();
               for (const [depName, depResult] of dependencyResults) {
                 if (depName === forEachParentName) {
-                  // Replace the entire forEach parent result with just the current item
-                  // Wrap the item in a ReviewSummary structure with an output field
-                  // This ensures that outputs.fetch-tickets contains the individual item
                   const modifiedResult: ReviewSummary = {
                     issues: [],
                     output: item,
                   } as any;
                   forEachDependencyResults.set(depName, modifiedResult);
 
-                  // Also provide access to the full array via <checkName>-raw key
                   const rawResult: ReviewSummary = {
                     issues: [],
                     output: forEachItems,
@@ -1268,12 +1261,37 @@ export class CheckExecutionEngine {
                 sessionInfo
               );
 
-              // Collect issues from each iteration
+              return { index: itemIndex, itemResult };
+            });
+
+            const forEachConcurrency = Math.max(
+              1,
+              Math.min(forEachItems.length, effectiveMaxParallelism)
+            );
+
+            if (debug && forEachConcurrency > 1) {
+              log(
+                `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
+              );
+            }
+
+            const forEachResults = await this.executeWithLimitedParallelism(
+              itemTasks,
+              forEachConcurrency,
+              false
+            );
+
+            for (const result of forEachResults) {
+              if (result.status === 'rejected') {
+                throw result.reason;
+              }
+
+              const { itemResult } = result.value;
+
               if (itemResult.issues) {
                 allIssues.push(...itemResult.issues);
               }
 
-              // Collect outputs from each iteration
               if ((itemResult as any).output) {
                 allOutputs.push((itemResult as any).output);
               }
