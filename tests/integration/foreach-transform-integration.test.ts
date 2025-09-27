@@ -1,7 +1,9 @@
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
 import { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
-import { PRInfo } from '../../src/pr-analyzer';
 import { VisorConfig } from '../../src/types/config';
+import { execSync } from 'child_process';
+
+jest.mock('child_process');
 
 describe('forEach with transform_js integration', () => {
   let registry: CheckProviderRegistry;
@@ -11,20 +13,35 @@ describe('forEach with transform_js integration', () => {
   });
 
   it('should properly propagate forEach items to dependent checks when using transform_js', async () => {
+    // Override console.log temporarily to see debug output
+    const originalLog = console.log;
+    const logs: any[] = [];
+    console.log = (...args: any[]) => {
+      logs.push(args.join(' '));
+      originalLog(...args);
+    };
+
     // Track what the dependent check receives
     const capturedOutputs: any[] = [];
 
     // Create a mock provider to capture dependency results
     const mockProvider = {
       execute: jest.fn(async (prInfo, config, dependencyResults) => {
+        console.log(
+          'Mock provider called with dependencies:',
+          dependencyResults ? Array.from(dependencyResults.keys()) : 'none'
+        );
+
         // Capture what this check receives from dependencies
         if (dependencyResults && dependencyResults.has('fetch-items')) {
-          const fetchResult = dependencyResults.get('fetch-items');
           // The buildOutputContext method extracts the output field
           const outputs: Record<string, unknown> = {};
           for (const [checkName, result] of dependencyResults) {
-            outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
+            console.log(`Dependency ${checkName}:`, result);
+            outputs[checkName] =
+              (result as any).output !== undefined ? (result as any).output : result;
           }
+          console.log('Extracted fetch-items:', outputs['fetch-items']);
           capturedOutputs.push(outputs['fetch-items']);
         }
         return { issues: [] };
@@ -60,45 +77,44 @@ describe('forEach with transform_js integration', () => {
       },
     };
 
-    const prInfo: PRInfo = {
-      number: 1,
-      title: 'Test',
-      body: '',
-      author: 'test',
-      base: 'main',
-      head: 'feature',
-      files: [],
-      totalAdditions: 0,
-      totalDeletions: 0,
-    };
-
-    // Mock execSync for the command provider
-    const originalExecSync = require('child_process').execSync;
-    require('child_process').execSync = jest.fn((cmd: string) => {
-      if (cmd.includes('[{"id":1')) {
-        return Buffer.from('[{"id":1,"name":"item1"},{"id":2,"name":"item2"}]');
-      }
-      return Buffer.from('');
+    // Mock execSync for the command provider - override the global mock from setup.ts
+    console.log('execSync mock before:', (execSync as jest.Mock).getMockImplementation());
+    (execSync as jest.Mock).mockImplementation((cmd: string, options?: any) => {
+      console.log('execSync called with command:', cmd);
+      console.log('execSync options:', options);
+      // Always return the expected JSON for any echo command
+      const result = '[{"id":1,"name":"item1"},{"id":2,"name":"item2"}]';
+      console.log('Returning:', result);
+      return Buffer.from(result);
     });
+    console.log('execSync mock after:', (execSync as jest.Mock).getMockImplementation());
 
     try {
       const engine = new CheckExecutionEngine();
 
-      // Execute the checks
-      let result;
+      // Execute the checks - need to run both fetch-items and process-items
       try {
-        result = await engine.executeChecks({
-          checks: ['process-items'],
+        const results = await engine.executeChecks({
+          checks: ['fetch-items', 'process-items'],
           config,
         });
+        console.log('Results:', results);
+
+        // Log the fetch-items result
+        const fetchResult =
+          (results as any).checkResults?.['fetch-items'] ||
+          (results as any).results?.get('fetch-items');
+        console.log('fetch-items result:', JSON.stringify(fetchResult, null, 2));
+
+        console.log('Mock provider calls:', mockProvider.execute.mock.calls.length);
+        console.log('Captured outputs:', capturedOutputs);
       } catch (error) {
         console.error('Execution error:', error);
         throw error;
       }
 
-      console.log('Test result:', result ? 'Got result' : 'No result');
-      console.log('Mock provider calls:', mockProvider.execute.mock.calls.length);
-      console.log('Captured outputs:', capturedOutputs);
+      // Log what we actually got
+      console.log('capturedOutputs detail:', JSON.stringify(capturedOutputs, null, 2));
 
       // Verify the dependent check was called twice (once for each forEach item)
       expect(mockProvider.execute).toHaveBeenCalledTimes(2);
@@ -107,9 +123,13 @@ describe('forEach with transform_js integration', () => {
       expect(capturedOutputs).toHaveLength(2);
       expect(capturedOutputs[0]).toEqual({ id: 1, name: 'item1' });
       expect(capturedOutputs[1]).toEqual({ id: 2, name: 'item2' });
-
     } finally {
-      require('child_process').execSync = originalExecSync;
+      // Print logs for debugging
+      console.log = originalLog;
+      process.stderr.write(`Test logs: ${JSON.stringify(logs, null, 2)}\n`);
+
+      // Reset the mock
+      (execSync as jest.Mock).mockReset();
       // Restore the original noop provider
       (registry as any).providers.set('noop', originalNoop);
     }
@@ -140,18 +160,6 @@ describe('forEach with transform_js integration', () => {
       },
     };
 
-    const prInfo: PRInfo = {
-      number: 1,
-      title: 'Test',
-      body: '',
-      author: 'test',
-      base: 'main',
-      head: 'feature',
-      files: [],
-      totalAdditions: 0,
-      totalDeletions: 0,
-    };
-
     // Track executed commands
     const executedCommands: string[] = [];
     const originalExecSync = require('child_process').execSync;
@@ -169,7 +177,7 @@ describe('forEach with transform_js integration', () => {
       const engine = new CheckExecutionEngine();
 
       await engine.executeChecks({
-        checks: ['process-data'],
+        checks: ['fetch-data', 'process-data'],
         config,
       });
 
@@ -180,7 +188,6 @@ describe('forEach with transform_js integration', () => {
       // Verify the IDs were properly extracted
       expect(processCommands[0]).toContain('ID:1');
       expect(processCommands[1]).toContain('ID:2');
-
     } finally {
       require('child_process').execSync = originalExecSync;
     }
