@@ -17,6 +17,13 @@ import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 
+type ExtendedReviewSummary = ReviewSummary & {
+  output?: unknown;
+  content?: string;
+  isForEach?: boolean;
+  forEachItems?: unknown[];
+};
+
 /**
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
@@ -360,7 +367,7 @@ export class CheckExecutionEngine {
 
           // Check if we should stop due to fail-fast
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (failFast && this.shouldFailFast(result as any)) {
+          if (failFast && this.shouldFailFast(result)) {
             shouldStop = true;
             break;
           }
@@ -1346,10 +1353,9 @@ export class CheckExecutionEngine {
             );
 
             if (process.env.DEBUG && checkConfig.forEach) {
-              console.log(
-                `🔧 Debug: Check "${checkName}" provider returned:`,
-                JSON.stringify((finalResult as any).output).slice(0, 200)
-              );
+              const finalResultWithOutput = finalResult as ExtendedReviewSummary;
+              const outputPreview = JSON.stringify(finalResultWithOutput.output).slice(0, 200);
+              console.log(`🔧 Debug: Check "${checkName}" provider returned:`, outputPreview);
             }
 
             log(
@@ -1406,16 +1412,18 @@ export class CheckExecutionEngine {
           const reviewResult = result.value.result;
 
           // Handle forEach logic - process array outputs
-          if (checkConfig?.forEach && (reviewResult as any).output !== undefined) {
+          const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
+
+          if (checkConfig?.forEach && reviewSummaryWithOutput.output !== undefined) {
             if (process.env.DEBUG) {
               console.log(
                 `🔧 Debug: Raw output for forEach check ${checkName}:`,
-                Array.isArray((reviewResult as any).output)
-                  ? `array(${(reviewResult as any).output.length})`
-                  : typeof (reviewResult as any).output
+                Array.isArray(reviewSummaryWithOutput.output)
+                  ? `array(${reviewSummaryWithOutput.output.length})`
+                  : typeof reviewSummaryWithOutput.output
               );
             }
-            let outputArray = (reviewResult as any).output;
+            let outputArray = reviewSummaryWithOutput.output;
 
             if (process.env.DEBUG) {
               console.log(
@@ -1440,8 +1448,8 @@ export class CheckExecutionEngine {
             }
 
             // Store the array for iteration by dependent checks
-            (reviewResult as any).forEachItems = outputArray;
-            (reviewResult as any).isForEach = true;
+            reviewSummaryWithOutput.forEachItems = outputArray;
+            reviewSummaryWithOutput.isForEach = true;
           }
 
           results.set(checkName, reviewResult);
@@ -1810,7 +1818,8 @@ export class CheckExecutionEngine {
         // Issues are already prefixed and enriched with group/schema info
         aggregatedIssues.push(...(result.issues || []));
 
-        const resultContent = (result as any).content;
+        const resultSummary = result as ExtendedReviewSummary;
+        const resultContent = resultSummary.content;
         if (typeof resultContent === 'string' && resultContent.trim()) {
           contentMap[checkName] = resultContent.trim();
         }
@@ -2236,20 +2245,50 @@ export class CheckExecutionEngine {
   /**
    * Check if a task result should trigger fail-fast behavior
    */
-  private shouldFailFast(result: {
+  private isFailFastCandidate(value: unknown): value is {
     error?: string;
-    result?: { issues?: Array<{ severity: string }> };
-  }): boolean {
-    // If the result has an error property, it's a failed check
-    if (result?.error) {
+    result?: { issues?: Array<{ severity?: string }> };
+  } {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+
+    const candidate = value as {
+      error?: unknown;
+      result?: unknown;
+    };
+
+    if (candidate.error !== undefined && typeof candidate.error !== 'string') {
+      return false;
+    }
+
+    if (candidate.result !== undefined) {
+      if (typeof candidate.result !== 'object' || candidate.result === null) {
+        return false;
+      }
+
+      const issues = (candidate.result as { issues?: unknown }).issues;
+      if (issues !== undefined && !Array.isArray(issues)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private shouldFailFast(result: unknown): boolean {
+    if (!this.isFailFastCandidate(result)) {
+      return false;
+    }
+
+    if (result.error) {
       return true;
     }
 
     // If the result has a result with critical or error issues, it should fail fast
-    if (result?.result?.issues) {
-      return (result.result.issues || []).some(
-        (issue: { severity: string }) => issue.severity === 'error' || issue.severity === 'critical'
-      );
+    const issues = result.result?.issues;
+    if (Array.isArray(issues)) {
+      return issues.some(issue => issue?.severity === 'error' || issue?.severity === 'critical');
     }
 
     return false;
