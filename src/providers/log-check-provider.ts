@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Log levels supported by the log provider
@@ -17,7 +18,7 @@ export class LogCheckProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquid = new Liquid({
+    this.liquid = createExtendedLiquid({
       strictVariables: false,
       strictFilters: false,
     });

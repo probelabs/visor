@@ -34,6 +34,62 @@ Visor uses [LiquidJS](https://liquidjs.com/) for templating in prompts, commands
   - `utils.timestamp` - Current timestamp
   - `utils.date` - Current date
 
+## Custom Tags
+
+### Reading Files
+
+The `readfile` tag allows you to include content from files within your templates:
+
+```liquid
+# Read a file by path
+{% readfile "config/settings.json" %}
+
+# Read using a variable
+{% readfile configPath %}
+
+# Use in conditionals
+{% if includeConfig %}
+  Config: {% readfile "config.yaml" %}
+{% endif %}
+
+# Use in loops
+{% for file in configFiles %}
+  {% readfile file %}
+{% endfor %}
+```
+
+### Parsing JSON from Files
+
+You can read JSON files and parse them into objects using the `parse_json` filter:
+
+```liquid
+# Read and parse JSON, then access properties
+{% capture config_json %}{% readfile "config.json" %}{% endcapture %}
+{% assign config = config_json | parse_json %}
+Version: {{ config.version }}
+Name: {{ config.name }}
+
+# Use parsed JSON in conditionals
+{% if config.enabled %}
+  Feature is enabled
+{% endif %}
+
+# Iterate over arrays from JSON
+{% for item in config.items %}
+  - {{ item.name }}: {{ item.value }}
+{% endfor %}
+
+# Combine with other filters
+{% assign pkg = '{% readfile "package.json" %}' | parse_json %}
+Dependencies: {{ pkg.dependencies | json }}
+```
+
+**Security notes:**
+- Files are read relative to the project root
+- Directory traversal attempts are blocked
+- Absolute paths are not allowed
+- Invalid JSON returns the original string
+
 ## Useful Filters
 
 ### JSON Serialization

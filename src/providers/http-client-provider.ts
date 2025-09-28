@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Check provider that fetches data from HTTP endpoints
@@ -11,7 +12,7 @@ export class HttpClientProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
 
   getName(): string {

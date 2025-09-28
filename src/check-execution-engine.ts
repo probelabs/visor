@@ -913,11 +913,11 @@ export class CheckExecutionEngine {
     }
 
     // Import the liquid template system
-    const { Liquid } = await import('liquidjs');
+    const { createExtendedLiquid } = await import('./liquid-extensions');
     const fs = await import('fs/promises');
     const path = await import('path');
 
-    const liquid = new Liquid({
+    const liquid = createExtendedLiquid({
       trimTagLeft: false,
       trimTagRight: false,
       trimOutputLeft: false,

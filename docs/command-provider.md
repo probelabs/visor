@@ -145,6 +145,28 @@ checks:
       }
 ```
 
+### Reading Files in Templates
+
+You can read file content directly in your command templates:
+
+```yaml
+checks:
+  check-config:
+    type: command
+    exec: |
+      # Include config file content in command
+      CONFIG='{% readfile "config.json" %}'
+      echo "$CONFIG" | jq '.version'
+
+  validate-schema:
+    type: command
+    exec: |
+      # Read and validate against schema
+      SCHEMA='{% readfile "schema.json" %}'
+      DATA='{% readfile "data.json" %}'
+      ajv validate -s <(echo "$SCHEMA") -d <(echo "$DATA")
+```
+
 ### JavaScript Transform
 
 Transform command output using JavaScript expressions (evaluated in secure sandbox):
