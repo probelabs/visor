@@ -148,6 +148,43 @@ output:
     // Note: Command output is not exposed in JSON format, only issues are
   });
 
+  it('should support transform_js using output.tickets without explicit JSON.parse', () => {
+    const configContent = `
+version: "1.0"
+checks:
+  fetch-tickets:
+    type: command
+    exec: |
+      echo '{"query":"test","tickets":[{"key":"TT-101","priority":"high"},{"key":"TT-102","priority":"low"}]}'
+    transform_js: |
+      output.tickets
+    forEach: true
+
+  analyze-ticket:
+    type: command
+    depends_on: [fetch-tickets]
+    exec: |
+      echo "TICKET:{{ outputs['fetch-tickets'].key }}:{{ outputs['fetch-tickets'].priority }}"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
+`;
+
+    fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
+
+    const result = execCLI(['--check', 'analyze-ticket', '--output', 'json'], { cwd: tempDir });
+
+    const output = JSON.parse(result || '{}');
+    const checkResult = output.default[0];
+    const content = checkResult.content || '';
+
+    expect(content).toContain('TICKET:TT-101:high');
+    expect(content).toContain('TICKET:TT-102:low');
+  });
+
   it('should handle nested object extraction with transform_js and forEach', () => {
     const configContent = `
 version: "1.0"

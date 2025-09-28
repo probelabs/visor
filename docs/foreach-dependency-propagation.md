@@ -15,7 +15,7 @@ checks:
   fetch-items:
     type: command
     exec: echo '[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]'
-    transform_js: JSON.parse(output)
+    transform_js: output
     forEach: true
 
   process-item:
@@ -40,7 +40,7 @@ checks:
     exec: |
       echo '{"status":"ok","users":[{"id":1,"active":true},{"id":2,"active":false}]}'
     transform_js: |
-      JSON.parse(output).users
+      output.users
     forEach: true
 
   check-user:
@@ -65,7 +65,7 @@ checks:
   fetch-items:
     type: command
     exec: echo '[{"id":1,"value":10},{"id":2,"value":20},{"id":3,"value":30}]'
-    transform_js: JSON.parse(output)
+    transform_js: output
     forEach: true
 
   analyze-item:
@@ -93,7 +93,7 @@ checks:
   fetch-scores:
     type: command
     exec: echo '[{"name":"Alice","score":85},{"name":"Bob","score":92},{"name":"Charlie","score":78}]'
-    transform_js: JSON.parse(output)
+    transform_js: output
     forEach: true
 
   compare-score:
