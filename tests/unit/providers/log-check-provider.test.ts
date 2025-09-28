@@ -3,6 +3,19 @@ import type { CheckProviderConfig } from '../../../src/providers/check-provider.
 import type { PRInfo } from '../../../src/pr-analyzer';
 import type { ReviewSummary } from '../../../src/reviewer';
 
+// Mock liquidjs and liquid-extensions
+jest.mock('liquidjs', () => ({
+  Liquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+  })),
+}));
+
+jest.mock('../../../src/liquid-extensions', () => ({
+  createExtendedLiquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+  })),
+}));
+
 describe('LogCheckProvider', () => {
   let provider: LogCheckProvider;
 
