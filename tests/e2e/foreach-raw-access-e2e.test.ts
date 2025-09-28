@@ -223,6 +223,53 @@ output:
     expect(issueC.message).toContain('higher than baseline');
   });
 
+  it('should auto-parse JSON when transform_js returns output.tickets (no explicit parse)', () => {
+    const configContent = `
+version: "1.0"
+checks:
+  fetch-data:
+    type: command
+    exec: |
+      echo '{"tickets":[{"id":"a","value":10},{"id":"b","value":20},{"id":"c","value":30}]}'
+    transform_js: |
+      output.tickets
+    forEach: true
+
+  compare-item:
+    type: command
+    depends_on: [fetch-data]
+    exec: |
+      # Access current item and baseline through -raw
+      current_value="{{ outputs['fetch-data'].value }}"
+      first_value="{{ outputs['fetch-data-raw'][0].value }}"
+      if [ "$current_value" -gt "$first_value" ]; then
+        echo "DIFF:up"
+      else
+        echo "DIFF:base"
+      fi
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
+`;
+
+    fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
+
+    const result = execCLI(['--check', 'compare-item', '--output', 'json'], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
+
+    const output = JSON.parse(result || '{}');
+    const checkResult = output.default?.[0] || {};
+    const content = checkResult.content || '';
+    expect(typeof content).toBe('string');
+    expect(content).toContain('DIFF:base');
+    expect(content).toContain('DIFF:up');
+  });
+
   it('should handle raw array access with nested forEach dependencies', () => {
     const configContent = `
 version: "1.0"
