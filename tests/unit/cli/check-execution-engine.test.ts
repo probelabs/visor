@@ -606,7 +606,9 @@ describe('CheckExecutionEngine', () => {
       const liquidExtensionsMock = require('../../../src/liquid-extensions') as jest.Mocked<
         typeof import('../../../src/liquid-extensions')
       >;
-      liquidExtensionsMock.createExtendedLiquid = jest.fn().mockImplementation(() => mockLiquidInstance);
+      liquidExtensionsMock.createExtendedLiquid = jest
+        .fn()
+        .mockImplementation(() => mockLiquidInstance);
 
       const fsMock = require('fs/promises') as jest.Mocked<typeof import('fs/promises')>;
       fsMock.readFile = mockFs.readFile;
