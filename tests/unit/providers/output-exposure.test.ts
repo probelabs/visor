@@ -2,6 +2,19 @@ import { CommandCheckProvider } from '../../../src/providers/command-check-provi
 import { AICheckProvider } from '../../../src/providers/ai-check-provider';
 import { ReviewSummary } from '../../../src/reviewer';
 
+// Mock liquidjs and liquid-extensions
+jest.mock('liquidjs', () => ({
+  Liquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+  })),
+}));
+
+jest.mock('../../../src/liquid-extensions', () => ({
+  createExtendedLiquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+  })),
+}));
+
 describe('Provider Output Exposure', () => {
   describe('CommandCheckProvider', () => {
     let provider: CommandCheckProvider;

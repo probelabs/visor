@@ -14,6 +14,7 @@ jest.mock('../../../src/providers/check-provider-registry');
 jest.mock('liquidjs');
 jest.mock('fs/promises');
 jest.mock('path');
+jest.mock('../../../src/liquid-extensions');
 
 describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
@@ -602,6 +603,13 @@ describe('CheckExecutionEngine', () => {
       const liquidjsMock = require('liquidjs') as jest.Mocked<typeof import('liquidjs')>;
       liquidjsMock.Liquid = mockLiquid.Liquid;
 
+      const liquidExtensionsMock = require('../../../src/liquid-extensions') as jest.Mocked<
+        typeof import('../../../src/liquid-extensions')
+      >;
+      liquidExtensionsMock.createExtendedLiquid = jest
+        .fn()
+        .mockImplementation(() => mockLiquidInstance);
+
       const fsMock = require('fs/promises') as jest.Mocked<typeof import('fs/promises')>;
       fsMock.readFile = mockFs.readFile;
 
@@ -979,9 +987,13 @@ describe('CheckExecutionEngine', () => {
 
       mockLiquidInstance.parseAndRender.mockResolvedValue('rendered');
 
+      const liquidExtensionsMock = require('../../../src/liquid-extensions') as jest.Mocked<
+        typeof import('../../../src/liquid-extensions')
+      >;
+
       await (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig);
 
-      expect(mockLiquid.Liquid).toHaveBeenCalledWith({
+      expect(liquidExtensionsMock.createExtendedLiquid).toHaveBeenCalledWith({
         trimTagLeft: false,
         trimTagRight: false,
         trimOutputLeft: false,

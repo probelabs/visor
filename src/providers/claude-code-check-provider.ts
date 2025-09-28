@@ -4,6 +4,7 @@ import { ReviewSummary } from '../reviewer';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
 import {
@@ -54,7 +55,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquidEngine = new Liquid();
+    this.liquidEngine = createExtendedLiquid();
   }
 
   getName(): string {

@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -14,7 +15,7 @@ export class CommandCheckProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquid = new Liquid({
+    this.liquid = createExtendedLiquid({
       cache: false,
       strictFilters: false,
       strictVariables: false,

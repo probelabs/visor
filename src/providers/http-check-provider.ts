@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Check provider that sends data to an HTTP endpoint, typically used as an output/notification provider
@@ -12,7 +13,7 @@ export class HttpCheckProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
   getName(): string {
     return 'http';

@@ -14,6 +14,12 @@ jest.mock('liquidjs', () => ({
   })),
 }));
 
+jest.mock('../../../src/liquid-extensions', () => ({
+  createExtendedLiquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn(),
+  })),
+}));
+
 describe('HttpClientProvider', () => {
   let provider: HttpClientProvider;
   let mockPRInfo: PRInfo;

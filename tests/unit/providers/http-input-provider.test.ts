@@ -10,6 +10,13 @@ jest.mock('liquidjs', () => ({
   })),
 }));
 
+// Mock liquid-extensions
+jest.mock('../../../src/liquid-extensions', () => ({
+  createExtendedLiquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn().mockResolvedValue('{"transformed": "data"}'),
+  })),
+}));
+
 describe('HttpInputProvider', () => {
   let provider: HttpInputProvider;
   let mockPRInfo: PRInfo;

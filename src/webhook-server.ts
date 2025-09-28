@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from './liquid-extensions';
 import { CheckExecutionEngine } from './check-execution-engine';
 
 export interface WebhookPayload {
@@ -32,7 +33,7 @@ export class WebhookServer {
   constructor(config: HttpServerConfig, visorConfig?: VisorConfig) {
     this.config = config;
     this.visorConfig = visorConfig;
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
 
     // Detect GitHub Actions environment
     this.isGitHubActions = process.env.GITHUB_ACTIONS === 'true';

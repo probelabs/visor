@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Check provider that receives input from HTTP webhooks and makes it available to dependent checks
@@ -12,7 +13,7 @@ export class HttpInputProvider extends CheckProvider {
 
   constructor() {
     super();
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
 
   /**

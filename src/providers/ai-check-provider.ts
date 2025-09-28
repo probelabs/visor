@@ -5,6 +5,7 @@ import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
 import { safeImport } from './claude-code-types';
@@ -20,7 +21,7 @@ export class AICheckProvider extends CheckProvider {
   constructor() {
     super();
     this.aiReviewService = new AIReviewService();
-    this.liquidEngine = new Liquid();
+    this.liquidEngine = createExtendedLiquid();
   }
 
   getName(): string {

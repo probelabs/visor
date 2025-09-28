@@ -14,6 +14,13 @@ jest.mock('liquidjs', () => ({
   })),
 }));
 
+// Mock liquid-extensions
+jest.mock('../../../src/liquid-extensions', () => ({
+  createExtendedLiquid: jest.fn().mockImplementation(() => ({
+    parseAndRender: jest.fn(),
+  })),
+}));
+
 // Type for test configs where we may delete properties for validation testing
 type TestConfig = {
   type?: string;
