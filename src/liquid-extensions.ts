@@ -63,7 +63,7 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     }
     try {
       return JSON.parse(value);
-    } catch (error) {
+    } catch {
       // Return original value if parsing fails
       return value;
     }
@@ -73,7 +73,7 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
   liquid.registerFilter('to_json', (value: unknown) => {
     try {
       return JSON.stringify(value);
-    } catch (error) {
+    } catch {
       return '[Error: Unable to serialize to JSON]';
     }
   });
