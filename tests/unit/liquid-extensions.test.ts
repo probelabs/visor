@@ -4,10 +4,7 @@ import path from 'path';
 import os from 'os';
 
 // Helper function to safely change directory for a test
-async function withTempDir<T>(
-  tempDir: string,
-  fn: () => Promise<T> | T
-): Promise<T> {
+async function withTempDir<T>(tempDir: string, fn: () => Promise<T> | T): Promise<T> {
   const savedCwd = process.cwd();
   try {
     process.chdir(tempDir);
