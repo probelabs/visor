@@ -48,8 +48,12 @@ describe('forEach raw array access E2E Tests', () => {
       cliCommand = 'node';
       cliArgsPrefix = [distCli];
     } else {
+      // Resolve ts-node/register from repo root so child cwd doesn't break resolution
+      const tsNodeRegister = require.resolve('ts-node/register', {
+        paths: [path.resolve(__dirname, '../../')],
+      });
       cliCommand = 'node';
-      cliArgsPrefix = ['-r', 'ts-node/register', path.join(__dirname, '../../src/index.ts')];
+      cliArgsPrefix = ['-r', tsNodeRegister, path.join(__dirname, '../../src/index.ts')];
     }
 
     // Initialize git repository
