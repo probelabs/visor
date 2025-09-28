@@ -36,6 +36,35 @@ checks:
 | `on` | array | No | Events that trigger this check |
 | `tags` | array | No | Tags for filtering checks |
 
+## Auto‑JSON Access (no JSON.parse needed)
+
+Visor automatically parses command stdout when it contains valid JSON and exposes it in templates and `transform_js` without requiring `JSON.parse(...)`.
+
+- In Liquid templates: `{{ output.key }}` and `{{ outputs['some-check'].key }}` work directly when the underlying string is JSON.
+- In JavaScript transforms: you can write `output.items` instead of `JSON.parse(output).items`.
+- Backward compatible: `JSON.parse(output)` still works if you prefer it.
+
+Examples:
+
+```yaml
+checks:
+  fetch-tickets:
+    type: command
+    exec: |
+      echo '{"tickets":[{"key":"TT-101"},{"key":"TT-102"}]}'
+    transform_js: |
+      output.tickets      # no JSON.parse required
+    forEach: true
+
+  analyze-ticket:
+    type: command
+    depends_on: [fetch-tickets]
+    exec: |
+      echo "Processing {{ outputs['fetch-tickets'].key }} (index in batch)"
+```
+
+If the command prints plain text (not JSON), `output` behaves as a normal string.
+
 ## Examples
 
 ### Basic Command Execution

@@ -44,6 +44,18 @@ The `json` filter serializes objects to JSON strings, useful for debugging or pa
 # Debug output object
 {{ outputs | json }}
 
+### Auto‑JSON Access
+
+When a dependency’s output is a JSON string, Visor exposes it as an object automatically in templates:
+
+```liquid
+# If `fetch-tickets` printed '{"tickets":[{"key":"TT-101"}]}'
+Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}  
+# No JSON.parse required
+```
+
+If the underlying value is plain text, it behaves as a normal string.
+
 # Debug specific check output
 {{ outputs.security | json }}
 
