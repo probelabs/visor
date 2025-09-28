@@ -67,10 +67,10 @@ describe('CLI Workflow Integration Tests', () => {
 
       if (useCompiledVersion) {
         command = 'node';
-        commandArgs = [COMPILED_CLI_PATH, ...args];
+        commandArgs = [COMPILED_CLI_PATH, '--cli', ...args];
       } else {
         command = 'npx';
-        commandArgs = ['ts-node', SOURCE_CLI_PATH, ...args];
+        commandArgs = ['ts-node', SOURCE_CLI_PATH, '--cli', ...args];
       }
 
       let stdout = '';
@@ -80,6 +80,7 @@ describe('CLI Workflow Integration Tests', () => {
       const cleanEnv = { ...process.env };
       delete cleanEnv.JEST_WORKER_ID;
       delete cleanEnv.NODE_ENV;
+      delete cleanEnv.GITHUB_ACTIONS; // Force local CLI mode in CI runner
 
       const child = spawn(command, commandArgs, {
         cwd: options.cwd || tempDir,
