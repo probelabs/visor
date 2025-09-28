@@ -5,8 +5,12 @@ import os from 'os';
 
 describe('Liquid Extensions', () => {
   let tempDir: string;
+  let originalCwd: string;
 
   beforeEach(async () => {
+    // Save original working directory
+    originalCwd = process.cwd();
+
     // Create a temporary directory for test files
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visor-test-'));
 
@@ -15,6 +19,9 @@ describe('Liquid Extensions', () => {
   });
 
   afterEach(async () => {
+    // Restore original working directory first
+    process.chdir(originalCwd);
+
     // Clean up temp directory
     await fs.rm(tempDir, { recursive: true, force: true });
   });
