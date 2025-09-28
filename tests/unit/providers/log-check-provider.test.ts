@@ -6,13 +6,37 @@ import type { ReviewSummary } from '../../../src/reviewer';
 // Mock liquidjs and liquid-extensions
 jest.mock('liquidjs', () => ({
   Liquid: jest.fn().mockImplementation(() => ({
-    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+    parseAndRender: jest.fn().mockImplementation((template: string, context: any) => {
+      // Simple template replacement for tests
+      let rendered = template;
+      if (context) {
+        rendered = template
+          .replace(/\{\{\s*pr\.number\s*\}\}/g, context.pr?.number || '')
+          .replace(/\{\{\s*pr\.author\s*\}\}/g, context.pr?.author || '')
+          .replace(/\{\{\s*pr\.title\s*\}\}/g, context.pr?.title || '')
+          .replace(/\{\{\s*files\s*\|\s*size\s*\}\}/g, context.files?.length || '0');
+      }
+      return Promise.resolve(rendered);
+    }),
   })),
 }));
 
 jest.mock('../../../src/liquid-extensions', () => ({
   createExtendedLiquid: jest.fn().mockImplementation(() => ({
-    parseAndRender: jest.fn().mockImplementation((template: string) => Promise.resolve(template)),
+    parseAndRender: jest.fn().mockImplementation((template: string, context: any) => {
+      // Simple template replacement for tests
+      let rendered = template;
+      if (context) {
+        rendered = template
+          .replace(/\{\{\s*pr\.number\s*\}\}/g, context.pr?.number || '')
+          .replace(/\{\{\s*pr\.author\s*\}\}/g, context.pr?.author || '')
+          .replace(/\{\{\s*pr\.title\s*\}\}/g, context.pr?.title || '')
+          .replace(/\{\{\s*files\s*\|\s*size\s*\}\}/g, context.files?.length || '0')
+          .replace(/\{\{\s*fileCount\s*\}\}/g, context.fileCount || '0')
+          .replace(/\{\{\s*dependencyCount\s*\}\}/g, context.dependencyCount || '0');
+      }
+      return Promise.resolve(rendered);
+    }),
   })),
 }));
 
