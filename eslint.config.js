@@ -31,4 +31,13 @@ module.exports = [
       '*.d.ts',
     ],
   },
+  {
+    files: ['tests/**/*.{ts,tsx}', '__mocks__/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: false,
+    },
+  },
 ];

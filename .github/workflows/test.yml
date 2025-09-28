@@ -24,12 +24,12 @@ jobs:
       
       - name: Install dependencies
         run: npm ci
-      
+
+      - name: Build (first to ensure dist/ exists)
+        run: npm run build --ignore-scripts
+
       - name: Run tests
         run: npm test
-      
-      - name: Build
-        run: npm run build
       
       - name: Test basic action functionality
         uses: ./
@@ -55,9 +55,9 @@ jobs:
       
       - name: Install dependencies
         run: npm ci
-      
-      - name: Build
-        run: npm run build
+
+      - name: Build (first to ensure dist/ exists)
+        run: npm run build --ignore-scripts
         
       - name: Run act scenario tests
         run: npm test -- tests/scenarios/

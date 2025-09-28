@@ -195,6 +195,7 @@ describe('CommandCheckProvider', () => {
       expect(result).toEqual({
         issues: [],
         output: 'invalid json {',
+        content: 'invalid json {',
       });
     });
   });

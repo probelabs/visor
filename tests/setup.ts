@@ -1,9 +1,11 @@
 // Test setup file to configure mocks and prevent external API calls
 
-// Mock child_process spawn globally to prevent real process spawns
-jest.mock('child_process', () => ({
-  spawn: jest.fn().mockImplementation(() => {
-    const { EventEmitter } = require('events');
+// Mock child_process.spawn globally to prevent real process spawns while leaving other methods intact
+jest.mock('child_process', () => {
+  const actual = jest.requireActual('child_process');
+  const { EventEmitter } = require('events');
+
+  const mockSpawn = jest.fn().mockImplementation(() => {
     const mockChild = new EventEmitter();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mockChild as any).stdin = { write: jest.fn(), end: jest.fn() };
@@ -20,9 +22,13 @@ jest.mock('child_process', () => ({
     }, 10);
 
     return mockChild;
-  }),
-  execSync: jest.fn().mockReturnValue(''),
-}));
+  });
+
+  return {
+    ...actual,
+    spawn: mockSpawn,
+  };
+});
 
 // Note: Not mocking fs globally anymore as individual tests need control over it
 // Individual tests will mock fs as needed

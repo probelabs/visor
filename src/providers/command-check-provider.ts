@@ -1,6 +1,6 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
-import { ReviewSummary } from '../reviewer';
+import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 
@@ -80,11 +80,19 @@ export class CommandCheckProvider extends CheckProvider {
       env: this.getSafeEnvironmentVariables(),
     };
 
+    if (process.env.DEBUG) {
+      console.log('🔧 Debug: Template outputs keys:', Object.keys(templateContext.outputs || {}));
+    }
+
     try {
       // Render the command with Liquid templates if needed
       let renderedCommand = command;
       if (command.includes('{{') || command.includes('{%')) {
-        renderedCommand = await this.liquid.parseAndRender(command, templateContext);
+        renderedCommand = await this.renderCommandTemplate(command, templateContext);
+      }
+
+      if (process.env.DEBUG) {
+        console.log('🔧 Debug: Rendered command:', renderedCommand);
       }
 
       // Prepare environment variables - convert all to strings
@@ -121,15 +129,18 @@ export class CommandCheckProvider extends CheckProvider {
         console.error(`Command stderr: ${stderr}`);
       }
 
-      // Try to parse output as JSON
-      let output: unknown = stdout.trim();
+      // Keep raw output for transforms
+      const rawOutput = stdout.trim();
+
+      // Try to parse output as JSON for default behavior
+      let output: unknown = rawOutput;
       try {
         // Attempt to parse as JSON
-        const parsed = JSON.parse(stdout.trim());
+        const parsed = JSON.parse(rawOutput);
         output = parsed;
       } catch {
         // If not JSON, keep as string
-        output = stdout.trim();
+        output = rawOutput;
       }
 
       // Apply transform if specified (Liquid or JavaScript)
@@ -140,7 +151,7 @@ export class CommandCheckProvider extends CheckProvider {
         try {
           const transformContext = {
             ...templateContext,
-            output,
+            output: output, // Use parsed output for Liquid (object if JSON, string otherwise)
           };
           const rendered = await this.liquid.parseAndRender(transform, transformContext);
 
@@ -169,23 +180,62 @@ export class CommandCheckProvider extends CheckProvider {
       // Then apply JavaScript transform if present
       if (transformJs) {
         try {
+          // For transform_js, always use raw string output so JSON.parse() works as expected
           const jsContext = {
-            output: finalOutput,
+            output: rawOutput, // Always use raw string for JavaScript transform
             pr: templateContext.pr,
             files: templateContext.files,
             outputs: templateContext.outputs,
             env: templateContext.env,
-            // Helper functions
-            JSON: JSON,
           };
 
           // Compile and execute the JavaScript expression
-          const exec = this.sandbox.compile(`
-            const { output, pr, files, outputs, env, JSON } = scope;
-            return (${transformJs.trim()});
-          `);
+          // Use direct property access instead of destructuring to avoid syntax issues
+          const trimmedTransform = transformJs.trim();
+          let transformExpression: string;
+
+          if (/return\s+/.test(trimmedTransform)) {
+            transformExpression = `(() => {\n${trimmedTransform}\n})()`;
+          } else {
+            const lines = trimmedTransform.split('\n');
+            if (lines.length > 1) {
+              const lastLine = lines[lines.length - 1].trim();
+              const remaining = lines.slice(0, -1).join('\n');
+              if (lastLine && !lastLine.includes('}') && !lastLine.includes('{')) {
+                const returnTarget = lastLine.replace(/;$/, '');
+                transformExpression = `(() => {\n${remaining}\nreturn ${returnTarget};\n})()`;
+              } else {
+                transformExpression = `(${trimmedTransform})`;
+              }
+            } else {
+              transformExpression = `(${trimmedTransform})`;
+            }
+          }
+
+          const code = `
+            const output = scope.output;
+            const pr = scope.pr;
+            const files = scope.files;
+            const outputs = scope.outputs;
+            const env = scope.env;
+            return ${transformExpression};
+          `;
+
+          if (process.env.DEBUG) {
+            console.log('🔧 Debug: JavaScript transform code:', code);
+            console.log('🔧 Debug: JavaScript context:', jsContext);
+          }
+
+          const exec = this.sandbox.compile(code);
 
           finalOutput = exec({ scope: jsContext }).run();
+
+          if (process.env.DEBUG) {
+            console.log(
+              '🔧 Debug: transform_js result:',
+              JSON.stringify(finalOutput).slice(0, 200)
+            );
+          }
         } catch (error) {
           return {
             issues: [
@@ -202,12 +252,65 @@ export class CommandCheckProvider extends CheckProvider {
         }
       }
 
-      // Return the output as part of the review summary
-      // The output will be available to dependent checks
-      return {
-        issues: [],
-        output: finalOutput,
+      // Extract structured issues when the command returns them (skip for forEach parents)
+      let issues: ReviewIssue[] = [];
+      let outputForDependents: unknown = finalOutput;
+      let content: string | undefined;
+      let extracted: { issues: ReviewIssue[]; remainingOutput: unknown } | null = null;
+
+      const trimmedRawOutput = typeof rawOutput === 'string' ? rawOutput.trim() : undefined;
+
+      const commandConfig = config as CheckProviderConfig & { forEach?: boolean };
+      const isForEachParent = commandConfig.forEach === true;
+
+      if (!isForEachParent) {
+        extracted = this.extractIssuesFromOutput(finalOutput);
+        if (!extracted && typeof finalOutput === 'string') {
+          // Attempt to parse string output as JSON and extract issues again
+          try {
+            const parsed = JSON.parse(finalOutput);
+            extracted = this.extractIssuesFromOutput(parsed);
+            if (extracted) {
+              issues = extracted.issues;
+              outputForDependents = extracted.remainingOutput;
+            }
+          } catch {
+            // Ignore JSON parse errors – leave output as-is
+          }
+        } else if (extracted) {
+          issues = extracted.issues;
+          outputForDependents = extracted.remainingOutput;
+        }
+
+        if (!issues.length && this.shouldTreatAsTextOutput(trimmedRawOutput)) {
+          content = trimmedRawOutput;
+        } else if (issues.length && typeof extracted?.remainingOutput === 'string') {
+          const trimmed = extracted.remainingOutput.trim();
+          if (trimmed) {
+            content = trimmed;
+          }
+        }
+      }
+
+      if (!content && this.shouldTreatAsTextOutput(trimmedRawOutput) && !isForEachParent) {
+        content = trimmedRawOutput;
+      }
+
+      // Return the output and issues as part of the review summary so dependent checks can use them
+      const result = {
+        issues,
+        output: outputForDependents,
+        ...(content ? { content } : {}),
       } as ReviewSummary;
+
+      if (process.env.DEBUG && transformJs) {
+        console.log(
+          `🔧 Debug: Command provider returning output:`,
+          JSON.stringify((result as ReviewSummary & { output?: unknown }).output).slice(0, 200)
+        );
+      }
+
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {
@@ -236,7 +339,8 @@ export class CommandCheckProvider extends CheckProvider {
     for (const [checkName, result] of dependencyResults) {
       // If the result has a direct output field, use it directly
       // Otherwise, expose the entire result as-is
-      outputs[checkName] = (result as any).output !== undefined ? (result as any).output : result;
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkName] = summary.output !== undefined ? summary.output : summary;
     }
     return outputs;
   }
@@ -284,5 +388,241 @@ export class CommandCheckProvider extends CheckProvider {
       'Shell environment available',
       'Optional: Transform template for processing output',
     ];
+  }
+
+  private extractIssuesFromOutput(
+    output: unknown
+  ): { issues: ReviewIssue[]; remainingOutput: unknown } | null {
+    if (output === null || output === undefined) {
+      return null;
+    }
+
+    // If output is already a string, do not treat it as issues here (caller may try parsing JSON)
+    if (typeof output === 'string') {
+      return null;
+    }
+
+    if (Array.isArray(output)) {
+      const issues = this.normalizeIssueArray(output);
+      if (issues) {
+        return { issues, remainingOutput: undefined };
+      }
+      return null;
+    }
+
+    if (typeof output === 'object') {
+      const record = output as Record<string, unknown>;
+
+      if (Array.isArray(record.issues)) {
+        const issues = this.normalizeIssueArray(record.issues);
+        if (!issues) {
+          return null;
+        }
+
+        const remaining = { ...record };
+        delete (remaining as { issues?: unknown }).issues;
+
+        const remainingKeys = Object.keys(remaining);
+        const remainingOutput = remainingKeys.length > 0 ? remaining : undefined;
+
+        return {
+          issues,
+          remainingOutput,
+        };
+      }
+
+      const singleIssue = this.normalizeIssue(record);
+      if (singleIssue) {
+        return { issues: [singleIssue], remainingOutput: undefined };
+      }
+    }
+
+    return null;
+  }
+
+  private shouldTreatAsTextOutput(value?: string): value is string {
+    if (!value) {
+      return false;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    // Heuristic: consider it JSON-like if it starts with { or [ and ends with } or ]
+    const startsJson =
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'));
+
+    return !startsJson;
+  }
+
+  private normalizeIssueArray(values: unknown[]): ReviewIssue[] | null {
+    const normalized: ReviewIssue[] = [];
+
+    for (const value of values) {
+      const issue = this.normalizeIssue(value);
+      if (!issue) {
+        return null;
+      }
+      normalized.push(issue);
+    }
+
+    return normalized;
+  }
+
+  private normalizeIssue(raw: unknown): ReviewIssue | null {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    const data = raw as Record<string, unknown>;
+
+    const message = this.toTrimmedString(
+      data.message || data.text || data.description || data.summary
+    );
+    if (!message) {
+      return null;
+    }
+
+    const allowedSeverities = new Set(['info', 'warning', 'error', 'critical']);
+    const severityRaw = this.toTrimmedString(data.severity || data.level || data.priority);
+    let severity: ReviewIssue['severity'] = 'warning';
+    if (severityRaw) {
+      const lower = severityRaw.toLowerCase();
+      if (allowedSeverities.has(lower)) {
+        severity = lower as ReviewIssue['severity'];
+      } else if (['fatal', 'high'].includes(lower)) {
+        severity = 'error';
+      } else if (['medium', 'moderate'].includes(lower)) {
+        severity = 'warning';
+      } else if (['low', 'minor'].includes(lower)) {
+        severity = 'info';
+      }
+    }
+
+    const allowedCategories = new Set([
+      'security',
+      'performance',
+      'style',
+      'logic',
+      'documentation',
+    ]);
+    const categoryRaw = this.toTrimmedString(data.category || data.type || data.group);
+    let category: ReviewIssue['category'] = 'logic';
+    if (categoryRaw && allowedCategories.has(categoryRaw.toLowerCase())) {
+      category = categoryRaw.toLowerCase() as ReviewIssue['category'];
+    }
+
+    const file = this.toTrimmedString(data.file || data.path || data.filename) || 'system';
+
+    const line = this.toNumber(data.line || data.startLine || data.lineNumber) ?? 0;
+    const endLine = this.toNumber(data.endLine || data.end_line || data.stopLine);
+
+    const suggestion = this.toTrimmedString(data.suggestion);
+    const replacement = this.toTrimmedString(data.replacement);
+
+    const ruleId =
+      this.toTrimmedString(data.ruleId || data.rule || data.id || data.check) || 'command';
+
+    return {
+      file,
+      line,
+      endLine: endLine ?? undefined,
+      ruleId,
+      message,
+      severity,
+      category,
+      suggestion: suggestion || undefined,
+      replacement: replacement || undefined,
+    };
+  }
+
+  private toTrimmedString(value: unknown): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    if (value !== null && value !== undefined && typeof value.toString === 'function') {
+      const converted = String(value).trim();
+      return converted.length > 0 ? converted : null;
+    }
+    return null;
+  }
+
+  private toNumber(value: unknown): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const num = Number(value);
+    if (Number.isFinite(num)) {
+      return Math.trunc(num);
+    }
+    return null;
+  }
+
+  private async renderCommandTemplate(
+    template: string,
+    context: {
+      pr: Record<string, unknown>;
+      files: unknown[];
+      outputs: Record<string, unknown>;
+      env: Record<string, string>;
+    }
+  ): Promise<string> {
+    try {
+      return await this.liquid.parseAndRender(template, context);
+    } catch (error) {
+      if (process.env.DEBUG) {
+        console.warn('🔧 Debug: Liquid rendering failed, falling back to JS evaluation:', error);
+      }
+      return this.renderWithJsExpressions(template, context);
+    }
+  }
+
+  private renderWithJsExpressions(
+    template: string,
+    context: {
+      pr: Record<string, unknown>;
+      files: unknown[];
+      outputs: Record<string, unknown>;
+      env: Record<string, string>;
+    }
+  ): string {
+    const scope = {
+      pr: context.pr,
+      files: context.files,
+      outputs: context.outputs,
+      env: context.env,
+    };
+
+    const expressionRegex = /\{\{\s*([^{}]+?)\s*\}\}/g;
+
+    return template.replace(expressionRegex, (_match, expr) => {
+      const expression = String(expr).trim();
+      if (!expression) {
+        return '';
+      }
+
+      try {
+        const evalCode = `
+          const pr = scope.pr;
+          const files = scope.files;
+          const outputs = scope.outputs;
+          const env = scope.env;
+          return (${expression});
+        `;
+
+        const evaluator = this.sandbox.compile(evalCode);
+        const result = evaluator({ scope }).run();
+        return result === undefined || result === null ? '' : String(result);
+      } catch (evaluationError) {
+        if (process.env.DEBUG) {
+          console.warn('🔧 Debug: Failed to evaluate expression:', expression, evaluationError);
+        }
+        return '';
+      }
+    });
   }
 }
