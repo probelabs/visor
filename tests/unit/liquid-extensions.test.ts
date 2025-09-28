@@ -264,7 +264,7 @@ No file included
 
       const template = '{% assign data = jsonString | parse_json %}{{ data.nested.deep.value }}';
       const context = {
-        jsonString: '{"nested": {"deep": {"value": "found it!"}}}'
+        jsonString: '{"nested": {"deep": {"value": "found it!"}}}',
       };
       const result = await liquid.parseAndRender(template, context);
 
