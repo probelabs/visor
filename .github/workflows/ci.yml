@@ -24,8 +24,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build package
-        run: npm run build
+      - name: Build package (skip pre/post scripts)
+        run: npm run build --ignore-scripts
 
       - name: Lint code
         run: npm run lint
