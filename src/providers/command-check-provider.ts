@@ -180,12 +180,14 @@ export class CommandCheckProvider extends CheckProvider {
       // Then apply JavaScript transform if present
       if (transformJs) {
         try {
-          // For transform_js, always use raw string output so JSON.parse() works as expected
+          // For transform_js, provide a JSON-smart wrapper that:
+          //  - behaves like a string when coerced (so JSON.parse(output) still works)
+          //  - exposes parsed JSON properties if stdout is valid JSON (so output.key works)
           const jsContext = {
-            output: rawOutput, // Always use raw string for JavaScript transform
+            output: this.makeJsonSmart(rawOutput),
             pr: templateContext.pr,
             files: templateContext.files,
-            outputs: templateContext.outputs,
+            outputs: this.makeOutputsJsonSmart(templateContext.outputs),
             env: templateContext.env,
           };
 
@@ -231,10 +233,16 @@ export class CommandCheckProvider extends CheckProvider {
           finalOutput = exec({ scope: jsContext }).run();
 
           if (process.env.DEBUG) {
-            console.log(
-              '🔧 Debug: transform_js result:',
-              JSON.stringify(finalOutput).slice(0, 200)
-            );
+            try {
+              const preview = JSON.stringify(finalOutput);
+              console.log(
+                '🔧 Debug: transform_js result:',
+                typeof preview === 'string' ? preview.slice(0, 200) : String(preview).slice(0, 200)
+              );
+            } catch {
+              const preview = String(finalOutput);
+              console.log('🔧 Debug: transform_js result:', preview.slice(0, 200));
+            }
           }
         } catch (error) {
           return {
@@ -340,9 +348,90 @@ export class CommandCheckProvider extends CheckProvider {
       // If the result has a direct output field, use it directly
       // Otherwise, expose the entire result as-is
       const summary = result as ReviewSummary & { output?: unknown };
-      outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+      const value = summary.output !== undefined ? summary.output : summary;
+      outputs[checkName] = this.makeJsonSmart(value);
     }
     return outputs;
+  }
+
+  /**
+   * Wrap a value with JSON-smart behavior:
+   *  - If it's a JSON string, expose parsed properties via Proxy (e.g., value.key)
+   *  - When coerced to string (toString/valueOf/Symbol.toPrimitive), return the original raw string
+   *  - If parsing fails or value is not a string, return the value unchanged
+   */
+  private makeJsonSmart<T = unknown>(value: T): T | any {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const raw = value as unknown as string;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Not JSON, return original string
+      return raw;
+    }
+
+    // Use a boxed string so string methods still work via Proxy fallback
+    const boxed = new String(raw);
+    const handler: ProxyHandler<any> = {
+      get(target, prop, receiver) {
+        if (prop === 'toString' || prop === 'valueOf') {
+          return () => raw;
+        }
+        if (prop === Symbol.toPrimitive) {
+          return () => raw;
+        }
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          if (prop in parsed) {
+            return (parsed as any)[prop as any];
+          }
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+      has(_target, prop) {
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          if (prop in parsed) return true;
+        }
+        return false;
+      },
+      ownKeys(_target) {
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          try {
+            return Reflect.ownKeys(parsed);
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      },
+      getOwnPropertyDescriptor(_target, prop) {
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          const descriptor = Object.getOwnPropertyDescriptor(parsed, prop as any);
+          if (descriptor) return descriptor;
+        }
+        return {
+          configurable: true,
+          enumerable: true,
+          writable: false,
+          value: undefined,
+        };
+      },
+    };
+    return new Proxy(boxed, handler);
+  }
+
+  /**
+   * Recursively apply JSON-smart wrapper to outputs object values
+   */
+  private makeOutputsJsonSmart(outputs: Record<string, unknown>): Record<string, unknown> {
+    const wrapped: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(outputs || {})) {
+      wrapped[k] = this.makeJsonSmart(v);
+    }
+    return wrapped;
   }
 
   private getSafeEnvironmentVariables(): Record<string, string> {
