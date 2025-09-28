@@ -3,117 +3,147 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
+// Helper function to safely change directory for a test
+async function withTempDir<T>(
+  tempDir: string,
+  fn: () => Promise<T> | T
+): Promise<T> {
+  const savedCwd = process.cwd();
+  try {
+    process.chdir(tempDir);
+    return await fn();
+  } finally {
+    // Always restore the original directory
+    try {
+      process.chdir(savedCwd);
+    } catch {
+      // If restoration fails, at least try to go to a valid directory
+      process.chdir(os.tmpdir());
+    }
+  }
+}
+
 describe('Liquid Extensions', () => {
   let tempDir: string;
-  let originalCwd: string;
 
   beforeEach(async () => {
-    // Save original working directory
-    originalCwd = process.cwd();
-
     // Create a temporary directory for test files
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visor-test-'));
-
-    // Change to temp directory for tests
-    process.chdir(tempDir);
   });
 
   afterEach(async () => {
-    // Restore original working directory first
-    process.chdir(originalCwd);
+    // Make sure we're not in the temp directory before deleting it
+    if (process.cwd().startsWith(tempDir)) {
+      process.chdir(os.tmpdir());
+    }
 
     // Clean up temp directory
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {
+        // Ignore errors during cleanup
+      });
+    }
   });
 
   describe('readfile tag', () => {
     it('should read file content successfully', async () => {
       const liquid = createExtendedLiquid();
 
-      // Create a test file
+      // Create a test file in temp directory
+      const testFile = path.join(tempDir, 'test.txt');
       const testContent = 'Hello from test file!';
-      await fs.writeFile('test.txt', testContent);
+      await fs.writeFile(testFile, testContent);
 
-      const template = '{% readfile "test.txt" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe(testContent);
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "test.txt" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe(testContent);
+      });
     });
 
     it('should read file using variable path', async () => {
       const liquid = createExtendedLiquid();
 
       // Create a test file
+      const testFile = path.join(tempDir, 'variable.txt');
       const testContent = 'Variable path content';
-      await fs.writeFile('variable.txt', testContent);
+      await fs.writeFile(testFile, testContent);
 
-      const template = '{% readfile filename %}';
-      const context = { filename: 'variable.txt' };
-      const result = await liquid.parseAndRender(template, context);
-
-      expect(result).toBe(testContent);
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile filename %}';
+        const context = { filename: 'variable.txt' };
+        const result = await liquid.parseAndRender(template, context);
+        expect(result).toBe(testContent);
+      });
     });
 
     it('should handle nested path correctly', async () => {
       const liquid = createExtendedLiquid();
 
       // Create nested directory and file
-      await fs.mkdir('nested', { recursive: true });
+      const nestedDir = path.join(tempDir, 'nested');
+      await fs.mkdir(nestedDir, { recursive: true });
+      const testFile = path.join(nestedDir, 'deep.txt');
       const testContent = 'Nested file content';
-      await fs.writeFile('nested/deep.txt', testContent);
+      await fs.writeFile(testFile, testContent);
 
-      const template = '{% readfile "nested/deep.txt" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe(testContent);
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "nested/deep.txt" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe(testContent);
+      });
     });
 
     it('should handle non-existent file gracefully', async () => {
       const liquid = createExtendedLiquid();
 
-      const template = '{% readfile "non-existent.txt" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toContain('[Error reading file:');
-      expect(result).toContain('ENOENT');
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "non-existent.txt" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toContain('[Error reading file:');
+        expect(result).toContain('ENOENT');
+      });
     });
 
     it('should prevent directory traversal attacks', async () => {
       const liquid = createExtendedLiquid();
 
-      // Try to read a file outside project directory
-      const template = '{% readfile "../../../etc/passwd" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe('[Error: File path escapes project directory]');
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "../../../etc/passwd" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe('[Error: File path escapes project directory]');
+      });
     });
 
     it('should prevent absolute path access', async () => {
       const liquid = createExtendedLiquid();
 
-      const template = '{% readfile "/etc/passwd" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe('[Error: File path escapes project directory]');
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "/etc/passwd" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe('[Error: File path escapes project directory]');
+      });
     });
 
     it('should handle empty path gracefully', async () => {
       const liquid = createExtendedLiquid();
 
-      const template = '{% readfile "" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe('[Error: Invalid file path]');
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe('[Error: Invalid file path]');
+      });
     });
 
     it('should handle null/undefined path gracefully', async () => {
       const liquid = createExtendedLiquid();
 
-      const template = '{% readfile nullvar %}';
-      const context = { nullvar: null };
-      const result = await liquid.parseAndRender(template, context);
-
-      expect(result).toBe('[Error: Invalid file path]');
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile nullvar %}';
+        const context = { nullvar: null };
+        const result = await liquid.parseAndRender(template, context);
+        expect(result).toBe('[Error: Invalid file path]');
+      });
     });
 
     it('should read multi-line files correctly', async () => {
@@ -124,62 +154,70 @@ Line 2
 Line 3
 
 Line 5 with special chars: !@#$%^&*()`;
-      await fs.writeFile('multiline.txt', testContent);
+      const testFile = path.join(tempDir, 'multiline.txt');
+      await fs.writeFile(testFile, testContent);
 
-      const template = '{% readfile "multiline.txt" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe(testContent);
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "multiline.txt" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe(testContent);
+      });
     });
 
     it('should handle UTF-8 content correctly', async () => {
       const liquid = createExtendedLiquid();
 
       const testContent = 'Unicode: 你好世界 🌍 émojis 🎉';
-      await fs.writeFile('unicode.txt', testContent);
+      const testFile = path.join(tempDir, 'unicode.txt');
+      await fs.writeFile(testFile, testContent);
 
-      const template = '{% readfile "unicode.txt" %}';
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe(testContent);
+      await withTempDir(tempDir, async () => {
+        const template = '{% readfile "unicode.txt" %}';
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe(testContent);
+      });
     });
 
     it('should work within liquid loops', async () => {
       const liquid = createExtendedLiquid();
 
       // Create multiple files
-      await fs.writeFile('file1.txt', 'Content 1');
-      await fs.writeFile('file2.txt', 'Content 2');
+      await fs.writeFile(path.join(tempDir, 'file1.txt'), 'Content 1');
+      await fs.writeFile(path.join(tempDir, 'file2.txt'), 'Content 2');
 
-      const template = `{% for file in files %}
+      await withTempDir(tempDir, async () => {
+        const template = `{% for file in files %}
 File: {{ file }}
 Content: {% readfile file %}
 ---
 {% endfor %}`;
 
-      const context = { files: ['file1.txt', 'file2.txt'] };
-      const result = await liquid.parseAndRender(template, context);
+        const context = { files: ['file1.txt', 'file2.txt'] };
+        const result = await liquid.parseAndRender(template, context);
 
-      expect(result).toContain('Content 1');
-      expect(result).toContain('Content 2');
+        expect(result).toContain('Content 1');
+        expect(result).toContain('Content 2');
+      });
     });
 
     it('should work with liquid conditionals', async () => {
       const liquid = createExtendedLiquid();
 
-      await fs.writeFile('exists.txt', 'File exists!');
+      await fs.writeFile(path.join(tempDir, 'exists.txt'), 'File exists!');
 
-      const template = `{% if includeFile %}
+      await withTempDir(tempDir, async () => {
+        const template = `{% if includeFile %}
 Content: {% readfile "exists.txt" %}
 {% else %}
 No file included
 {% endif %}`;
 
-      const result1 = await liquid.parseAndRender(template, { includeFile: true });
-      expect(result1.trim()).toContain('File exists!');
+        const result1 = await liquid.parseAndRender(template, { includeFile: true });
+        expect(result1.trim()).toContain('File exists!');
 
-      const result2 = await liquid.parseAndRender(template, { includeFile: false });
-      expect(result2.trim()).toContain('No file included');
+        const result2 = await liquid.parseAndRender(template, { includeFile: false });
+        expect(result2.trim()).toContain('No file included');
+      });
     });
 
     it('should handle permission errors gracefully', async () => {
@@ -187,16 +225,18 @@ No file included
 
       // Create a file and make it unreadable (Unix-like systems)
       if (process.platform !== 'win32') {
-        await fs.writeFile('no-read.txt', 'secret');
-        await fs.chmod('no-read.txt', 0o000);
+        const testFile = path.join(tempDir, 'no-read.txt');
+        await fs.writeFile(testFile, 'secret');
+        await fs.chmod(testFile, 0o000);
 
-        const template = '{% readfile "no-read.txt" %}';
-        const result = await liquid.parseAndRender(template);
-
-        expect(result).toContain('[Error reading file:');
+        await withTempDir(tempDir, async () => {
+          const template = '{% readfile "no-read.txt" %}';
+          const result = await liquid.parseAndRender(template);
+          expect(result).toContain('[Error reading file:');
+        });
 
         // Clean up: restore permissions before deletion
-        await fs.chmod('no-read.txt', 0o644);
+        await fs.chmod(testFile, 0o644);
       }
     });
   });
@@ -258,12 +298,14 @@ No file included
 
       // Create a JSON file
       const jsonData = { version: '1.0.0', features: ['a', 'b', 'c'] };
-      await fs.writeFile('test.json', JSON.stringify(jsonData));
+      const jsonFile = path.join(tempDir, 'test.json');
+      await fs.writeFile(jsonFile, JSON.stringify(jsonData));
 
-      const template = `{% capture json %}{% readfile "test.json" %}{% endcapture %}{% assign data = json | parse_json %}Version: {{ data.version }}, Features: {{ data.features | join: ", " }}`;
-      const result = await liquid.parseAndRender(template);
-
-      expect(result).toBe('Version: 1.0.0, Features: a, b, c');
+      await withTempDir(tempDir, async () => {
+        const template = `{% capture json %}{% readfile "test.json" %}{% endcapture %}{% assign data = json | parse_json %}Version: {{ data.version }}, Features: {{ data.features | join: ", " }}`;
+        const result = await liquid.parseAndRender(template);
+        expect(result).toBe('Version: 1.0.0, Features: a, b, c');
+      });
     });
 
     it('should handle nested JSON objects', async () => {
