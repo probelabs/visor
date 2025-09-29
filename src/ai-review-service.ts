@@ -3,16 +3,13 @@ import type { ProbeAgentOptions } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
+import { logger } from './logger';
 
 /**
- * Helper function to log messages respecting JSON/SARIF output format
- * Routes to stderr for JSON/SARIF to avoid contaminating structured output
+ * Helper function to log debug messages using the centralized logger
  */
 function log(...args: unknown[]): void {
-  const isStructuredOutput =
-    process.env.VISOR_OUTPUT_FORMAT === 'json' || process.env.VISOR_OUTPUT_FORMAT === 'sarif';
-  const logFn = isStructuredOutput ? console.error : console.log;
-  logFn(...args);
+  logger.debug(args.join(' '));
 }
 
 export interface AIReviewConfig {

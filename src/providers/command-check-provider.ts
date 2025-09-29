@@ -4,6 +4,7 @@ import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { logger } from '../logger';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -81,9 +82,9 @@ export class CommandCheckProvider extends CheckProvider {
       env: this.getSafeEnvironmentVariables(),
     };
 
-    if (process.env.DEBUG) {
-      console.log('🔧 Debug: Template outputs keys:', Object.keys(templateContext.outputs || {}));
-    }
+    logger.debug(
+      `🔧 Debug: Template outputs keys: ${Object.keys(templateContext.outputs || {}).join(', ')}`
+    );
 
     try {
       // Render the command with Liquid templates if needed
@@ -92,9 +93,7 @@ export class CommandCheckProvider extends CheckProvider {
         renderedCommand = await this.renderCommandTemplate(command, templateContext);
       }
 
-      if (process.env.DEBUG) {
-        console.log('🔧 Debug: Rendered command:', renderedCommand);
-      }
+      logger.debug(`🔧 Debug: Rendered command: ${renderedCommand}`);
 
       // Prepare environment variables - convert all to strings
       const scriptEnv: Record<string, string> = {};
@@ -126,8 +125,8 @@ export class CommandCheckProvider extends CheckProvider {
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
 
-      if (stderr && process.env.DEBUG) {
-        console.error(`Command stderr: ${stderr}`);
+      if (stderr) {
+        logger.debug(`Command stderr: ${stderr}`);
       }
 
       // Keep raw output for transforms
@@ -227,25 +226,30 @@ export class CommandCheckProvider extends CheckProvider {
             return ${transformExpression};
           `;
 
-          if (process.env.DEBUG) {
-            console.log('🔧 Debug: JavaScript transform code:', code);
-            console.log('🔧 Debug: JavaScript context:', jsContext);
+          try {
+            logger.debug(`🔧 Debug: JavaScript transform code: ${code}`);
+            logger.debug(
+              `🔧 Debug: JavaScript context: ${JSON.stringify(jsContext).slice(0, 200)}`
+            );
+          } catch {
+            // Ignore logging errors
           }
 
           const exec = this.sandbox.compile(code);
 
           finalOutput = exec({ scope: jsContext }).run();
 
-          if (process.env.DEBUG) {
+          try {
+            const preview = JSON.stringify(finalOutput);
+            logger.debug(
+              `🔧 Debug: transform_js result: ${typeof preview === 'string' ? preview.slice(0, 200) : String(preview).slice(0, 200)}`
+            );
+          } catch {
             try {
-              const preview = JSON.stringify(finalOutput);
-              console.log(
-                '🔧 Debug: transform_js result:',
-                typeof preview === 'string' ? preview.slice(0, 200) : String(preview).slice(0, 200)
-              );
-            } catch {
               const preview = String(finalOutput);
-              console.log('🔧 Debug: transform_js result:', preview.slice(0, 200));
+              logger.debug(`🔧 Debug: transform_js result: ${preview.slice(0, 200)}`);
+            } catch {
+              // Ignore logging errors
             }
           }
         } catch (error) {
@@ -315,11 +319,16 @@ export class CommandCheckProvider extends CheckProvider {
         ...(content ? { content } : {}),
       } as ReviewSummary;
 
-      if (process.env.DEBUG && transformJs) {
-        console.log(
-          `🔧 Debug: Command provider returning output:`,
-          JSON.stringify((result as ReviewSummary & { output?: unknown }).output).slice(0, 200)
-        );
+      if (transformJs) {
+        try {
+          const outputValue = (result as ReviewSummary & { output?: unknown }).output;
+          const stringified = JSON.stringify(outputValue);
+          logger.debug(
+            `🔧 Debug: Command provider returning output: ${stringified ? stringified.slice(0, 200) : '(empty)'}`
+          );
+        } catch {
+          // Ignore logging errors
+        }
       }
 
       return result;
@@ -667,9 +676,7 @@ export class CommandCheckProvider extends CheckProvider {
     try {
       return await this.liquid.parseAndRender(template, context);
     } catch (error) {
-      if (process.env.DEBUG) {
-        console.warn('🔧 Debug: Liquid rendering failed, falling back to JS evaluation:', error);
-      }
+      logger.debug(`🔧 Debug: Liquid rendering failed, falling back to JS evaluation: ${error}`);
       return this.renderWithJsExpressions(template, context);
     }
   }
@@ -711,9 +718,7 @@ export class CommandCheckProvider extends CheckProvider {
         const result = evaluator({ scope }).run();
         return result === undefined || result === null ? '' : String(result);
       } catch (evaluationError) {
-        if (process.env.DEBUG) {
-          console.warn('🔧 Debug: Failed to evaluate expression:', expression, evaluationError);
-        }
+        logger.debug(`🔧 Debug: Failed to evaluate expression: ${expression} - ${evaluationError}`);
         return '';
       }
     });
