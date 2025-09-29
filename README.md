@@ -88,7 +88,7 @@ Visor is a general SDLC automation framework:
 
 ## Table of Contents
 
-- [90‑second Quick Start](#90-second-quick-start)
+- [90‑second Quick Start](#90second-quick-start)
 - [Core Concepts](#core-concepts-1-minute)
 - [Beyond Code Review](#beyond-code-review)
 - [Features](#features)
@@ -100,16 +100,16 @@ Visor is a general SDLC automation framework:
 - [CLI Usage](#cli-usage)
 - [Troubleshooting](#troubleshooting)
 - [Security Defaults](#security-defaults)
-- [Performance & Cost Controls](#performance--cost-controls)
+- [Performance & Cost Controls](#performance-cost-controls)
 - [Observability](#observability)
 - [AI Configuration](#ai-configuration)
-- [Step Dependencies](#step-dependencies--intelligent-execution)
+- [Step Dependencies](#step-dependencies-intelligent-execution)
 - [Claude Code Provider](#claude-code-provider)
 - [AI Session Reuse](#ai-session-reuse)
 - [Schema-Template System](#schema-template-system)
 - [Enhanced Prompts](#enhanced-prompts)
 - [Advanced Configuration](#advanced-configuration)
-- [HTTP Integration & Scheduling](#http-integration--scheduling)
+- [HTTP Integration & Scheduling](#http-integration-scheduling)
 - [Pluggable Architecture](#pluggable-architecture)
 - [GitHub Action Reference](#github-action-reference)
 - [Output Formats](#output-formats)
@@ -275,7 +275,7 @@ checks:
   performance:{ type: ai, depends_on: [security] }
 ```
 
-Learn more: [docs/dependencies.md](docs/dependencies.md)
+Learn more: [docs/dependencies.md](docs/dependencies.md). See also: [forEach dependency propagation](docs/foreach-dependency-propagation.md)
 
 ## 🤖 Claude Code Provider
 
@@ -320,7 +320,7 @@ checks:
     prompt: "Return JSON matching code-review schema"
 ```
 
-Learn more: [docs/schema-templates.md](docs/schema-templates.md)
+Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
 
 ## 🎯 Enhanced Prompts
 
@@ -402,6 +402,7 @@ Learn more: [docs/http.md](docs/http.md)
 Mix providers (`ai`, `http`, `http_client`, `log`, `command`, `claude-code`) or add your own.
 
 - **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
+- **MCP Tools**: Leverage the Model Context Protocol for external tools - [docs/mcp.md](docs/mcp.md)
 - **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)
 
 ## 🎯 GitHub Action Reference
@@ -431,6 +432,12 @@ Learn more: [docs/output-formats.md](docs/output-formats.md)
 ## 🤝 Contributing
 
 Learn more: [docs/contributing.md](docs/contributing.md)
+
+## 📚 Further Reading
+
+- Failure conditions schema: [docs/failure-conditions-schema.md](docs/failure-conditions-schema.md)
+- Failure conditions implementation notes: [docs/failure-conditions-implementation.md](docs/failure-conditions-implementation.md)
+- Recipes and practical examples: [docs/recipes.md](docs/recipes.md)
 
 ## 📄 License
 
