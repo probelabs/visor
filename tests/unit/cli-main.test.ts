@@ -6,11 +6,14 @@ const originalArgv = process.argv;
 const originalExit = process.exit;
 const originalConsoleLog = console.log;
 const originalConsoleError = console.error;
+const originalStderrWrite = process.stderr.write;
 
 describe('CLI Main Entry Point', () => {
   let mockConsoleLog: jest.Mock;
   let mockConsoleError: jest.Mock;
   let mockProcessExit: jest.Mock;
+  let capturedStderr = '';
+  let mockStderrWrite: jest.Mock;
 
   beforeEach(() => {
     mockConsoleLog = jest.fn();
@@ -20,6 +23,15 @@ describe('CLI Main Entry Point', () => {
     console.log = mockConsoleLog;
     console.error = mockConsoleError;
     process.exit = mockProcessExit as any;
+
+    // Capture stderr written by centralized logger
+    capturedStderr = '';
+    mockStderrWrite = jest.fn((chunk: any) => {
+      capturedStderr += String(chunk);
+      return true;
+    });
+    (process.stderr.write as unknown as jest.Mock | ((...a: any[]) => any)) =
+      mockStderrWrite as any;
   });
 
   afterEach(() => {
@@ -27,6 +39,8 @@ describe('CLI Main Entry Point', () => {
     process.exit = originalExit;
     console.log = originalConsoleLog;
     console.error = originalConsoleError;
+    (process.stderr.write as unknown as jest.Mock | ((...a: any[]) => any)) =
+      originalStderrWrite as any;
     jest.clearAllMocks();
   });
 
@@ -54,12 +68,10 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleError).toHaveBeenCalledWith(
-      expect.stringContaining('Configuration version: 1.0')
-    );
-    // CLI now shows repository status instead of config summary
-    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Repository:'));
+    // Assert via stderr capture to support centralized logger
+    expect(capturedStderr).toContain('🔍 Visor - AI-powered code review tool');
+    expect(capturedStderr).toContain('Configuration version: 1.0');
+    expect(capturedStderr).toContain('Repository:');
   });
 
   it('should run CLI with check arguments', async () => {
@@ -80,9 +92,7 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleError).toHaveBeenCalledWith(
-      expect.stringContaining('No configuration found for check: invalid-type')
-    );
+    expect(capturedStderr).toContain('No configuration found for check: invalid-type');
     expect(mockProcessExit).toHaveBeenCalledWith(1);
   });
 
@@ -91,9 +101,7 @@ describe('CLI Main Entry Point', () => {
 
     await main();
 
-    expect(mockConsoleError).toHaveBeenCalledWith('🔍 Visor - AI-powered code review tool');
-    expect(mockConsoleError).toHaveBeenCalledWith(
-      expect.stringContaining('Configuration version: 1.0')
-    );
+    expect(capturedStderr).toContain('🔍 Visor - AI-powered code review tool');
+    expect(capturedStderr).toContain('Configuration version: 1.0');
   });
 });

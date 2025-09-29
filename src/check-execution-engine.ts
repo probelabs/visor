@@ -16,6 +16,7 @@ import { FailureConditionEvaluator } from './failure-condition-evaluator';
 import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
+import { logger } from './logger';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -202,10 +203,7 @@ export class CheckExecutionEngine {
       this.webhookContext = options.webhookContext;
 
       // Determine where to send log messages based on output format
-      const logFn =
-        options.outputFormat === 'json' || options.outputFormat === 'sarif'
-          ? console.error
-          : console.log;
+      const logFn = (msg: string) => logger.info(msg);
 
       // Initialize GitHub checks if enabled
       if (options.githubChecks?.enabled && options.githubChecks.octokit) {
@@ -242,7 +240,7 @@ export class CheckExecutionEngine {
       );
 
       if (filteredChecks.length === 0) {
-        logFn('⚠️ No checks match the tag filter criteria');
+        logger.warn('⚠️ No checks match the tag filter criteria');
         // Complete GitHub checks with no checks message if they were initialized
         if (this.checkRunMap) {
           await this.completeGitHubChecksWithError('No checks match the tag filter criteria');
@@ -304,7 +302,9 @@ export class CheckExecutionEngine {
         debug: debugInfo,
       };
     } catch (error) {
-      console.error('Error executing checks:', error);
+      logger.error(
+        'Error executing checks: ' + (error instanceof Error ? error.message : String(error))
+      );
 
       // Complete GitHub checks with error if they were initialized
       if (this.checkRunMap) {
@@ -413,12 +413,8 @@ export class CheckExecutionEngine {
     this.config = config;
 
     // Determine where to send log messages based on output format
-    const logFn =
-      outputFormat === 'json' || outputFormat === 'sarif'
-        ? debug
-          ? console.error
-          : () => {}
-        : console.log;
+    // Use debug logger for internal engine messages; important notices use logger.warn/info directly.
+    const logFn = (msg: string) => logger.debug(msg);
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -592,14 +588,16 @@ export class CheckExecutionEngine {
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
-      logFn(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
-      logFn(`🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`);
+      logger.debug(`🔧 Debug: executeGroupedChecks called with checks: ${JSON.stringify(checks)}`);
+      logger.debug(
+        `🔧 Debug: Config available: ${!!config}, Config has checks: ${!!config?.checks}`
+      );
     }
 
     // Filter checks based on current event type to prevent execution of checks that shouldn't run
     const filteredChecks = this.filterChecksByEvent(checks, config, prInfo, logFn, debug);
     if (filteredChecks.length !== checks.length && debug) {
-      logFn(
+      logger.debug(
         `🔧 Debug: Event filtering reduced checks from ${checks.length} to ${filteredChecks.length}: ${JSON.stringify(filteredChecks)}`
       );
     }
@@ -612,7 +610,7 @@ export class CheckExecutionEngine {
     );
 
     if (tagFilteredChecks.length !== filteredChecks.length && debug) {
-      logFn(
+      logger.debug(
         `🔧 Debug: Tag filtering reduced checks from ${filteredChecks.length} to ${tagFilteredChecks.length}: ${JSON.stringify(tagFilteredChecks)}`
       );
     }
@@ -622,7 +620,7 @@ export class CheckExecutionEngine {
 
     // Check if we have any checks left after filtering
     if (checks.length === 0) {
-      logFn('⚠️ No checks remain after tag filtering');
+      logger.warn('⚠️ No checks remain after tag filtering');
       return {};
     }
 
@@ -638,7 +636,7 @@ export class CheckExecutionEngine {
 
     if (checks.length > 1 || hasDependencies) {
       if (debug) {
-        logFn(
+        logger.debug(
           `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
         );
       }
@@ -657,7 +655,7 @@ export class CheckExecutionEngine {
     // Single check execution
     if (checks.length === 1) {
       if (debug) {
-        logFn(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
+        logger.debug(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
       }
       const checkResult = await this.executeSingleGroupedCheck(
         prInfo,
@@ -1354,7 +1352,7 @@ export class CheckExecutionEngine {
             if (process.env.DEBUG && checkConfig.forEach) {
               const finalResultWithOutput = finalResult as ExtendedReviewSummary;
               const outputPreview = JSON.stringify(finalResultWithOutput.output).slice(0, 200);
-              console.log(`🔧 Debug: Check "${checkName}" provider returned:`, outputPreview);
+              logger.debug(`🔧 Debug: Check "${checkName}" provider returned: ${outputPreview}`);
             }
 
             log(
@@ -1921,8 +1919,7 @@ export class CheckExecutionEngine {
         const checkResult = result.value;
 
         if (checkResult.error) {
-          const log = console.error;
-          log(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
+          logger.debug(`🔧 Debug: Check ${checkName} failed: ${checkResult.error}`);
           debugInfo.push(`❌ Check "${checkName}" failed: ${checkResult.error}`);
 
           // Check if this is a critical error
@@ -1948,7 +1945,7 @@ export class CheckExecutionEngine {
             replacement: undefined,
           });
         } else if (checkResult.result) {
-          console.error(
+          logger.debug(
             `🔧 Debug: Check ${checkName} succeeded with ${(checkResult.result.issues || []).length} issues`
           );
           debugInfo.push(
@@ -1961,8 +1958,7 @@ export class CheckExecutionEngine {
       } else {
         const errorMessage =
           result.reason instanceof Error ? result.reason.message : String(result.reason);
-        const log = console.error;
-        log(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
+        logger.debug(`🔧 Debug: Check ${checkName} promise rejected: ${errorMessage}`);
         debugInfo.push(`❌ Check "${checkName}" promise rejected: ${errorMessage}`);
 
         // Check if this is a critical error

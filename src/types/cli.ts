@@ -24,6 +24,10 @@ export interface CliOptions {
   maxParallelism?: number;
   /** Enable debug mode for detailed output */
   debug?: boolean;
+  /** Increase verbosity (more than info, less than debug) */
+  verbose?: boolean;
+  /** Reduce verbosity to warnings and errors */
+  quiet?: boolean;
   /** Stop execution on first failure condition */
   failFast?: boolean;
   /** Tags to include - checks must have at least one of these tags */
@@ -38,6 +42,8 @@ export interface CliOptions {
   version?: boolean;
   /** Code context mode: auto (default), enabled (force include), disabled (force exclude) */
   codeContext?: 'auto' | 'enabled' | 'disabled';
+  /** When set, write formatted output to this file instead of stdout */
+  outputFile?: string;
 }
 
 /**

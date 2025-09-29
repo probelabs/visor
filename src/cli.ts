@@ -31,6 +31,7 @@ export class CLI {
         []
       )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
+      .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
@@ -43,6 +44,8 @@ export class CLI {
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
+      .option('-v, --verbose', 'Increase verbosity (without full debug)')
+      .option('-q, --quiet', 'Reduce verbosity to warnings and errors')
       .option('--fail-fast', 'Stop execution on first failure condition')
       .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
@@ -88,6 +91,7 @@ export class CLI {
           []
         )
         .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
+        .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
@@ -100,6 +104,8 @@ export class CLI {
           value => parseInt(value, 10)
         )
         .option('--debug', 'Enable debug mode for detailed output')
+        .option('-v, --verbose', 'Increase verbosity (without full debug)')
+        .option('-q, --quiet', 'Reduce verbosity to warnings and errors')
         .option('--fail-fast', 'Stop execution on first failure condition')
         .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
         .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
@@ -158,10 +164,13 @@ export class CLI {
       return {
         checks: uniqueChecks,
         output: options.output as OutputFormat,
+        outputFile: options.outputFile,
         configPath: options.config,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
+        verbose: options.verbose,
+        quiet: options.quiet,
         failFast: options.failFast,
         tags,
         excludeTags,
@@ -253,6 +262,7 @@ export class CLI {
         []
       )
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
+      .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
@@ -265,6 +275,8 @@ export class CLI {
         value => parseInt(value, 10)
       )
       .option('--debug', 'Enable debug mode for detailed output')
+      .option('-v, --verbose', 'Increase verbosity (without full debug)')
+      .option('-q, --quiet', 'Reduce verbosity to warnings and errors')
       .option('--fail-fast', 'Stop execution on first failure condition')
       .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
@@ -327,6 +339,7 @@ Examples:
   visor --check all --output json
   visor --check architecture --check security --output markdown
   visor --check security --output sarif > results.sarif
+  visor --check all --output json --output-file results.json   # Save to file reliably
   visor --check all --timeout 300000 --output json           # 5 minute timeout
   visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
   visor --check all --debug --output markdown                # Enable debug mode

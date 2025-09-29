@@ -237,12 +237,12 @@ Learn more: [docs/performance.md](docs/performance.md)
 
 ## 👀 Observability
 
-Use JSON for pipelines or SARIF for code scanning.
+Use JSON for pipelines or SARIF for code scanning. To avoid any chance of logs mixing with the result stream, prefer the built‑in `--output-file`.
 
 Examples:
 ```bash
-visor --check security --output json
-visor --check security --output sarif > visor-results.sarif
+visor --check security --output json --output-file visor-results.json
+visor --check security --output sarif --output-file visor-results.sarif
 ```
 
 Learn more: [docs/observability.md](docs/observability.md)
