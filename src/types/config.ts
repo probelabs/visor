@@ -2,8 +2,8 @@
  * Types for Visor configuration system
  */
 
-// Import ReviewSummary for type definitions
-import type { ReviewSummary, ReviewIssue } from '../reviewer';
+// Import types from reviewer
+import type { ReviewIssue } from '../reviewer';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
@@ -73,7 +73,7 @@ export interface FailureConditionContext {
   };
 
   /** Previous check outputs for dependencies - keyed by check name */
-  outputs?: Record<string, ReviewSummary>;
+  outputs?: Record<string, unknown>;
 
   /** Check context information */
   checkName?: string;
