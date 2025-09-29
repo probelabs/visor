@@ -316,6 +316,36 @@ export class FailureConditionEvaluator {
    */
   private evaluateExpression(condition: string, context: FailureConditionContext): boolean {
     try {
+      // Normalize multi-line or semicolon-separated expressions.
+      // Allows writing debug statements on separate lines, e.g.:
+      //   log("start")
+      //   log(outputs)
+      //   outputs["fetch-tickets"].issueType === 'Bug'
+      // We convert to a single expression using the comma operator so the
+      // final expression determines the boolean result.
+      const normalize = (expr: string): string => {
+        const trimmed = expr.trim();
+        // If it's already a single-line expression without semicolons, keep it.
+        if (!/[\n;]/.test(trimmed)) return trimmed;
+
+        // Split on newlines/semicolons, drop empty and comment-only lines.
+        const parts = trimmed
+          .split(/[\n;]+/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0 && !s.startsWith('//'));
+
+        if (parts.length === 0) return 'true';
+
+        // Support an explicit return in the last statement.
+        const lastRaw = parts.pop() as string;
+        const last = lastRaw.replace(/^return\s+/i, '').trim();
+
+        // Join leading statements with comma operator; last expression returns value.
+        if (parts.length === 0) return last;
+        return `(${parts.join(', ')}, ${last})`;
+      };
+
+      // note: normalization happens later only if raw compilation fails
       // Helper functions for GitHub Actions-style expressions
       const contains = (searchString: string, searchValue: string): boolean =>
         String(searchString).toLowerCase().includes(String(searchValue).toLowerCase());
@@ -453,7 +483,16 @@ export class FailureConditionEvaluator {
       };
 
       // Compile and execute the expression in the sandbox
-      const exec = this.sandbox.compile(`return (${condition.trim()});`);
+      const raw = condition.trim();
+      let exec: ReturnType<typeof this.sandbox.compile>;
+      try {
+        // Try compiling the raw expression as-is first (supports multi-line logical expressions)
+        exec = this.sandbox.compile(`return (${raw});`);
+      } catch {
+        // Fallback: normalize multi-line statements into a comma-chain expression
+        const normalizedExpr = normalize(condition);
+        exec = this.sandbox.compile(`return (${normalizedExpr});`);
+      }
       const result = exec(scope).run();
 
       // Ensure we return a boolean
