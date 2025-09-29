@@ -17,24 +17,25 @@ function read(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-// Minimal GitHub‑like slugger. Handles duplicates with numeric suffixes.
+// GitHub-like slugger. Handles unicode/emoji/diacritics and duplicate ids.
 function makeSlugger() {
   const seen = new Map();
   return function slugify(raw) {
-    // Remove Markdown emphasis/backticks and emoji
+    // Normalize, strip markdown/HTML, remove emoji and diacritics, kebab-case
     let text = String(raw)
+      .normalize('NFKD')
       .replace(/[`*_~]/g, '')
       .replace(/<[^>]+>/g, '') // HTML tags
       .replace(/:[^:\s]+:/g, '') // :emoji:
-      .replace(/[\u{1F300}-\u{1FAFF}]/gu, '') // unicode emoji range
+      .replace(/[\u{1F300}-\u{1FAFF}]/gu, '') // emoji range
+      .replace(/[\u0300-\u036f]/g, '') // diacritics
       .trim()
       .toLowerCase();
-    // Replace non alphanum with hyphens
+    // Allow word chars, spaces, and hyphens; drop the rest
     text = text
-      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/[^a-z0-9_\s-]/g, '')
       .replace(/[\s_]+/g, '-')
       .replace(/-+/g, '-');
-    // Trim hyphens
     text = text.replace(/^-+/, '').replace(/-+$/, '');
     let slug = text;
     if (seen.has(slug)) {
@@ -53,7 +54,7 @@ function extractHeadings(md) {
   const slug = makeSlugger();
   const headings = [];
   for (const line of lines) {
-    const m = /^(#{2,6})\s+(.+)$/.exec(line.trim()); // H2..H6 only
+    const m = /^(#{1,6})\s+(.+)$/.exec(line.trim()); // H1..H6
     if (m) {
       const level = m[1].length;
       const title = m[2].trim();
@@ -130,4 +131,3 @@ function main() {
 if (require.main === module) {
   main();
 }
-
