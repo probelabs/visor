@@ -221,6 +221,9 @@ export class CommandCheckProvider extends CheckProvider {
             const files = scope.files;
             const outputs = scope.outputs;
             const env = scope.env;
+            const log = (...args) => {
+              console.log('🔍 Debug:', ...args);
+            };
             return ${transformExpression};
           `;
 

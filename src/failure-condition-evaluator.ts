@@ -340,6 +340,11 @@ export class FailureConditionEvaluator {
       const success = (): boolean => true;
       const failure = (): boolean => false;
 
+      // Debug logging function for printing to console
+      const log = (...args: unknown[]): void => {
+        console.log('🔍 Debug:', ...args);
+      };
+
       // Helper functions for array operations
       const hasIssue = (issues: unknown[], field: string, value: unknown): boolean => {
         if (!Array.isArray(issues)) return false;
@@ -403,14 +408,14 @@ export class FailureConditionEvaluator {
       const event = context.event || 'manual';
       const env = context.env || {};
       const outputs = context.outputs || {};
-      const debug = context.debug || null;
+      const debugData = context.debug || null;
 
       // Create scope with all context variables and helper functions
       const scope = {
         // Primary context variables
         output,
         outputs,
-        debug,
+        debug: debugData,
         // Legacy compatibility variables
         issues,
         suggestions,
@@ -438,6 +443,7 @@ export class FailureConditionEvaluator {
         always,
         success,
         failure,
+        log,
         hasIssue,
         countIssues,
         hasFileMatching,
