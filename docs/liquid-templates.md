@@ -213,6 +213,44 @@ checks:
 3. **Validate before parsing**: When transforming to JSON, ensure valid syntax
 4. **Keep templates readable**: Use proper indentation and comments
 
+## Debugging Techniques
+
+### Using the `json` Filter for Inspection
+
+The `json` filter is your primary debugging tool for inspecting data structures:
+
+```liquid
+# Debug all available outputs
+All outputs: {{ outputs | json }}
+
+# Debug specific dependency output
+Fetch result: {{ outputs["fetch-tickets"] | json }}
+
+# Debug PR context
+PR info: {{ pr | json }}
+
+# Debug environment variables
+Environment: {{ env | json }}
+```
+
+### Debugging in JavaScript Expressions
+
+When using `transform_js` or conditions (`if`, `fail_if`), use the `log()` function:
+
+```yaml
+checks:
+  my-check:
+    type: command
+    exec: curl -s https://api.example.com/data
+    transform_js: |
+      log("Raw output:", output);
+      const data = JSON.parse(output);
+      log("Parsed data:", data);
+      return data.items;
+```
+
+See the [Debugging Guide](./debugging.md) for comprehensive debugging techniques.
+
 ## Troubleshooting
 
 ### "[Object]" in output
@@ -224,9 +262,23 @@ This means you're trying to output an object directly. Use the `json` filter:
 Check variable names match exactly (case-sensitive). Use conditional checks:
 ```liquid
 {% if outputs.security %}
-  {{ outputs.security | json }}
+  Security data: {{ outputs.security | json }}
 {% else %}
   No security output available
+{% endif %}
+```
+
+### Debugging missing outputs
+```liquid
+# Check what outputs are available
+Available outputs: {{ outputs | json }}
+
+# Check specific output existence
+{% if outputs["fetch-data"] %}
+  Data found: {{ outputs["fetch-data"] | json }}
+{% else %}
+  Warning: fetch-data output not found.
+  Available keys: {% for key in outputs %}{{ key }}{% unless forloop.last %}, {% endunless %}{% endfor %}
 {% endif %}
 ```
 

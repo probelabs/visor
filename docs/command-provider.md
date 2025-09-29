@@ -217,6 +217,21 @@ checks:
 - `files` - Array of changed files
 - `outputs` - Results from dependency checks
 - `env` - Environment variables
+- `log()` - Debug function that prints to console with 🔍 prefix
+
+**Debugging JavaScript transforms:**
+```yaml
+checks:
+  debug-transform:
+    type: command
+    exec: "echo '{\"items\":[1,2,3]}'"
+    transform_js: |
+      log("Raw output:", output);
+      const data = JSON.parse(output);
+      log("Parsed data:", data);
+      log("Item count:", data.items.length);
+      return data.items;
+```
 - `JSON` - JSON object for parsing/stringifying
 
 ### Environment Variables

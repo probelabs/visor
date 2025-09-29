@@ -118,3 +118,34 @@ Configuration supports:
 - Test with different AI providers by setting appropriate environment variables
 - The binary name is `visor` (as defined in package.json bin field)
 - Tests use Jest with TypeScript support via ts-jest
+
+### Debugging Techniques
+
+1. **Use the `log()` function in JavaScript expressions**:
+   - Available in `if`, `fail_if`, and `transform_js` contexts
+   - Outputs with 🔍 prefix for easy identification
+   - Example: `log("Debug:", outputs); return outputs.length > 0;`
+
+2. **Use the `json` filter in Liquid templates**:
+   - Debug complex objects: `{{ outputs | json }}`
+   - Inspect specific values: `{{ outputs["fetch-data"] | json }}`
+
+3. **Use the logger check type for debugging**:
+   ```yaml
+   checks:
+     debug-flow:
+       type: logger
+       depends_on: [previous-check]
+       message: |
+         Outputs: {{ outputs | json }}
+         PR: {{ pr | json }}
+   ```
+
+4. **Enable debug mode**: `visor --debug` or `debug: true` in GitHub Action
+
+5. **Common debugging patterns**:
+   - Check if outputs exist: `log("Keys:", Object.keys(outputs));`
+   - Safe JSON parsing: `try { JSON.parse(output) } catch(e) { log("Error:", e) }`
+   - Validate structure: `log("Is array?", Array.isArray(outputs["check-name"]));`
+
+See `docs/debugging.md` for comprehensive debugging guide.
