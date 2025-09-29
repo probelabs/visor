@@ -169,9 +169,18 @@ export class FailureConditionEvaluator {
       // Environment variables
       env: contextData?.environment || {},
 
-      // Previous check results (raw outputs for full access)
+      // Previous check results (unwrap output field like templates do)
       outputs: contextData?.previousResults
-        ? Object.fromEntries(Array.from(contextData.previousResults.entries()))
+        ? (() => {
+            const outputs: Record<string, unknown> = {};
+            for (const [checkName, result] of contextData.previousResults) {
+              // If the result has a direct output field, use it directly
+              // Otherwise, expose the entire result as-is
+              const summary = result as ReviewSummary & { output?: unknown };
+              outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+            }
+            return outputs;
+          })()
         : {},
 
       // Required output property (empty for if conditions)
@@ -563,7 +572,17 @@ export class FailureConditionEvaluator {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(reviewSummary as any), // Pass through any additional fields
       },
-      outputs: previousOutputs || {},
+      outputs: (() => {
+        if (!previousOutputs) return {};
+        const outputs: Record<string, unknown> = {};
+        for (const [checkName, result] of Object.entries(previousOutputs)) {
+          // If the result has a direct output field, use it directly
+          // Otherwise, expose the entire result as-is
+          const summary = result as ReviewSummary & { output?: unknown };
+          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        }
+        return outputs;
+      })(),
       // Add basic context info for failure conditions
       checkName: checkName,
       schema: checkSchema,

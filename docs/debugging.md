@@ -210,6 +210,20 @@ checks:
       Processing item: {{ outputs["fetch-items"] | json }}
 ```
 
+**Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts, giving you direct access to the array. This makes it easier to work with the data:
+
+```yaml
+checks:
+  analyze-tickets:
+    type: command
+    depends_on: [fetch-tickets]
+    if: |
+      // Direct access to the array from forEach check
+      log("Tickets:", outputs["fetch-tickets"]);
+      outputs["fetch-tickets"].some(t => t.issueType === "Bug")
+    exec: echo "Processing bugs..."
+```
+
 ### 2. Debugging Conditional Execution
 
 ```yaml
