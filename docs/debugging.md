@@ -210,7 +210,7 @@ checks:
       Processing item: {{ outputs["fetch-items"] | json }}
 ```
 
-**Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts. Instead of getting `{output: [...], forEachItems: [...], isForEach: true}`, you get the array directly. This makes it easier to work with the data:
+**Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts, giving you direct access to the array. This makes it easier to work with the data:
 
 ```yaml
 checks:
