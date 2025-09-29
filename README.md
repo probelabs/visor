@@ -5,7 +5,7 @@
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
-  [![License](https://img.shields.io/badge/license-MIT-blue)]()
+  [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
   
   Config‑driven checks and automations with native GitHub checks/annotations.
   PR reviews, issue assistants, release notes, scheduled audits, and webhooks.
@@ -65,6 +65,23 @@ checks:
 
 Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
 
+## Requirements
+
+- Node.js 18+ (CI runs Node 20)
+- When used as a GitHub Action: appropriate permissions/secrets (see [Security Defaults](#security-defaults))
+
+## Installation
+
+- One‑off run
+  ```bash
+  npx @probelabs/visor --check all --output table
+  ```
+- Project dev dependency
+  ```bash
+  npm i -D @probelabs/visor
+  npx visor --check all --output json
+  ```
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
@@ -88,7 +105,9 @@ Visor is a general SDLC automation framework:
 
 ## Table of Contents
 
-- [90‑second Quick Start](#90-second-quick-start)
+ - [90‑second Quick Start](#90-second-quick-start)
+ - [Requirements](#requirements)
+ - [Installation](#installation)
 - [Core Concepts (1 minute)](#core-concepts-1-minute)
 - [Beyond Code Review](#beyond-code-review)
 - [Features](#features)
@@ -354,8 +373,9 @@ checks:
       log("Outputs:", outputs);
       outputs["fetch-data"]?.status === "ready"
     transform_js: |
+      // `output` is auto‑parsed JSON when possible; no JSON.parse needed
       log("Raw data:", output);
-      JSON.parse(output)
+      output
 ```
 
 **Use `json` filter in Liquid templates:**
