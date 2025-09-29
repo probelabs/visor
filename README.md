@@ -336,6 +336,41 @@ checks:
 
 Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
+## 🔍 Debugging
+
+Comprehensive debugging tools help troubleshoot configurations and data flows:
+
+### Quick Debugging Tips
+
+**Use `log()` in JavaScript expressions:**
+```yaml
+checks:
+  conditional-check:
+    if: |
+      log("Outputs:", outputs);
+      outputs["fetch-data"]?.status === "ready"
+    transform_js: |
+      log("Raw data:", output);
+      JSON.parse(output)
+```
+
+**Use `json` filter in Liquid templates:**
+```yaml
+checks:
+  debug-check:
+    type: logger
+    message: |
+      Outputs: {{ outputs | json }}
+      PR: {{ pr | json }}
+```
+
+**Enable debug mode:**
+```bash
+visor --check all --debug
+```
+
+Learn more: [docs/debugging.md](docs/debugging.md)
+
 ## 🔧 Advanced Configuration
 
 Extend shared configs and override per‑repo settings.
