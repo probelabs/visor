@@ -17,7 +17,7 @@
 Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you immediately get:
 - A staged review pipeline (`overview → security → performance → quality → style`).
 - Native GitHub integration: check runs, annotations, and PR comments out of the box.
-- Built‑in code answering assistant: trigger from any issue or PR comment, e.g. `/visor how it works?`.
+- Built‑in code assistant: trigger via PR/issue comments (e.g., `/visor how it works?`).
 - A manual release-notes generator for tagged release workflows.
 - No magic: everything is config‑driven in `.visor.yaml`; prompts/context are visible and templatable.
 - Built for scale: composable checks, tag-based profiles, and flexible `extends` for shared policies.
@@ -82,6 +82,26 @@ Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
   npx visor --check all --output json
   ```
 
+## 📋 CLI Usage
+
+Short cheatsheet for common tasks:
+
+```bash
+# Run all checks with a table output
+visor --check all --output table
+
+# Filter by tags (e.g., fast/local) and increase parallelism
+visor --tags fast,local --max-parallelism 5
+
+# Emit machine‑readable results and save to a file
+visor --check security --output json --output-file visor-results.json
+
+# Discover options
+visor --help
+```
+
+See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
@@ -108,6 +128,7 @@ Visor is a general SDLC automation framework:
  - [90‑second Quick Start](#90-second-quick-start)
  - [Requirements](#requirements)
  - [Installation](#installation)
+ - [CLI Usage](#cli-usage)
 - [Core Concepts (1 minute)](#core-concepts-1-minute)
 - [Beyond Code Review](#beyond-code-review)
 - [Features](#features)
@@ -116,7 +137,6 @@ Visor is a general SDLC automation framework:
 - [Tag-Based Check Filtering](#tag-based-check-filtering)
 - [PR Comment Commands](#pr-comment-commands)
 - [Suppressing Warnings](#suppressing-warnings)
-- [CLI Usage](#cli-usage)
 - [Troubleshooting](#troubleshooting)
 - [Security Defaults](#security-defaults)
 - [Performance & Cost Controls](#performance-cost-controls)
@@ -212,17 +232,6 @@ const testPassword = "demo123"; // visor-disable
 ```
 
 Learn more: [docs/suppressions.md](docs/suppressions.md)
-
-## 📋 CLI Usage
-
-Run locally in any CI or dev machine.
-
-Example:
-```bash
-npx @probelabs/visor --check all --output table
-```
-
-See [docs/NPM_USAGE.md](docs/NPM_USAGE.md) for full options and examples.
 
 ## 🛠️ Troubleshooting
 
@@ -343,11 +352,11 @@ checks:
     prompt: "Return JSON matching code-review schema"
 ```
 
-Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
+Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
 ## 🎯 Enhanced Prompts
 
-Write prompts inline or in files; Liquid variables provide PR context. See [Liquid Templates Guide](./docs/liquid-templates.md) for debugging with `json` filter and full reference.
+Write prompts inline or in files; Liquid variables provide PR context.
 
 Example:
 ```yaml
@@ -357,7 +366,7 @@ checks:
     prompt: ./prompts/overview.liquid
 ```
 
-Learn more: [docs/schema-templates.md](docs/schema-templates.md)
+Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
 
 ## 🔍 Debugging
 
