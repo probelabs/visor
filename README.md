@@ -22,7 +22,7 @@ Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you 
 - No magic: everything is config‑driven in `.visor.yaml`; prompts/context are visible and templatable.
 - Built for scale: composable checks, tag-based profiles, and flexible `extends` for shared policies.
 
-## 🚀 90‑second Quick Start
+## 🚀 90-second Quick Start
 
 ### Add the Action
 
@@ -88,7 +88,7 @@ Visor is a general SDLC automation framework:
 
 ## Table of Contents
 
-- [90‑second Quick Start](#90second-quick-start)
+- [90‑second Quick Start](#90-second-quick-start)
 - [Core Concepts](#core-concepts-1-minute)
 - [Beyond Code Review](#beyond-code-review)
 - [Features](#features)
