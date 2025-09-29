@@ -38,7 +38,8 @@
     "release:patch": "./scripts/release.sh patch",
     "release:minor": "./scripts/release.sh minor",
     "release:major": "./scripts/release.sh major",
-    "release:prerelease": "./scripts/release.sh prerelease"
+    "release:prerelease": "./scripts/release.sh prerelease",
+    "docs:validate": "node scripts/validate-readme-links.js"
   },
   "keywords": [
     "code-review",

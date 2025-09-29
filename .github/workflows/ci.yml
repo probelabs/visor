@@ -33,6 +33,9 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
+      - name: Validate README links
+        run: npm run docs:validate
+
       - name: Run tests
         run: npm test
         env:

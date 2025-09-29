@@ -5,7 +5,7 @@
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
-  [![License](https://img.shields.io/badge/license-MIT-blue)]()
+  [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
   
   Config‑driven checks and automations with native GitHub checks/annotations.
   PR reviews, issue assistants, release notes, scheduled audits, and webhooks.
@@ -17,12 +17,12 @@
 Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you immediately get:
 - A staged review pipeline (`overview → security → performance → quality → style`).
 - Native GitHub integration: check runs, annotations, and PR comments out of the box.
-- Built‑in code answering assistant: trigger from any issue or PR comment, e.g. `/visor how it works?`.
+- Built‑in code assistant: trigger via PR/issue comments (e.g., `/visor how it works?`).
 - A manual release-notes generator for tagged release workflows.
 - No magic: everything is config‑driven in `.visor.yaml`; prompts/context are visible and templatable.
 - Built for scale: composable checks, tag-based profiles, and flexible `extends` for shared policies.
 
-## 🚀 90‑second Quick Start
+## 🚀 90-second Quick Start
 
 ### Add the Action
 
@@ -65,6 +65,43 @@ checks:
 
 Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
 
+## Requirements
+
+- Node.js 18+ (CI runs Node 20)
+- When used as a GitHub Action: appropriate permissions/secrets (see [Security Defaults](#security-defaults))
+
+## Installation
+
+- One‑off run
+  ```bash
+  npx @probelabs/visor --check all --output table
+  ```
+- Project dev dependency
+  ```bash
+  npm i -D @probelabs/visor
+  npx visor --check all --output json
+  ```
+
+## 📋 CLI Usage
+
+Short cheatsheet for common tasks:
+
+```bash
+# Run all checks with a table output
+visor --check all --output table
+
+# Filter by tags (e.g., fast/local) and increase parallelism
+visor --tags fast,local --max-parallelism 5
+
+# Emit machine‑readable results and save to a file
+visor --check security --output json --output-file visor-results.json
+
+# Discover options
+visor --help
+```
+
+See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
@@ -88,31 +125,37 @@ Visor is a general SDLC automation framework:
 
 ## Table of Contents
 
-- [90‑second Quick Start](#90-second-quick-start)
-- [Core Concepts](#core-concepts-1-minute)
+ - [90‑second Quick Start](#90-second-quick-start)
+ - [Requirements](#requirements)
+ - [Installation](#installation)
+ - [CLI Usage](#cli-usage)
+- [Core Concepts (1 minute)](#core-concepts-1-minute)
 - [Beyond Code Review](#beyond-code-review)
 - [Features](#features)
 - [When to pick Visor](#when-to-pick-visor)
 - [Developer Experience Playbook](#developer-experience-playbook)
-- [Tag-Based Filtering](#tag-based-check-filtering)
+- [Tag-Based Check Filtering](#tag-based-check-filtering)
 - [PR Comment Commands](#pr-comment-commands)
-- [Suppress Warnings](#suppressing-warnings)
-- [CLI Usage](#cli-usage)
+- [Suppressing Warnings](#suppressing-warnings)
 - [Troubleshooting](#troubleshooting)
 - [Security Defaults](#security-defaults)
-- [Performance & Cost Controls](#performance--cost-controls)
+- [Performance & Cost Controls](#performance-cost-controls)
 - [Observability](#observability)
 - [AI Configuration](#ai-configuration)
-- [Step Dependencies](#step-dependencies--intelligent-execution)
+- [Step Dependencies & Intelligent Execution](#step-dependencies-intelligent-execution)
 - [Claude Code Provider](#claude-code-provider)
 - [AI Session Reuse](#ai-session-reuse)
 - [Schema-Template System](#schema-template-system)
 - [Enhanced Prompts](#enhanced-prompts)
+- [Debugging](#debugging)
 - [Advanced Configuration](#advanced-configuration)
-- [HTTP Integration & Scheduling](#http-integration--scheduling)
+- [HTTP Integration & Scheduling](#http-integration-scheduling)
 - [Pluggable Architecture](#pluggable-architecture)
 - [GitHub Action Reference](#github-action-reference)
 - [Output Formats](#output-formats)
+- [Contributing](#contributing)
+- [Further Reading](#further-reading)
+- [License](#license)
 
 ## ✨ Features
 
@@ -190,17 +233,6 @@ const testPassword = "demo123"; // visor-disable
 
 Learn more: [docs/suppressions.md](docs/suppressions.md)
 
-## 📋 CLI Usage
-
-Run locally in any CI or dev machine.
-
-Example:
-```bash
-npx @probelabs/visor --check all --output table
-```
-
-See [docs/NPM_USAGE.md](docs/NPM_USAGE.md) for full options and examples.
-
 ## 🛠️ Troubleshooting
 
 If comments/annotations don’t appear, verify workflow permissions and run with `--debug`.
@@ -275,7 +307,7 @@ checks:
   performance:{ type: ai, depends_on: [security] }
 ```
 
-Learn more: [docs/dependencies.md](docs/dependencies.md)
+Learn more: [docs/dependencies.md](docs/dependencies.md). See also: [forEach dependency propagation](docs/foreach-dependency-propagation.md)
 
 ## 🤖 Claude Code Provider
 
@@ -324,7 +356,7 @@ Learn more: [docs/schema-templates.md](docs/schema-templates.md)
 
 ## 🎯 Enhanced Prompts
 
-Write prompts inline or in files; Liquid variables provide PR context. See [Liquid Templates Guide](./docs/liquid-templates.md) for debugging with `json` filter and full reference.
+Write prompts inline or in files; Liquid variables provide PR context.
 
 Example:
 ```yaml
@@ -334,7 +366,7 @@ checks:
     prompt: ./prompts/overview.liquid
 ```
 
-Learn more: [docs/schema-templates.md](docs/schema-templates.md)
+Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
 
 ## 🔍 Debugging
 
@@ -350,8 +382,9 @@ checks:
       log("Outputs:", outputs);
       outputs["fetch-data"]?.status === "ready"
     transform_js: |
+      // `output` is auto‑parsed JSON when possible; no JSON.parse needed
       log("Raw data:", output);
-      JSON.parse(output)
+      output
 ```
 
 **Use `json` filter in Liquid templates:**
@@ -402,6 +435,7 @@ Learn more: [docs/http.md](docs/http.md)
 Mix providers (`ai`, `http`, `http_client`, `log`, `command`, `claude-code`) or add your own.
 
 - **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
+- **MCP Tools**: Leverage the Model Context Protocol for external tools - [docs/mcp.md](docs/mcp.md)
 - **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)
 
 ## 🎯 GitHub Action Reference
@@ -431,6 +465,12 @@ Learn more: [docs/output-formats.md](docs/output-formats.md)
 ## 🤝 Contributing
 
 Learn more: [docs/contributing.md](docs/contributing.md)
+
+## 📚 Further Reading
+
+- Failure conditions schema: [docs/failure-conditions-schema.md](docs/failure-conditions-schema.md)
+- Failure conditions implementation notes: [docs/failure-conditions-implementation.md](docs/failure-conditions-implementation.md)
+- Recipes and practical examples: [docs/recipes.md](docs/recipes.md)
 
 ## 📄 License
 
