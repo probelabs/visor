@@ -60,7 +60,12 @@ npx -y @probelabs/visor --check performance --check architecture --config .visor
 
 ### Generate SARIF report for CI/CD
 ```bash
-npx -y @probelabs/visor --check security --output sarif > results.sarif
+npx -y @probelabs/visor --check security --output sarif --output-file results.sarif
+```
+
+### Save JSON to a file (recommended)
+```bash
+npx -y @probelabs/visor --check all --output json --output-file visor-results.json
 ```
 
 ## Configuration

@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { logger } from '../logger';
 
 /**
  * Log levels supported by the log provider
@@ -91,9 +92,11 @@ export class LogCheckProvider extends CheckProvider {
       includeMetadata
     );
 
-    // Output to console based on log level
-    const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
-    logFn(logOutput);
+    // Route through centralized logger to keep stdout clean in JSON/SARIF
+    if (level === 'error') logger.error(logOutput);
+    else if (level === 'warn') logger.warn(logOutput);
+    else if (level === 'debug') logger.debug(logOutput);
+    else logger.info(logOutput);
 
     // Return with the log content as custom data for dependent checks
     return {

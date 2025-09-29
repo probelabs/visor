@@ -6,6 +6,9 @@ import { CheckExecutionEngine } from './check-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
+import { logger, configureLoggerFromCli } from './logger';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Main CLI entry point for Visor
@@ -28,6 +31,13 @@ export async function main(): Promise<void> {
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
+    // Configure centralized logger
+    configureLoggerFromCli({
+      output: options.output,
+      debug: options.debug,
+      verbose: options.verbose,
+      quiet: options.quiet,
+    });
 
     // Handle help and version flags
     if (options.help) {
@@ -44,40 +54,42 @@ export async function main(): Promise<void> {
     let config;
     if (options.configPath) {
       try {
+        logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
       } catch (error) {
         // Show the actual error message, not just assume "file not found"
         if (error instanceof Error) {
-          console.error(`❌ Error loading configuration from ${options.configPath}:`);
-          console.error(`   ${error.message}`);
+          logger.error(`❌ Error loading configuration from ${options.configPath}:`);
+          logger.error(`   ${error.message}`);
 
           // Provide helpful hints based on the error type
           if (error.message.includes('not found')) {
-            console.error('\n💡 Hint: Check that the file path is correct and the file exists.');
-            console.error('   You can use an absolute path: --config $(pwd)/.visor.yaml');
+            logger.warn('\n💡 Hint: Check that the file path is correct and the file exists.');
+            logger.warn('   You can use an absolute path: --config $(pwd)/.visor.yaml');
           } else if (error.message.includes('Invalid YAML')) {
-            console.error(
+            logger.warn(
               '\n💡 Hint: Check your YAML syntax. You can validate it at https://www.yamllint.com/'
             );
           } else if (error.message.includes('extends')) {
-            console.error(
+            logger.warn(
               '\n💡 Hint: Check that extended configuration files exist and are accessible.'
             );
           } else if (error.message.includes('permission')) {
-            console.error('\n💡 Hint: Check file permissions. The file must be readable.');
+            logger.warn('\n💡 Hint: Check file permissions. The file must be readable.');
           }
         } else {
-          console.error(`❌ Error loading configuration: ${error}`);
+          logger.error(`❌ Error loading configuration: ${error}`);
         }
 
         // Exit with error when explicit config path fails
-        console.error(
+        logger.error(
           '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
         );
         process.exit(1);
       }
     } else {
       // Auto-discovery mode - fallback to defaults is OK
+      logger.step('Discovering configuration');
       config = await configManager
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());
@@ -90,7 +102,7 @@ export async function main(): Promise<void> {
     const availableChecks = Object.keys(config.checks || {});
     const invalidChecks = checksToRun.filter(check => !availableChecks.includes(check));
     if (invalidChecks.length > 0) {
-      console.error(`❌ Error: No configuration found for check: ${invalidChecks[0]}`);
+      logger.error(`❌ Error: No configuration found for check: ${invalidChecks[0]}`);
       process.exit(1);
     }
 
@@ -118,7 +130,7 @@ export async function main(): Promise<void> {
 
     // Use stderr for status messages when outputting formatted results to stdout
     // Suppress all status messages when outputting JSON to avoid breaking parsers
-    const logFn = options.output === 'json' ? () => {} : console.error;
+    const logFn = (msg: string) => logger.info(msg);
 
     // Determine if we should include code context (diffs)
     // In CLI mode (local), we do smart detection. PR mode always includes context.
@@ -141,11 +153,9 @@ export async function main(): Promise<void> {
         check => config.checks?.[check]?.schema === 'code-review'
       );
       includeCodeContext = hasCodeReviewSchema;
-      if (hasCodeReviewSchema) {
+      if (hasCodeReviewSchema)
         logFn('📝 Code context: ENABLED (code-review schema detected in local mode)');
-      } else {
-        logFn('📝 Code context: DISABLED (no code-review schema found in local mode)');
-      }
+      else logFn('📝 Code context: DISABLED (no code-review schema found in local mode)');
     }
 
     // Get repository info using GitRepositoryAnalyzer
@@ -154,26 +164,30 @@ export async function main(): Promise<void> {
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
     try {
+      logger.step('Analyzing repository');
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext);
     } catch (error) {
-      console.error('❌ Error analyzing git repository:', error);
-      console.error('💡 Make sure you are in a git repository or initialize one with "git init"');
+      logger.error(
+        '❌ Error analyzing git repository: ' +
+          (error instanceof Error ? error.message : String(error))
+      );
+      logger.warn('💡 Make sure you are in a git repository or initialize one with "git init"');
       process.exit(1);
     }
 
     // Check if we're in a git repository
     if (!repositoryInfo.isGitRepository) {
-      console.error('❌ Error: Not a git repository. Run "git init" to initialize a repository.');
+      logger.error('❌ Error: Not a git repository. Run "git init" to initialize a repository.');
       process.exit(1);
     }
 
-    logFn('🔍 Visor - AI-powered code review tool');
-    logFn(`Configuration version: ${config.version}`);
-    logFn(`Configuration source: ${options.configPath || 'default search locations'}`);
+    logger.info('🔍 Visor - AI-powered code review tool');
+    logger.info(`Configuration version: ${config.version}`);
+    logger.verbose(`Configuration source: ${options.configPath || 'default search locations'}`);
 
     // Check if there are any changes to analyze (only when code context is needed)
     if (includeCodeContext && repositoryInfo.files.length === 0) {
-      console.error('❌ Error: No changes to analyze. Make some file changes first.');
+      logger.error('❌ Error: No changes to analyze. Make some file changes first.');
       process.exit(1);
     }
 
@@ -181,13 +195,13 @@ export async function main(): Promise<void> {
     if (options.debug) {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
       const registry = CheckProviderRegistry.getInstance();
-      logFn('Registered providers:', registry.getAvailableProviders().join(', '));
+      logger.debug('Registered providers: ' + registry.getAvailableProviders().join(', '));
     }
 
-    logFn(`📂 Repository: ${repositoryInfo.base} branch`);
-    logFn(`📁 Files changed: ${repositoryInfo.files?.length || 0}`);
-    logFn('🔍 Analyzing local git repository...');
-    logFn(`🤖 Executing checks: ${checksToRun.join(', ')}`);
+    logger.info(`📂 Repository: ${repositoryInfo.base} branch`);
+    logger.info(`📁 Files changed: ${repositoryInfo.files?.length || 0}`);
+    logger.step(`Executing ${checksToRun.length} check(s)`);
+    logger.verbose(`Checks: ${checksToRun.join(', ')}`);
 
     // Create CheckExecutionEngine for running checks
     const engine = new CheckExecutionEngine();
@@ -262,6 +276,7 @@ export async function main(): Promise<void> {
     );
 
     // Format output based on format type
+    logger.step(`Formatting results as ${options.output}`);
     let output: string;
     if (options.output === 'json') {
       output = JSON.stringify(groupedResultsToUse, null, 2);
@@ -309,10 +324,45 @@ export async function main(): Promise<void> {
       output = OutputFormatters.formatAsTable(analysisResult, { showDetails: true });
     }
 
-    console.log(output);
+    // Emit or save output
+    if (options.outputFile) {
+      try {
+        const outPath = path.resolve(process.cwd(), options.outputFile);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, output, 'utf8');
+        logger.success(`Saved ${options.output} output to ${outPath}`);
+      } catch (writeErr) {
+        logger.error(
+          `Failed to write output to file: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`
+        );
+        process.exit(1);
+      }
+    } else {
+      console.log(output);
+    }
+
+    // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
+    const allResults = Object.values(groupedResultsToUse).flat();
+    const allIssues = allResults.flatMap((r: CheckResult) => r.issues || []);
+    const counts = allIssues.reduce(
+      (acc, issue: { severity?: string }) => {
+        const sev = (issue.severity || 'info').toLowerCase();
+        acc.total++;
+        if (sev === 'critical') acc.critical++;
+        else if (sev === 'error') acc.error++;
+        else if (sev === 'warning' || sev === 'warn') acc.warning++;
+        else acc.info++;
+        return acc;
+      },
+      { total: 0, critical: 0, error: 0, warning: 0, info: 0 }
+    );
+
+    logger.success(
+      `Completed ${executedCheckNames.length} check(s): ${counts.total} issues (${counts.critical} critical, ${counts.error} error, ${counts.warning} warning)`
+    );
+    logger.verbose(`Checks executed: ${executedCheckNames.join(', ')}`);
 
     // Check for critical issues
-    const allResults = Object.values(groupedResultsToUse).flat();
     const criticalCount = allResults.reduce((sum, result: CheckResult) => {
       const issues = result.issues || [];
       return (
@@ -336,35 +386,35 @@ export async function main(): Promise<void> {
 
     // Provide user-friendly error messages for known errors
     if (ClaudeCodeSDKNotInstalledError && error instanceof ClaudeCodeSDKNotInstalledError) {
-      console.error('\n❌ Error: Claude Code SDK is not installed.');
-      console.error('To use the claude-code provider, you need to install the required packages:');
-      console.error('\n  npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk');
-      console.error('\nOr if using yarn:');
-      console.error('\n  yarn add @anthropic/claude-code-sdk @modelcontextprotocol/sdk\n');
+      logger.error('\n❌ Error: Claude Code SDK is not installed.');
+      logger.error('To use the claude-code provider, you need to install the required packages:');
+      logger.error('\n  npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk');
+      logger.error('\nOr if using yarn:');
+      logger.error('\n  yarn add @anthropic/claude-code-sdk @modelcontextprotocol/sdk\n');
     } else if (ClaudeCodeAPIKeyMissingError && error instanceof ClaudeCodeAPIKeyMissingError) {
-      console.error('\n❌ Error: No API key found for Claude Code provider.');
-      console.error('Please set one of the following environment variables:');
-      console.error('  - CLAUDE_CODE_API_KEY');
-      console.error('  - ANTHROPIC_API_KEY');
-      console.error('\nExample:');
-      console.error('  export CLAUDE_CODE_API_KEY="your-api-key-here"\n');
+      logger.error('\n❌ Error: No API key found for Claude Code provider.');
+      logger.error('Please set one of the following environment variables:');
+      logger.error('  - CLAUDE_CODE_API_KEY');
+      logger.error('  - ANTHROPIC_API_KEY');
+      logger.error('\nExample:');
+      logger.error('  export CLAUDE_CODE_API_KEY="your-api-key-here"\n');
     } else if (error instanceof Error && error.message.includes('No API key configured')) {
-      console.error('\n❌ Error: No API key or credentials configured for AI provider.');
-      console.error('Please set one of the following:');
-      console.error('\nFor Google Gemini:');
-      console.error('  export GOOGLE_API_KEY="your-api-key"');
-      console.error('\nFor Anthropic Claude:');
-      console.error('  export ANTHROPIC_API_KEY="your-api-key"');
-      console.error('\nFor OpenAI:');
-      console.error('  export OPENAI_API_KEY="your-api-key"');
-      console.error('\nFor AWS Bedrock:');
-      console.error('  export AWS_ACCESS_KEY_ID="your-access-key"');
-      console.error('  export AWS_SECRET_ACCESS_KEY="your-secret-key"');
-      console.error('  export AWS_REGION="us-east-1"');
-      console.error('\nOr use API key authentication for Bedrock:');
-      console.error('  export AWS_BEDROCK_API_KEY="your-api-key"\n');
+      logger.error('\n❌ Error: No API key or credentials configured for AI provider.');
+      logger.error('Please set one of the following:');
+      logger.error('\nFor Google Gemini:');
+      logger.error('  export GOOGLE_API_KEY="your-api-key"');
+      logger.error('\nFor Anthropic Claude:');
+      logger.error('  export ANTHROPIC_API_KEY="your-api-key"');
+      logger.error('\nFor OpenAI:');
+      logger.error('  export OPENAI_API_KEY="your-api-key"');
+      logger.error('\nFor AWS Bedrock:');
+      logger.error('  export AWS_ACCESS_KEY_ID="your-access-key"');
+      logger.error('  export AWS_SECRET_ACCESS_KEY="your-secret-key"');
+      logger.error('  export AWS_REGION="us-east-1"');
+      logger.error('\nOr use API key authentication for Bedrock:');
+      logger.error('  export AWS_BEDROCK_API_KEY="your-api-key"\n');
     } else {
-      console.error('❌ Error:', error instanceof Error ? error.message : error);
+      logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
     process.exit(1);
   }
