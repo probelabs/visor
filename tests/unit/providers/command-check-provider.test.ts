@@ -434,9 +434,11 @@ describe('CommandCheckProvider', () => {
 
   describe('Error Handling', () => {
     it('should log stderr in debug mode', async () => {
-      const originalDebug = process.env.DEBUG;
-      process.env.DEBUG = 'true';
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const originalDebug = process.env.VISOR_DEBUG;
+      process.env.VISOR_DEBUG = 'true';
+      const { logger } = await import('../../../src/logger');
+      logger.configure({ debug: true });
+      const consoleSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
       const config: CheckProviderConfig = {
         type: 'command',
@@ -450,16 +452,18 @@ describe('CommandCheckProvider', () => {
 
       await provider.execute(mockPRInfo, config);
 
-      expect(consoleSpy).toHaveBeenCalledWith('Command stderr: warning\n');
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Command stderr: warning'));
 
-      process.env.DEBUG = originalDebug;
+      process.env.VISOR_DEBUG = originalDebug;
       consoleSpy.mockRestore();
     });
 
     it('should not log stderr when debug mode is disabled', async () => {
-      const originalDebug = process.env.DEBUG;
-      delete process.env.DEBUG;
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const originalDebug = process.env.VISOR_DEBUG;
+      delete process.env.VISOR_DEBUG;
+      const { logger } = await import('../../../src/logger');
+      logger.configure({ debug: false });
+      const consoleSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
       const config: CheckProviderConfig = {
         type: 'command',
@@ -473,9 +477,9 @@ describe('CommandCheckProvider', () => {
 
       await provider.execute(mockPRInfo, config);
 
-      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Command stderr'));
 
-      process.env.DEBUG = originalDebug;
+      process.env.VISOR_DEBUG = originalDebug;
       consoleSpy.mockRestore();
     });
 

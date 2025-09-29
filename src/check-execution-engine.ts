@@ -1064,9 +1064,11 @@ export class CheckExecutionEngine {
 
     // Log execution plan
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
-    log(
-      `🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`
-    );
+    if (debug) {
+      log(
+        `🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`
+      );
+    }
 
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
@@ -1092,14 +1094,18 @@ export class CheckExecutionEngine {
       if (hasSessionReuseInLevel) {
         // Force sequential execution when session reuse is involved
         actualParallelism = 1;
-        log(
-          `🔄 Debug: Level ${executionGroup.level} contains session reuse checks - forcing sequential execution (parallelism: 1)`
-        );
+        if (debug) {
+          log(
+            `🔄 Debug: Level ${executionGroup.level} contains session reuse checks - forcing sequential execution (parallelism: 1)`
+          );
+        }
       }
 
-      log(
-        `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
-      );
+      if (debug) {
+        log(
+          `🔧 Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
+        );
+      }
 
       // Create task functions for checks in this level
       const levelTaskFunctions = executionGroup.parallel.map(checkName => async () => {
@@ -1113,7 +1119,9 @@ export class CheckExecutionEngine {
         }
 
         try {
-          log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
+          if (debug) {
+            log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
+          }
 
           // Evaluate if condition to determine whether to run this check
           if (checkConfig.if) {
@@ -1131,7 +1139,9 @@ export class CheckExecutionEngine {
             );
 
             if (!shouldRun) {
-              log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+              if (debug) {
+                log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+              }
               return {
                 checkName,
                 error: null,
@@ -1213,13 +1223,17 @@ export class CheckExecutionEngine {
                 reuseSession: true,
               };
 
-              log(
-                `🔄 Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
-              );
+              if (debug) {
+                log(
+                  `🔄 Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
+                );
+              }
             } else {
-              log(
-                `⚠️ Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
-              );
+              if (debug) {
+                log(
+                  `⚠️ Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
+                );
+              }
             }
           }
 
@@ -1229,7 +1243,9 @@ export class CheckExecutionEngine {
             const timestamp = new Date().toISOString();
             currentSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName}`;
             sessionIds.set(checkName, currentSessionId);
-            log(`🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+            if (debug) {
+              log(`🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+            }
 
             // Add session ID to provider config
             providerConfig.sessionId = currentSessionId;
@@ -1239,9 +1255,11 @@ export class CheckExecutionEngine {
           let finalResult: ReviewSummary;
 
           if (isForEachDependent && forEachParentName) {
-            log(
-              `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
-            );
+            if (debug) {
+              log(
+                `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
+              );
+            }
 
             const allIssues: ReviewIssue[] = [];
             const allOutputs: unknown[] = [];
@@ -1268,9 +1286,11 @@ export class CheckExecutionEngine {
                 }
               }
 
-              log(
-                `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
-              );
+              if (debug) {
+                log(
+                  `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
+                );
+              }
 
               const itemResult = await provider.execute(
                 prInfo,
@@ -1349,15 +1369,22 @@ export class CheckExecutionEngine {
               sessionInfo
             );
 
-            if (process.env.DEBUG && checkConfig.forEach) {
-              const finalResultWithOutput = finalResult as ExtendedReviewSummary;
-              const outputPreview = JSON.stringify(finalResultWithOutput.output).slice(0, 200);
-              logger.debug(`🔧 Debug: Check "${checkName}" provider returned: ${outputPreview}`);
+            if (checkConfig.forEach) {
+              try {
+                const finalResultWithOutput = finalResult as ExtendedReviewSummary;
+                const outputPreview =
+                  JSON.stringify(finalResultWithOutput.output)?.slice(0, 200) || '(empty)';
+                logger.debug(`🔧 Debug: Check "${checkName}" provider returned: ${outputPreview}`);
+              } catch {
+                // Ignore logging errors
+              }
             }
 
-            log(
-              `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
-            );
+            if (debug) {
+              log(
+                `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+              );
+            }
           }
 
           // Add group, schema, template info and timestamp to issues from config
@@ -1382,7 +1409,9 @@ export class CheckExecutionEngine {
           };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
-          log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+          if (debug) {
+            log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+          }
 
           return {
             checkName,
@@ -1412,14 +1441,13 @@ export class CheckExecutionEngine {
           const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
 
           if (checkConfig?.forEach && reviewSummaryWithOutput.output !== undefined) {
-            if (process.env.DEBUG) {
-              console.log(
-                `🔧 Debug: Raw output for forEach check ${checkName}:`,
+            logger.debug(
+              `🔧 Debug: Raw output for forEach check ${checkName}: ${
                 Array.isArray(reviewSummaryWithOutput.output)
                   ? `array(${reviewSummaryWithOutput.output.length})`
                   : typeof reviewSummaryWithOutput.output
-              );
-            }
+              }`
+            );
             const rawOutput = reviewSummaryWithOutput.output;
             let normalizedOutput: unknown[];
 
@@ -1438,11 +1466,13 @@ export class CheckExecutionEngine {
               normalizedOutput = [rawOutput];
             }
 
-            if (process.env.DEBUG) {
-              console.log(
-                `🔧 Debug: Check "${checkName}" forEach output:`,
-                JSON.stringify(normalizedOutput).slice(0, 200)
+            try {
+              const preview = JSON.stringify(normalizedOutput);
+              logger.debug(
+                `🔧 Debug: Check "${checkName}" forEach output: ${preview?.slice(0, 200) || '(empty)'}`
               );
+            } catch {
+              // Ignore logging errors
             }
 
             // Store the array for iteration by dependent checks
@@ -1477,7 +1507,9 @@ export class CheckExecutionEngine {
 
           // Check if we should stop execution due to fail-fast
           if (effectiveFailFast) {
-            log(`🛑 Check "${checkName}" failed and fail-fast is enabled - stopping execution`);
+            if (debug) {
+              log(`🛑 Check "${checkName}" failed and fail-fast is enabled - stopping execution`);
+            }
             shouldStopExecution = true;
             break;
           }
@@ -1497,9 +1529,11 @@ export class CheckExecutionEngine {
             );
 
             if (hasFailuresToReport) {
-              log(
-                `🛑 Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
-              );
+              if (debug) {
+                log(
+                  `🛑 Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
+                );
+              }
               shouldStopExecution = true;
               break;
             }
@@ -1509,16 +1543,16 @@ export class CheckExecutionEngine {
     }
 
     // Log final execution status
-    if (shouldStopExecution) {
+    if (shouldStopExecution && debug) {
       log(
         `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
       );
-    } else {
+    } else if (debug) {
       log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
     }
 
     // Cleanup sessions after execution
-    if (sessionIds.size > 0) {
+    if (sessionIds.size > 0 && debug) {
       log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
       for (const [checkName, sessionId] of sessionIds) {
         try {
