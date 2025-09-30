@@ -1200,6 +1200,34 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         }
       }
 
+      // Check if this is a custom schema (free-form data)
+      // Custom schemas are:
+      // 1. Inline schemas (effectiveSchema === 'custom')
+      // 2. File-based custom schemas (starts with ./ or contains .json)
+      // 3. Any schema that is NOT 'code-review' or other built-in schemas
+      const isCustomSchema =
+        _schema === 'custom' ||
+        (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
+        (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
+
+      if (isCustomSchema) {
+        // For custom schemas, preserve ALL fields from the parsed JSON
+        // Don't force the response into the standard ReviewSummary format
+        log('📋 Custom schema detected - preserving all fields from parsed JSON');
+        log(`📊 Schema: ${_schema}`);
+        log(`📊 Custom schema keys: ${Object.keys(reviewData).join(', ')}`);
+
+        // Return the full parsed data as the output, with an empty issues array
+        // This allows downstream checks to access all custom fields via outputs
+        const result: ReviewSummary & { output?: unknown } = {
+          issues: [], // Empty array for custom schemas (no code review issues)
+          output: reviewData, // Preserve ALL custom schema fields here
+        };
+
+        log('✅ Successfully created ReviewSummary with custom schema output');
+        return result;
+      }
+
       // Standard code-review schema processing
       log('🔍 Validating parsed review data...');
       log(`📊 Overall score: ${0}`);

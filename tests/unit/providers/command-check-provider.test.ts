@@ -430,6 +430,39 @@ describe('CommandCheckProvider', () => {
 
       expect((result as any).output).toBe('test-value');
     });
+
+    it('should access all custom schema fields from AI check output', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'echo "Complexity: {{ outputs.ai-check.complexity }}, Priority: {{ outputs.ai-check.priority }}, Hours: {{ outputs.ai-check.estimated_hours }}"',
+      };
+
+      // Simulate AI check with custom schema (no issues, only custom output)
+      const dependencyResults = new Map<string, ReviewSummary>();
+      dependencyResults.set('ai-check', {
+        issues: [], // Empty for custom schemas
+        output: {
+          complexity: 'high',
+          priority: 8,
+          estimated_hours: 24,
+          risk_level: 'medium',
+          tags: ['backend', 'database'],
+        },
+      } as ReviewSummary);
+
+      mockExec.mockResolvedValue({
+        stdout: 'Complexity: high, Priority: 8, Hours: 24\n',
+        stderr: '',
+      });
+
+      const result = await provider.execute(mockPRInfo, config, dependencyResults);
+
+      expect(mockExec).toHaveBeenCalledWith(
+        'echo "Complexity: high, Priority: 8, Hours: 24"',
+        expect.any(Object)
+      );
+      expect((result as any).output).toBe('Complexity: high, Priority: 8, Hours: 24');
+    });
   });
 
   describe('Error Handling', () => {
