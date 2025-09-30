@@ -1377,7 +1377,14 @@ export class CheckExecutionEngine {
             finalResult = {
               issues: allIssues,
               ...(finalOutput !== undefined ? { output: finalOutput } : {}),
-            } as ReviewSummary & { output?: unknown };
+            } as ExtendedReviewSummary;
+
+            // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
+            // will also iterate over the items (propagate forEach behavior down the chain)
+            if (allOutputs.length > 0) {
+              (finalResult as ExtendedReviewSummary).isForEach = true;
+              (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
+            }
 
             if (aggregatedContents.length > 0) {
               (finalResult as ReviewSummary & { content?: string }).content =
