@@ -1076,6 +1076,11 @@ export class CheckExecutionEngine {
     // Note: We'll get the provider dynamically per check, not a single one for all
     const sessionIds = new Map<string, string>(); // checkName -> sessionId
     let shouldStopExecution = false;
+    let completedChecksCount = 0;
+    const totalChecksCount = stats.totalChecks;
+    let skippedChecksCount = 0;
+    let failedChecksCount = 0;
+    const executionStartTime = Date.now();
 
     for (
       let levelIndex = 0;
@@ -1118,6 +1123,10 @@ export class CheckExecutionEngine {
           };
         }
 
+        const checkStartTime = Date.now();
+        completedChecksCount++;
+        logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
+
         try {
           if (debug) {
             log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
@@ -1139,6 +1148,8 @@ export class CheckExecutionEngine {
             );
 
             if (!shouldRun) {
+              skippedChecksCount++;
+              logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
               if (debug) {
                 log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
               }
@@ -1148,6 +1159,7 @@ export class CheckExecutionEngine {
                 result: {
                   issues: [],
                 },
+                skipped: true,
               };
             }
           }
@@ -1402,13 +1414,27 @@ export class CheckExecutionEngine {
             issues: enrichedIssues,
           };
 
+          const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+          const issueCount = enrichedIssues.length;
+          if (issueCount > 0) {
+            logger.success(
+              `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? '' : 's'} found`
+            );
+          } else {
+            logger.success(`Check complete: ${checkName} (${checkDuration}s)`);
+          }
+
           return {
             checkName,
             error: null,
             result: enrichedResult,
           };
         } catch (error) {
+          failedChecksCount++;
           const errorMessage = error instanceof Error ? error.message : String(error);
+          const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+          logger.error(`✖ Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
+
           if (debug) {
             log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
           }
@@ -1542,13 +1568,32 @@ export class CheckExecutionEngine {
       }
     }
 
-    // Log final execution status
-    if (shouldStopExecution && debug) {
-      log(
-        `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
-      );
-    } else if (debug) {
-      log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
+    // Log final execution summary
+    const executionDuration = ((Date.now() - executionStartTime) / 1000).toFixed(1);
+    const successfulChecks = totalChecksCount - failedChecksCount - skippedChecksCount;
+
+    logger.info('');
+    logger.step(`Execution complete (${executionDuration}s)`);
+    logger.info(`  ✔ Successful: ${successfulChecks}/${totalChecksCount}`);
+    if (skippedChecksCount > 0) {
+      logger.info(`  ⏭  Skipped: ${skippedChecksCount}`);
+    }
+    if (failedChecksCount > 0) {
+      logger.info(`  ✖ Failed: ${failedChecksCount}`);
+    }
+
+    if (shouldStopExecution) {
+      logger.warn(`  ⚠️  Execution stopped early due to fail-fast`);
+    }
+
+    if (debug) {
+      if (shouldStopExecution) {
+        log(
+          `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
+        );
+      } else {
+        log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
+      }
     }
 
     // Cleanup sessions after execution
