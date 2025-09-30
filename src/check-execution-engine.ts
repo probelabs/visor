@@ -1197,16 +1197,31 @@ export class CheckExecutionEngine {
             },
           };
 
-          // Pass results from dependencies if needed
+          // Pass results from ALL transitive dependencies (not just direct ones)
+          // This ensures the "outputs" variable has access to all ancestor check results
           const dependencyResults = new Map<string, ReviewSummary>();
           let isForEachDependent = false;
           let forEachItems: unknown[] = [];
           let forEachParentName: string | undefined;
 
-          for (const depId of checkConfig.depends_on || []) {
+          // Get all transitive dependencies (ancestors) for this check
+          const allDependencies = DependencyResolver.getAllDependencies(
+            checkName,
+            dependencyGraph.nodes
+          );
+
+          // Include results from ALL dependencies (direct and transitive)
+          for (const depId of allDependencies) {
             if (results.has(depId)) {
               const depResult = results.get(depId)!;
               dependencyResults.set(depId, depResult);
+            }
+          }
+
+          // Check direct dependencies for forEach behavior
+          for (const depId of checkConfig.depends_on || []) {
+            if (results.has(depId)) {
+              const depResult = results.get(depId)!;
 
               // Check if this dependency has forEach enabled
               const depForEachResult = depResult as ReviewSummary & {
@@ -1461,6 +1476,14 @@ export class CheckExecutionEngine {
         const checkConfig = config.checks[checkName];
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
+          // Skip storing results for skipped checks (they should not appear in outputs)
+          if ((result.value as any).skipped) {
+            if (debug) {
+              log(`🔧 Debug: Not storing result for skipped check "${checkName}"`);
+            }
+            continue;
+          }
+
           const reviewResult = result.value.result;
 
           // Handle forEach logic - process array outputs

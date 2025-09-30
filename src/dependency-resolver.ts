@@ -193,6 +193,46 @@ export class DependencyResolver {
   }
 
   /**
+   * Get all transitive dependencies (ancestors) for a given check
+   * This returns all checks that must complete before the given check can run,
+   * not just the direct dependencies.
+   *
+   * For example, if A -> B -> C, then:
+   * - getAllDependencies(C) returns [A, B]
+   * - getAllDependencies(B) returns [A]
+   * - getAllDependencies(A) returns []
+   *
+   * @param checkId The check to find dependencies for
+   * @param nodes The dependency graph nodes
+   * @returns Array of all transitive dependency IDs
+   */
+  static getAllDependencies(checkId: string, nodes: Map<string, CheckNode>): string[] {
+    const allDeps = new Set<string>();
+    const visited = new Set<string>();
+
+    const collectDependencies = (currentId: string) => {
+      if (visited.has(currentId)) {
+        return;
+      }
+      visited.add(currentId);
+
+      const node = nodes.get(currentId);
+      if (!node) {
+        return;
+      }
+
+      // Add direct dependencies and recurse
+      for (const depId of node.dependencies) {
+        allDeps.add(depId);
+        collectDependencies(depId);
+      }
+    };
+
+    collectDependencies(checkId);
+    return Array.from(allDeps);
+  }
+
+  /**
    * Get execution statistics for debugging
    */
   static getExecutionStats(graph: DependencyGraph): {
