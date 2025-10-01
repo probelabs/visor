@@ -20,6 +20,12 @@ describe('E2E: forEach with Conditional Chain', () => {
   let configPath: string;
 
   beforeAll(() => {
+    // Ensure dist is built
+    const projectRoot = path.join(__dirname, '../..');
+    if (!fs.existsSync(path.join(projectRoot, 'dist/cli-main.js'))) {
+      execSync('npm run build', { cwd: projectRoot, stdio: 'inherit' });
+    }
+
     // Create temp directory for test
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-foreach-conditional-'));
 
