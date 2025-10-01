@@ -274,7 +274,7 @@ export class CheckExecutionEngine {
 
       // Complete GitHub checks with results
       if (this.checkRunMap) {
-        await this.completeGitHubChecksWithResults(reviewSummary, options);
+        await this.completeGitHubChecksWithResults(reviewSummary, options, prInfo);
       }
 
       const executionTime = Date.now() - startTime;
@@ -2690,7 +2690,8 @@ export class CheckExecutionEngine {
    */
   private async completeGitHubChecksWithResults(
     reviewSummary: ReviewSummary,
-    options: CheckExecutionOptions
+    options: CheckExecutionOptions,
+    prInfo: import('./pr-analyzer').PRInfo
   ): Promise<void> {
     if (
       !this.githubCheckService ||
@@ -2738,7 +2739,11 @@ export class CheckExecutionEngine {
           checkRun.id,
           checkName,
           failureResults,
-          checkIssues
+          checkIssues,
+          undefined, // executionError
+          prInfo.files.map((f: import('./pr-analyzer').PRFile) => f.filename), // filesChangedInCommit
+          options.githubChecks.prNumber, // prNumber
+          options.githubChecks.headSha // currentCommitSha
         );
 
         console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
