@@ -1292,6 +1292,8 @@ export class CheckExecutionEngine {
             const allOutputs: unknown[] = [];
             const aggregatedContents: string[] = [];
 
+            // Create task functions (not executed yet) - these will be executed with controlled concurrency
+            // via executeWithLimitedParallelism to respect maxParallelism setting
             const itemTasks = forEachItems.map((item, itemIndex) => async () => {
               // Create modified dependency results with current item
               const forEachDependencyResults = new Map<string, ReviewSummary>();
