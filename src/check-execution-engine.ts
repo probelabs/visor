@@ -1132,38 +1132,6 @@ export class CheckExecutionEngine {
             log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
           }
 
-          // Evaluate if condition to determine whether to run this check
-          if (checkConfig.if) {
-            const shouldRun = await this.failureEvaluator.evaluateIfCondition(
-              checkName,
-              checkConfig.if,
-              {
-                branch: prInfo.head,
-                baseBranch: prInfo.base,
-                filesChanged: prInfo.files.map(f => f.filename),
-                event: 'issue_comment', // Command triggered from comment
-                environment: getSafeEnvironmentVariables(),
-                previousResults: results,
-              }
-            );
-
-            if (!shouldRun) {
-              skippedChecksCount++;
-              logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
-              if (debug) {
-                log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
-              }
-              return {
-                checkName,
-                error: null,
-                result: {
-                  issues: [],
-                },
-                skipped: true,
-              };
-            }
-          }
-
           // Get the appropriate provider for this check type
           const providerType = checkConfig.type || 'ai';
           const provider = this.providerRegistry.getProviderOrThrow(providerType);
@@ -1313,6 +1281,42 @@ export class CheckExecutionEngine {
                 }
               }
 
+              // Evaluate if condition for this forEach item
+              if (checkConfig.if) {
+                // Merge current results with forEach-specific dependency results for condition evaluation
+                const conditionResults = new Map(results);
+                for (const [depName, depResult] of forEachDependencyResults) {
+                  conditionResults.set(depName, depResult);
+                }
+
+                const shouldRun = await this.failureEvaluator.evaluateIfCondition(
+                  checkName,
+                  checkConfig.if,
+                  {
+                    branch: prInfo.head,
+                    baseBranch: prInfo.base,
+                    filesChanged: prInfo.files.map(f => f.filename),
+                    event: 'issue_comment',
+                    environment: getSafeEnvironmentVariables(),
+                    previousResults: conditionResults,
+                  }
+                );
+
+                if (!shouldRun) {
+                  if (debug) {
+                    log(
+                      `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
+                    );
+                  }
+                  // Return empty result for skipped items
+                  return {
+                    index: itemIndex,
+                    itemResult: { issues: [] } as ReviewSummary,
+                    skipped: true,
+                  };
+                }
+              }
+
               if (debug) {
                 log(
                   `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
@@ -1349,6 +1353,11 @@ export class CheckExecutionEngine {
             for (const result of forEachResults) {
               if (result.status === 'rejected') {
                 throw result.reason;
+              }
+
+              // Skip results from skipped items (those that failed if condition)
+              if ((result.value as any).skipped) {
+                continue;
               }
 
               const { itemResult } = result.value;
@@ -1396,6 +1405,38 @@ export class CheckExecutionEngine {
             );
           } else {
             // Normal single execution
+            // Evaluate if condition for non-forEach-dependent checks
+            if (checkConfig.if) {
+              const shouldRun = await this.failureEvaluator.evaluateIfCondition(
+                checkName,
+                checkConfig.if,
+                {
+                  branch: prInfo.head,
+                  baseBranch: prInfo.base,
+                  filesChanged: prInfo.files.map(f => f.filename),
+                  event: 'issue_comment',
+                  environment: getSafeEnvironmentVariables(),
+                  previousResults: results,
+                }
+              );
+
+              if (!shouldRun) {
+                skippedChecksCount++;
+                logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
+                if (debug) {
+                  log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+                }
+                return {
+                  checkName,
+                  error: null,
+                  result: {
+                    issues: [],
+                  },
+                  skipped: true,
+                };
+              }
+            }
+
             finalResult = await provider.execute(
               prInfo,
               providerConfig,
