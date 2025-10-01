@@ -537,76 +537,67 @@ export class GitHubCheckService {
   }
 
   /**
-   * Get check runs for all commits in a PR to clear old annotations
+   * Get check runs for a specific commit SHA
+   * Returns all check runs with the given name on this commit
    */
-  async getCheckRunsForPR(
+  async getCheckRunsForCommit(
     owner: string,
     repo: string,
-    prNumber: number,
+    commitSha: string,
     checkName: string
   ): Promise<Array<{ id: number; head_sha: string }>> {
     try {
-      // Get PR commits
-      const commitsResponse = await this.octokit.rest.pulls.listCommits({
+      const checksResponse = await this.octokit.rest.checks.listForRef({
         owner,
         repo,
-        pull_number: prNumber,
-        per_page: 100,
+        ref: commitSha,
+        check_name: `Visor: ${checkName}`,
       });
 
-      const checkRuns: Array<{ id: number; head_sha: string }> = [];
-
-      // Get check runs for each commit
-      for (const commit of commitsResponse.data) {
-        try {
-          const checksResponse = await this.octokit.rest.checks.listForRef({
-            owner,
-            repo,
-            ref: commit.sha,
-            check_name: `Visor: ${checkName}`,
-          });
-
-          for (const check of checksResponse.data.check_runs) {
-            checkRuns.push({
-              id: check.id,
-              head_sha: commit.sha,
-            });
-          }
-        } catch (error) {
-          // Continue if we can't get checks for a specific commit
-          console.debug(`Could not get checks for commit ${commit.sha}:`, error);
-        }
-      }
-
-      return checkRuns;
+      return checksResponse.data.check_runs.map(check => ({
+        id: check.id,
+        head_sha: commitSha,
+      }));
     } catch (error) {
       throw new Error(
-        `Failed to get PR check runs: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to get check runs for commit ${commitSha}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
   /**
-   * Clear annotations from old check runs in the PR (including current commit)
-   * This prevents annotation accumulation when a check runs multiple times
+   * Clear annotations from old check runs on the current commit
+   * This prevents annotation accumulation when a check runs multiple times on the same commit
+   * (e.g., force push, re-running checks)
    */
   async clearOldAnnotations(
     owner: string,
     repo: string,
-    prNumber: number,
+    prNumber: number, // Not used, kept for backward compatibility
     checkName: string,
     currentCommitSha: string,
     currentCheckRunId: number
   ): Promise<void> {
     try {
-      const allCheckRuns = await this.getCheckRunsForPR(owner, repo, prNumber, checkName);
+      // Get all check runs for this check name on the current commit
+      const allCheckRuns = await this.getCheckRunsForCommit(
+        owner,
+        repo,
+        currentCommitSha,
+        checkName
+      );
 
-      // Filter out the CURRENT check run (by ID), but include old runs on the same commit
+      // Filter out the CURRENT check run (by ID)
       // This handles the case where Visor runs multiple times on the same commit
       const oldRuns = allCheckRuns.filter(run => run.id !== currentCheckRunId);
 
+      if (oldRuns.length === 0) {
+        console.debug(`No old check runs to clear for ${checkName} on commit ${currentCommitSha}`);
+        return;
+      }
+
       console.debug(
-        `Clearing ${oldRuns.length} old check run annotations for ${checkName} (keeping current run ${currentCheckRunId})`
+        `Clearing ${oldRuns.length} old check run(s) for ${checkName} on commit ${currentCommitSha.substring(0, 7)} (keeping current run ${currentCheckRunId})`
       );
 
       // Update each old check run to have empty annotations
@@ -622,7 +613,7 @@ export class GitHubCheckService {
               annotations: [], // Clear annotations
             },
           });
-          console.debug(`Cleared annotations from check run ${run.id}`);
+          console.debug(`✓ Cleared annotations from check run ${run.id}`);
         } catch (error) {
           console.debug(`Could not clear annotations for check run ${run.id}:`, error);
         }
