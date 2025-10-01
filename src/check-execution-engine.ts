@@ -781,8 +781,8 @@ export class CheckExecutionEngine {
       if (!checkConfig) continue;
 
       // Extract issues for this check
-      const checkIssues = (reviewSummary.issues || []).filter(issue =>
-        issue.ruleId?.startsWith(`${checkName}/`)
+      const checkIssues = (reviewSummary.issues || []).filter(
+        issue => issue.checkName === checkName
       );
 
       // Create a mini ReviewSummary for this check
@@ -1483,9 +1483,10 @@ export class CheckExecutionEngine {
             }
           }
 
-          // Add group, schema, template info and timestamp to issues from config
+          // Add checkName, group, schema, template info and timestamp to issues from config
           const enrichedIssues = (finalResult.issues || []).map(issue => ({
             ...issue,
+            checkName: checkName,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
             schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
@@ -2710,13 +2711,10 @@ export class CheckExecutionEngine {
       issuesByCheck.set(checkName, []);
     }
 
-    // Group issues by their check name (extracted from ruleId prefix)
+    // Group issues by their check name
     for (const issue of reviewSummary.issues || []) {
-      if (issue.ruleId && issue.ruleId.includes('/')) {
-        const checkName = issue.ruleId.split('/')[0];
-        if (issuesByCheck.has(checkName)) {
-          issuesByCheck.get(checkName)!.push(issue);
-        }
+      if (issue.checkName && issuesByCheck.has(issue.checkName)) {
+        issuesByCheck.get(issue.checkName)!.push(issue);
       }
     }
 
