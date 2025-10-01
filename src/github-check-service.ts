@@ -133,9 +133,17 @@ export class GitHubCheckService {
     currentCommitSha?: string
   ): Promise<void> {
     try {
-      // Clear old annotations from previous commits in the PR
+      // Clear old annotations from ALL previous check runs (including older runs on the same commit)
+      // This prevents annotation accumulation when a check runs multiple times
       if (prNumber && currentCommitSha) {
-        await this.clearOldAnnotations(owner, repo, prNumber, checkName, currentCommitSha);
+        await this.clearOldAnnotations(
+          owner,
+          repo,
+          prNumber,
+          checkName,
+          currentCommitSha,
+          check_run_id
+        );
       }
 
       const { conclusion, summary } = this.determineCheckRunConclusion(
@@ -579,20 +587,27 @@ export class GitHubCheckService {
   }
 
   /**
-   * Clear annotations from old check runs in the PR (except current commit)
+   * Clear annotations from old check runs in the PR (including current commit)
+   * This prevents annotation accumulation when a check runs multiple times
    */
   async clearOldAnnotations(
     owner: string,
     repo: string,
     prNumber: number,
     checkName: string,
-    currentCommitSha: string
+    currentCommitSha: string,
+    currentCheckRunId: number
   ): Promise<void> {
     try {
-      const oldCheckRuns = await this.getCheckRunsForPR(owner, repo, prNumber, checkName);
+      const allCheckRuns = await this.getCheckRunsForPR(owner, repo, prNumber, checkName);
 
-      // Filter to only old commits (not the current one)
-      const oldRuns = oldCheckRuns.filter(run => run.head_sha !== currentCommitSha);
+      // Filter out the CURRENT check run (by ID), but include old runs on the same commit
+      // This handles the case where Visor runs multiple times on the same commit
+      const oldRuns = allCheckRuns.filter(run => run.id !== currentCheckRunId);
+
+      console.debug(
+        `Clearing ${oldRuns.length} old check run annotations for ${checkName} (keeping current run ${currentCheckRunId})`
+      );
 
       // Update each old check run to have empty annotations
       for (const run of oldRuns) {
@@ -603,10 +618,11 @@ export class GitHubCheckService {
             check_run_id: run.id,
             output: {
               title: 'Outdated',
-              summary: 'This check has been superseded by a newer commit.',
+              summary: 'This check has been superseded by a newer run.',
               annotations: [], // Clear annotations
             },
           });
+          console.debug(`Cleared annotations from check run ${run.id}`);
         } catch (error) {
           console.debug(`Could not clear annotations for check run ${run.id}:`, error);
         }
