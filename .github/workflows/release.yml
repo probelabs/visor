@@ -40,9 +40,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Update probe to latest
-        run: npm run update-probe
-
       - name: Run tests
         run: npm test
         env:
