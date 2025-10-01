@@ -1203,6 +1203,7 @@ export class CheckExecutionEngine {
           let isForEachDependent = false;
           let forEachItems: unknown[] = [];
           let forEachParentName: string | undefined;
+          const forEachParents: string[] = []; // Track ALL forEach parents
 
           // Get all transitive dependencies (ancestors) for this check
           const allDependencies = DependencyResolver.getAllDependencies(
@@ -1230,9 +1231,14 @@ export class CheckExecutionEngine {
               };
 
               if (depForEachResult.isForEach && Array.isArray(depForEachResult.forEachItems)) {
-                isForEachDependent = true;
-                forEachItems = depForEachResult.forEachItems;
-                forEachParentName = depId;
+                if (!isForEachDependent) {
+                  // First forEach dependency found - use it as the primary
+                  isForEachDependent = true;
+                  forEachItems = depForEachResult.forEachItems;
+                  forEachParentName = depId;
+                }
+                // Track all forEach parents for unwrapping
+                forEachParents.push(depId);
               }
             }
           }
@@ -1296,20 +1302,37 @@ export class CheckExecutionEngine {
             // via executeWithLimitedParallelism to respect maxParallelism setting
             const itemTasks = forEachItems.map((item, itemIndex) => async () => {
               // Create modified dependency results with current item
+              // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
               const forEachDependencyResults = new Map<string, ReviewSummary>();
               for (const [depName, depResult] of dependencyResults) {
-                if (depName === forEachParentName) {
-                  const modifiedResult: ReviewSummary & { output?: unknown } = {
-                    issues: [],
-                    output: item,
+                if (forEachParents.includes(depName)) {
+                  // This is a forEach parent - unwrap its output for this iteration
+                  const depForEachResult = depResult as ReviewSummary & {
+                    output?: unknown;
+                    forEachItems?: unknown[];
                   };
-                  forEachDependencyResults.set(depName, modifiedResult);
 
-                  const rawResult: ReviewSummary & { output?: unknown } = {
-                    issues: [],
-                    output: forEachItems,
-                  };
-                  forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                  if (
+                    Array.isArray(depForEachResult.output) &&
+                    depForEachResult.output[itemIndex] !== undefined
+                  ) {
+                    // Unwrap to the item at the current index
+                    const modifiedResult: ReviewSummary & { output?: unknown } = {
+                      issues: [],
+                      output: depForEachResult.output[itemIndex],
+                    };
+                    forEachDependencyResults.set(depName, modifiedResult);
+
+                    // Also provide -raw access to the full array
+                    const rawResult: ReviewSummary & { output?: unknown } = {
+                      issues: [],
+                      output: depForEachResult.output,
+                    };
+                    forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                  } else {
+                    // Fallback: use the result as-is
+                    forEachDependencyResults.set(depName, depResult);
+                  }
                 } else {
                   forEachDependencyResults.set(depName, depResult);
                 }
