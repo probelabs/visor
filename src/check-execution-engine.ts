@@ -897,6 +897,38 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Evaluate `if` condition for a check
+   * @param checkName Name of the check
+   * @param condition The condition string to evaluate
+   * @param prInfo PR information
+   * @param results Current check results
+   * @param debug Whether debug mode is enabled
+   * @returns true if the check should run, false if it should be skipped
+   */
+  private async evaluateCheckCondition(
+    checkName: string,
+    condition: string,
+    prInfo: PRInfo,
+    results: Map<string, ReviewSummary>,
+    debug?: boolean
+  ): Promise<boolean> {
+    const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
+      branch: prInfo.head,
+      baseBranch: prInfo.base,
+      filesChanged: prInfo.files.map(f => f.filename),
+      event: 'issue_comment',
+      environment: getSafeEnvironmentVariables(),
+      previousResults: results,
+    });
+
+    if (!shouldRun && debug) {
+      logger.debug(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+    }
+
+    return shouldRun;
+  }
+
+  /**
    * Render check content using the appropriate template
    */
   private async renderCheckContent(
@@ -1289,17 +1321,12 @@ export class CheckExecutionEngine {
                   conditionResults.set(depName, depResult);
                 }
 
-                const shouldRun = await this.failureEvaluator.evaluateIfCondition(
+                const shouldRun = await this.evaluateCheckCondition(
                   checkName,
                   checkConfig.if,
-                  {
-                    branch: prInfo.head,
-                    baseBranch: prInfo.base,
-                    filesChanged: prInfo.files.map(f => f.filename),
-                    event: 'issue_comment',
-                    environment: getSafeEnvironmentVariables(),
-                    previousResults: conditionResults,
-                  }
+                  prInfo,
+                  conditionResults,
+                  debug
                 );
 
                 if (!shouldRun) {
@@ -1407,25 +1434,17 @@ export class CheckExecutionEngine {
             // Normal single execution
             // Evaluate if condition for non-forEach-dependent checks
             if (checkConfig.if) {
-              const shouldRun = await this.failureEvaluator.evaluateIfCondition(
+              const shouldRun = await this.evaluateCheckCondition(
                 checkName,
                 checkConfig.if,
-                {
-                  branch: prInfo.head,
-                  baseBranch: prInfo.base,
-                  filesChanged: prInfo.files.map(f => f.filename),
-                  event: 'issue_comment',
-                  environment: getSafeEnvironmentVariables(),
-                  previousResults: results,
-                }
+                prInfo,
+                results,
+                debug
               );
 
               if (!shouldRun) {
                 skippedChecksCount++;
                 logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
-                if (debug) {
-                  log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
-                }
                 return {
                   checkName,
                   error: null,
