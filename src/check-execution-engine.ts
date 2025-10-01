@@ -274,7 +274,7 @@ export class CheckExecutionEngine {
 
       // Complete GitHub checks with results
       if (this.checkRunMap) {
-        await this.completeGitHubChecksWithResults(reviewSummary, options);
+        await this.completeGitHubChecksWithResults(reviewSummary, options, prInfo);
       }
 
       const executionTime = Date.now() - startTime;
@@ -781,8 +781,8 @@ export class CheckExecutionEngine {
       if (!checkConfig) continue;
 
       // Extract issues for this check
-      const checkIssues = (reviewSummary.issues || []).filter(issue =>
-        issue.ruleId?.startsWith(`${checkName}/`)
+      const checkIssues = (reviewSummary.issues || []).filter(
+        issue => issue.checkName === checkName
       );
 
       // Create a mini ReviewSummary for this check
@@ -894,6 +894,38 @@ export class CheckExecutionEngine {
     }
 
     return resolvedPath;
+  }
+
+  /**
+   * Evaluate `if` condition for a check
+   * @param checkName Name of the check
+   * @param condition The condition string to evaluate
+   * @param prInfo PR information
+   * @param results Current check results
+   * @param debug Whether debug mode is enabled
+   * @returns true if the check should run, false if it should be skipped
+   */
+  private async evaluateCheckCondition(
+    checkName: string,
+    condition: string,
+    prInfo: PRInfo,
+    results: Map<string, ReviewSummary>,
+    debug?: boolean
+  ): Promise<boolean> {
+    const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
+      branch: prInfo.head,
+      baseBranch: prInfo.base,
+      filesChanged: prInfo.files.map(f => f.filename),
+      event: 'issue_comment',
+      environment: getSafeEnvironmentVariables(),
+      previousResults: results,
+    });
+
+    if (!shouldRun && debug) {
+      logger.debug(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+    }
+
+    return shouldRun;
   }
 
   /**
@@ -1132,38 +1164,6 @@ export class CheckExecutionEngine {
             log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
           }
 
-          // Evaluate if condition to determine whether to run this check
-          if (checkConfig.if) {
-            const shouldRun = await this.failureEvaluator.evaluateIfCondition(
-              checkName,
-              checkConfig.if,
-              {
-                branch: prInfo.head,
-                baseBranch: prInfo.base,
-                filesChanged: prInfo.files.map(f => f.filename),
-                event: 'issue_comment', // Command triggered from comment
-                environment: getSafeEnvironmentVariables(),
-                previousResults: results,
-              }
-            );
-
-            if (!shouldRun) {
-              skippedChecksCount++;
-              logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
-              if (debug) {
-                log(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
-              }
-              return {
-                checkName,
-                error: null,
-                result: {
-                  issues: [],
-                },
-                skipped: true,
-              };
-            }
-          }
-
           // Get the appropriate provider for this check type
           const providerType = checkConfig.type || 'ai';
           const provider = this.providerRegistry.getProviderOrThrow(providerType);
@@ -1292,6 +1292,8 @@ export class CheckExecutionEngine {
             const allOutputs: unknown[] = [];
             const aggregatedContents: string[] = [];
 
+            // Create task functions (not executed yet) - these will be executed with controlled concurrency
+            // via executeWithLimitedParallelism to respect maxParallelism setting
             const itemTasks = forEachItems.map((item, itemIndex) => async () => {
               // Create modified dependency results with current item
               const forEachDependencyResults = new Map<string, ReviewSummary>();
@@ -1310,6 +1312,37 @@ export class CheckExecutionEngine {
                   forEachDependencyResults.set(`${depName}-raw`, rawResult);
                 } else {
                   forEachDependencyResults.set(depName, depResult);
+                }
+              }
+
+              // Evaluate if condition for this forEach item
+              if (checkConfig.if) {
+                // Merge current results with forEach-specific dependency results for condition evaluation
+                const conditionResults = new Map(results);
+                for (const [depName, depResult] of forEachDependencyResults) {
+                  conditionResults.set(depName, depResult);
+                }
+
+                const shouldRun = await this.evaluateCheckCondition(
+                  checkName,
+                  checkConfig.if,
+                  prInfo,
+                  conditionResults,
+                  debug
+                );
+
+                if (!shouldRun) {
+                  if (debug) {
+                    log(
+                      `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
+                    );
+                  }
+                  // Return empty result for skipped items
+                  return {
+                    index: itemIndex,
+                    itemResult: { issues: [] } as ReviewSummary,
+                    skipped: true,
+                  };
                 }
               }
 
@@ -1349,6 +1382,11 @@ export class CheckExecutionEngine {
             for (const result of forEachResults) {
               if (result.status === 'rejected') {
                 throw result.reason;
+              }
+
+              // Skip results from skipped items (those that failed if condition)
+              if ((result.value as any).skipped) {
+                continue;
               }
 
               const { itemResult } = result.value;
@@ -1396,6 +1434,30 @@ export class CheckExecutionEngine {
             );
           } else {
             // Normal single execution
+            // Evaluate if condition for non-forEach-dependent checks
+            if (checkConfig.if) {
+              const shouldRun = await this.evaluateCheckCondition(
+                checkName,
+                checkConfig.if,
+                prInfo,
+                results,
+                debug
+              );
+
+              if (!shouldRun) {
+                skippedChecksCount++;
+                logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
+                return {
+                  checkName,
+                  error: null,
+                  result: {
+                    issues: [],
+                  },
+                  skipped: true,
+                };
+              }
+            }
+
             finalResult = await provider.execute(
               prInfo,
               providerConfig,
@@ -1421,9 +1483,10 @@ export class CheckExecutionEngine {
             }
           }
 
-          // Add group, schema, template info and timestamp to issues from config
+          // Add checkName, group, schema, template info and timestamp to issues from config
           const enrichedIssues = (finalResult.issues || []).map(issue => ({
             ...issue,
+            checkName: checkName,
             ruleId: `${checkName}/${issue.ruleId}`,
             group: checkConfig.group,
             schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
@@ -2628,7 +2691,8 @@ export class CheckExecutionEngine {
    */
   private async completeGitHubChecksWithResults(
     reviewSummary: ReviewSummary,
-    options: CheckExecutionOptions
+    options: CheckExecutionOptions,
+    prInfo: import('./pr-analyzer').PRInfo
   ): Promise<void> {
     if (
       !this.githubCheckService ||
@@ -2647,13 +2711,10 @@ export class CheckExecutionEngine {
       issuesByCheck.set(checkName, []);
     }
 
-    // Group issues by their check name (extracted from ruleId prefix)
+    // Group issues by their check name
     for (const issue of reviewSummary.issues || []) {
-      if (issue.ruleId && issue.ruleId.includes('/')) {
-        const checkName = issue.ruleId.split('/')[0];
-        if (issuesByCheck.has(checkName)) {
-          issuesByCheck.get(checkName)!.push(issue);
-        }
+      if (issue.checkName && issuesByCheck.has(issue.checkName)) {
+        issuesByCheck.get(issue.checkName)!.push(issue);
       }
     }
 
@@ -2676,7 +2737,11 @@ export class CheckExecutionEngine {
           checkRun.id,
           checkName,
           failureResults,
-          checkIssues
+          checkIssues,
+          undefined, // executionError
+          prInfo.files.map((f: import('./pr-analyzer').PRFile) => f.filename), // filesChangedInCommit
+          options.githubChecks.prNumber, // prNumber
+          options.githubChecks.headSha // currentCommitSha
         );
 
         console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);

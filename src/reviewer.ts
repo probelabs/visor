@@ -13,6 +13,8 @@ export interface ReviewIssue {
   message: string;
   severity: 'info' | 'warning' | 'error' | 'critical';
   category: 'security' | 'performance' | 'style' | 'logic' | 'documentation';
+  // Check identification - which check created this issue
+  checkName?: string;
   // Group and schema for comment separation
   group?: string;
   schema?: string;
