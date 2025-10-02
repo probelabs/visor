@@ -154,10 +154,6 @@ export class CheckExecutionEngine {
     config: import('./types/config').VisorConfig | undefined,
     tagFilter: import('./types/config').TagFilter | undefined
   ): string[] {
-    if (!tagFilter || (!tagFilter.include && !tagFilter.exclude)) {
-      return checks;
-    }
-
     const logFn = this.config?.output?.pr_comment ? console.error : console.log;
 
     return checks.filter(checkName => {
@@ -168,6 +164,22 @@ export class CheckExecutionEngine {
       }
 
       const checkTags = checkConfig.tags || [];
+
+      // If check has tags but no tag filter is specified, exclude it
+      if (checkTags.length > 0 && (!tagFilter || (!tagFilter.include && !tagFilter.exclude))) {
+        logFn(`⏭️ Skipping check '${checkName}' - check has tags but no tag filter specified`);
+        return false;
+      }
+
+      // If no tag filter is specified and check has no tags, include it
+      if (!tagFilter || (!tagFilter.include && !tagFilter.exclude)) {
+        return true;
+      }
+
+      // If check has no tags and a tag filter is specified, include it (untagged checks always run)
+      if (checkTags.length === 0) {
+        return true;
+      }
 
       // Check exclude tags first (if any exclude tag matches, skip the check)
       if (tagFilter.exclude && tagFilter.exclude.length > 0) {

@@ -21,7 +21,7 @@ describe('Tag Filtering', () => {
       },
     });
 
-    it('should return all checks when no tag filter is specified', () => {
+    it('should exclude checks with tags when no tag filter is specified', () => {
       const config = createConfig({
         security: { type: 'ai', prompt: 'security check', tags: ['security', 'critical'] },
         performance: { type: 'ai', prompt: 'performance check', tags: ['performance', 'optional'] },
@@ -40,7 +40,30 @@ describe('Tag Filtering', () => {
         }
       ).filterChecksByTags(checks, config, undefined);
 
-      expect(result).toEqual(checks);
+      // All checks have tags, so they should be excluded when no tag filter is specified
+      expect(result).toEqual([]);
+    });
+
+    it('should include checks without tags when no tag filter is specified', () => {
+      const config = createConfig({
+        security: { type: 'ai', prompt: 'security check', tags: ['security'] },
+        untagged1: { type: 'ai', prompt: 'untagged check 1' },
+        untagged2: { type: 'ai', prompt: 'untagged check 2' },
+      });
+
+      const checks = ['security', 'untagged1', 'untagged2'];
+      const result = (
+        engine as unknown as {
+          filterChecksByTags: (
+            checks: string[],
+            config: VisorConfig,
+            tagFilter: TagFilter | undefined
+          ) => string[];
+        }
+      ).filterChecksByTags(checks, config, undefined);
+
+      // Checks without tags should run, but checks with tags should be excluded
+      expect(result).toEqual(['untagged1', 'untagged2']);
     });
 
     it('should filter checks by include tags', () => {
@@ -131,8 +154,8 @@ describe('Tag Filtering', () => {
         }
       ).filterChecksByTags(checks, config, tagFilter);
 
-      // untagged check should be excluded when include filter is applied
-      expect(result).toEqual(['security']);
+      // untagged check should be included even when tag filter is applied (it has no tags to filter)
+      expect(result).toEqual(['security', 'untagged']);
     });
 
     it('should exclude checks without configuration', () => {
