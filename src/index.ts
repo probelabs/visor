@@ -636,6 +636,16 @@ async function handleIssueComment(
   const command = parseComment(comment.body, availableCommands);
   if (!command) {
     console.log('No valid command found in comment');
+    // For issue comments (not PRs), run event-driven checks instead of command-based logic
+    // This allows checks with `on: [issue_comment]` to execute based on their `if` conditions
+    if (!isPullRequest && _actionChecksToRun && _actionChecksToRun.length > 0 && config) {
+      console.log(
+        '📋 No command found, but this is an issue comment - running event-driven checks'
+      );
+      // Run the checks that were determined by the main run() function
+      await handleIssueEvent(octokit, owner, repo, context, inputs, config, _actionChecksToRun);
+    }
+    // For PRs without commands, or issues without checks to run, return early
     return;
   }
 
