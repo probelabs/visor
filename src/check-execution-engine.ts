@@ -969,8 +969,23 @@ export class CheckExecutionEngine {
 
     // Determine template to use
     // If schema is an object (inline JSON schema), use 'plain' rendering
-    const schemaName =
-      typeof checkConfig.schema === 'object' ? 'plain' : checkConfig.schema || 'plain';
+    // If schema is a file path (legitimate path with / and ends with .json), treat as plain (schema file reference)
+    let schemaName: string;
+    if (typeof checkConfig.schema === 'object') {
+      schemaName = 'plain';
+    } else if (
+      typeof checkConfig.schema === 'string' &&
+      checkConfig.schema.includes('/') &&
+      checkConfig.schema.endsWith('.json') &&
+      !checkConfig.schema.startsWith('.') // Reject paths starting with .. or .
+    ) {
+      // Schema is a file path reference - use plain rendering
+      // The schema file will be handled by the AI provider when making the request
+      schemaName = 'plain';
+    } else {
+      schemaName = checkConfig.schema || 'plain';
+    }
+
     let templateContent: string;
 
     if (checkConfig.template) {
