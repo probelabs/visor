@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { logger } from '../logger';
 
 /**
  * Check provider that receives input from HTTP webhooks and makes it available to dependent checks
@@ -91,7 +92,11 @@ export class HttpInputProvider extends CheckProvider {
         };
         const rendered = await this.liquid.parseAndRender(transform, templateContext);
         processedData = JSON.parse(rendered);
+        logger.verbose(`✓ Applied webhook transform successfully`);
       } catch (error) {
+        logger.error(
+          `✗ Failed to transform webhook data: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
         return {
           issues: [
             {

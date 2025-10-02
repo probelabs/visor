@@ -1,0 +1,27 @@
+version: "1.0"
+
+# Minimal, fast feedback config to try locally
+max_parallelism: 2
+
+checks:
+  overview:
+    type: ai
+    group: overview
+    ai:
+      provider: mock
+    tags: [local, fast]
+    schema: plain
+    prompt: |
+      Provide a concise overview of this repository and recent changes.
+      Focus on what a new contributor should know in 5 bullets.
+
+  security-quick:
+    type: ai
+    group: review
+    ai:
+      provider: mock
+    tags: [local, fast, security]
+    schema: code-review
+    prompt: |
+      Do a quick security pass on changed files.
+      Flag obvious injection, auth, or secrets issues with clear remediation.
