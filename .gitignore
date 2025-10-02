@@ -54,4 +54,4 @@ debug-trace.js
  
 # Workshop artifacts
 workshop/build/
-workshop/*.pdf
+!workshop/Visor-Workshop.pdf
