@@ -104,8 +104,15 @@ Please perform a comprehensive security analysis focusing on:
 
 Return results in JSON format matching the code-review schema with:
 - Specific file locations and line numbers
-- Clear severity classifications (critical/error/warning/info)
+- Clear severity classifications based on NEW code being introduced:
+  - **critical**: ONLY for NEW security vulnerabilities, data loss risks, or breaking changes being INTRODUCED
+  - **error**: Issues that must be fixed
+  - **warning**: Issues that should be fixed
+  - **info**: Suggestions and improvements (including fixes to existing issues)
 - Actionable remediation suggestions
 - Reference to security best practices where applicable
+
+IMPORTANT: When code FIXES an existing security issue, mark it as 'info' or 'warning', NOT 'critical'.
+Only mark code as 'critical' when it INTRODUCES new problems.
 
 Focus on newly added or modified code, but consider how changes interact with existing security measures.
