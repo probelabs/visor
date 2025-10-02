@@ -94,7 +94,9 @@ export class HttpInputProvider extends CheckProvider {
         processedData = JSON.parse(rendered);
         logger.verbose(`✓ Applied webhook transform successfully`);
       } catch (error) {
-        logger.error(`✗ Failed to transform webhook data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        logger.error(
+          `✗ Failed to transform webhook data: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
         return {
           issues: [
             {

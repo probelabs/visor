@@ -164,7 +164,9 @@ export class CommandCheckProvider extends CheckProvider {
             logger.verbose(`✓ Applied Liquid transform successfully (string output)`);
           }
         } catch (error) {
-          logger.error(`✗ Failed to apply Liquid transform: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          logger.error(
+            `✗ Failed to apply Liquid transform: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
           return {
             issues: [
               {
@@ -257,7 +259,9 @@ export class CommandCheckProvider extends CheckProvider {
             }
           }
         } catch (error) {
-          logger.error(`✗ Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          logger.error(
+            `✗ Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
           return {
             issues: [
               {

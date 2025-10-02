@@ -109,8 +109,8 @@ export class LogCheckProvider extends CheckProvider {
   private buildTemplateContext(
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
-    includePrContext: boolean = true,
-    includeDependencies: boolean = true,
+    _includePrContext: boolean = true,
+    _includeDependencies: boolean = true,
     includeMetadata: boolean = true
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
