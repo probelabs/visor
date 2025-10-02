@@ -8,6 +8,7 @@ Quick instructions to present and explore the Visor workshop content.
 - Live slides:
   - `npm run workshop:serve`
   - Opens a local server with auto‑reload. Press `S` for speaker notes.
+  - **Custom styling**: `custom.css` provides visual hierarchy with color-coded headers
 
 - Export static site:
   - `npm run workshop:export`

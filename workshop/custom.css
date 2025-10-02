@@ -1,0 +1,87 @@
+.reveal .slides section {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.reveal .slides section > * {
+  max-height: 100%;
+}
+
+/* Main section headers - most prominent */
+.reveal h1 {
+  font-size: 2.5em !important;
+  font-weight: bold !important;
+  color: #42affa !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  margin-bottom: 0.5em !important;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.5) !important;
+}
+
+/* Slide titles - clear separation */
+.reveal h2 {
+  font-size: 1.6em !important;
+  font-weight: 600 !important;
+  color: #68d8ff !important;
+  margin-bottom: 0.8em !important;
+  border-bottom: 3px solid #42affa !important;
+  padding-bottom: 0.3em !important;
+  display: inline-block !important;
+  width: 100% !important;
+}
+
+/* Subsections */
+.reveal h3 {
+  font-size: 1.2em !important;
+  font-weight: 500 !important;
+  color: #8ee4ff !important;
+  margin-bottom: 0.6em !important;
+}
+
+/* Body content - clearly different from headers */
+.reveal p,
+.reveal ul,
+.reveal ol {
+  font-size: 0.85em !important;
+  line-height: 1.6 !important;
+  color: #e0e0e0 !important;
+  margin-top: 0.5em !important;
+}
+
+.reveal ul,
+.reveal ol {
+  margin-left: 1.5em !important;
+}
+
+.reveal li {
+  margin-bottom: 0.4em !important;
+}
+
+/* Code blocks with depth */
+.reveal pre {
+  width: 100% !important;
+  font-size: 0.45em !important;
+  margin: 1em 0 !important;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.3) !important;
+}
+
+.reveal code {
+  font-size: 0.9em !important;
+  line-height: 1.2 !important;
+  background: rgba(255,255,255,0.1) !important;
+  padding: 0.2em 0.4em !important;
+  border-radius: 3px !important;
+}
+
+.reveal pre code {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* Make strong text stand out */
+.reveal strong {
+  color: #ffd700 !important;
+  font-weight: bold !important;
+}
