@@ -1,0 +1,12 @@
+version: "1.0"
+
+checks:
+  unit-tests:
+    type: command
+    group: ci
+    exec: |
+      echo 'Running unit tests (simulated)';
+      echo '{"passed": 128, "failed": 0, "duration_sec": 1.2}'
+    transform_js: |
+      // Emit a simple markdown summary to avoid issue parsing
+      `## Unit Test Summary\n- Passed: 128\n- Failed: 0\n- Duration: 1.2s`;

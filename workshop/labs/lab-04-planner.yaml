@@ -1,0 +1,169 @@
+version: "1.0"
+
+# Force fast, deterministic runs for teaching
+ai_provider: mock
+max_parallelism: 3
+
+checks:
+  classify-task:
+    type: ai
+    group: planning
+    schema: ./workshop/schemas/task-classification.json
+    ai:
+      provider: mock
+    prompt: |
+      You are a senior engineer. Classify the following task and map it to repository components.
+
+      --- Task Description ---
+      {% assign task = env.TASK_DESC | default: '' %}
+      {% if task == '' %}
+      {% assign task = readfile "workshop/labs/lab-04-task.md" %}
+      {% endif %}
+      {{ task }}
+      ------------------------
+
+      Return strict JSON matching the schema with these rules:
+      - intent: feature | bugfix | refactor | docs | chore
+      - components[]: { name, path, reason, checks[], priority }
+        - path must be a relative folder in this repo (e.g., "src", "scripts", "docs")
+        - checks only from: security, performance, quality, style, docs
+      - recommended_checks: defaults for the task if not per-component
+      - labels and risks: short, actionable strings
+    template:
+      content: |
+        ## Task Classification (JSON)
+        ```json
+        {{ output | json }}
+        ```
+
+  select-components:
+    type: command
+    depends_on: [classify-task]
+    exec: echo "{}" # placeholder; we only use transform_js
+    transform_js: |
+      const c = outputs['classify-task'];
+      const list = (c && c.components) ? c.components : [];
+      // Normalize names and default checks
+      list.map(x => ({
+        name: x.name || (x.path || '').split('/').filter(Boolean).slice(-1)[0] || 'component',
+        path: x.path || '.',
+        checks: Array.isArray(x.checks) && x.checks.length ? x.checks : (c.recommended_checks || ['quality']),
+        priority: x.priority || 'medium',
+        reason: x.reason || 'Included by classifier'
+      }))
+    forEach: true
+    group: planning
+
+  component-scan:
+    type: command
+    depends_on: [select-components]
+    exec: |
+      comp="{{ outputs['select-components'].path }}"; set -e
+      if [ -d "$comp" ]; then
+        echo "# Folder: $comp"
+        echo "## Files"
+        find "$comp" -maxdepth 1 -type f -name '*.*' | head -n 10 | sed 's#^#- #' || true
+        echo "\n## Samples"
+        for f in $(find "$comp" -maxdepth 1 -type f -name '*.*' | head -n 3); do
+          echo "--- $f"
+          sed -n '1,80p' "$f" | sed 's/\t/  /g' || true
+        done
+      else
+        echo "# Folder not found: $comp"
+      fi
+    group: planning
+
+  component-agent:
+    type: ai
+    depends_on: [component-scan]
+    group: planning
+    ai:
+      provider: mock
+    prompt: |
+      You are the agent responsible for a single component.
+      Component: {{ outputs['select-components'].name }}
+      Path: {{ outputs['select-components'].path }}
+      Priority: {{ outputs['select-components'].priority }}
+      Requested checks: {{ outputs['select-components'].checks | json }}
+
+      Repository context (files + samples):
+      {{ outputs['component-scan'] }}
+
+      Tasks:
+      1) Identify relevant files and hotspots in this folder for the requested task
+      2) Propose concrete code changes (file:line ranges) and new files if needed
+      3) List risks/unknowns and required clarifications
+      4) Provide a step-by-step mini-plan for this component
+
+      Output concise, structured markdown with headings.
+
+  # Optional: demonstrate conditional dependency checks per component
+  component-security:
+    type: ai
+    depends_on: [select-components]
+    if: "Array.isArray(outputs['select-components'].checks) && outputs['select-components'].checks.includes('security')"
+    ai:
+      provider: mock
+    prompt: |
+      Perform a lightweight security review of the component at:
+      {{ outputs['select-components'].path }}
+      Focus only on obvious issues and quick hardening wins.
+    group: security
+
+  component-quality:
+    type: ai
+    depends_on: [select-components]
+    if: "Array.isArray(outputs['select-components'].checks) && outputs['select-components'].checks.includes('quality')"
+    ai:
+      provider: mock
+    prompt: |
+      Review maintainability and testability concerns for:
+      {{ outputs['select-components'].path }}
+      Suggest refactors and unit test ideas.
+    group: quality
+
+  consolidate-plan:
+    type: ai
+    depends_on: [classify-task, select-components, component-agent]
+    group: planning
+    ai:
+      provider: mock
+    prompt: |
+      Create a consolidated implementation plan for the task using the following inputs.
+
+      Classification (JSON):
+      ```json
+      {{ outputs['classify-task'] | json }}
+      ```
+
+      Per-component proposals (array order matches selected components):
+      {% assign comps = outputs['select-components-raw'] %}
+      {% for i in (0..comps.size) %}
+      {% assign comp = comps[i] %}
+      {% assign agent = outputs['component-agent-raw'][i] %}
+      {% if comp and agent %}
+      ### {{ comp.name }} ({{ comp.path }})
+      {{ agent }}
+      {% endif %}
+      {% endfor %}
+
+      Requirements:
+      - Produce a single cross-component plan with phases and owners
+      - Show dependency order and parallelizable chunks
+      - Include a file-by-file change list with brief rationale
+      - Include a test plan and a rollback plan
+
+  task-proposal:
+    type: ai
+    depends_on: [consolidate-plan]
+    group: planning
+    ai:
+      provider: mock
+    prompt: |
+      Turn the consolidated plan into an implementation proposal suitable for a PR description.
+      Include:
+      - Summary with scope boundaries and non-goals
+      - Checklist of tasks with owners
+      - Risk register and mitigations
+      - Validation steps (manual + CI)
+      - Release notes snippet

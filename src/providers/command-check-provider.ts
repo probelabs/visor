@@ -158,10 +158,13 @@ export class CommandCheckProvider extends CheckProvider {
           // Try to parse the transformed result as JSON
           try {
             finalOutput = JSON.parse(rendered.trim());
+            logger.verbose(`✓ Applied Liquid transform successfully (parsed as JSON)`);
           } catch {
             finalOutput = rendered.trim();
+            logger.verbose(`✓ Applied Liquid transform successfully (string output)`);
           }
         } catch (error) {
+          logger.error(`✗ Failed to apply Liquid transform: ${error instanceof Error ? error.message : 'Unknown error'}`);
           return {
             issues: [
               {
@@ -239,6 +242,7 @@ export class CommandCheckProvider extends CheckProvider {
 
           finalOutput = exec({ scope: jsContext }).run();
 
+          logger.verbose(`✓ Applied JavaScript transform successfully`);
           try {
             const preview = JSON.stringify(finalOutput);
             logger.debug(
@@ -253,6 +257,7 @@ export class CommandCheckProvider extends CheckProvider {
             }
           }
         } catch (error) {
+          logger.error(`✗ Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`);
           return {
             issues: [
               {

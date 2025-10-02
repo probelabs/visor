@@ -977,7 +977,7 @@ export class CheckExecutionEngine {
       typeof checkConfig.schema === 'string' &&
       checkConfig.schema.includes('/') &&
       checkConfig.schema.endsWith('.json') &&
-      !checkConfig.schema.startsWith('.') // Reject paths starting with .. or .
+      !checkConfig.schema.includes('..') // Reject paths containing .. (parent directory)
     ) {
       // Schema is a file path reference - use plain rendering
       // The schema file will be handled by the AI provider when making the request
@@ -2560,6 +2560,7 @@ export class CheckExecutionEngine {
         );
 
         if (failed) {
+          logger.warn(`⚠️  Check "${checkName}" - global fail_if condition met: ${globalFailIf}`);
           results.push({
             conditionName: 'global_fail_if',
             expression: globalFailIf,
@@ -2568,6 +2569,8 @@ export class CheckExecutionEngine {
             message: 'Global failure condition met',
             haltExecution: false,
           });
+        } else {
+          logger.debug(`✓ Check "${checkName}" - global fail_if condition passed`);
         }
       }
 
@@ -2582,6 +2585,7 @@ export class CheckExecutionEngine {
         );
 
         if (failed) {
+          logger.warn(`⚠️  Check "${checkName}" - fail_if condition met: ${checkFailIf}`);
           results.push({
             conditionName: `${checkName}_fail_if`,
             expression: checkFailIf,
@@ -2590,6 +2594,8 @@ export class CheckExecutionEngine {
             message: `Check ${checkName} failure condition met`,
             haltExecution: false,
           });
+        } else {
+          logger.debug(`✓ Check "${checkName}" - fail_if condition passed`);
         }
       }
 

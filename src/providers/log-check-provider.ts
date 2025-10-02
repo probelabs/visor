@@ -115,31 +115,31 @@ export class LogCheckProvider extends CheckProvider {
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
-    if (includePrContext) {
-      context.pr = {
-        number: prInfo.number,
-        title: prInfo.title,
-        body: prInfo.body,
-        author: prInfo.author,
-        base: prInfo.base,
-        head: prInfo.head,
-        totalAdditions: prInfo.totalAdditions,
-        totalDeletions: prInfo.totalDeletions,
-        files: prInfo.files.map(f => ({
-          filename: f.filename,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          changes: f.changes,
-        })),
-      };
+    // Always provide pr context for template rendering
+    context.pr = {
+      number: prInfo.number,
+      title: prInfo.title,
+      body: prInfo.body,
+      author: prInfo.author,
+      base: prInfo.base,
+      head: prInfo.head,
+      totalAdditions: prInfo.totalAdditions,
+      totalDeletions: prInfo.totalDeletions,
+      files: prInfo.files.map(f => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+      })),
+    };
 
-      // Add convenience data
-      context.filenames = prInfo.files.map(f => f.filename);
-      context.fileCount = prInfo.files.length;
-    }
+    // Add convenience data
+    context.filenames = prInfo.files.map(f => f.filename);
+    context.fileCount = prInfo.files.length;
 
-    if (includeDependencies && dependencyResults) {
+    // Always provide dependency data for template rendering
+    if (dependencyResults) {
       const dependencies: Record<string, unknown> = {};
       const outputs: Record<string, unknown> = {};
       context.dependencyCount = dependencyResults.size;

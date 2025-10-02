@@ -1,0 +1,19 @@
+version: "1.0"
+
+checks:
+  debug-check:
+    type: log
+    group: debug
+    message: |
+      PR context (if any): {{ pr | json }}
+      Outputs: {{ outputs | json }}
+      Env: {{ env | json }}
+
+  conditional-check:
+    type: log
+    group: debug
+    if: |
+      log('conditional-check: evaluating condition with outputs =', outputs);
+      true
+    message: "Condition evaluated; check executed."
+
