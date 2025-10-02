@@ -1830,11 +1830,7 @@ https://github.com/TykTechnologies/tyk/blob/master/.visor.yaml
 
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
-**REFINE project's Jira workflow** — End-to-end ticket automation:
-
-```
-https://github.com/TykTechnologies/REFINE/blob/main/jira_analysis.yaml
-```
+**End-to-end Jira ticket automation workflow:**
 
 <div style="display: flex; gap: 2em; margin-top: 1em;">
 
@@ -1886,17 +1882,9 @@ curl -o .visor.yaml https://raw.githubusercontent.com/probelabs/visor/main/defau
 echo "extends: defaults" > .visor.yaml
 ```
 
-**3. Explore Jira automation:**
-```bash
-# Download and run the Jira example
-curl -o jira.yaml https://raw.githubusercontent.com/TykTechnologies/REFINE/main/jira_analysis.yaml
-npx -y @probelabs/visor --config jira.yaml --output markdown
-```
-
 **Resources:**
 - Defaults: `github.com/probelabs/visor/blob/main/defaults/.visor.yaml`
 - Tyk example: `github.com/TykTechnologies/tyk/blob/master/.visor.yaml`
-- Jira flow: `github.com/TykTechnologies/REFINE/blob/main/jira_analysis.yaml`
 
 </div>
 
@@ -1954,12 +1942,6 @@ checks:
 **📚 Documentation & Source Code:**
 - **Visor GitHub:** [github.com/probelabs/visor](https://github.com/probelabs/visor)
 - **Probe Labs:** [probelabs.com](https://probelabs.com)
-
-**🔧 Real-World Automation Examples:**
-- **REFINE Repository:** [github.com/TykTechnologies/REFINE](https://github.com/TykTechnologies/REFINE)
-  - Jira automation workflows
-  - SDLC integration examples
-  - Production configs and patterns
 
 **🚀 Get Started:**
 ```bash
