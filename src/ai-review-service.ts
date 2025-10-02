@@ -425,6 +425,7 @@ ${prContext}
     <rule>For INCREMENTAL analysis, ONLY review changes in commit_diff section</rule>
     <rule>For FULL analysis, review all changes in full_diff section</rule>
     <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
+    <rule>SEVERITY GUIDELINES: Use 'critical' severity ONLY for NEW problems being INTRODUCED (security vulnerabilities, data loss, breaking changes). When code FIXES an existing issue, use 'info' or 'warning' severity, NOT 'critical'. The schema describes severity levels in detail.</rule>
   </rules>
 </review_request>`;
     }
