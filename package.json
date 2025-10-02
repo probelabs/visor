@@ -40,7 +40,7 @@
     "release:prerelease": "./scripts/release.sh prerelease",
     "docs:validate": "node scripts/validate-readme-links.js",
     "workshop:setup": "npm install -D reveal-md@6.1.2",
-    "workshop:serve": "reveal-md workshop/slides.md -w",
+    "workshop:serve": "cd workshop && reveal-md slides.md -w",
     "workshop:export": "reveal-md workshop/slides.md --static workshop/build",
     "workshop:pdf": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter",
     "workshop:pdf:ci": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args=\"--no-sandbox --disable-dev-shm-usage\"",
