@@ -179,10 +179,12 @@ export async function run(): Promise<void> {
     try {
       const visorVersion =
         process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
-      let probeVersion = 'unknown';
-      try {
-        probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
-      } catch {}
+      let probeVersion = process.env.PROBE_VERSION || 'unknown';
+      if (!process.env.PROBE_VERSION) {
+        try {
+          probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
+        } catch {}
+      }
       console.log(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
     } catch {}
 
