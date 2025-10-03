@@ -50,6 +50,21 @@ export async function main(): Promise<void> {
       process.exit(0);
     }
 
+    // Print runtime banner (info level): Visor + Probe versions
+    try {
+      const visorVersion =
+        process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
+      let probeVersion = 'unknown';
+      try {
+        probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
+      } catch {
+        // ignore if dependency metadata not available (tests, local)
+      }
+      logger.info(`Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
+    } catch {
+      // If anything goes wrong reading versions, do not block execution
+    }
+
     // Load configuration
     let config;
     if (options.configPath) {
