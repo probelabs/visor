@@ -16,11 +16,9 @@ import Sandbox from '@nyariv/sandboxjs';
  * Evaluates failure conditions using SandboxJS for secure evaluation
  */
 export class FailureConditionEvaluator {
-  private sandbox: Sandbox;
+  private sandbox?: Sandbox;
 
-  constructor() {
-    this.sandbox = this.createSecureSandbox();
-  }
+  constructor() {}
 
   /**
    * Create a secure sandbox with whitelisted functions and globals
@@ -493,6 +491,9 @@ export class FailureConditionEvaluator {
 
       // Compile and execute the expression in the sandbox
       const raw = condition.trim();
+      if (!this.sandbox) {
+        this.sandbox = this.createSecureSandbox();
+      }
       let exec: ReturnType<typeof this.sandbox.compile>;
       try {
         // Try compiling the raw expression as-is first (supports multi-line logical expressions)

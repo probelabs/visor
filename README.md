@@ -100,7 +100,7 @@ visor --check security --output json --output-file visor-results.json
 visor --help
 ```
 
-See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
+See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md) · Programmatic usage: [docs/sdk.md](docs/sdk.md)
 
 ## 🧩 Core Concepts (1 minute)
 

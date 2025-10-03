@@ -12,7 +12,7 @@ import { logger } from '../logger';
  */
 export class CommandCheckProvider extends CheckProvider {
   private liquid: Liquid;
-  private sandbox: Sandbox;
+  private sandbox?: Sandbox;
 
   constructor() {
     super();
@@ -21,7 +21,7 @@ export class CommandCheckProvider extends CheckProvider {
       strictFilters: false,
       strictVariables: false,
     });
-    this.sandbox = this.createSecureSandbox();
+    // Lazily create sandbox only when transform_js is used
   }
 
   private createSecureSandbox(): Sandbox {
@@ -240,8 +240,10 @@ export class CommandCheckProvider extends CheckProvider {
             // Ignore logging errors
           }
 
+          if (!this.sandbox) {
+            this.sandbox = this.createSecureSandbox();
+          }
           const exec = this.sandbox.compile(code);
-
           finalOutput = exec({ scope: jsContext }).run();
 
           logger.verbose(`✓ Applied JavaScript transform successfully`);
@@ -723,6 +725,9 @@ export class CommandCheckProvider extends CheckProvider {
           return (${expression});
         `;
 
+        if (!this.sandbox) {
+          this.sandbox = this.createSecureSandbox();
+        }
         const evaluator = this.sandbox.compile(evalCode);
         const result = evaluator({ scope }).run();
         return result === undefined || result === null ? '' : String(result);

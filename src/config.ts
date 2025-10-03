@@ -213,22 +213,30 @@ export class ConfigManager {
    */
   public loadBundledDefaultConfig(): VisorConfig | null {
     try {
-      // Try different paths to find the bundled default config
-      const possiblePaths = [
-        // When running as GitHub Action (bundled in dist/)
-        path.join(__dirname, 'defaults', '.visor.yaml'),
-        // When running from source
-        path.join(__dirname, '..', 'defaults', '.visor.yaml'),
-        // Try via package root
-        this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
-        // GitHub Action environment variable
-        process.env.GITHUB_ACTION_PATH
-          ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
-          : '',
-        process.env.GITHUB_ACTION_PATH
-          ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
-          : '',
-      ].filter(p => p); // Remove empty paths
+      // Try different paths to find the bundled default config (support CJS and ESM)
+      const possiblePaths: string[] = [];
+
+      // __dirname is available in CJS; guard for ESM builds
+      if (typeof __dirname !== 'undefined') {
+        possiblePaths.push(
+          path.join(__dirname, 'defaults', '.visor.yaml'),
+          path.join(__dirname, '..', 'defaults', '.visor.yaml')
+        );
+      }
+
+      // Try via package root
+      const pkgRoot = this.findPackageRoot();
+      if (pkgRoot) {
+        possiblePaths.push(path.join(pkgRoot, 'defaults', '.visor.yaml'));
+      }
+
+      // GitHub Action environment variable
+      if (process.env.GITHUB_ACTION_PATH) {
+        possiblePaths.push(
+          path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml'),
+          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+        );
+      }
 
       let bundledConfigPath: string | undefined;
       for (const possiblePath of possiblePaths) {
