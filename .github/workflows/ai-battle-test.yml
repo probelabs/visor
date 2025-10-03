@@ -35,11 +35,20 @@ jobs:
     name: AI Battle Test — ${{ matrix.ai_provider.name }} — ${{ github.event_name }}
     runs-on: ubuntu-latest
     if: >
-      github.event_name == 'pull_request' || 
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' && 
-       github.event.issue.pull_request && 
-       contains(github.event.comment.body, '/ai-test'))
+      (
+        github.event_name == 'pull_request' || 
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' && 
+          github.event.issue.pull_request && 
+          contains(github.event.comment.body, '/ai-test')
+        )
+      ) && (
+        (matrix.ai_provider.name == 'Google Gemini' && secrets.GOOGLE_API_KEY != '') ||
+        (matrix.ai_provider.name == 'OpenAI GPT-4' && secrets.OPENAI_API_KEY != '') ||
+        (matrix.ai_provider.name == 'Anthropic Claude' && secrets.ANTHROPIC_API_KEY != '') ||
+        (matrix.ai_provider.name == 'Mock AI (Fallback)')
+      )
     
     strategy:
       fail-fast: false
