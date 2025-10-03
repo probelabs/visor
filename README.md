@@ -100,7 +100,7 @@ visor --check security --output json --output-file visor-results.json
 visor --help
 ```
 
-See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md) · Programmatic usage: [docs/sdk.md](docs/sdk.md)
+See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
 
 ## 🧩 Core Concepts (1 minute)
 
@@ -141,13 +141,14 @@ Visor is a general SDLC automation framework:
  - [Security Defaults](#-security-defaults)
  - [Performance & Cost Controls](#-performance--cost-controls)
  - [Observability](#-observability)
- - [Failure Routing (Auto-fix Loops)](#failure-routing-auto-fix-loops)
  - [AI Configuration](#-ai-configuration)
  - [Step Dependencies & Intelligent Execution](#-step-dependencies--intelligent-execution)
+ - [Failure Routing (Auto-fix Loops)](#-failure-routing-auto-fix-loops)
  - [Claude Code Provider](#-claude-code-provider)
  - [AI Session Reuse](#-ai-session-reuse)
  - [Schema-Template System](#-schema-template-system)
  - [Enhanced Prompts](#-enhanced-prompts)
+ - [SDK (Programmatic Usage)](#-sdk-programmatic-usage)
  - [Debugging](#-debugging)
  - [Advanced Configuration](#-advanced-configuration)
  - [HTTP Integration & Scheduling](#-http-integration--scheduling)
@@ -310,6 +311,55 @@ checks:
 
 Learn more: [docs/dependencies.md](docs/dependencies.md). See also: [forEach dependency propagation](docs/foreach-dependency-propagation.md)
 
+## 🔄 Failure Routing (Auto-fix Loops)
+
+Automatically remediate failures and re‑run steps using config‑driven routing:
+
+- Per‑step `on_fail` and `on_success` actions:
+  - `retry` with fixed/exponential backoff (+ deterministic jitter)
+  - `run`: remediation steps (single or list)
+  - `goto`: jump back to an ancestor step and continue forward
+  - `goto_js` / `run_js`: dynamic routing with safe, synchronous JS
+- Loop safety:
+  - Global `routing.max_loops` per scope to prevent livelock
+  - Per‑step attempt counters; forEach items have isolated counters
+
+Example (retry + goto on failure):
+```yaml
+version: "2.0"
+routing:
+  max_loops: 5
+checks:
+  setup: { type: command, exec: "echo setup" }
+  build:
+    type: command
+    depends_on: [setup]
+    exec: |
+      test -f .ok || (echo first try fails >&2; touch .ok; exit 1)
+      echo ok
+    on_fail:
+      goto: setup
+      retry: { max: 1, backoff: { mode: exponential, delay_ms: 400 } }
+```
+
+Example (on_success jump‑back once):
+```yaml
+checks:
+  unit: { type: command, exec: "echo unit" }
+  build:
+    type: command
+    depends_on: [unit]
+    exec: "echo build"
+    on_success:
+      run: [notify]
+      goto_js: |
+        // Jump back only on first success
+        return attempt === 1 ? 'unit' : null;
+  notify: { type: command, exec: "echo notify" }
+```
+
+Learn more: [docs/failure-routing.md](docs/failure-routing.md)
+
 ## 🤖 Claude Code Provider
 
 Use the Claude Code SDK as a provider for deeper analysis.
@@ -368,6 +418,49 @@ checks:
 ```
 
 Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
+
+## 📦 SDK (Programmatic Usage)
+
+Run Visor programmatically from Node.js without shelling out. The SDK is a thin façade over the existing engine.
+
+**Install:**
+```bash
+npm i -D @probelabs/visor
+```
+
+**ESM Example:**
+```ts
+import { loadConfig, runChecks } from '@probelabs/visor/sdk';
+
+const config = await loadConfig();
+const result = await runChecks({
+  config,
+  checks: Object.keys(config.checks || {}),
+  output: { format: 'json' },
+});
+console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
+```
+
+**CommonJS Example:**
+```js
+const { loadConfig, runChecks } = require('@probelabs/visor/sdk');
+(async () => {
+  const config = await loadConfig();
+  const result = await runChecks({
+    config,
+    checks: Object.keys(config.checks || {}),
+    output: { format: 'json' }
+  });
+  console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
+})();
+```
+
+**Key Functions:**
+- `loadConfig(configPath?: string)` — Load Visor config
+- `resolveChecks(checkIds, config)` — Expand check IDs with dependencies
+- `runChecks(options)` — Run checks programmatically
+
+Learn more: [docs/sdk.md](docs/sdk.md)
 
 ## 🔍 Debugging
 
@@ -482,71 +575,3 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
   Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
 </div>
-## Failure Routing (Auto-fix Loops)
-
-Visor can automatically remediate failures and re‑run steps using config‑driven routing:
-
-- Per‑step `on_fail` and `on_success` actions
-  - `retry` with fixed/exponential backoff (+ deterministic jitter)
-  - `run`: remediation steps (single or list)
-  - `goto`: jump back to an ancestor step and continue forward
-  - `goto_js` / `run_js`: dynamic routing with safe, synchronous JS
-- Loop safety
-  - Global `routing.max_loops` per scope to prevent livelock
-  - Per‑step attempt counters; forEach items have isolated counters (“parallel universes”)
-
-Example (retry + goto on failure):
-```yaml
-version: "2.0"
-routing:
-  max_loops: 5
-checks:
-  setup: { type: command, exec: "echo setup" }
-  build:
-    type: command
-    depends_on: [setup]
-    exec: |
-      test -f .ok || (echo first try fails >&2; touch .ok; exit 1)
-      echo ok
-    on_fail:
-      goto: setup
-      retry: { max: 1, backoff: { mode: exponential, delay_ms: 400 } }
-```
-
-Example (on_success jump‑back once):
-```yaml
-checks:
-  unit: { type: command, exec: "echo unit" }
-  build:
-    type: command
-    depends_on: [unit]
-    exec: "echo build"
-    on_success:
-      run: [notify]
-      goto_js: |
-        // Jump back only on first success
-        return attempt === 1 ? 'unit' : null;
-  notify: { type: command, exec: "echo notify" }
-```
-
-forEach + remediation:
-```yaml
-checks:
-  list: { type: command, exec: "echo '[\\"a\\",\\"b\\"]'", forEach: true }
-  mark: { type: command, depends_on: [list], exec: "touch .m_{{ outputs.list }}" }
-  process:
-    type: command
-    depends_on: [list]
-    exec: "test -f .m_{{ outputs.list }} || exit 1"
-    on_fail:
-      run: [mark]
-      retry: { max: 1 }
-```
-
-Try the full examples:
-- examples/routing-basic.yaml
-- examples/routing-on-success.yaml
-- examples/routing-foreach.yaml
-- examples/routing-dynamic-js.yaml
-
-Learn more: [docs/failure-routing.md](docs/failure-routing.md).
