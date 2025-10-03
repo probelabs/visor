@@ -21,6 +21,8 @@ function read(file) {
 function makeSlugger() {
   const seen = new Map();
   return function slugify(raw) {
+    const original = String(raw);
+    const startsWithNonAlnum = /^[^a-zA-Z0-9]/.test(original.trimStart());
     // Normalize, strip markdown/HTML, remove emoji and diacritics, kebab-case
     let text = String(raw)
       .normalize('NFKD')
@@ -33,11 +35,11 @@ function makeSlugger() {
       .toLowerCase();
     // Allow word chars, spaces, and hyphens; drop the rest
     text = text
-      .replace(/[^a-z0-9_\s-]/g, '')
-      .replace(/[\s_]+/g, '-')
-      .replace(/-+/g, '-');
-    text = text.replace(/^-+/, '').replace(/-+$/, '');
-    let slug = text;
+      .replace(/[^a-z0-9_\s-]/g, '') // keep letters, numbers, spaces, underscores, hyphens
+      .replace(/_/g, '-') // underscores to hyphens (one-to-one)
+      .replace(/\s/g, '-'); // spaces to hyphens (one-to-one, preserves doubles)
+    // Do NOT collapse or trim hyphens: GitHub preserves leading and double hyphens
+    let slug = startsWithNonAlnum && !text.startsWith('-') ? `-${text}` : text;
     if (seen.has(slug)) {
       const n = seen.get(slug) + 1;
       seen.set(slug, n);
