@@ -41,12 +41,15 @@ export function resolveChecks(checkIds: string[], config: VisorConfig | undefine
   const visiting = new Set<string>();
   const result: string[] = [];
 
-  const dfs = (id: string) => {
+  const dfs = (id: string, stack: string[] = []) => {
     if (resolved.has(id)) return;
-    if (visiting.has(id)) return; // guard cycles
+    if (visiting.has(id)) {
+      const cycle = [...stack, id].join(' -> ');
+      throw new Error(`Circular dependency detected involving check: ${id} (path: ${cycle})`);
+    }
     visiting.add(id);
     const deps = config.checks[id]?.depends_on || [];
-    for (const d of deps) dfs(d);
+    for (const d of deps) dfs(d, [...stack, id]);
     if (!result.includes(id)) result.push(id);
     visiting.delete(id);
     resolved.add(id);
