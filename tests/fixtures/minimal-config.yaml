@@ -1,6 +1,0 @@
-version: "1.0"
-checks:
-  performance:
-    type: ai
-    prompt: "Review for performance issues"
-    on: [pr_opened]

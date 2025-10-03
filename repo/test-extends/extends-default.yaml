@@ -1,8 +1,0 @@
-version: "1.0"
-extends: default
-
-checks:
-  custom-check:
-    type: ai
-    prompt: "Custom analysis"
-    on: [pr_opened]
