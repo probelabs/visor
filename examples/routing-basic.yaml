@@ -1,0 +1,35 @@
+version: "2.0"
+
+# Basic failure routing: retry + goto ancestor
+routing:
+  max_loops: 5
+  defaults:
+    on_fail:
+      retry:
+        max: 1
+        backoff: { mode: exponential, delay_ms: 400 }
+
+checks:
+  setup-env:
+    type: command
+    exec: "echo '[setup] preparing environment'"
+
+  flaky:
+    type: command
+    depends_on: [setup-env]
+    exec: |
+      FLAG=".visor_demo_flaky"
+      if [ ! -f "$FLAG" ]; then
+        echo "first attempt failing" >&2
+        touch "$FLAG"
+        exit 1
+      fi
+      echo "second attempt OK"
+    on_fail:
+      goto: setup-env
+
+  cleanup:
+    type: command
+    depends_on: [flaky]
+    exec: "rm -f .visor_demo_flaky && echo '[cleanup] done'"
+

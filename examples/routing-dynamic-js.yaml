@@ -1,0 +1,46 @@
+version: "2.0"
+
+# Dynamic routing using *_js hooks
+routing:
+  max_loops: 6
+
+checks:
+  setup:
+    type: command
+    exec: "echo '[setup] install deps'"
+
+  lint-fix:
+    type: command
+    exec: "echo '[lint-fix] apply fixes'"
+
+  target:
+    type: command
+    depends_on: [setup]
+    exec: |
+      # Simulate a missing module error on first try
+      FLAG=".visor_demo_dynamic"
+      if [ ! -f "$FLAG" ]; then
+        echo "module not found: axios" >&2
+        touch "$FLAG"
+        exit 1
+      fi
+      echo "[target] succeeded"
+    on_fail:
+      goto_js: |
+        // If we see a missing module message, jump back to setup
+        if ((error.message||'').toLowerCase().includes('module not found')) return 'setup';
+        if ((error.stderr||'').toLowerCase().includes('module not found')) return 'setup';
+        return null;
+      run_js: |
+        // If lint is mentioned, add lint-fix dynamically
+        const out = [];
+        const s = (error.stderr||'').toLowerCase();
+        if (s.includes('lint')) out.push('lint-fix');
+        return out;
+      retry: { max: 1, backoff: { mode: fixed, delay_ms: 200 } }
+
+  cleanup:
+    type: command
+    depends_on: [target]
+    exec: "rm -f .visor_demo_dynamic && echo '[cleanup] done'"
+

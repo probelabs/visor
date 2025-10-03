@@ -7,6 +7,10 @@ This directory contains example configurations demonstrating various Visor featu
 ### Basic Examples
 - **`quick-start-tags.yaml`** - Simple configuration showing basic tag usage
 - **`visor-with-tags.yaml`** - Comprehensive configuration with all tag features
+ - **`routing-basic.yaml`** - Failure routing with retry + goto ancestor
+ - **`routing-on-success.yaml`** - on_success post-steps + single jump-back
+ - **`routing-foreach.yaml`** - forEach remediation with run + retry
+ - **`routing-dynamic-js.yaml`** - Dynamic routing via goto_js/run_js
 
 ### GitHub Actions Workflows
 - **`github-workflow-with-tags.yml`** - Progressive code review workflow using tags
@@ -214,3 +218,26 @@ checks:
 - [Main README](../README.md) - Complete Visor documentation
 - [Configuration Guide](../docs/configuration.md) - Detailed config options
 - [GitHub Actions Guide](../docs/github-actions.md) - CI/CD integration
+### 4. Failure Routing Examples
+
+Run the examples directly from the repo root:
+
+```bash
+# Basic retry + goto ancestor
+npx -y @probelabs/visor --config examples/routing-basic.yaml --output table
+
+# on_success: run notify and jump back once to re-run unit-tests
+npx -y @probelabs/visor --config examples/routing-on-success.yaml --output table
+
+# forEach remediation: mark missing items then retry
+npx -y @probelabs/visor --config examples/routing-foreach.yaml --output table
+
+# Dynamic routing with *_js hooks
+npx -y @probelabs/visor --config examples/routing-dynamic-js.yaml --output table
+```
+
+Notes:
+- These examples create small temporary files in the repo (prefixed with `.visor_demo_`).
+  Run `git clean -fdx` or delete the files manually to reset.
+- The `routing` block supports `max_loops` and default retry policies; step-level settings override defaults.
+- See `docs/failure-routing-rfc.md` for full semantics.
