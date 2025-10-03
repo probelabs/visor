@@ -348,6 +348,72 @@ export interface CheckConfig {
   tags?: string[];
   /** Process output as array and run dependent checks for each item */
   forEach?: boolean;
+  /** Failure routing configuration for this check (retry/goto/run) */
+  on_fail?: OnFailConfig;
+  /** Success routing configuration for this check (post-actions and optional goto) */
+  on_success?: OnSuccessConfig;
+}
+
+/**
+ * Backoff policy for retries
+ */
+export interface BackoffPolicy {
+  /** Backoff mode */
+  mode?: 'fixed' | 'exponential';
+  /** Initial delay in milliseconds */
+  delay_ms?: number;
+}
+
+/**
+ * Retry policy for a step
+ */
+export interface RetryPolicy {
+  /** Maximum retry attempts (excluding the first attempt) */
+  max?: number;
+  /** Backoff policy */
+  backoff?: BackoffPolicy;
+}
+
+/**
+ * Failure routing configuration per check
+ */
+export interface OnFailConfig {
+  /** Retry policy */
+  retry?: RetryPolicy;
+  /** Remediation steps to run before reattempt */
+  run?: string[];
+  /** Jump back to an ancestor step (by id) */
+  goto?: string;
+  /** Dynamic goto: JS expression returning step id or null */
+  goto_js?: string;
+  /** Dynamic remediation list: JS expression returning string[] */
+  run_js?: string;
+}
+
+/**
+ * Success routing configuration per check
+ */
+export interface OnSuccessConfig {
+  /** Post-success steps to run */
+  run?: string[];
+  /** Optional jump back to ancestor step (by id) */
+  goto?: string;
+  /** Dynamic goto: JS expression returning step id or null */
+  goto_js?: string;
+  /** Dynamic post-success steps: JS expression returning string[] */
+  run_js?: string;
+}
+
+/**
+ * Global routing defaults
+ */
+export interface RoutingDefaults {
+  /** Per-scope cap on routing transitions (success + failure) */
+  max_loops?: number;
+  /** Default policies applied to checks (step-level overrides take precedence) */
+  defaults?: {
+    on_fail?: OnFailConfig;
+  };
 }
 
 /**
@@ -528,6 +594,8 @@ export interface VisorConfig {
   failure_conditions?: FailureConditions;
   /** Tag filter for selective check execution */
   tag_filter?: TagFilter;
+  /** Optional routing defaults for retry/goto/run policies */
+  routing?: RoutingDefaults;
 }
 
 /**

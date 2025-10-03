@@ -17,6 +17,8 @@ import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
+import Sandbox from '@nyariv/sandboxjs';
+import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -122,6 +124,7 @@ export class CheckExecutionEngine {
   private workingDirectory: string;
   private config?: import('./types/config').VisorConfig;
   private webhookContext?: { webhookData: Map<string, unknown> };
+  private routingSandbox?: Sandbox;
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -133,6 +136,482 @@ export class CheckExecutionEngine {
     // This allows us to reuse the existing PRReviewer logic without network calls
     this.mockOctokit = this.createMockOctokit();
     this.reviewer = new PRReviewer(this.mockOctokit as unknown as import('@octokit/rest').Octokit);
+  }
+
+  /**
+   * Lazily create a secure sandbox for routing JS (goto_js, run_js)
+   */
+  private getRoutingSandbox(): Sandbox {
+    if (this.routingSandbox) return this.routingSandbox;
+    const globals = {
+      ...Sandbox.SAFE_GLOBALS,
+      Math,
+      JSON,
+      console: { log: console.log },
+    };
+    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
+    this.routingSandbox = new Sandbox({ globals, prototypeWhitelist });
+    return this.routingSandbox;
+  }
+
+  private redact(str: unknown, limit = 200): string {
+    try {
+      const s = typeof str === 'string' ? str : JSON.stringify(str);
+      return s.length > limit ? s.slice(0, limit) + '…' : s;
+    } catch {
+      return String(str).slice(0, limit);
+    }
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private deterministicJitter(baseMs: number, seedStr: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < seedStr.length; i++) h = (h ^ seedStr.charCodeAt(i)) * 16777619;
+    const frac = ((h >>> 0) % 1000) / 1000; // 0..1
+    return Math.floor(baseMs * 0.15 * frac); // up to 15% jitter
+  }
+
+  private computeBackoffDelay(
+    attempt: number,
+    mode: 'fixed' | 'exponential',
+    baseMs: number,
+    seed: string
+  ): number {
+    const jitter = this.deterministicJitter(baseMs, seed);
+    if (mode === 'exponential') {
+      return baseMs * Math.pow(2, Math.max(0, attempt - 1)) + jitter;
+    }
+    return baseMs + jitter;
+  }
+
+  /**
+   * Execute a check with retry/backoff and routing semantics (on_fail/on_success)
+   */
+  private async executeWithRouting(
+    checkName: string,
+    checkConfig: CheckConfig,
+    provider: import('./providers/check-provider.interface').CheckProvider,
+    providerConfig: CheckProviderConfig,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    sessionInfo: { parentSessionId?: string; reuseSession?: boolean } | undefined,
+    config: VisorConfig | undefined,
+    dependencyGraph: DependencyGraph,
+    debug?: boolean,
+    resultsMap?: Map<string, ReviewSummary>,
+    foreachContext?: { index: number; total: number; parent: string }
+  ): Promise<ReviewSummary> {
+    const log = (msg: string) =>
+      (this.config?.output?.pr_comment ? console.error : console.log)(msg);
+    const maxLoops = config?.routing?.max_loops ?? 10;
+    const defaults = config?.routing?.defaults?.on_fail || {};
+
+    const onFail: OnFailConfig | undefined = checkConfig.on_fail
+      ? { ...defaults, ...checkConfig.on_fail }
+      : Object.keys(defaults).length
+        ? defaults
+        : undefined;
+    const onSuccess: OnSuccessConfig | undefined = checkConfig.on_success;
+
+    let attempt = 1;
+    let loopCount = 0;
+    const seed = `${checkName}-${prInfo.number || 'local'}`;
+
+    const allAncestors = DependencyResolver.getAllDependencies(checkName, dependencyGraph.nodes);
+
+    const evalRunJs = async (expr?: string, error?: unknown): Promise<string[]> => {
+      if (!expr) return [];
+      try {
+        const sandbox = this.getRoutingSandbox();
+        const scope = {
+          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+          attempt,
+          loop: loopCount,
+          error,
+          foreach: foreachContext
+            ? {
+                index: foreachContext.index,
+                total: foreachContext.total,
+                parent: foreachContext.parent,
+              }
+            : null,
+          outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base,
+          },
+          files: prInfo.files,
+          env: getSafeEnvironmentVariables(),
+        };
+        const code = `
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
+          const __fn = () => {\n${expr}\n};
+          const __res = __fn();
+          return Array.isArray(__res) ? __res : (__res ? [__res] : []);
+        `;
+        const exec = sandbox.compile(code);
+        const res = exec({ scope }).run();
+        if (debug) {
+          log(`🔧 Debug: run_js evaluated → [${this.redact(res)}]`);
+        }
+        return Array.isArray(res) ? res.filter(x => typeof x === 'string') : [];
+      } catch (e) {
+        if (debug) {
+          log(`⚠️ Debug: run_js evaluation failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return [];
+      }
+    };
+
+    const evalGotoJs = async (expr?: string, error?: unknown): Promise<string | null> => {
+      if (!expr) return null;
+      try {
+        const sandbox = this.getRoutingSandbox();
+        const scope = {
+          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+          attempt,
+          loop: loopCount,
+          error,
+          foreach: foreachContext
+            ? {
+                index: foreachContext.index,
+                total: foreachContext.total,
+                parent: foreachContext.parent,
+              }
+            : null,
+          outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base,
+          },
+          files: prInfo.files,
+          env: getSafeEnvironmentVariables(),
+        };
+        const code = `
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
+          const __fn = () => {\n${expr}\n};
+          const __res = __fn();
+          return (typeof __res === 'string' && __res) ? __res : null;
+        `;
+        const exec = sandbox.compile(code);
+        const res = exec({ scope }).run();
+        if (debug) {
+          log(`🔧 Debug: goto_js evaluated → ${this.redact(res)}`);
+        }
+        return typeof res === 'string' && res ? res : null;
+      } catch (e) {
+        if (debug) {
+          log(`⚠️ Debug: goto_js evaluation failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return null;
+      }
+    };
+
+    const getAllDepsFromConfig = (name: string): string[] => {
+      const visited = new Set<string>();
+      const acc: string[] = [];
+      const dfs = (n: string) => {
+        if (visited.has(n)) return;
+        visited.add(n);
+        const cfg = config?.checks?.[n];
+        const deps = cfg?.depends_on || [];
+        for (const d of deps) {
+          acc.push(d);
+          dfs(d);
+        }
+      };
+      dfs(name);
+      return Array.from(new Set(acc));
+    };
+
+    const executeNamedCheckInline = async (target: string): Promise<ReviewSummary> => {
+      const targetCfg = config?.checks?.[target];
+      if (!targetCfg) {
+        throw new Error(`on_* referenced unknown check '${target}'`);
+      }
+      // Ensure all dependencies of target are available; execute missing ones in topological order
+      // Use config graph (not only current dependencyGraph) so inline steps can bring their own deps
+      const allTargetDeps = getAllDepsFromConfig(target);
+      if (allTargetDeps.length > 0) {
+        // Build subgraph mapping for ordered execution
+        const subSet = new Set<string>([...allTargetDeps]);
+        const subDeps: Record<string, string[]> = {};
+        for (const id of subSet) {
+          const cfg = config?.checks?.[id];
+          subDeps[id] = (cfg?.depends_on || []).filter(d => subSet.has(d));
+        }
+        const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
+        for (const group of subGraph.executionOrder) {
+          for (const depId of group.parallel) {
+            // Skip if already have results
+            if (resultsMap?.has(depId) || dependencyResults.has(depId)) continue;
+            // Execute dependency inline (recursively ensures its deps are also present)
+            await executeNamedCheckInline(depId);
+          }
+        }
+      }
+      const providerType = targetCfg.type || 'ai';
+      const prov = this.providerRegistry.getProviderOrThrow(providerType);
+      this.setProviderWebhookContext(prov);
+      const provCfg: CheckProviderConfig = {
+        type: providerType,
+        prompt: targetCfg.prompt,
+        exec: targetCfg.exec,
+        focus: targetCfg.focus || this.mapCheckNameToFocus(target),
+        schema: targetCfg.schema,
+        group: targetCfg.group,
+        checkName: target,
+        eventContext: prInfo.eventContext,
+        transform: targetCfg.transform,
+        transform_js: targetCfg.transform_js,
+        env: targetCfg.env,
+        forEach: targetCfg.forEach,
+        ai: {
+          timeout: providerConfig.ai?.timeout || 600000,
+          debug: !!debug,
+          ...(targetCfg.ai || {}),
+        },
+      };
+      // Build dependencyResults for target using already computed global results (after ensuring deps executed)
+      const targetDeps = getAllDepsFromConfig(target);
+      const depResults = new Map<string, ReviewSummary>();
+      for (const depId of targetDeps) {
+        // Prefer per-scope dependencyResults (e.g., forEach item context) over global results
+        const res = dependencyResults.get(depId) || resultsMap?.get(depId);
+        if (res) depResults.set(depId, res);
+      }
+      // Debug: log key dependent outputs for visibility
+      try {
+        // Try to log a small preview of dependent outputs if available
+        const depPreview: Record<string, unknown> = {};
+        for (const [k, v] of depResults.entries()) {
+          const out = (v as any)?.output;
+          if (out !== undefined) depPreview[k] = out;
+        }
+        if (debug) {
+          log(`🔧 Debug: inline exec '${target}' deps output: ${JSON.stringify(depPreview)}`);
+        }
+      } catch {}
+
+      if (debug) {
+        const execStr = (provCfg as any).exec;
+        if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
+      }
+      const r = await prov.execute(prInfo, provCfg, depResults, sessionInfo);
+      // enrich with metadata similar to main flow
+      const enrichedIssues = (r.issues || []).map(issue => ({
+        ...issue,
+        checkName: target,
+        ruleId: `${target}/${issue.ruleId}`,
+        group: targetCfg.group,
+        schema: typeof targetCfg.schema === 'object' ? 'custom' : targetCfg.schema,
+        template: targetCfg.template,
+        timestamp: Date.now(),
+      }));
+      const enriched = { ...r, issues: enrichedIssues } as ReviewSummary;
+      resultsMap?.set(target, enriched);
+      if (debug) log(`🔧 Debug: inline executed '${target}', issues: ${enrichedIssues.length}`);
+      return enriched;
+    };
+
+    // Begin attempts loop
+    // We treat each retry/goto/run as consuming one loop budget entry
+    while (true) {
+      try {
+        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        // Success path
+        // Treat result issues with severity error/critical as a soft-failure eligible for on_fail routing
+        const hasSoftFailure = (res.issues || []).some(
+          i => i.severity === 'error' || i.severity === 'critical'
+        );
+        if (hasSoftFailure && onFail) {
+          if (debug)
+            log(
+              `🔧 Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
+            );
+          const lastError: any = {
+            message: 'soft-failure: issues present',
+            code: 'soft_failure',
+            issues: res.issues,
+          };
+          const dynamicRun = await evalRunJs(onFail.run_js, lastError);
+          let runList = [...(onFail.run || []), ...dynamicRun].filter(Boolean);
+          runList = Array.from(new Set(runList));
+          if (debug) log(`🔧 Debug: on_fail.run (soft) list = [${runList.join(', ')}]`);
+          if (runList.length > 0) {
+            loopCount++;
+            if (loopCount > maxLoops) {
+              throw new Error(
+                `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail run`
+              );
+            }
+            if (debug) log(`🔧 Debug: on_fail.run (soft) executing [${runList.join(', ')}]`);
+            for (const stepId of runList) {
+              await executeNamedCheckInline(stepId);
+            }
+          }
+          let target = await evalGotoJs(onFail.goto_js, lastError);
+          if (!target && onFail.goto) target = onFail.goto;
+          if (debug) log(`🔧 Debug: on_fail.goto (soft) target = ${target}`);
+          if (target) {
+            if (!allAncestors.includes(target)) {
+              if (debug)
+                log(
+                  `⚠️ Debug: on_fail.goto (soft) '${target}' is not an ancestor of '${checkName}' — skipping`
+                );
+            } else {
+              loopCount++;
+              if (loopCount > maxLoops) {
+                throw new Error(
+                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
+                );
+              }
+              await executeNamedCheckInline(target);
+            }
+          }
+
+          const retryMax = onFail.retry?.max ?? 0;
+          const base = onFail.retry?.backoff?.delay_ms ?? 0;
+          const mode = onFail.retry?.backoff?.mode ?? 'fixed';
+          if (attempt <= retryMax) {
+            loopCount++;
+            if (loopCount > maxLoops) {
+              throw new Error(`Routing loop budget exceeded (max_loops=${maxLoops}) during retry`);
+            }
+            const delay = base > 0 ? this.computeBackoffDelay(attempt, mode, base, seed) : 0;
+            if (debug)
+              log(
+                `🔁 Debug: retrying '${checkName}' (soft) attempt ${attempt + 1}/${retryMax + 1} after ${delay}ms`
+              );
+            if (delay > 0) await this.sleep(delay);
+            attempt++;
+            continue; // loop
+          }
+          // No retry configured: return existing result
+          return res;
+        }
+        let needRerun = false;
+        if (onSuccess) {
+          // Compute run list
+          const dynamicRun = await evalRunJs(onSuccess.run_js);
+          const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
+          if (runList.length > 0) {
+            loopCount++;
+            if (loopCount > maxLoops) {
+              throw new Error(
+                `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`
+              );
+            }
+            for (const stepId of Array.from(new Set(runList))) {
+              await executeNamedCheckInline(stepId);
+            }
+          }
+          // Optional goto
+          let target = await evalGotoJs(onSuccess.goto_js);
+          if (!target && onSuccess.goto) target = onSuccess.goto;
+          if (target) {
+            if (!allAncestors.includes(target)) {
+              if (debug)
+                log(
+                  `⚠️ Debug: on_success.goto '${target}' is not an ancestor of '${checkName}' — skipping`
+                );
+            } else {
+              loopCount++;
+              if (loopCount > maxLoops) {
+                throw new Error(
+                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
+                );
+              }
+              await executeNamedCheckInline(target);
+              // After jumping back to an ancestor, re-run the current check to re-validate with new state
+              needRerun = true;
+            }
+          }
+        }
+        if (needRerun) {
+          if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
+          attempt++;
+          continue; // loop will execute the check again
+        }
+        return res;
+      } catch (err) {
+        // Failure path
+        if (!onFail) {
+          throw err; // no routing policy
+        }
+
+        const lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Dynamic compute run/goto
+        const dynamicRun = await evalRunJs(onFail.run_js, lastError);
+        let runList = [...(onFail.run || []), ...dynamicRun].filter(Boolean);
+        // Dedup while preserving order
+        runList = Array.from(new Set(runList));
+
+        if (runList.length > 0) {
+          loopCount++;
+          if (loopCount > maxLoops) {
+            throw new Error(
+              `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail run`
+            );
+          }
+          if (debug) log(`🔧 Debug: on_fail.run executing [${runList.join(', ')}]`);
+          for (const stepId of runList) {
+            await executeNamedCheckInline(stepId);
+          }
+        }
+
+        let target = await evalGotoJs(onFail.goto_js, lastError);
+        if (!target && onFail.goto) target = onFail.goto;
+        if (target) {
+          if (!allAncestors.includes(target)) {
+            if (debug)
+              log(
+                `⚠️ Debug: on_fail.goto '${target}' is not an ancestor of '${checkName}' — skipping`
+              );
+          } else {
+            loopCount++;
+            if (loopCount > maxLoops) {
+              throw new Error(
+                `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
+              );
+            }
+            await executeNamedCheckInline(target);
+          }
+        }
+
+        // Retry if allowed
+        const retryMax = onFail.retry?.max ?? 0;
+        const base = onFail.retry?.backoff?.delay_ms ?? 0;
+        const mode = onFail.retry?.backoff?.mode ?? 'fixed';
+        if (attempt <= retryMax) {
+          loopCount++;
+          if (loopCount > maxLoops) {
+            throw new Error(`Routing loop budget exceeded (max_loops=${maxLoops}) during retry`);
+          }
+          const delay = base > 0 ? this.computeBackoffDelay(attempt, mode, base, seed) : 0;
+          if (debug)
+            log(
+              `🔁 Debug: retrying '${checkName}' attempt ${attempt + 1}/${retryMax + 1} after ${delay}ms`
+            );
+          if (delay > 0) await this.sleep(delay);
+          attempt++;
+          continue; // loop
+        }
+
+        // Exhausted retry budget; rethrow
+        throw lastError;
+      }
+    }
   }
 
   /**
@@ -445,19 +924,13 @@ export class CheckExecutionEngine {
     // Use filtered checks for execution
     checks = filteredChecks;
 
-    // If we have a config with individual check definitions, use dependency-aware execution
-    // Check if any of the checks have dependencies or if there are multiple checks
-    const hasDependencies =
-      config?.checks &&
-      checks.some(checkName => {
-        const checkConfig = config.checks[checkName];
-        return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
-      });
-
-    if (config?.checks && (checks.length > 1 || hasDependencies)) {
+    // If we have a config with individual check definitions, prefer dependency-aware execution
+    // even for a single check, so provider types other than 'ai' work consistently.
+    const allConfigured = config?.checks ? checks.every(name => !!config.checks[name]) : false;
+    if (allConfigured) {
       if (debug) {
         logFn(
-          `🔧 Debug: Using dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+          `🔧 Debug: Using dependency-aware execution for ${checks.length} configured check(s)`
         );
       }
       return await this.executeDependencyAwareChecks(
@@ -1086,7 +1559,7 @@ export class CheckExecutionEngine {
       );
     }
 
-    // Validate dependencies
+    // Validate dependencies for the initially requested checks first
     const validation = DependencyResolver.validateDependencies(checks, dependencies);
     if (!validation.valid) {
       return {
@@ -1101,6 +1574,32 @@ export class CheckExecutionEngine {
           },
         ],
       };
+    }
+
+    // Expand requested checks with transitive dependencies present in config for execution
+    const expandWithTransitives = (rootChecks: string[]): string[] => {
+      if (!config?.checks) return rootChecks;
+      const set = new Set<string>(rootChecks);
+      const visit = (name: string) => {
+        const cfg = config.checks[name];
+        if (!cfg || !cfg.depends_on) return;
+        for (const dep of cfg.depends_on) {
+          if (!set.has(dep)) {
+            set.add(dep);
+            visit(dep);
+          }
+        }
+      };
+      for (const c of rootChecks) visit(c);
+      return Array.from(set);
+    };
+
+    checks = expandWithTransitives(checks);
+
+    // Rebuild dependencies map for the expanded set
+    for (const checkName of checks) {
+      const checkConfig = config.checks[checkName];
+      dependencies[checkName] = checkConfig?.depends_on || [];
     }
 
     // Build dependency graph
@@ -1194,6 +1693,9 @@ export class CheckExecutionEngine {
           // Get the appropriate provider for this check type
           const providerType = checkConfig.type || 'ai';
           const provider = this.providerRegistry.getProviderOrThrow(providerType);
+          if (debug) {
+            log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+          }
           this.setProviderWebhookContext(provider);
 
           // Create provider config for this specific check
@@ -1402,11 +1904,24 @@ export class CheckExecutionEngine {
                 );
               }
 
-              const itemResult = await provider.execute(
-                prInfo,
+              // Execute with retry/routing semantics per item
+              const itemResult = await this.executeWithRouting(
+                checkName,
+                checkConfig,
+                provider,
                 providerConfig,
+                prInfo,
                 forEachDependencyResults,
-                sessionInfo
+                sessionInfo,
+                config,
+                dependencyGraph,
+                debug,
+                results,
+                /*foreachContext*/ {
+                  index: itemIndex,
+                  total: forEachItems.length,
+                  parent: forEachParentName,
+                }
               );
 
               return { index: itemIndex, itemResult };
@@ -1508,11 +2023,19 @@ export class CheckExecutionEngine {
               }
             }
 
-            finalResult = await provider.execute(
-              prInfo,
+            // Execute with retry/routing semantics
+            finalResult = await this.executeWithRouting(
+              checkName,
+              checkConfig,
+              provider,
               providerConfig,
+              prInfo,
               dependencyResults,
-              sessionInfo
+              sessionInfo,
+              config,
+              dependencyGraph,
+              debug,
+              results
             );
 
             if (checkConfig.forEach) {
