@@ -345,13 +345,30 @@ export class CommandCheckProvider extends CheckProvider {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      // Extract stderr from the error if available (child_process errors include stdout/stderr)
+      let stderrOutput = '';
+      if (error && typeof error === 'object') {
+        const execError = error as { stderr?: string; stdout?: string };
+        if (execError.stderr) {
+          stderrOutput = execError.stderr.trim();
+        }
+      }
+
+      // Construct detailed error message including stderr
+      const detailedMessage = stderrOutput
+        ? `Command execution failed: ${errorMessage}\n\nStderr output:\n${stderrOutput}`
+        : `Command execution failed: ${errorMessage}`;
+
+      logger.error(`✗ ${detailedMessage}`);
+
       return {
         issues: [
           {
             file: 'command',
             line: 0,
             ruleId: 'command/execution_error',
-            message: `Command execution failed: ${errorMessage}`,
+            message: detailedMessage,
             severity: 'error',
             category: 'logic',
           },

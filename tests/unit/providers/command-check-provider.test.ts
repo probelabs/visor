@@ -179,6 +179,36 @@ describe('CommandCheckProvider', () => {
       });
     });
 
+    it('should include stderr in error message when command fails', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'failing-command',
+      };
+
+      const error = new Error('Command failed with exit code 1');
+      Object.assign(error, {
+        stderr: 'Error: File not found\nStack trace...',
+        stdout: 'partial output',
+      });
+
+      mockExec.mockRejectedValue(error);
+
+      const result = await provider.execute(mockPRInfo, config);
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues![0]).toMatchObject({
+        file: 'command',
+        line: 0,
+        ruleId: 'command/execution_error',
+        severity: 'error',
+        category: 'logic',
+      });
+      expect(result.issues![0].message).toContain('Command failed with exit code 1');
+      expect(result.issues![0].message).toContain('Stderr output:');
+      expect(result.issues![0].message).toContain('Error: File not found');
+      expect(result.issues![0].message).toContain('Stack trace...');
+    });
+
     it('should handle malformed JSON gracefully', async () => {
       const config: CheckProviderConfig = {
         type: 'command',
