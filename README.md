@@ -141,6 +141,7 @@ Visor is a general SDLC automation framework:
 - [Security Defaults](#security-defaults)
 - [Performance & Cost Controls](#performance-cost-controls)
 - [Observability](#observability)
+- [Failure Routing (Auto-fix Loops)](#failure-routing-auto-fix-loops)
 - [AI Configuration](#ai-configuration)
 - [Step Dependencies & Intelligent Execution](#step-dependencies-intelligent-execution)
 - [Claude Code Provider](#claude-code-provider)
@@ -481,3 +482,71 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
   Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
 </div>
+## Failure Routing (Auto-fix Loops)
+
+Visor can automatically remediate failures and re‑run steps using config‑driven routing:
+
+- Per‑step `on_fail` and `on_success` actions
+  - `retry` with fixed/exponential backoff (+ deterministic jitter)
+  - `run`: remediation steps (single or list)
+  - `goto`: jump back to an ancestor step and continue forward
+  - `goto_js` / `run_js`: dynamic routing with safe, synchronous JS
+- Loop safety
+  - Global `routing.max_loops` per scope to prevent livelock
+  - Per‑step attempt counters; forEach items have isolated counters (“parallel universes”)
+
+Example (retry + goto on failure):
+```yaml
+version: "2.0"
+routing:
+  max_loops: 5
+checks:
+  setup: { type: command, exec: "echo setup" }
+  build:
+    type: command
+    depends_on: [setup]
+    exec: |
+      test -f .ok || (echo first try fails >&2; touch .ok; exit 1)
+      echo ok
+    on_fail:
+      goto: setup
+      retry: { max: 1, backoff: { mode: exponential, delay_ms: 400 } }
+```
+
+Example (on_success jump‑back once):
+```yaml
+checks:
+  unit: { type: command, exec: "echo unit" }
+  build:
+    type: command
+    depends_on: [unit]
+    exec: "echo build"
+    on_success:
+      run: [notify]
+      goto_js: |
+        // Jump back only on first success
+        return attempt === 1 ? 'unit' : null;
+  notify: { type: command, exec: "echo notify" }
+```
+
+forEach + remediation:
+```yaml
+checks:
+  list: { type: command, exec: "echo '[\\"a\\",\\"b\\"]'", forEach: true }
+  mark: { type: command, depends_on: [list], exec: "touch .m_{{ outputs.list }}" }
+  process:
+    type: command
+    depends_on: [list]
+    exec: "test -f .m_{{ outputs.list }} || exit 1"
+    on_fail:
+      run: [mark]
+      retry: { max: 1 }
+```
+
+Try the full examples:
+- examples/routing-basic.yaml
+- examples/routing-on-success.yaml
+- examples/routing-foreach.yaml
+- examples/routing-dynamic-js.yaml
+
+Learn more: [docs/failure-routing.md](docs/failure-routing.md).

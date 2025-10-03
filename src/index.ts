@@ -175,6 +175,18 @@ export async function run(): Promise<void> {
     // Always use config-driven mode in GitHub Actions
     // The CLI mode is only for local development, not for GitHub Actions
     console.log('🤖 Using config-driven mode');
+    // Version banner for Action runs (mirrors CLI banner but via console)
+    try {
+      const visorVersion =
+        process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
+      let probeVersion = process.env.PROBE_VERSION || 'unknown';
+      if (!process.env.PROBE_VERSION) {
+        try {
+          probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
+        } catch {}
+      }
+      console.log(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
+    } catch {}
 
     // Load config to determine which checks should run for this event
     const configManager = new ConfigManager();

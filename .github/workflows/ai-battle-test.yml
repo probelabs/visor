@@ -19,6 +19,11 @@ on:
         - 'comment_management'
         - 'provider_types'
 
+# Cancel previous in-progress runs of this workflow on the same ref (branch/PR)
+concurrency:
+  group: ai-battle-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -27,14 +32,23 @@ permissions:
 
 jobs:
   ai-battle-test:
-    name: AI Battle Test - ${{ github.event_name }}
+    name: AI Battle Test — ${{ matrix.ai_provider.name }} — ${{ github.event_name }}
     runs-on: ubuntu-latest
     if: >
-      github.event_name == 'pull_request' || 
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' && 
-       github.event.issue.pull_request && 
-       contains(github.event.comment.body, '/ai-test'))
+      (
+        github.event_name == 'pull_request' || 
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' && 
+          github.event.issue.pull_request && 
+          contains(github.event.comment.body, '/ai-test')
+        )
+      ) && (
+        (matrix.ai_provider.name == 'Google Gemini' && secrets.GOOGLE_API_KEY != '') ||
+        (matrix.ai_provider.name == 'OpenAI GPT-4' && secrets.OPENAI_API_KEY != '') ||
+        (matrix.ai_provider.name == 'Anthropic Claude' && secrets.ANTHROPIC_API_KEY != '') ||
+        (matrix.ai_provider.name == 'Mock AI (Fallback)')
+      )
     
     strategy:
       fail-fast: false
@@ -107,14 +121,14 @@ jobs:
         run: |
           echo "✅ XML Formatted Analysis completed successfully"
           echo "Provider: ${{ matrix.ai_provider.name }}"
-          echo "Review Score: ${{ steps.xml_test.outputs.review-score }}"
           echo "Total Issues: ${{ steps.xml_test.outputs.total-issues }}"
+          echo "Critical Issues: ${{ steps.xml_test.outputs.critical-issues }}"
           echo "PR Action: ${{ steps.xml_test.outputs.pr-action }}"
           echo "Incremental Analysis: ${{ steps.xml_test.outputs.incremental-analysis }}"
           
-          # Validate that we got expected outputs (skip for mock provider as it may not have outputs)
-          if [ -z "${{ steps.xml_test.outputs.review-score }}" ] && [ "${{ matrix.ai_provider.name }}" != "Mock AI (Fallback)" ]; then
-            echo "❌ Missing review-score output"
+          # Validate presence of total-issues for non-mock providers
+          if [ -z "${{ steps.xml_test.outputs.total-issues }}" ] && [ "${{ matrix.ai_provider.name }}" != "Mock AI (Fallback)" ]; then
+            echo "❌ Missing total-issues output"
             exit 1
           fi
 
