@@ -141,7 +141,7 @@ Visor is a general SDLC automation framework:
 - [Security Defaults](#security-defaults)
 - [Performance & Cost Controls](#performance-cost-controls)
 - [Observability](#observability)
-- [Failure Routing (Auto‑Fix Loops)](#failure-routing-auto-fix-loops)
+- [Failure Routing (Auto-fix Loops)](#failure-routing-auto-fix-loops)
 - [AI Configuration](#ai-configuration)
 - [Step Dependencies & Intelligent Execution](#step-dependencies-intelligent-execution)
 - [Claude Code Provider](#claude-code-provider)
@@ -482,7 +482,7 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
   Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
 </div>
-## ♻️ Failure Routing (Auto‑Fix Loops)
+## Failure Routing (Auto-fix Loops)
 
 Visor can automatically remediate failures and re‑run steps using config‑driven routing:
 
@@ -549,4 +549,4 @@ Try the full examples:
 - examples/routing-foreach.yaml
 - examples/routing-dynamic-js.yaml
 
-Design notes: see docs/failure-routing-rfc.md.
+Learn more: [docs/failure-routing.md](docs/failure-routing.md).
