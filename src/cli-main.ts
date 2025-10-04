@@ -50,7 +50,16 @@ export async function main(): Promise<void> {
       process.exit(0);
     }
 
+    // Configure logger based on output format and verbosity
+    logger.configure({
+      outputFormat: options.output,
+      debug: options.debug,
+      verbose: options.verbose,
+      quiet: options.quiet,
+    });
+
     // Print runtime banner (info level): Visor + Probe versions
+    // Banner is automatically suppressed for JSON/SARIF by logger configuration
     try {
       const visorVersion =
         process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
@@ -284,11 +293,15 @@ export async function main(): Promise<void> {
       }
     }
 
+    // Extract execution statistics before processing results
+    const executionStatistics = (groupedResultsToUse as any).__executionStatistics;
+
+    // Get executed check names (excluding __executionStatistics)
     const executedCheckNames = Array.from(
       new Set(
-        Object.values(groupedResultsToUse).flatMap((checks: CheckResult[]) =>
-          checks.map(check => check.checkName)
-        )
+        Object.entries(groupedResultsToUse)
+          .filter(([key]) => key !== '__executionStatistics')
+          .flatMap(([, checks]) => (checks as CheckResult[]).map(check => check.checkName))
       )
     );
 
@@ -302,13 +315,18 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResultsToUse)
-            .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
+          issues: Object.entries(groupedResultsToUse)
+            .filter(([key]) => key !== '__executionStatistics')
+            .flatMap(([, r]) =>
+              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
+            )
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
         checksExecuted: executedCheckNames,
+        executionStatistics,
+        isCodeReview: includeCodeContext,
       };
       output = OutputFormatters.formatAsSarif(analysisResult);
     } else if (options.output === 'markdown') {
@@ -316,13 +334,18 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResultsToUse)
-            .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
+          issues: Object.entries(groupedResultsToUse)
+            .filter(([key]) => key !== '__executionStatistics')
+            .flatMap(([, r]) =>
+              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
+            )
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
         checksExecuted: executedCheckNames,
+        executionStatistics,
+        isCodeReview: includeCodeContext,
       };
       output = OutputFormatters.formatAsMarkdown(analysisResult);
     } else {
@@ -330,13 +353,18 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.values(groupedResultsToUse)
-            .flatMap((r: CheckResult[]) => r.map((check: CheckResult) => check.issues || []).flat())
+          issues: Object.entries(groupedResultsToUse)
+            .filter(([key]) => key !== '__executionStatistics')
+            .flatMap(([, r]) =>
+              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
+            )
             .flat(),
         },
         executionTime: 0,
         timestamp: new Date().toISOString(),
         checksExecuted: executedCheckNames,
+        executionStatistics,
+        isCodeReview: includeCodeContext,
       };
       output = OutputFormatters.formatAsTable(analysisResult, { showDetails: true });
     }
@@ -359,7 +387,9 @@ export async function main(): Promise<void> {
     }
 
     // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
-    const allResults = Object.values(groupedResultsToUse).flat();
+    const allResults = Object.entries(groupedResultsToUse)
+      .filter(([key]) => key !== '__executionStatistics')
+      .flatMap(([, checks]) => checks as CheckResult[]);
     const allIssues = allResults.flatMap((r: CheckResult) => r.issues || []);
     const counts = allIssues.reduce(
       (acc, issue: { severity?: string }) => {

@@ -16,8 +16,10 @@ export interface AnalysisResult {
   executionTime: number;
   timestamp: string;
   checksExecuted: string[];
+  executionStatistics?: import('./check-execution-engine').ExecutionStatistics; // Detailed execution statistics
   debug?: DebugInfo; // Optional debug information when debug mode is enabled
   failureConditions?: FailureConditionResult[]; // Optional failure condition results
+  isCodeReview?: boolean; // Whether this is a code review context (affects output formatting)
 }
 
 export interface DebugInfo {
@@ -55,30 +57,49 @@ export class OutputFormatters {
     const issues = result.reviewSummary.issues || [];
     const totalIssues = issues.length;
     const criticalIssues = issues.filter(i => i.severity === 'critical').length;
-    // Summary table
-    const summaryTable = new CliTable3({
-      head: ['Metric', 'Value'],
-      colWidths: [25, 30],
-      style: {
-        head: ['cyan', 'bold'],
-        border: ['grey'],
-      },
-    });
 
-    summaryTable.push(
-      ['Total Issues', totalIssues.toString()],
-      ['Critical Issues', criticalIssues.toString()],
-      ['Files Analyzed', result.repositoryInfo.files.length.toString()],
-      ['Total Additions', result.repositoryInfo.totalAdditions.toString()],
-      ['Total Deletions', result.repositoryInfo.totalDeletions.toString()],
-      ['Execution Time', `${result.executionTime}ms`],
-      ['Checks Executed', result.checksExecuted.join(', ')]
-    );
+    // Check if this is a code review context
+    const isCodeReview = result.isCodeReview || issues.some(i => i.schema === 'code-review');
 
-    output += 'Analysis Summary\n';
-    output += summaryTable.toString() + '\n';
+    // Only show "Analysis Summary" table for code review contexts or when there are issues
+    // For other contexts, the execution statistics table already provides summary
+    if (isCodeReview || totalIssues > 0) {
+      // Summary table
+      const summaryTable = new CliTable3({
+        head: ['Metric', 'Value'],
+        colWidths: [25, 30],
+        style: {
+          head: ['cyan', 'bold'],
+          border: ['grey'],
+        },
+      });
 
-    output += '\n';
+      // Add issue metrics
+      summaryTable.push(['Total Issues', totalIssues.toString()]);
+      if (criticalIssues > 0) {
+        summaryTable.push(['Critical Issues', criticalIssues.toString()]);
+      }
+
+      // Add code-review specific metrics if in code review context
+      if (isCodeReview && result.repositoryInfo.files.length > 0) {
+        summaryTable.push(
+          ['Files Analyzed', result.repositoryInfo.files.length.toString()],
+          ['Total Additions', result.repositoryInfo.totalAdditions.toString()],
+          ['Total Deletions', result.repositoryInfo.totalDeletions.toString()]
+        );
+      }
+
+      // Always show execution time and checks executed
+      summaryTable.push(
+        ['Execution Time', `${result.executionTime}ms`],
+        ['Checks Executed', result.checksExecuted.join(', ')]
+      );
+
+      output += 'Analysis Summary\n';
+      output += summaryTable.toString() + '\n';
+
+      output += '\n';
+    }
 
     // Issues by category table
     if (issues.length > 0) {

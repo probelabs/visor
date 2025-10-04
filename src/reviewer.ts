@@ -47,6 +47,7 @@ export interface CheckResult {
 }
 
 // Results grouped by group name
+// Note: __executionStatistics is added dynamically at runtime (not part of type contract)
 export interface GroupedCheckResults {
   [groupName: string]: CheckResult[];
 }
