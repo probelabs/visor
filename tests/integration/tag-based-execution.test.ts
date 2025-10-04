@@ -96,7 +96,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -131,7 +134,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -165,7 +171,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -201,7 +210,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -233,7 +245,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -269,7 +284,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -310,7 +328,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const fastChecks: string[] = [];
-      for (const group of Object.values(fastResult)) {
+      for (const [key, group] of Object.entries(fastResult)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             fastChecks.push(check.checkName);
@@ -343,7 +364,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const comprehensiveChecks: string[] = [];
-      for (const group of Object.values(comprehensiveResult)) {
+      for (const [key, group] of Object.entries(comprehensiveResult)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             comprehensiveChecks.push(check.checkName);
@@ -396,7 +420,10 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const group of Object.values(result)) {
+      for (const [key, group] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics') continue;
+
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);

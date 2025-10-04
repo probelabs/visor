@@ -264,20 +264,32 @@ export async function main(): Promise<void> {
     const shouldFilterResults =
       explicitChecks && explicitChecks.size > 0 && !explicitChecks.has('all');
 
+    // Extract and preserve __executionStatistics before filtering
+    const executionStats = (groupedResults as any).__executionStatistics;
+
     const groupedResultsToUse: GroupedCheckResults = shouldFilterResults
       ? (Object.fromEntries(
           Object.entries(groupedResults)
+            .filter(([key]) => key !== '__executionStatistics')
             .map(([group, checkResults]) => [
               group,
-              checkResults.filter(check => explicitChecks!.has(check.checkName)),
+              (checkResults as CheckResult[]).filter(check => explicitChecks!.has(check.checkName)),
             ])
             .filter(([, checkResults]) => checkResults.length > 0)
         ) as GroupedCheckResults)
       : groupedResults;
 
+    // Restore __executionStatistics if it exists
+    if (executionStats) {
+      (groupedResultsToUse as any).__executionStatistics = executionStats;
+    }
+
     if (shouldFilterResults) {
       for (const [group, checkResults] of Object.entries(groupedResults)) {
-        for (const check of checkResults) {
+        // Skip __executionStatistics property
+        if (group === '__executionStatistics') continue;
+
+        for (const check of checkResults as CheckResult[]) {
           if (check.issues && check.issues.length > 0 && !explicitChecks!.has(check.checkName)) {
             if (!groupedResultsToUse[group]) {
               groupedResultsToUse[group] = [];
@@ -309,7 +321,11 @@ export async function main(): Promise<void> {
     logger.step(`Formatting results as ${options.output}`);
     let output: string;
     if (options.output === 'json') {
-      output = JSON.stringify(groupedResultsToUse, null, 2);
+      // Filter out __executionStatistics from JSON output
+      const jsonOutput = Object.fromEntries(
+        Object.entries(groupedResultsToUse).filter(([key]) => key !== '__executionStatistics')
+      );
+      output = JSON.stringify(jsonOutput, null, 2);
     } else if (options.output === 'sarif') {
       // Build analysis result and format as SARIF
       const analysisResult: AnalysisResult = {
