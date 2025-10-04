@@ -18,7 +18,9 @@ export interface AIReviewConfig {
   timeout?: number; // Default: 600000ms (10 minutes)
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
-  tools?: Array<{ name: string; [key: string]: unknown }>; // MCP tools from servers
+  tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
+  // Pass-through MCP server configuration for ProbeAgent
+  mcpServers?: Record<string, import('./types/config').McpServerConfig>;
 }
 
 export interface AIDebugInfo {
@@ -878,6 +880,12 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
+
+      // Wire MCP configuration when provided
+      if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
+        (options as any).enableMcp = true;
+        (options as any).mcpConfig = { mcpServers: this.config.mcpServers };
+      }
 
       // Add provider-specific options if configured
       if (this.config.provider) {
