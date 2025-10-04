@@ -575,15 +575,15 @@ export class AICheckProvider extends CheckProvider {
 
     // Setup MCP tools if any servers are configured
     if (Object.keys(mcpServers).length > 0) {
+      // Pass raw server config to AI service so it can enable MCP in ProbeAgent
+      (aiConfig as any).mcpServers = mcpServers;
+      // Optional: attempt to enumerate tools for debug visibility (not required for functionality)
       const mcpConfig: import('../types/config').AIProviderConfig = { mcpServers };
       const mcpTools = await this.setupMcpTools(mcpConfig);
-      if (mcpTools.length > 0) {
-        aiConfig.tools = mcpTools;
-        if (aiConfig.debug) {
-          console.error(
-            `🔧 Debug: AI check configured with ${mcpTools.length} MCP tools from ${Object.keys(mcpServers).length} servers`
-          );
-        }
+      if (aiConfig.debug) {
+        console.error(
+          `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers; discovered ${mcpTools.length} tools`
+        );
       }
     }
 

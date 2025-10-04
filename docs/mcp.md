@@ -27,7 +27,15 @@ checks:
     # Inherits global MCP servers automatically
 ```
 
-#### Check-Level MCP Configuration
+#### Check-Level MCP Configuration (YAML keys and precedence)
+
+You can declare MCP servers for an individual check in two ways. Visor supports both and merges them with the following precedence (last wins):
+
+1) Global: `ai_mcp_servers` at the root of `.visor.yaml` (applies to all AI checks)
+2) Check level: `ai_mcp_servers` under a specific check (overrides global for that check)
+3) AI object: `ai.mcpServers` inside the same check (highest precedence)
+
+For Claude Code checks, use `claude_code.mcpServers` (provider‑specific) instead of `ai_mcp_servers`.
 
 Override global MCP servers for specific checks:
 
@@ -36,13 +44,20 @@ checks:
   performance_review:
     type: ai
     prompt: "Analyze performance using specialized tools"
-    ai_mcp_servers:  # Overrides global servers
+    # Option A: check-level (recommended for simple cases)
+    ai_mcp_servers:
       probe:
         command: "npx"
         args: ["-y", "@probelabs/probe@latest", "mcp"]
       custom_profiler:
         command: "python3"
         args: ["./tools/performance-analyzer.py"]
+    # Option B: via ai.mcpServers (overrides check-level if both present)
+    ai:
+      mcpServers:
+        probe:
+          command: "npx"
+          args: ["-y", "@probelabs/probe@latest", "mcp"]
 ```
 
 #### AI Object-Level MCP Configuration
@@ -63,6 +78,33 @@ checks:
         github:
           command: "npx"
           args: ["-y", "@modelcontextprotocol/server-github"]
+
+#### Claude Code Provider (check-level)
+
+When using the `claude-code` provider, configure MCP servers under `claude_code.mcpServers`:
+
+```yaml
+checks:
+  claude_with_mcp:
+    type: claude-code
+    prompt: "Analyze code complexity and architecture"
+    claude_code:
+      mcpServers:
+        custom_analyzer:
+          command: "node"
+          args: ["./mcp-servers/analyzer.js"]
+```
+
+#### How Visor passes MCP to the engine
+
+- For AI checks (`type: ai`), Visor forwards your MCP server map to the ProbeAgent SDK as:
+  - `enableMcp: true`
+  - `mcpConfig: { mcpServers: { ... } }`
+  No additional settings are required; tools are discovered from the servers.
+
+- For Claude Code checks (`type: claude-code`), Visor constructs an equivalent tool list from `claude_code.mcpServers` and passes it to the Claude Code SDK.
+
+Tip: run with `--debug` to see how many MCP servers and tools were detected for a check.
 ```
 
 #### Available MCP Servers
@@ -79,4 +121,3 @@ checks:
 - [Jira Workflow Automation](../examples/jira-workflow-mcp.yaml) - Complete Jira integration examples
 - [Simple Jira Analysis](../examples/jira-simple-example.yaml) - Basic JQL → analyze → label workflow
 - [Setup Guide](../examples/JIRA_MCP_SETUP.md) - Detailed Jira MCP configuration instructions
-
