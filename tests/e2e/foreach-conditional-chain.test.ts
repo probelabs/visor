@@ -293,9 +293,11 @@ checks:
     expect(result).toMatch(/Completed forEach execution for check "final-check"/);
 
     // Verify the checks were executed
-    expect(result).toMatch(/Checks Executed/);
+    // Note: "Checks Executed" only appears in Analysis Summary when there are issues
+    // Since there are no issues, we verify execution via completion messages instead
+    expect(result).toMatch(/Dependency-aware execution completed successfully/);
 
-    // The summary should show all checks executed
+    // The summary should show all checks executed (in debug output)
     expect(result).toContain('root-check');
     expect(result).toContain('check-a');
     expect(result).toContain('check-b');

@@ -515,7 +515,7 @@ async function handleIssueEvent(
   const engine = new CheckExecutionEngine();
 
   try {
-    const result = await engine.executeGroupedChecks(
+    const executionResult = await engine.executeGroupedChecks(
       prInfo,
       checksToRun,
       undefined, // timeout
@@ -524,12 +524,14 @@ async function handleIssueEvent(
       inputs.debug === 'true'
     );
 
+    const { results } = executionResult;
+
     // Format and post results as a comment on the issue
-    if (Object.keys(result).length > 0) {
+    if (Object.keys(results).length > 0) {
       let commentBody = '';
 
       // Directly use check content without adding extra headers
-      for (const checks of Object.values(result)) {
+      for (const checks of Object.values(results)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `${check.content}\n\n`;
@@ -845,7 +847,7 @@ async function handleIssueComment(
         }
 
         // Calculate total check results from grouped results
-        const totalChecks = Object.values(groupedResults).flat().length;
+        const totalChecks = Object.values(groupedResults).flatMap(checks => checks).length;
         setOutput('checks-executed', totalChecks.toString());
       }
       break;
@@ -1259,7 +1261,7 @@ async function completeGitHubChecks(
 function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
 
-  for (const [groupName, checkResults] of Object.entries(groupedResults)) {
+  for (const checkResults of Object.values(groupedResults)) {
     for (const checkResult of checkResults) {
       const { checkName, content } = checkResult;
 
@@ -1292,7 +1294,7 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
           message: message.trim(),
           severity,
           category: 'logic', // Default category since we can't parse this from content
-          group: groupName,
+          group: checkResult.group,
           timestamp: Date.now(),
         };
 

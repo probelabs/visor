@@ -28,6 +28,52 @@ type ExtendedReviewSummary = ReviewSummary & {
 };
 
 /**
+ * Statistics for a single check execution
+ */
+export interface CheckExecutionStats {
+  checkName: string;
+  totalRuns: number; // How many times the check executed (1 or forEach iterations)
+  successfulRuns: number;
+  failedRuns: number;
+  skipped: boolean;
+  skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed';
+  skipCondition?: string; // The actual if condition text
+  totalDuration: number; // Total duration in milliseconds
+  perIterationDuration?: number[]; // Duration for each iteration (if forEach)
+  issuesFound: number;
+  issuesBySeverity: {
+    critical: number;
+    error: number;
+    warning: number;
+    info: number;
+  };
+  outputsProduced?: number; // Number of outputs for forEach checks
+  errorMessage?: string; // Error message if failed
+  forEachPreview?: string[]; // Preview of forEach items processed (first few)
+}
+
+/**
+ * Overall execution statistics for all checks
+ */
+export interface ExecutionStatistics {
+  totalChecksConfigured: number;
+  totalExecutions: number; // Sum of all runs including forEach iterations
+  successfulExecutions: number;
+  failedExecutions: number;
+  skippedChecks: number;
+  totalDuration: number;
+  checks: CheckExecutionStats[];
+}
+
+/**
+ * Result of executing checks, including both the grouped results and execution statistics
+ */
+export interface ExecutionResult {
+  results: GroupedCheckResults;
+  statistics: ExecutionStatistics;
+}
+
+/**
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
 function getSafeEnvironmentVariables(): Record<string, string> {
@@ -125,6 +171,7 @@ export class CheckExecutionEngine {
   private config?: import('./types/config').VisorConfig;
   private webhookContext?: { webhookData: Map<string, unknown> };
   private routingSandbox?: Sandbox;
+  private executionStats: Map<string, CheckExecutionStats> = new Map();
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -784,12 +831,16 @@ export class CheckExecutionEngine {
         };
       }
 
+      // Build execution statistics
+      const executionStatistics = this.buildExecutionStatistics();
+
       return {
         repositoryInfo,
         reviewSummary,
         executionTime,
         timestamp,
         checksExecuted: filteredChecks,
+        executionStatistics,
         debug: debugInfo,
       };
     } catch (error) {
@@ -1050,7 +1101,7 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute review checks and return grouped results for new architecture
+   * Execute review checks and return grouped results with statistics for new architecture
    */
   public async executeGroupedChecks(
     prInfo: PRInfo,
@@ -1062,7 +1113,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter
-  ): Promise<GroupedCheckResults> {
+  ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =
       outputFormat === 'json' || outputFormat === 'sarif'
@@ -1106,7 +1157,10 @@ export class CheckExecutionEngine {
     // Check if we have any checks left after filtering
     if (checks.length === 0) {
       logger.warn('⚠️ No checks remain after tag filtering');
-      return {};
+      return {
+        results: {},
+        statistics: this.buildExecutionStatistics(),
+      };
     }
 
     if (!config?.checks) {
@@ -1153,11 +1207,17 @@ export class CheckExecutionEngine {
 
       const groupedResults: GroupedCheckResults = {};
       groupedResults[checkResult.group] = [checkResult];
-      return groupedResults;
+      return {
+        results: groupedResults,
+        statistics: this.buildExecutionStatistics(),
+      };
     }
 
     // No checks to execute
-    return {};
+    return {
+      results: {},
+      statistics: this.buildExecutionStatistics(),
+    };
   }
 
   /**
@@ -1216,7 +1276,7 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute multiple checks with dependency awareness - return grouped results
+   * Execute multiple checks with dependency awareness - return grouped results with statistics
    */
   private async executeGroupedDependencyAwareChecks(
     prInfo: PRInfo,
@@ -1227,7 +1287,7 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean
-  ): Promise<GroupedCheckResults> {
+  ): Promise<ExecutionResult> {
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
       prInfo,
@@ -1240,8 +1300,21 @@ export class CheckExecutionEngine {
       failFast
     );
 
+    // Build execution statistics
+    const executionStatistics = this.buildExecutionStatistics();
+
     // Convert the flat ReviewSummary to grouped CheckResults
-    return await this.convertReviewSummaryToGroupedResults(reviewSummary, checks, config, prInfo);
+    const groupedResults = await this.convertReviewSummaryToGroupedResults(
+      reviewSummary,
+      checks,
+      config,
+      prInfo
+    );
+
+    return {
+      results: groupedResults,
+      statistics: executionStatistics,
+    };
   }
 
   /**
@@ -1636,9 +1709,11 @@ export class CheckExecutionEngine {
     let shouldStopExecution = false;
     let completedChecksCount = 0;
     const totalChecksCount = stats.totalChecks;
-    let skippedChecksCount = 0;
-    let failedChecksCount = 0;
-    const executionStartTime = Date.now();
+
+    // Initialize execution statistics for all checks
+    for (const checkName of checks) {
+      this.initializeCheckStats(checkName);
+    }
 
     for (
       let levelIndex = 0;
@@ -1817,11 +1892,17 @@ export class CheckExecutionEngine {
           let finalResult: ReviewSummary;
 
           if (isForEachDependent && forEachParentName) {
+            // Record forEach preview items
+            this.recordForEachPreview(checkName, forEachItems);
+
             if (debug) {
               log(
                 `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
               );
             }
+
+            // Log forEach processing start
+            logger.info(`  Processing ${forEachItems.length} items...`);
 
             const allIssues: ReviewIssue[] = [];
             const allOutputs: unknown[] = [];
@@ -1904,6 +1985,9 @@ export class CheckExecutionEngine {
                 );
               }
 
+              // Track iteration start
+              const iterationStart = this.recordIterationStart(checkName);
+
               // Execute with retry/routing semantics per item
               const itemResult = await this.executeWithRouting(
                 checkName,
@@ -1922,6 +2006,21 @@ export class CheckExecutionEngine {
                   total: forEachItems.length,
                   parent: forEachParentName,
                 }
+              );
+
+              // Record iteration completion
+              const iterationDuration = (Date.now() - iterationStart) / 1000;
+              this.recordIterationComplete(
+                checkName,
+                iterationStart,
+                true,
+                itemResult.issues || [],
+                (itemResult as any).output
+              );
+
+              // Log iteration progress
+              logger.info(
+                `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
               );
 
               return { index: itemIndex, itemResult };
@@ -2010,8 +2109,9 @@ export class CheckExecutionEngine {
               );
 
               if (!shouldRun) {
-                skippedChecksCount++;
-                logger.info(`⏭  Skipping check: ${checkName} (if condition evaluated to false)`);
+                // Record skip with condition
+                this.recordSkip(checkName, 'if_condition', checkConfig.if);
+                logger.info(`⏭  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
                 return {
                   checkName,
                   error: null,
@@ -2036,6 +2136,15 @@ export class CheckExecutionEngine {
               dependencyGraph,
               debug,
               results
+            );
+
+            // Record normal (non-forEach) execution
+            this.recordIterationComplete(
+              checkName,
+              checkStartTime,
+              true,
+              finalResult.issues || [],
+              (finalResult as any).output
             );
 
             if (checkConfig.forEach) {
@@ -2074,7 +2183,24 @@ export class CheckExecutionEngine {
 
           const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
           const issueCount = enrichedIssues.length;
-          if (issueCount > 0) {
+          const checkStats = this.executionStats.get(checkName);
+
+          // Enhanced completion message with forEach stats
+          if (checkStats && checkStats.totalRuns > 1) {
+            if (issueCount > 0) {
+              logger.success(
+                `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs, ${issueCount} issue${issueCount === 1 ? '' : 's'}`
+              );
+            } else {
+              logger.success(
+                `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs`
+              );
+            }
+          } else if (checkStats && checkStats.outputsProduced && checkStats.outputsProduced > 0) {
+            logger.success(
+              `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.outputsProduced} items`
+            );
+          } else if (issueCount > 0) {
             logger.success(
               `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? '' : 's'} found`
             );
@@ -2088,9 +2214,13 @@ export class CheckExecutionEngine {
             result: enrichedResult,
           };
         } catch (error) {
-          failedChecksCount++;
           const errorMessage = error instanceof Error ? error.message : String(error);
           const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+
+          // Record error in stats
+          this.recordError(checkName, error instanceof Error ? error : new Error(String(error)));
+          this.recordIterationComplete(checkName, checkStartTime, false, [], undefined);
+
           logger.error(`✖ Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
 
           if (debug) {
@@ -2234,22 +2364,20 @@ export class CheckExecutionEngine {
       }
     }
 
-    // Log final execution summary
-    const executionDuration = ((Date.now() - executionStartTime) / 1000).toFixed(1);
-    const successfulChecks = totalChecksCount - failedChecksCount - skippedChecksCount;
+    // Build and log final execution summary
+    const executionStatistics = this.buildExecutionStatistics();
 
-    logger.info('');
-    logger.step(`Execution complete (${executionDuration}s)`);
-    logger.info(`  ✔ Successful: ${successfulChecks}/${totalChecksCount}`);
-    if (skippedChecksCount > 0) {
-      logger.info(`  ⏭  Skipped: ${skippedChecksCount}`);
-    }
-    if (failedChecksCount > 0) {
-      logger.info(`  ✖ Failed: ${failedChecksCount}`);
+    // Show detailed summary table (only if logFn outputs to console)
+    // Skip when output format is JSON/SARIF to avoid polluting structured output
+    // Check if logFn is console.log (not a no-op or console.error)
+    if (logFn === console.log) {
+      this.logExecutionSummary(executionStatistics);
     }
 
+    // Add warning if execution stopped early
     if (shouldStopExecution) {
-      logger.warn(`  ⚠️  Execution stopped early due to fail-fast`);
+      logger.info('');
+      logger.warn(`⚠️  Execution stopped early due to fail-fast`);
     }
 
     if (debug) {
@@ -3484,5 +3612,289 @@ export class CheckExecutionEngine {
     // The key insight is that issue-assistant should only run on issue_opened/issue_comment
     // events, which don't generate PRInfo objects in the first place.
     return 'pr_updated';
+  }
+
+  /**
+   * Initialize execution statistics for a check
+   */
+  private initializeCheckStats(checkName: string): void {
+    this.executionStats.set(checkName, {
+      checkName,
+      totalRuns: 0,
+      successfulRuns: 0,
+      failedRuns: 0,
+      skipped: false,
+      totalDuration: 0,
+      issuesFound: 0,
+      issuesBySeverity: {
+        critical: 0,
+        error: 0,
+        warning: 0,
+        info: 0,
+      },
+      perIterationDuration: [],
+    });
+  }
+
+  /**
+   * Record the start of a check iteration
+   * Returns the start timestamp for duration tracking
+   */
+  private recordIterationStart(_checkName: string): number {
+    return Date.now();
+  }
+
+  /**
+   * Record completion of a check iteration
+   */
+  private recordIterationComplete(
+    checkName: string,
+    startTime: number,
+    success: boolean,
+    issues: ReviewIssue[],
+    output?: unknown
+  ): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats) return;
+
+    const duration = Date.now() - startTime;
+    stats.totalRuns++;
+    if (success) {
+      stats.successfulRuns++;
+    } else {
+      stats.failedRuns++;
+    }
+    stats.totalDuration += duration;
+    stats.perIterationDuration!.push(duration);
+
+    // Count issues by severity
+    for (const issue of issues) {
+      stats.issuesFound++;
+      if (issue.severity === 'critical') stats.issuesBySeverity.critical++;
+      else if (issue.severity === 'error') stats.issuesBySeverity.error++;
+      else if (issue.severity === 'warning') stats.issuesBySeverity.warning++;
+      else if (issue.severity === 'info') stats.issuesBySeverity.info++;
+    }
+
+    // Track outputs produced
+    if (output !== undefined) {
+      stats.outputsProduced = (stats.outputsProduced || 0) + 1;
+    }
+  }
+
+  /**
+   * Record that a check was skipped
+   */
+  private recordSkip(
+    checkName: string,
+    reason: 'if_condition' | 'fail_fast' | 'dependency_failed',
+    condition?: string
+  ): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats) return;
+
+    stats.skipped = true;
+    stats.skipReason = reason;
+    if (condition) {
+      stats.skipCondition = condition;
+    }
+  }
+
+  /**
+   * Record forEach preview items
+   */
+  private recordForEachPreview(checkName: string, items: unknown[]): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats || !items.length) return;
+
+    // Store preview of first 3 items
+    const preview = items.slice(0, 3).map(item => {
+      const str = typeof item === 'string' ? item : JSON.stringify(item);
+      return str.length > 50 ? str.substring(0, 47) + '...' : str;
+    });
+
+    if (items.length > 3) {
+      preview.push(`...${items.length - 3} more`);
+    }
+
+    stats.forEachPreview = preview;
+  }
+
+  /**
+   * Record an error for a check
+   */
+  private recordError(checkName: string, error: Error | string): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats) return;
+
+    stats.errorMessage = error instanceof Error ? error.message : String(error);
+  }
+
+  /**
+   * Build the final execution statistics object
+   */
+  private buildExecutionStatistics(): ExecutionStatistics {
+    const checks = Array.from(this.executionStats.values());
+    const totalExecutions = checks.reduce((sum, s) => sum + s.totalRuns, 0);
+    const successfulExecutions = checks.reduce((sum, s) => sum + s.successfulRuns, 0);
+    const failedExecutions = checks.reduce((sum, s) => sum + s.failedRuns, 0);
+    const skippedChecks = checks.filter(s => s.skipped).length;
+    const totalDuration = checks.reduce((sum, s) => sum + s.totalDuration, 0);
+
+    return {
+      totalChecksConfigured: checks.length,
+      totalExecutions,
+      successfulExecutions,
+      failedExecutions,
+      skippedChecks,
+      totalDuration,
+      checks,
+    };
+  }
+
+  /**
+   * Truncate a string to max length with ellipsis
+   */
+  private truncate(str: string, maxLen: number): string {
+    if (str.length <= maxLen) return str;
+    return str.substring(0, maxLen - 3) + '...';
+  }
+
+  /**
+   * Format the Status column for execution summary table
+   */
+  private formatStatusColumn(stats: CheckExecutionStats): string {
+    if (stats.skipped) {
+      if (stats.skipReason === 'if_condition') return '⏭ if';
+      if (stats.skipReason === 'fail_fast') return '⏭ ff';
+      if (stats.skipReason === 'dependency_failed') return '⏭ dep';
+      return '⏭';
+    }
+
+    if (stats.totalRuns === 0) return '-';
+
+    const symbol = stats.failedRuns === 0 ? '✔' : stats.successfulRuns === 0 ? '✖' : '✔/✖';
+
+    // Show iteration count if > 1
+    if (stats.totalRuns > 1) {
+      if (stats.failedRuns > 0 && stats.successfulRuns > 0) {
+        // Partial success
+        return `${symbol} ${stats.successfulRuns}/${stats.totalRuns}`;
+      } else {
+        // All success or all failed
+        return `${symbol} ×${stats.totalRuns}`;
+      }
+    }
+
+    return symbol;
+  }
+
+  /**
+   * Format the Details column for execution summary table
+   */
+  private formatDetailsColumn(stats: CheckExecutionStats): string {
+    const parts: string[] = [];
+
+    // Outputs produced (forEach)
+    if (stats.outputsProduced && stats.outputsProduced > 0) {
+      parts.push(`→${stats.outputsProduced}`);
+    }
+
+    // Critical issues
+    if (stats.issuesBySeverity.critical > 0) {
+      parts.push(`${stats.issuesBySeverity.critical}🔴`);
+    }
+
+    // Warnings
+    if (stats.issuesBySeverity.warning > 0) {
+      parts.push(`${stats.issuesBySeverity.warning}⚠️`);
+    }
+
+    // Info (only if no critical/warnings)
+    if (
+      stats.issuesBySeverity.info > 0 &&
+      stats.issuesBySeverity.critical === 0 &&
+      stats.issuesBySeverity.warning === 0
+    ) {
+      parts.push(`${stats.issuesBySeverity.info}💡`);
+    }
+
+    // Error message or skip condition
+    if (stats.errorMessage) {
+      parts.push(this.truncate(stats.errorMessage, 20));
+    } else if (stats.skipCondition) {
+      parts.push(this.truncate(stats.skipCondition, 20));
+    }
+
+    return parts.join(' ');
+  }
+
+  /**
+   * Log the execution summary table
+   */
+  private logExecutionSummary(stats: ExecutionStatistics): void {
+    const totalIssues = stats.checks.reduce((sum, s) => sum + s.issuesFound, 0);
+    const criticalIssues = stats.checks.reduce((sum, s) => sum + s.issuesBySeverity.critical, 0);
+    const warningIssues = stats.checks.reduce((sum, s) => sum + s.issuesBySeverity.warning, 0);
+    const durationSec = (stats.totalDuration / 1000).toFixed(1);
+
+    // Summary box
+    const summaryTable = new (require('cli-table3'))({
+      style: {
+        head: [],
+        border: [],
+      },
+      colWidths: [41],
+    });
+
+    summaryTable.push(
+      [`Execution Complete (${durationSec}s)`],
+      [`Checks: ${stats.totalChecksConfigured} configured → ${stats.totalExecutions} executions`],
+      [
+        `Status: ${stats.successfulExecutions} ✔ │ ${stats.failedExecutions} ✖ │ ${stats.skippedChecks} ⏭`,
+      ]
+    );
+
+    if (totalIssues > 0) {
+      let issuesLine = `Issues: ${totalIssues} total`;
+      if (criticalIssues > 0) issuesLine += ` (${criticalIssues} 🔴`;
+      if (warningIssues > 0) issuesLine += `${criticalIssues > 0 ? ' ' : ' ('}${warningIssues} ⚠️)`;
+      else if (criticalIssues > 0) issuesLine += ')';
+      summaryTable.push([issuesLine]);
+    }
+
+    logger.info('');
+    logger.info(summaryTable.toString());
+
+    // Details table
+    logger.info('');
+    logger.info('Check Details:');
+
+    const detailsTable = new (require('cli-table3'))({
+      head: ['Check', 'Duration', 'Status', 'Details'],
+      colWidths: [21, 10, 10, 21],
+      style: {
+        head: ['cyan'],
+        border: ['grey'],
+      },
+    });
+
+    for (const checkStats of stats.checks) {
+      const duration = checkStats.skipped
+        ? '-'
+        : `${(checkStats.totalDuration / 1000).toFixed(1)}s`;
+      const status = this.formatStatusColumn(checkStats);
+      const details = this.formatDetailsColumn(checkStats);
+
+      detailsTable.push([checkStats.checkName, duration, status, details]);
+    }
+
+    logger.info(detailsTable.toString());
+
+    // Legend
+    logger.info('');
+    logger.info(
+      'Legend: ✔=success │ ✖=failed │ ⏭=skipped │ ×N=iterations │ →N=outputs │ N🔴=critical │ N⚠️=warnings'
+    );
   }
 }

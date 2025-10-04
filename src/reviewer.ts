@@ -147,7 +147,7 @@ export class PRReviewer {
     if (config && checks && checks.length > 0) {
       const { CheckExecutionEngine } = await import('./check-execution-engine');
       const engine = new CheckExecutionEngine();
-      const groupedResults = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         prInfo,
         checks,
         undefined,
@@ -155,7 +155,7 @@ export class PRReviewer {
         undefined,
         debug
       );
-      return groupedResults;
+      return results;
     }
 
     throw new Error(
