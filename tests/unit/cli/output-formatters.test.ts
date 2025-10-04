@@ -86,8 +86,8 @@ describe('OutputFormatters', () => {
       expect(result).toContain('Analysis Summary');
       expect(result).toContain('Total Issues');
       expect(result).toContain('3');
-      expect(result).toContain('Critical Issues');
-      expect(result).toContain('0'); // No critical issues in our test data
+      // Note: "Critical Issues" row only shown when criticalIssues > 0
+      expect(result).not.toContain('Critical Issues'); // No critical issues in our test data
       expect(result).toContain('Execution Time');
       expect(result).toContain('1500ms');
       expect(result).toContain('security, performance, style');
