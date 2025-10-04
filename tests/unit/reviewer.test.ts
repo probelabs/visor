@@ -156,7 +156,18 @@ jest.mock('../../src/check-execution-engine', () => {
             });
           }
 
-          return groupedResults;
+          return {
+            results: groupedResults,
+            statistics: {
+              totalChecksConfigured: _checks.length,
+              totalExecutions: _checks.length,
+              successfulExecutions: _checks.length,
+              failedExecutions: 0,
+              skippedChecks: 0,
+              totalDuration: 0,
+              checks: [],
+            },
+          };
         }),
     })),
   };

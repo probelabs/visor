@@ -82,7 +82,7 @@ describe('Tag-Based Execution Integration', () => {
       const config = createConfig();
       const tagFilter: TagFilter = { include: ['local'] };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -96,10 +96,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -120,7 +117,7 @@ describe('Tag-Based Execution Integration', () => {
       const config = createConfig();
       const tagFilter: TagFilter = { include: ['remote'] };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -134,10 +131,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -157,7 +151,7 @@ describe('Tag-Based Execution Integration', () => {
       const config = createConfig();
       const tagFilter: TagFilter = { exclude: ['slow'] };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -171,10 +165,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -196,7 +187,7 @@ describe('Tag-Based Execution Integration', () => {
         exclude: ['experimental'],
       };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -210,10 +201,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -231,7 +219,7 @@ describe('Tag-Based Execution Integration', () => {
       const config = createConfig();
       const tagFilter: TagFilter = { include: ['security'] };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -245,10 +233,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -270,7 +255,7 @@ describe('Tag-Based Execution Integration', () => {
         include: ['local'],
       };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -284,10 +269,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);
@@ -328,10 +310,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const fastChecks: string[] = [];
-      for (const [key, group] of Object.entries(fastResult)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(fastResult.results)) {
         for (const check of group) {
           if (check.checkName) {
             fastChecks.push(check.checkName);
@@ -350,7 +329,7 @@ describe('Tag-Based Execution Integration', () => {
         include: ['comprehensive'],
       };
 
-      const comprehensiveResult = await engine.executeGroupedChecks(
+      const { results: comprehensiveResults } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -364,10 +343,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const comprehensiveChecks: string[] = [];
-      for (const [key, group] of Object.entries(comprehensiveResult)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(comprehensiveResults)) {
         for (const check of group) {
           if (check.checkName) {
             comprehensiveChecks.push(check.checkName);
@@ -385,7 +361,7 @@ describe('Tag-Based Execution Integration', () => {
       const config = createConfig();
       const tagFilter: TagFilter = { include: ['non-existent-tag'] };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -397,7 +373,7 @@ describe('Tag-Based Execution Integration', () => {
         tagFilter
       );
 
-      expect(Object.keys(result).length).toBe(0);
+      expect(Object.keys(results).length).toBe(0);
     });
 
     it('should combine multiple include tags with OR logic', async () => {
@@ -406,7 +382,7 @@ describe('Tag-Based Execution Integration', () => {
         include: ['security', 'performance'],
       };
 
-      const result = await engine.executeGroupedChecks(
+      const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
         Object.keys(config.checks),
         30000,
@@ -420,10 +396,7 @@ describe('Tag-Based Execution Integration', () => {
 
       // Results are grouped by 'group' field, extract check names
       const executedChecks: string[] = [];
-      for (const [key, group] of Object.entries(result)) {
-        // Skip __executionStatistics property
-        if (key === '__executionStatistics') continue;
-
+      for (const group of Object.values(results)) {
         for (const check of group) {
           if (check.checkName) {
             executedChecks.push(check.checkName);

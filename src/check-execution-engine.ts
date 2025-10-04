@@ -66,6 +66,14 @@ export interface ExecutionStatistics {
 }
 
 /**
+ * Result of executing checks, including both the grouped results and execution statistics
+ */
+export interface ExecutionResult {
+  results: GroupedCheckResults;
+  statistics: ExecutionStatistics;
+}
+
+/**
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
 function getSafeEnvironmentVariables(): Record<string, string> {
@@ -1093,7 +1101,7 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute review checks and return grouped results for new architecture
+   * Execute review checks and return grouped results with statistics for new architecture
    */
   public async executeGroupedChecks(
     prInfo: PRInfo,
@@ -1105,7 +1113,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter
-  ): Promise<GroupedCheckResults> {
+  ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =
       outputFormat === 'json' || outputFormat === 'sarif'
@@ -1149,7 +1157,10 @@ export class CheckExecutionEngine {
     // Check if we have any checks left after filtering
     if (checks.length === 0) {
       logger.warn('⚠️ No checks remain after tag filtering');
-      return {};
+      return {
+        results: {},
+        statistics: this.buildExecutionStatistics(),
+      };
     }
 
     if (!config?.checks) {
@@ -1196,11 +1207,17 @@ export class CheckExecutionEngine {
 
       const groupedResults: GroupedCheckResults = {};
       groupedResults[checkResult.group] = [checkResult];
-      return groupedResults;
+      return {
+        results: groupedResults,
+        statistics: this.buildExecutionStatistics(),
+      };
     }
 
     // No checks to execute
-    return {};
+    return {
+      results: {},
+      statistics: this.buildExecutionStatistics(),
+    };
   }
 
   /**
@@ -1259,7 +1276,7 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Execute multiple checks with dependency awareness - return grouped results
+   * Execute multiple checks with dependency awareness - return grouped results with statistics
    */
   private async executeGroupedDependencyAwareChecks(
     prInfo: PRInfo,
@@ -1270,7 +1287,7 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean
-  ): Promise<GroupedCheckResults> {
+  ): Promise<ExecutionResult> {
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
       prInfo,
@@ -1294,10 +1311,10 @@ export class CheckExecutionEngine {
       prInfo
     );
 
-    // Attach execution statistics to the grouped results
-    (groupedResults as any).__executionStatistics = executionStatistics;
-
-    return groupedResults;
+    return {
+      results: groupedResults,
+      statistics: executionStatistics,
+    };
   }
 
   /**

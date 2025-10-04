@@ -249,7 +249,7 @@ export async function main(): Promise<void> {
     prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
-    const groupedResults = await engine.executeGroupedChecks(
+    const executionResult = await engine.executeGroupedChecks(
       prInfo,
       checksToRun,
       options.timeout,
@@ -261,35 +261,26 @@ export async function main(): Promise<void> {
       tagFilter
     );
 
+    // Extract results and statistics from the execution result
+    const { results: groupedResults, statistics: executionStatistics } = executionResult;
+
     const shouldFilterResults =
       explicitChecks && explicitChecks.size > 0 && !explicitChecks.has('all');
-
-    // Extract and preserve __executionStatistics before filtering
-    const executionStats = (groupedResults as any).__executionStatistics;
 
     const groupedResultsToUse: GroupedCheckResults = shouldFilterResults
       ? (Object.fromEntries(
           Object.entries(groupedResults)
-            .filter(([key]) => key !== '__executionStatistics')
             .map(([group, checkResults]) => [
               group,
-              (checkResults as CheckResult[]).filter(check => explicitChecks!.has(check.checkName)),
+              checkResults.filter(check => explicitChecks!.has(check.checkName)),
             ])
             .filter(([, checkResults]) => checkResults.length > 0)
         ) as GroupedCheckResults)
       : groupedResults;
 
-    // Restore __executionStatistics if it exists
-    if (executionStats) {
-      (groupedResultsToUse as any).__executionStatistics = executionStats;
-    }
-
     if (shouldFilterResults) {
       for (const [group, checkResults] of Object.entries(groupedResults)) {
-        // Skip __executionStatistics property
-        if (group === '__executionStatistics') continue;
-
-        for (const check of checkResults as CheckResult[]) {
+        for (const check of checkResults) {
           if (check.issues && check.issues.length > 0 && !explicitChecks!.has(check.checkName)) {
             if (!groupedResultsToUse[group]) {
               groupedResultsToUse[group] = [];
@@ -305,15 +296,12 @@ export async function main(): Promise<void> {
       }
     }
 
-    // Extract execution statistics before processing results
-    const executionStatistics = (groupedResultsToUse as any).__executionStatistics;
-
-    // Get executed check names (excluding __executionStatistics)
+    // Get executed check names
     const executedCheckNames = Array.from(
       new Set(
-        Object.entries(groupedResultsToUse)
-          .filter(([key]) => key !== '__executionStatistics')
-          .flatMap(([, checks]) => (checks as CheckResult[]).map(check => check.checkName))
+        Object.entries(groupedResultsToUse).flatMap(([, checks]) =>
+          checks.map(check => check.checkName)
+        )
       )
     );
 
@@ -321,21 +309,14 @@ export async function main(): Promise<void> {
     logger.step(`Formatting results as ${options.output}`);
     let output: string;
     if (options.output === 'json') {
-      // Filter out __executionStatistics from JSON output
-      const jsonOutput = Object.fromEntries(
-        Object.entries(groupedResultsToUse).filter(([key]) => key !== '__executionStatistics')
-      );
-      output = JSON.stringify(jsonOutput, null, 2);
+      output = JSON.stringify(groupedResultsToUse, null, 2);
     } else if (options.output === 'sarif') {
       // Build analysis result and format as SARIF
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.entries(groupedResultsToUse)
-            .filter(([key]) => key !== '__executionStatistics')
-            .flatMap(([, r]) =>
-              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
-            )
+          issues: Object.values(groupedResultsToUse)
+            .flatMap(checks => checks.flatMap(check => check.issues || []))
             .flat(),
         },
         executionTime: 0,
@@ -350,11 +331,8 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.entries(groupedResultsToUse)
-            .filter(([key]) => key !== '__executionStatistics')
-            .flatMap(([, r]) =>
-              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
-            )
+          issues: Object.values(groupedResultsToUse)
+            .flatMap(checks => checks.flatMap(check => check.issues || []))
             .flat(),
         },
         executionTime: 0,
@@ -369,11 +347,8 @@ export async function main(): Promise<void> {
       const analysisResult: AnalysisResult = {
         repositoryInfo,
         reviewSummary: {
-          issues: Object.entries(groupedResultsToUse)
-            .filter(([key]) => key !== '__executionStatistics')
-            .flatMap(([, r]) =>
-              (r as CheckResult[]).map((check: CheckResult) => check.issues || []).flat()
-            )
+          issues: Object.values(groupedResultsToUse)
+            .flatMap(checks => checks.flatMap(check => check.issues || []))
             .flat(),
         },
         executionTime: 0,
@@ -403,9 +378,7 @@ export async function main(): Promise<void> {
     }
 
     // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
-    const allResults = Object.entries(groupedResultsToUse)
-      .filter(([key]) => key !== '__executionStatistics')
-      .flatMap(([, checks]) => checks as CheckResult[]);
+    const allResults = Object.values(groupedResultsToUse).flatMap(checks => checks);
     const allIssues = allResults.flatMap((r: CheckResult) => r.issues || []);
     const counts = allIssues.reduce(
       (acc, issue: { severity?: string }) => {
