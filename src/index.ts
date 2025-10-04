@@ -529,7 +529,11 @@ async function handleIssueEvent(
       let commentBody = '';
 
       // Directly use check content without adding extra headers
-      for (const checks of Object.values(result)) {
+      for (const [key, checks] of Object.entries(result)) {
+        // Skip __executionStatistics property
+        if (key === '__executionStatistics' || !Array.isArray(checks)) {
+          continue;
+        }
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `${check.content}\n\n`;
@@ -845,7 +849,10 @@ async function handleIssueComment(
         }
 
         // Calculate total check results from grouped results
-        const totalChecks = Object.values(groupedResults).flat().length;
+        const totalChecks = Object.entries(groupedResults)
+          .filter(([key]) => key !== '__executionStatistics')
+          .flatMap(([, checks]) => checks)
+          .length;
         setOutput('checks-executed', totalChecks.toString());
       }
       break;
@@ -1260,6 +1267,10 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
   const issues: ReviewIssue[] = [];
 
   for (const [groupName, checkResults] of Object.entries(groupedResults)) {
+    // Skip __executionStatistics property
+    if (groupName === '__executionStatistics' || !Array.isArray(checkResults)) {
+      continue;
+    }
     for (const checkResult of checkResults) {
       const { checkName, content } = checkResult;
 
