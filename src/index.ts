@@ -851,8 +851,7 @@ async function handleIssueComment(
         // Calculate total check results from grouped results
         const totalChecks = Object.entries(groupedResults)
           .filter(([key]) => key !== '__executionStatistics')
-          .flatMap(([, checks]) => checks)
-          .length;
+          .flatMap(([, checks]) => checks).length;
         setOutput('checks-executed', totalChecks.toString());
       }
       break;
