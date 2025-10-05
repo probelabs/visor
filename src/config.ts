@@ -14,7 +14,6 @@ import {
   EnvironmentOverrides,
   MergedConfig,
   ConfigLoadOptions,
-  McpServerConfig,
 } from './types/config';
 import { CliOptions } from './types/cli';
 import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
@@ -365,8 +364,8 @@ export class ConfigManager {
     const errors: ConfigValidationError[] = [];
     const warnings: ConfigValidationError[] = [];
 
-    // First, try schema-based validation (auto-generated at build time).
-    // Unknown keys become schema errors (we’ll convert some to warnings when appropriate).
+    // First, run schema-based validation (runtime-generated).
+    // Unknown keys become schema errors (we convert additionalProperties to warnings by default).
     this.validateWithAjvSchema(config, errors, warnings);
 
     // Validate required fields
@@ -377,7 +376,7 @@ export class ConfigManager {
       });
     }
 
-    // Warn on unknown root keys (non-blocking)
+    // Also run lightweight manual unknown-key warnings to catch typos consistently.
     this.warnUnknownRootKeys(config, warnings);
 
     if (!config.checks) {
@@ -398,8 +397,7 @@ export class ConfigManager {
         // Warn on unknown/typo keys at the check level
         this.warnUnknownCheckKeys(checkName, checkConfig as Record<string, unknown>, warnings);
 
-        // Validate MCP servers at check-level
-        // 1) check-level key: ai_mcp_servers
+        // Validate MCP servers at check-level (basic shape only)
         if (checkConfig.ai_mcp_servers) {
           this.validateMcpServersObject(
             checkConfig.ai_mcp_servers,
@@ -408,10 +406,9 @@ export class ConfigManager {
             warnings
           );
         }
-        // 2) ai.mcpServers (highest precedence)
         if ((checkConfig as CheckConfig).ai?.mcpServers) {
           this.validateMcpServersObject(
-            (checkConfig as CheckConfig).ai!.mcpServers as Record<string, McpServerConfig>,
+            (checkConfig as CheckConfig).ai!.mcpServers as Record<string, unknown>,
             `checks.${checkName}.ai.mcpServers`,
             errors,
             warnings
@@ -642,13 +639,13 @@ export class ConfigManager {
   }
 
   /**
-   * Validate MCP servers object shape and values
+   * Validate MCP servers object shape and values (basic shape only)
    */
   private validateMcpServersObject(
     mcpServers: unknown,
     fieldPrefix: string,
     errors: ConfigValidationError[],
-    warnings: ConfigValidationError[]
+    _warnings: ConfigValidationError[]
   ): void {
     if (typeof mcpServers !== 'object' || mcpServers === null) {
       errors.push({
@@ -660,66 +657,39 @@ export class ConfigManager {
     }
 
     for (const [serverName, cfg] of Object.entries(mcpServers as Record<string, unknown>)) {
-      const path = `${fieldPrefix}.${serverName}`;
+      const pathStr = `${fieldPrefix}.${serverName}`;
       if (!cfg || typeof cfg !== 'object') {
-        errors.push({ field: path, message: `${path} must be an object`, value: cfg });
+        errors.push({ field: pathStr, message: `${pathStr} must be an object`, value: cfg });
         continue;
       }
-      const { command, args, env } = cfg as {
-        command?: unknown;
-        args?: unknown;
-        env?: unknown;
-      };
-
+      const { command, args, env } = cfg as { command?: unknown; args?: unknown; env?: unknown };
       if (typeof command !== 'string' || command.trim() === '') {
         errors.push({
-          field: `${path}.command`,
-          message: `${path}.command must be a non-empty string`,
+          field: `${pathStr}.command`,
+          message: `${pathStr}.command must be a non-empty string`,
           value: command,
         });
       }
-
-      if (args !== undefined) {
-        if (!Array.isArray(args)) {
-          errors.push({
-            field: `${path}.args`,
-            message: `${path}.args must be an array of strings (e.g., ["-y", "@probelabs/logoscope@latest", "mcp"])`,
-            value: args,
-          });
-        } else {
-          // Ensure all args are strings
-          const nonStrings = (args as unknown[]).filter(a => typeof a !== 'string');
-          if (nonStrings.length > 0) {
-            errors.push({
-              field: `${path}.args`,
-              message: `${path}.args must contain only strings`,
-              value: args,
-            });
-          }
-        }
-      } else {
-        // Advise best practice to include explicit args array when using npx
-        if (typeof command === 'string' && command === 'npx') {
-          warnings.push({
-            field: `${path}.args`,
-            message: `${path} uses 'npx' without args; if you intend to start an MCP server, specify args like ["-y", "<pkg>@latest", "mcp"]`,
-          });
-        }
+      if (args !== undefined && !Array.isArray(args)) {
+        errors.push({
+          field: `${pathStr}.args`,
+          message: `${pathStr}.args must be an array of strings`,
+          value: args,
+        });
       }
-
       if (env !== undefined) {
         if (typeof env !== 'object' || env === null) {
           errors.push({
-            field: `${path}.env`,
-            message: `${path}.env must be an object of string values`,
+            field: `${pathStr}.env`,
+            message: `${pathStr}.env must be an object of string values`,
             value: env,
           });
         } else {
           for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
             if (typeof v !== 'string') {
               errors.push({
-                field: `${path}.env.${k}`,
-                message: `${path}.env.${k} must be a string`,
+                field: `${pathStr}.env.${k}`,
+                message: `${pathStr}.env.${k} must be a string`,
                 value: v,
               });
             }
@@ -738,15 +708,53 @@ export class ConfigManager {
     errors: ConfigValidationError[],
     warnings: ConfigValidationError[]
   ): void {
-    // Lazy require to avoid runtime crash if file missing in dev.
+    // Feature flag: enable runtime schema validation only when explicitly requested
+    if (
+      process.env.VISOR_ENABLE_AJV !== '1' &&
+      process.env.VISOR_ENABLE_AJV !== 'true' &&
+      process.env.VISOR_DEBUG !== 'true'
+    ) {
+      return;
+    }
+    // Generate schema at runtime from TypeScript; skip if generator not available.
     let schema: any | undefined;
     try {
-      // Generated at build: scripts/generate-config-schema.js
-
-      const mod = require('./generated/config-schema');
-      schema = mod?.configSchema || mod?.default || mod;
-    } catch {
-      // No schema available (e.g., dev, tests without build). Skip.
+      const tjs = require('ts-json-schema-generator');
+      const generator = tjs.createGenerator({
+        path: path.resolve(__dirname, 'types', 'config.ts'),
+        tsconfig: path.resolve(__dirname, '..', 'tsconfig.json'),
+        type: 'VisorConfig',
+        expose: 'all',
+        jsDoc: 'extended',
+        skipTypeCheck: false,
+        topRef: true,
+      });
+      schema = generator.createSchema('VisorConfig');
+      // Disallow unknown keys by default; allow x-* extension keys at all object levels
+      const decorate = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (obj.type === 'object' && obj.properties) {
+          if (obj.additionalProperties === undefined) obj.additionalProperties = false;
+          obj.patternProperties = obj.patternProperties || {};
+          obj.patternProperties['^x-'] = {};
+        }
+        for (const key of [
+          'definitions',
+          '$defs',
+          'properties',
+          'items',
+          'anyOf',
+          'allOf',
+          'oneOf',
+        ]) {
+          const child = (obj as any)[key];
+          if (Array.isArray(child)) child.forEach(decorate);
+          else if (child && typeof child === 'object') Object.values(child).forEach(decorate);
+        }
+      };
+      decorate(schema);
+    } catch (e) {
+      logger.debug(`Schema generation unavailable: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
 
@@ -757,25 +765,26 @@ export class ConfigManager {
       const ok = validate(config);
       if (!ok && Array.isArray(validate.errors)) {
         for (const e of validate.errors) {
-          // Convert Ajv error into our format
-          const field = e.instancePath
+          const pathStr = e.instancePath
             ? e.instancePath.replace(/^\//, '').replace(/\//g, '.')
-            : e.schemaPath || 'config';
+            : '';
           const msg = e.message || 'Invalid configuration';
-          // Treat additionalProperties as unknown-key warnings by default
           if (e.keyword === 'additionalProperties') {
             const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
+            const fullField = pathStr ? `${pathStr}.${addl}` : addl;
+            const topLevel = !pathStr;
             warnings.push({
-              field: field || 'config',
-              message: `Unknown key '${addl}' will be ignored`,
+              field: fullField || 'config',
+              message: topLevel
+                ? `Unknown top-level key '${addl}' will be ignored.`
+                : `Unknown key '${addl}' will be ignored`,
             });
           } else {
-            errors.push({ field: field || 'config', message: msg });
+            errors.push({ field: pathStr || 'config', message: msg });
           }
         }
       }
     } catch (err) {
-      // Schema validation failed to run; do not block
       logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -939,6 +948,7 @@ export class ConfigManager {
       }
     }
   }
+  // Unknown-key hints are produced by Ajv (additionalProperties=false)
 
   /**
    * Validate tag filter configuration

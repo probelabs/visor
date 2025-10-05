@@ -15,6 +15,7 @@ describe('Config validation warnings and MCP shape checks', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-config-test-'));
     jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    process.env.VISOR_ENABLE_AJV = '1';
   });
 
   afterEach(() => {
@@ -22,6 +23,7 @@ describe('Config validation warnings and MCP shape checks', () => {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {}
+    delete process.env.VISOR_ENABLE_AJV;
   });
 
   it('warns on unknown top-level keys', async () => {
@@ -94,21 +96,7 @@ checks:
     );
   });
 
-  it("warns when 'npx' command is used without args for MCP server", async () => {
-    const yaml = `
-version: "1.0"
-checks:
-  warn_npx:
-    type: ai
-    prompt: "ok"
-    ai_mcp_servers:
-      someServer:
-        command: "npx"
-`;
-    const cm = new ConfigManager();
-    await cm.loadConfig(writeConfig(yaml));
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("uses 'npx' without args"));
-  });
+  // Domain-specific 'npx without args' warning removed; relying solely on Ajv
 
   it('warns on unknown keys inside ai object', async () => {
     const yaml = `

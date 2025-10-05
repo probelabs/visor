@@ -43,7 +43,7 @@
     "format": "prettier --write src tests",
     "format:check": "prettier --check src tests",
     "clean": "",
-    "prebuild": "npm run clean && node scripts/generate-config-schema.js",
+    "prebuild": "npm run clean",
     "prepare": "husky",
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
