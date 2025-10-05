@@ -376,8 +376,7 @@ export class ConfigManager {
       });
     }
 
-    // Also run lightweight manual unknown-key warnings to catch typos consistently.
-    this.warnUnknownRootKeys(config, warnings);
+    // Unknown key warnings are produced by Ajv using the pre-generated schema.
 
     if (!config.checks) {
       errors.push({
@@ -394,8 +393,7 @@ export class ConfigManager {
         // 'on' field is optional - if not specified, check can run on any event
         this.validateCheckConfig(checkName, checkConfig, errors);
 
-        // Warn on unknown/typo keys at the check level
-        this.warnUnknownCheckKeys(checkName, checkConfig as Record<string, unknown>, warnings);
+        // Unknown/typo keys at the check level are produced by Ajv.
 
         // Validate MCP servers at check-level (basic shape only)
         if (checkConfig.ai_mcp_servers) {
@@ -758,165 +756,7 @@ export class ConfigManager {
     }
   }
 
-  /**
-   * Warn about unknown root-level keys to catch typos/non-existing options
-   */
-  private warnUnknownRootKeys(
-    config: Partial<VisorConfig>,
-    warnings: ConfigValidationError[]
-  ): void {
-    const allowed: Set<string> = new Set([
-      'version',
-      'extends',
-      'checks',
-      'output',
-      'http_server',
-      'env',
-      'ai_model',
-      'ai_provider',
-      'ai_mcp_servers',
-      'max_parallelism',
-      'fail_fast',
-      'fail_if',
-      'failure_conditions',
-      'tag_filter',
-      'routing',
-    ]);
-    for (const key of Object.keys(config)) {
-      if (!allowed.has(key)) {
-        warnings.push({ field: key, message: `Unknown top-level key '${key}' will be ignored.` });
-      }
-    }
-  }
-
-  /**
-   * Warn about unknown keys at check-level and inside nested ai/claude_code objects
-   */
-  private warnUnknownCheckKeys(
-    checkName: string,
-    checkConfig: Record<string, unknown>,
-    warnings: ConfigValidationError[]
-  ): void {
-    const allowedCheckKeys = new Set([
-      // common
-      'type',
-      'prompt',
-      'appendPrompt',
-      'exec',
-      'stdin',
-      'url',
-      'body',
-      'method',
-      'headers',
-      'endpoint',
-      'transform',
-      'transform_js',
-      'schedule',
-      'focus',
-      'command',
-      'on',
-      'triggers',
-      'ai',
-      'ai_model',
-      'ai_provider',
-      'ai_mcp_servers',
-      'claude_code',
-      'env',
-      'depends_on',
-      'group',
-      'schema',
-      'template',
-      'if',
-      'reuse_ai_session',
-      'fail_if',
-      'failure_conditions',
-      'tags',
-      'forEach',
-      'on_fail',
-      'on_success',
-      // rarely used / internal-friendly
-      'eventContext',
-      'workingDirectory',
-      'timeout',
-      'metadata',
-      'sessionId',
-      // deprecated alias we warn about explicitly
-      'args',
-    ]);
-
-    // Check-level unknown keys
-    for (const key of Object.keys(checkConfig)) {
-      if (!allowedCheckKeys.has(key)) {
-        warnings.push({
-          field: `checks.${checkName}.${key}`,
-          message: `Unknown key '${key}' in check '${checkName}' will be ignored`,
-        });
-      }
-    }
-
-    // Deprecation notice
-    if (Object.prototype.hasOwnProperty.call(checkConfig, 'args')) {
-      warnings.push({
-        field: `checks.${checkName}.args`,
-        message: `Deprecated key 'args' in checks.${checkName}. Use 'exec' with inline args instead.`,
-      });
-    }
-
-    // ai.* unknown keys
-    const ai = checkConfig['ai'];
-    if (ai && typeof ai === 'object') {
-      const allowedAIKeys = new Set([
-        'provider',
-        'model',
-        'apiKey',
-        'timeout',
-        'debug',
-        'mcpServers',
-      ]);
-      for (const key of Object.keys(ai as Record<string, unknown>)) {
-        if (!allowedAIKeys.has(key)) {
-          warnings.push({
-            field: `checks.${checkName}.ai.${key}`,
-            message: `Unknown key '${key}' under ai; valid: ${Array.from(allowedAIKeys).join(', ')}`,
-          });
-        }
-      }
-    }
-
-    // claude_code.* unknown keys
-    const cc = checkConfig['claude_code'];
-    if (cc && typeof cc === 'object') {
-      const allowedCC = new Set([
-        'allowedTools',
-        'maxTurns',
-        'systemPrompt',
-        'mcpServers',
-        'subagent',
-        'hooks',
-      ]);
-      for (const key of Object.keys(cc as Record<string, unknown>)) {
-        if (!allowedCC.has(key)) {
-          warnings.push({
-            field: `checks.${checkName}.claude_code.${key}`,
-            message: `Unknown key '${key}' under claude_code will be ignored`,
-          });
-        }
-      }
-      // hooks subkeys
-      const hooks = (cc as Record<string, unknown>)['hooks'];
-      if (hooks && typeof hooks === 'object') {
-        const allowedHooks = new Set(['onStart', 'onEnd', 'onError']);
-        for (const key of Object.keys(hooks as Record<string, unknown>)) {
-          if (!allowedHooks.has(key)) {
-            warnings.push({
-              field: `checks.${checkName}.claude_code.hooks.${key}`,
-              message: `Unknown key '${key}' in hooks will be ignored`,
-            });
-          }
-        }
-      }
-    }
-  }
+  // Unknown-key warnings are fully handled by Ajv using the generated schema
   // Unknown-key hints are produced by Ajv (additionalProperties=false)
 
   /**
