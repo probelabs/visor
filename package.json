@@ -43,7 +43,7 @@
     "format": "prettier --write src tests",
     "format:check": "prettier --check src tests",
     "clean": "",
-    "prebuild": "npm run clean",
+    "prebuild": "npm run clean && node scripts/generate-config-schema.js",
     "prepare": "husky",
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
@@ -98,7 +98,9 @@
     "liquidjs": "^10.21.1",
     "node-cron": "^3.0.3",
     "simple-git": "^3.28.0",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
@@ -123,6 +125,7 @@
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
+    "ts-json-schema-generator": "^1.5.1",
     "wrangler": "^3.0.0"
   },
   "peerDependencies": {

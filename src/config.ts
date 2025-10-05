@@ -1,6 +1,7 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger';
 import simpleGit from 'simple-git';
 import {
   VisorConfig,
@@ -13,10 +14,13 @@ import {
   EnvironmentOverrides,
   MergedConfig,
   ConfigLoadOptions,
+  McpServerConfig,
 } from './types/config';
 import { CliOptions } from './types/cli';
 import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
 import { ConfigMerger } from './utils/config-merger';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 
 /**
  * Configuration manager for Visor
@@ -359,6 +363,11 @@ export class ConfigManager {
    */
   private validateConfig(config: Partial<VisorConfig>): void {
     const errors: ConfigValidationError[] = [];
+    const warnings: ConfigValidationError[] = [];
+
+    // First, try schema-based validation (auto-generated at build time).
+    // Unknown keys become schema errors (we’ll convert some to warnings when appropriate).
+    this.validateWithAjvSchema(config, errors, warnings);
 
     // Validate required fields
     if (!config.version) {
@@ -367,6 +376,9 @@ export class ConfigManager {
         message: 'Missing required field: version',
       });
     }
+
+    // Warn on unknown root keys (non-blocking)
+    this.warnUnknownRootKeys(config, warnings);
 
     if (!config.checks) {
       errors.push({
@@ -382,7 +394,50 @@ export class ConfigManager {
         }
         // 'on' field is optional - if not specified, check can run on any event
         this.validateCheckConfig(checkName, checkConfig, errors);
+
+        // Warn on unknown/typo keys at the check level
+        this.warnUnknownCheckKeys(checkName, checkConfig as Record<string, unknown>, warnings);
+
+        // Validate MCP servers at check-level
+        // 1) check-level key: ai_mcp_servers
+        if (checkConfig.ai_mcp_servers) {
+          this.validateMcpServersObject(
+            checkConfig.ai_mcp_servers,
+            `checks.${checkName}.ai_mcp_servers`,
+            errors,
+            warnings
+          );
+        }
+        // 2) ai.mcpServers (highest precedence)
+        if ((checkConfig as CheckConfig).ai?.mcpServers) {
+          this.validateMcpServersObject(
+            (checkConfig as CheckConfig).ai!.mcpServers as Record<string, McpServerConfig>,
+            `checks.${checkName}.ai.mcpServers`,
+            errors,
+            warnings
+          );
+        }
+        // 3) Precedence warning if both are provided
+        if (checkConfig.ai_mcp_servers && (checkConfig as CheckConfig).ai?.mcpServers) {
+          const lower = Object.keys(checkConfig.ai_mcp_servers);
+          const higher = Object.keys((checkConfig as CheckConfig).ai!.mcpServers!);
+          const overridden = lower.filter(k => higher.includes(k));
+          warnings.push({
+            field: `checks.${checkName}.ai.mcpServers`,
+            message:
+              overridden.length > 0
+                ? `Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers overrides these servers: ${overridden.join(
+                    ', '
+                  )}`
+                : 'Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check.',
+          });
+        }
       }
+    }
+
+    // Validate global MCP servers if present
+    if (config.ai_mcp_servers) {
+      this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);
     }
 
     // Validate output configuration if present
@@ -420,6 +475,12 @@ export class ConfigManager {
 
     if (errors.length > 0) {
       throw new Error(errors[0].message);
+    }
+    // Emit warnings (do not block execution)
+    if (warnings.length > 0) {
+      for (const w of warnings) {
+        logger.warn(`⚠️  Config warning [${w.field}]: ${w.message}`);
+      }
     }
   }
 
@@ -576,6 +637,305 @@ export class ConfigManager {
             });
           }
         });
+      }
+    }
+  }
+
+  /**
+   * Validate MCP servers object shape and values
+   */
+  private validateMcpServersObject(
+    mcpServers: unknown,
+    fieldPrefix: string,
+    errors: ConfigValidationError[],
+    warnings: ConfigValidationError[]
+  ): void {
+    if (typeof mcpServers !== 'object' || mcpServers === null) {
+      errors.push({
+        field: fieldPrefix,
+        message: `${fieldPrefix} must be an object mapping server names to { command, args?, env? }`,
+        value: mcpServers,
+      });
+      return;
+    }
+
+    for (const [serverName, cfg] of Object.entries(mcpServers as Record<string, unknown>)) {
+      const path = `${fieldPrefix}.${serverName}`;
+      if (!cfg || typeof cfg !== 'object') {
+        errors.push({ field: path, message: `${path} must be an object`, value: cfg });
+        continue;
+      }
+      const { command, args, env } = cfg as {
+        command?: unknown;
+        args?: unknown;
+        env?: unknown;
+      };
+
+      if (typeof command !== 'string' || command.trim() === '') {
+        errors.push({
+          field: `${path}.command`,
+          message: `${path}.command must be a non-empty string`,
+          value: command,
+        });
+      }
+
+      if (args !== undefined) {
+        if (!Array.isArray(args)) {
+          errors.push({
+            field: `${path}.args`,
+            message: `${path}.args must be an array of strings (e.g., ["-y", "@probelabs/logoscope@latest", "mcp"])`,
+            value: args,
+          });
+        } else {
+          // Ensure all args are strings
+          const nonStrings = (args as unknown[]).filter(a => typeof a !== 'string');
+          if (nonStrings.length > 0) {
+            errors.push({
+              field: `${path}.args`,
+              message: `${path}.args must contain only strings`,
+              value: args,
+            });
+          }
+        }
+      } else {
+        // Advise best practice to include explicit args array when using npx
+        if (typeof command === 'string' && command === 'npx') {
+          warnings.push({
+            field: `${path}.args`,
+            message: `${path} uses 'npx' without args; if you intend to start an MCP server, specify args like ["-y", "<pkg>@latest", "mcp"]`,
+          });
+        }
+      }
+
+      if (env !== undefined) {
+        if (typeof env !== 'object' || env === null) {
+          errors.push({
+            field: `${path}.env`,
+            message: `${path}.env must be an object of string values`,
+            value: env,
+          });
+        } else {
+          for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
+            if (typeof v !== 'string') {
+              errors.push({
+                field: `${path}.env.${k}`,
+                message: `${path}.env.${k} must be a string`,
+                value: v,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate configuration using generated JSON Schema via Ajv, if available.
+   * Adds to errors/warnings but does not throw directly.
+   */
+  private validateWithAjvSchema(
+    config: Partial<VisorConfig>,
+    errors: ConfigValidationError[],
+    warnings: ConfigValidationError[]
+  ): void {
+    // Lazy require to avoid runtime crash if file missing in dev.
+    let schema: any | undefined;
+    try {
+      // Generated at build: scripts/generate-config-schema.js
+
+      const mod = require('./generated/config-schema');
+      schema = mod?.configSchema || mod?.default || mod;
+    } catch {
+      // No schema available (e.g., dev, tests without build). Skip.
+      return;
+    }
+
+    try {
+      const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+      addFormats(ajv);
+      const validate = ajv.compile(schema);
+      const ok = validate(config);
+      if (!ok && Array.isArray(validate.errors)) {
+        for (const e of validate.errors) {
+          // Convert Ajv error into our format
+          const field = e.instancePath
+            ? e.instancePath.replace(/^\//, '').replace(/\//g, '.')
+            : e.schemaPath || 'config';
+          const msg = e.message || 'Invalid configuration';
+          // Treat additionalProperties as unknown-key warnings by default
+          if (e.keyword === 'additionalProperties') {
+            const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
+            warnings.push({
+              field: field || 'config',
+              message: `Unknown key '${addl}' will be ignored`,
+            });
+          } else {
+            errors.push({ field: field || 'config', message: msg });
+          }
+        }
+      }
+    } catch (err) {
+      // Schema validation failed to run; do not block
+      logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Warn about unknown root-level keys to catch typos/non-existing options
+   */
+  private warnUnknownRootKeys(
+    config: Partial<VisorConfig>,
+    warnings: ConfigValidationError[]
+  ): void {
+    const allowed: Set<string> = new Set([
+      'version',
+      'extends',
+      'checks',
+      'output',
+      'http_server',
+      'env',
+      'ai_model',
+      'ai_provider',
+      'ai_mcp_servers',
+      'max_parallelism',
+      'fail_fast',
+      'fail_if',
+      'failure_conditions',
+      'tag_filter',
+      'routing',
+    ]);
+    for (const key of Object.keys(config)) {
+      if (!allowed.has(key)) {
+        warnings.push({ field: key, message: `Unknown top-level key '${key}' will be ignored.` });
+      }
+    }
+  }
+
+  /**
+   * Warn about unknown keys at check-level and inside nested ai/claude_code objects
+   */
+  private warnUnknownCheckKeys(
+    checkName: string,
+    checkConfig: Record<string, unknown>,
+    warnings: ConfigValidationError[]
+  ): void {
+    const allowedCheckKeys = new Set([
+      // common
+      'type',
+      'prompt',
+      'appendPrompt',
+      'exec',
+      'stdin',
+      'url',
+      'body',
+      'method',
+      'headers',
+      'endpoint',
+      'transform',
+      'transform_js',
+      'schedule',
+      'focus',
+      'command',
+      'on',
+      'triggers',
+      'ai',
+      'ai_model',
+      'ai_provider',
+      'ai_mcp_servers',
+      'claude_code',
+      'env',
+      'depends_on',
+      'group',
+      'schema',
+      'template',
+      'if',
+      'reuse_ai_session',
+      'fail_if',
+      'failure_conditions',
+      'tags',
+      'forEach',
+      'on_fail',
+      'on_success',
+      // rarely used / internal-friendly
+      'eventContext',
+      'workingDirectory',
+      'timeout',
+      'metadata',
+      'sessionId',
+      // deprecated alias we warn about explicitly
+      'args',
+    ]);
+
+    // Check-level unknown keys
+    for (const key of Object.keys(checkConfig)) {
+      if (!allowedCheckKeys.has(key)) {
+        warnings.push({
+          field: `checks.${checkName}.${key}`,
+          message: `Unknown key '${key}' in check '${checkName}' will be ignored`,
+        });
+      }
+    }
+
+    // Deprecation notice
+    if (Object.prototype.hasOwnProperty.call(checkConfig, 'args')) {
+      warnings.push({
+        field: `checks.${checkName}.args`,
+        message: `Deprecated key 'args' in checks.${checkName}. Use 'exec' with inline args instead.`,
+      });
+    }
+
+    // ai.* unknown keys
+    const ai = checkConfig['ai'];
+    if (ai && typeof ai === 'object') {
+      const allowedAIKeys = new Set([
+        'provider',
+        'model',
+        'apiKey',
+        'timeout',
+        'debug',
+        'mcpServers',
+      ]);
+      for (const key of Object.keys(ai as Record<string, unknown>)) {
+        if (!allowedAIKeys.has(key)) {
+          warnings.push({
+            field: `checks.${checkName}.ai.${key}`,
+            message: `Unknown key '${key}' under ai; valid: ${Array.from(allowedAIKeys).join(', ')}`,
+          });
+        }
+      }
+    }
+
+    // claude_code.* unknown keys
+    const cc = checkConfig['claude_code'];
+    if (cc && typeof cc === 'object') {
+      const allowedCC = new Set([
+        'allowedTools',
+        'maxTurns',
+        'systemPrompt',
+        'mcpServers',
+        'subagent',
+        'hooks',
+      ]);
+      for (const key of Object.keys(cc as Record<string, unknown>)) {
+        if (!allowedCC.has(key)) {
+          warnings.push({
+            field: `checks.${checkName}.claude_code.${key}`,
+            message: `Unknown key '${key}' under claude_code will be ignored`,
+          });
+        }
+      }
+      // hooks subkeys
+      const hooks = (cc as Record<string, unknown>)['hooks'];
+      if (hooks && typeof hooks === 'object') {
+        const allowedHooks = new Set(['onStart', 'onEnd', 'onError']);
+        for (const key of Object.keys(hooks as Record<string, unknown>)) {
+          if (!allowedHooks.has(key)) {
+            warnings.push({
+              field: `checks.${checkName}.claude_code.hooks.${key}`,
+              message: `Unknown key '${key}' in hooks will be ignored`,
+            });
+          }
+        }
       }
     }
   }
