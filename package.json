@@ -31,7 +31,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp node_modules/tiktoken/tiktoken_bg.wasm dist/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
     "build": "npm run build:cli && npm run build:sdk",
     "test": "jest",
@@ -43,7 +43,8 @@
     "format": "prettier --write src tests",
     "format:check": "prettier --check src tests",
     "clean": "",
-    "prebuild": "npm run clean",
+    "prebuild": "npm run clean && node scripts/generate-config-schema.js",
+    "pretest": "node scripts/generate-config-schema.js",
     "prepare": "husky",
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
@@ -89,7 +90,7 @@
     "@octokit/auth-app": "^8.1.0",
     "@octokit/core": "^7.0.3",
     "@octokit/rest": "^22.0.0",
-    "@probelabs/probe": "^0.6.0-rc117",
+    "@probelabs/probe": "^0.6.0-rc119",
     "@types/commander": "^2.12.0",
     "@types/uuid": "^10.0.0",
     "cli-table3": "^0.6.5",
@@ -98,7 +99,9 @@
     "liquidjs": "^10.21.1",
     "node-cron": "^3.0.3",
     "simple-git": "^3.28.0",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
@@ -123,6 +126,7 @@
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
+    "ts-json-schema-generator": "^1.5.1",
     "wrangler": "^3.0.0"
   },
   "peerDependencies": {

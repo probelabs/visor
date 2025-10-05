@@ -1,6 +1,7 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger';
 import simpleGit from 'simple-git';
 import {
   VisorConfig,
@@ -17,6 +18,8 @@ import {
 import { CliOptions } from './types/cli';
 import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
 import { ConfigMerger } from './utils/config-merger';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 
 /**
  * Configuration manager for Visor
@@ -359,6 +362,11 @@ export class ConfigManager {
    */
   private validateConfig(config: Partial<VisorConfig>): void {
     const errors: ConfigValidationError[] = [];
+    const warnings: ConfigValidationError[] = [];
+
+    // First, run schema-based validation (runtime-generated).
+    // Unknown keys become schema errors (we convert additionalProperties to warnings by default).
+    this.validateWithAjvSchema(config, errors, warnings);
 
     // Validate required fields
     if (!config.version) {
@@ -367,6 +375,8 @@ export class ConfigManager {
         message: 'Missing required field: version',
       });
     }
+
+    // Unknown key warnings are produced by Ajv using the pre-generated schema.
 
     if (!config.checks) {
       errors.push({
@@ -382,7 +392,47 @@ export class ConfigManager {
         }
         // 'on' field is optional - if not specified, check can run on any event
         this.validateCheckConfig(checkName, checkConfig, errors);
+
+        // Unknown/typo keys at the check level are produced by Ajv.
+
+        // Validate MCP servers at check-level (basic shape only)
+        if (checkConfig.ai_mcp_servers) {
+          this.validateMcpServersObject(
+            checkConfig.ai_mcp_servers,
+            `checks.${checkName}.ai_mcp_servers`,
+            errors,
+            warnings
+          );
+        }
+        if ((checkConfig as CheckConfig).ai?.mcpServers) {
+          this.validateMcpServersObject(
+            (checkConfig as CheckConfig).ai!.mcpServers as Record<string, unknown>,
+            `checks.${checkName}.ai.mcpServers`,
+            errors,
+            warnings
+          );
+        }
+        // 3) Precedence warning if both are provided
+        if (checkConfig.ai_mcp_servers && (checkConfig as CheckConfig).ai?.mcpServers) {
+          const lower = Object.keys(checkConfig.ai_mcp_servers);
+          const higher = Object.keys((checkConfig as CheckConfig).ai!.mcpServers!);
+          const overridden = lower.filter(k => higher.includes(k));
+          warnings.push({
+            field: `checks.${checkName}.ai.mcpServers`,
+            message:
+              overridden.length > 0
+                ? `Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers overrides these servers: ${overridden.join(
+                    ', '
+                  )}`
+                : 'Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check.',
+          });
+        }
       }
+    }
+
+    // Validate global MCP servers if present
+    if (config.ai_mcp_servers) {
+      this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);
     }
 
     // Validate output configuration if present
@@ -420,6 +470,12 @@ export class ConfigManager {
 
     if (errors.length > 0) {
       throw new Error(errors[0].message);
+    }
+    // Emit warnings (do not block execution)
+    if (warnings.length > 0) {
+      for (const w of warnings) {
+        logger.warn(`⚠️  Config warning [${w.field}]: ${w.message}`);
+      }
     }
   }
 
@@ -579,6 +635,144 @@ export class ConfigManager {
       }
     }
   }
+
+  /**
+   * Validate MCP servers object shape and values (basic shape only)
+   */
+  private validateMcpServersObject(
+    mcpServers: unknown,
+    fieldPrefix: string,
+    errors: ConfigValidationError[],
+    _warnings: ConfigValidationError[]
+  ): void {
+    if (typeof mcpServers !== 'object' || mcpServers === null) {
+      errors.push({
+        field: fieldPrefix,
+        message: `${fieldPrefix} must be an object mapping server names to { command, args?, env? }`,
+        value: mcpServers,
+      });
+      return;
+    }
+
+    for (const [serverName, cfg] of Object.entries(mcpServers as Record<string, unknown>)) {
+      const pathStr = `${fieldPrefix}.${serverName}`;
+      if (!cfg || typeof cfg !== 'object') {
+        errors.push({ field: pathStr, message: `${pathStr} must be an object`, value: cfg });
+        continue;
+      }
+      const { command, args, env } = cfg as { command?: unknown; args?: unknown; env?: unknown };
+      if (typeof command !== 'string' || command.trim() === '') {
+        errors.push({
+          field: `${pathStr}.command`,
+          message: `${pathStr}.command must be a non-empty string`,
+          value: command,
+        });
+      }
+      if (args !== undefined && !Array.isArray(args)) {
+        errors.push({
+          field: `${pathStr}.args`,
+          message: `${pathStr}.args must be an array of strings`,
+          value: args,
+        });
+      }
+      if (env !== undefined) {
+        if (typeof env !== 'object' || env === null) {
+          errors.push({
+            field: `${pathStr}.env`,
+            message: `${pathStr}.env must be an object of string values`,
+            value: env,
+          });
+        } else {
+          for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
+            if (typeof v !== 'string') {
+              errors.push({
+                field: `${pathStr}.env.${k}`,
+                message: `${pathStr}.env.${k} must be a string`,
+                value: v,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate configuration using generated JSON Schema via Ajv, if available.
+   * Adds to errors/warnings but does not throw directly.
+   */
+  private validateWithAjvSchema(
+    config: Partial<VisorConfig>,
+    errors: ConfigValidationError[],
+    warnings: ConfigValidationError[]
+  ): void {
+    try {
+      if (!__ajvValidate) {
+        // Preferred fast path: try plain JSON in dist/generated first
+        try {
+          const jsonPath = path.resolve(__dirname, 'generated', 'config-schema.json');
+
+          const jsonSchema = require(jsonPath);
+          if (jsonSchema) {
+            const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+            addFormats(ajv);
+            const validate = ajv.compile(jsonSchema);
+            __ajvValidate = (data: unknown) => validate(data);
+            __ajvErrors = () => validate.errors;
+          }
+        } catch {}
+        // Fallback: use embedded TS module (bundled by ncc)
+        if (!__ajvValidate) {
+          try {
+            const mod = require('./generated/config-schema');
+            const schema = mod?.configSchema || mod?.default || mod;
+            if (schema) {
+              const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+              addFormats(ajv);
+              const validate = ajv.compile(schema);
+              __ajvValidate = (data: unknown) => validate(data);
+              __ajvErrors = () => validate.errors;
+            } else {
+              return;
+            }
+          } catch {
+            return;
+          }
+        }
+      }
+
+      const ok = __ajvValidate(config);
+      const errs = __ajvErrors ? __ajvErrors() : null;
+      if (!ok && Array.isArray(errs)) {
+        for (const e of errs) {
+          const pathStr = e.instancePath
+            ? e.instancePath.replace(/^\//, '').replace(/\//g, '.')
+            : '';
+          const msg = e.message || 'Invalid configuration';
+          if (e.keyword === 'additionalProperties') {
+            const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
+            const fullField = pathStr ? `${pathStr}.${addl}` : addl;
+            const topLevel = !pathStr;
+            warnings.push({
+              field: fullField || 'config',
+              message: topLevel
+                ? `Unknown top-level key '${addl}' will be ignored.`
+                : `Unknown key '${addl}' will be ignored`,
+            });
+          } else {
+            // Defer to our existing programmatic validators for required/type errors
+            // to preserve friendly, stable error messages and avoid duplication.
+            logger.debug(`Ajv note [${pathStr || 'config'}]: ${msg}`);
+          }
+        }
+      }
+    } catch (err) {
+      logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Unknown-key warnings are fully handled by Ajv using the generated schema
+  // Unknown-key hints are produced by Ajv (additionalProperties=false)
 
   /**
    * Validate tag filter configuration
@@ -806,3 +1000,7 @@ export class ConfigManager {
     return merged;
   }
 }
+
+// Cache Ajv validator across loads to avoid repeated heavy generation
+let __ajvValidate: ((data: unknown) => boolean) | null = null;
+let __ajvErrors: (() => import('ajv').ErrorObject[] | null | undefined) | null = null;

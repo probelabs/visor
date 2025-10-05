@@ -6,6 +6,9 @@ yarn-error.log*
 
 # Build outputs
 dist/
+# Allow committing the pre-generated JSON schema for runtime validation
+!dist/generated/
+!dist/generated/config-schema.json
 *.tsbuildinfo
 
 # Environment variables
