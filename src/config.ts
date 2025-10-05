@@ -710,8 +710,22 @@ export class ConfigManager {
   ): void {
     try {
       if (!__ajvValidate) {
-        __scheduleAjvBuild();
-        return; // use manual validators for this call; Ajv will be ready shortly
+        // Try to use pre-generated schema (preferred fast path)
+        try {
+          const mod = require('./generated/config-schema');
+          const schema = mod?.configSchema || mod?.default || mod;
+          if (schema) {
+            const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+            addFormats(ajv);
+            const validate = ajv.compile(schema);
+            __ajvValidate = (data: unknown) => validate(data);
+            __ajvErrors = () => validate.errors;
+          } else {
+            return;
+          }
+        } catch {
+          return;
+        }
       }
 
       const ok = __ajvValidate(config);
@@ -733,7 +747,9 @@ export class ConfigManager {
                 : `Unknown key '${addl}' will be ignored`,
             });
           } else {
-            errors.push({ field: pathStr || 'config', message: msg });
+            // Defer to our existing programmatic validators for required/type errors
+            // to preserve friendly, stable error messages and avoid duplication.
+            logger.debug(`Ajv note [${pathStr || 'config'}]: ${msg}`);
           }
         }
       }
@@ -1135,6 +1151,7 @@ let __ajvValidate: ((data: unknown) => boolean) | null = null;
 let __ajvErrors: (() => import('ajv').ErrorObject[] | null | undefined) | null = null;
 let __ajvInitScheduled = false;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function __scheduleAjvBuild(): void {
   if (__ajvInitScheduled || __ajvValidate) return;
   __ajvInitScheduled = true;
