@@ -6,6 +6,10 @@ branding:
   color: 'blue'
 
 inputs:
+  mode:
+    description: 'Run mode: github-actions or cli. Default: github-actions'
+    required: false
+    default: 'github-actions'
   github-token:
     description: 'GitHub token for API access (use this OR app-id/private-key)'
     required: false

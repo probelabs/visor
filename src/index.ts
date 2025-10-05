@@ -1505,15 +1505,33 @@ async function markCheckAsFailed(
 // Only execute if not in test environment
 if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
   (() => {
-    // Simple mode detection: use GITHUB_ACTIONS env var which is always 'true' in GitHub Actions
-    // Also check for --cli flag to force CLI mode even in GitHub Actions environment
-    const isGitHubAction = process.env.GITHUB_ACTIONS === 'true' && !process.argv.includes('--cli');
+    // Explicit, argument-driven mode selection. No auto-detection of GitHub Actions.
+    // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.
+    const argv = process.argv;
+    let modeFromArg: string | undefined;
 
-    if (isGitHubAction) {
-      // Run as GitHub Action
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i];
+      if (arg === '--mode' && i + 1 < argv.length) {
+        modeFromArg = argv[i + 1];
+        break;
+      } else if (arg.startsWith('--mode=')) {
+        modeFromArg = arg.split('=')[1];
+        break;
+      }
+    }
+
+    const mode = (modeFromArg || process.env.VISOR_MODE || process.env.INPUT_MODE || 'cli')
+      .toString()
+      .toLowerCase();
+
+    const isGitHubMode = mode === 'github-actions' || mode === 'github';
+
+    if (isGitHubMode) {
+      // Run in GitHub Action mode explicitly
       run();
     } else {
-      // Import and run CLI
+      // Default to CLI mode
       import('./cli-main')
         .then(({ main }) => {
           main().catch(error => {
