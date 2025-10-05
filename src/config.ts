@@ -708,21 +708,36 @@ export class ConfigManager {
   ): void {
     try {
       if (!__ajvValidate) {
-        // Try to use pre-generated schema (preferred fast path)
+        // Preferred fast path: try plain JSON in dist/generated first
         try {
-          const mod = require('./generated/config-schema');
-          const schema = mod?.configSchema || mod?.default || mod;
-          if (schema) {
+          const jsonPath = path.resolve(__dirname, 'generated', 'config-schema.json');
+
+          const jsonSchema = require(jsonPath);
+          if (jsonSchema) {
             const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
             addFormats(ajv);
-            const validate = ajv.compile(schema);
+            const validate = ajv.compile(jsonSchema);
             __ajvValidate = (data: unknown) => validate(data);
             __ajvErrors = () => validate.errors;
-          } else {
+          }
+        } catch {}
+        // Fallback: use embedded TS module (bundled by ncc)
+        if (!__ajvValidate) {
+          try {
+            const mod = require('./generated/config-schema');
+            const schema = mod?.configSchema || mod?.default || mod;
+            if (schema) {
+              const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+              addFormats(ajv);
+              const validate = ajv.compile(schema);
+              __ajvValidate = (data: unknown) => validate(data);
+              __ajvErrors = () => validate.errors;
+            } else {
+              return;
+            }
+          } catch {
             return;
           }
-        } catch {
-          return;
         }
       }
 
@@ -989,55 +1004,3 @@ export class ConfigManager {
 // Cache Ajv validator across loads to avoid repeated heavy generation
 let __ajvValidate: ((data: unknown) => boolean) | null = null;
 let __ajvErrors: (() => import('ajv').ErrorObject[] | null | undefined) | null = null;
-let __ajvInitScheduled = false;
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function __scheduleAjvBuild(): void {
-  if (__ajvInitScheduled || __ajvValidate) return;
-  __ajvInitScheduled = true;
-  setTimeout(() => {
-    try {
-      const tjs = require('ts-json-schema-generator');
-      const generator = tjs.createGenerator({
-        path: path.resolve(__dirname, 'types', 'config.ts'),
-        tsconfig: path.resolve(__dirname, '..', 'tsconfig.json'),
-        type: 'VisorConfig',
-        expose: 'all',
-        jsDoc: 'extended',
-        skipTypeCheck: false,
-        topRef: true,
-      });
-      const schema = generator.createSchema('VisorConfig');
-      const decorate = (obj: any) => {
-        if (!obj || typeof obj !== 'object') return;
-        if (obj.type === 'object' && obj.properties) {
-          if (obj.additionalProperties === undefined) obj.additionalProperties = false;
-          obj.patternProperties = obj.patternProperties || {};
-          obj.patternProperties['^x-'] = {};
-        }
-        for (const key of [
-          'definitions',
-          '$defs',
-          'properties',
-          'items',
-          'anyOf',
-          'allOf',
-          'oneOf',
-        ]) {
-          const child = (obj as any)[key];
-          if (Array.isArray(child)) child.forEach(decorate);
-          else if (child && typeof child === 'object') Object.values(child).forEach(decorate);
-        }
-      };
-      decorate(schema);
-      const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
-      addFormats(ajv);
-      const validate = ajv.compile(schema);
-      __ajvValidate = (data: unknown) => validate(data);
-      __ajvErrors = () => validate.errors;
-      logger.debug('Ajv schema validator initialized (delayed)');
-    } catch (e) {
-      logger.debug(`Ajv init failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, 1000);
-}

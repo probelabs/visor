@@ -56,6 +56,17 @@ function generate() {
   const body = `export const configSchema = ${JSON.stringify(schema, null, 2)} as const;\nexport default configSchema;\n`;
   fs.writeFileSync(outFile, header + body, 'utf8');
   console.log(`[generate-config-schema] Wrote ${outFile}`);
+
+  // Also emit a JSON copy into dist for visibility + direct load in runtime if needed
+  try {
+    const distGen = path.resolve(__dirname, '..', 'dist', 'generated');
+    fs.mkdirSync(distGen, { recursive: true });
+    const jsonOut = path.join(distGen, 'config-schema.json');
+    fs.writeFileSync(jsonOut, JSON.stringify(schema, null, 2), 'utf8');
+    console.log(`[generate-config-schema] Wrote ${jsonOut}`);
+  } catch (e) {
+    console.warn('[generate-config-schema] Could not write dist/generated/config-schema.json:', e && e.message ? e.message : e);
+  }
 }
 
 try {
