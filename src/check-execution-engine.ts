@@ -1823,6 +1823,36 @@ export class CheckExecutionEngine {
             }
           }
 
+          // If any direct dependency failed (errors/critical or */error ruleIds), skip this check
+          const directDeps = checkConfig.depends_on || [];
+          const failedDeps: string[] = [];
+          for (const depId of directDeps) {
+            const depRes = results.get(depId);
+            if (!depRes) continue;
+            // Only treat command provider execution/transform failures as dependency-fatal
+            const hasFatalCommandFailure = (depRes.issues || []).some(issue => {
+              const id = issue.ruleId || '';
+              return (
+                id.endsWith('/command/execution_error') ||
+                id.endsWith('/command/transform_js_error') ||
+                id.endsWith('/command/transform_error')
+              );
+            });
+            if (hasFatalCommandFailure) failedDeps.push(depId);
+          }
+
+          if (failedDeps.length > 0) {
+            // Record skip and provide a concise console message
+            this.recordSkip(checkName, 'dependency_failed');
+            logger.info(`⏭  Skipped (dependency failed: ${failedDeps.join(', ')})`);
+            return {
+              checkName,
+              error: null,
+              result: { issues: [] },
+              skipped: true,
+            };
+          }
+
           // Check direct dependencies for forEach behavior
           for (const depId of checkConfig.depends_on || []) {
             if (results.has(depId)) {
