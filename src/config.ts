@@ -708,63 +708,16 @@ export class ConfigManager {
     errors: ConfigValidationError[],
     warnings: ConfigValidationError[]
   ): void {
-    // Feature flag: enable runtime schema validation only when explicitly requested
-    if (
-      process.env.VISOR_ENABLE_AJV !== '1' &&
-      process.env.VISOR_ENABLE_AJV !== 'true' &&
-      process.env.VISOR_DEBUG !== 'true'
-    ) {
-      return;
-    }
-    // Generate schema at runtime from TypeScript; skip if generator not available.
-    let schema: any | undefined;
     try {
-      const tjs = require('ts-json-schema-generator');
-      const generator = tjs.createGenerator({
-        path: path.resolve(__dirname, 'types', 'config.ts'),
-        tsconfig: path.resolve(__dirname, '..', 'tsconfig.json'),
-        type: 'VisorConfig',
-        expose: 'all',
-        jsDoc: 'extended',
-        skipTypeCheck: false,
-        topRef: true,
-      });
-      schema = generator.createSchema('VisorConfig');
-      // Disallow unknown keys by default; allow x-* extension keys at all object levels
-      const decorate = (obj: any) => {
-        if (!obj || typeof obj !== 'object') return;
-        if (obj.type === 'object' && obj.properties) {
-          if (obj.additionalProperties === undefined) obj.additionalProperties = false;
-          obj.patternProperties = obj.patternProperties || {};
-          obj.patternProperties['^x-'] = {};
-        }
-        for (const key of [
-          'definitions',
-          '$defs',
-          'properties',
-          'items',
-          'anyOf',
-          'allOf',
-          'oneOf',
-        ]) {
-          const child = (obj as any)[key];
-          if (Array.isArray(child)) child.forEach(decorate);
-          else if (child && typeof child === 'object') Object.values(child).forEach(decorate);
-        }
-      };
-      decorate(schema);
-    } catch (e) {
-      logger.debug(`Schema generation unavailable: ${e instanceof Error ? e.message : String(e)}`);
-      return;
-    }
+      if (!__ajvValidate) {
+        __scheduleAjvBuild();
+        return; // use manual validators for this call; Ajv will be ready shortly
+      }
 
-    try {
-      const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
-      addFormats(ajv);
-      const validate = ajv.compile(schema);
-      const ok = validate(config);
-      if (!ok && Array.isArray(validate.errors)) {
-        for (const e of validate.errors) {
+      const ok = __ajvValidate(config);
+      const errs = __ajvErrors ? __ajvErrors() : null;
+      if (!ok && Array.isArray(errs)) {
+        for (const e of errs) {
           const pathStr = e.instancePath
             ? e.instancePath.replace(/^\//, '').replace(/\//g, '.')
             : '';
@@ -1175,4 +1128,59 @@ export class ConfigManager {
 
     return merged;
   }
+}
+
+// Cache Ajv validator across loads to avoid repeated heavy generation
+let __ajvValidate: ((data: unknown) => boolean) | null = null;
+let __ajvErrors: (() => import('ajv').ErrorObject[] | null | undefined) | null = null;
+let __ajvInitScheduled = false;
+
+function __scheduleAjvBuild(): void {
+  if (__ajvInitScheduled || __ajvValidate) return;
+  __ajvInitScheduled = true;
+  setTimeout(() => {
+    try {
+      const tjs = require('ts-json-schema-generator');
+      const generator = tjs.createGenerator({
+        path: path.resolve(__dirname, 'types', 'config.ts'),
+        tsconfig: path.resolve(__dirname, '..', 'tsconfig.json'),
+        type: 'VisorConfig',
+        expose: 'all',
+        jsDoc: 'extended',
+        skipTypeCheck: false,
+        topRef: true,
+      });
+      const schema = generator.createSchema('VisorConfig');
+      const decorate = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (obj.type === 'object' && obj.properties) {
+          if (obj.additionalProperties === undefined) obj.additionalProperties = false;
+          obj.patternProperties = obj.patternProperties || {};
+          obj.patternProperties['^x-'] = {};
+        }
+        for (const key of [
+          'definitions',
+          '$defs',
+          'properties',
+          'items',
+          'anyOf',
+          'allOf',
+          'oneOf',
+        ]) {
+          const child = (obj as any)[key];
+          if (Array.isArray(child)) child.forEach(decorate);
+          else if (child && typeof child === 'object') Object.values(child).forEach(decorate);
+        }
+      };
+      decorate(schema);
+      const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+      addFormats(ajv);
+      const validate = ajv.compile(schema);
+      __ajvValidate = (data: unknown) => validate(data);
+      __ajvErrors = () => validate.errors;
+      logger.debug('Ajv schema validator initialized (delayed)');
+    } catch (e) {
+      logger.debug(`Ajv init failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, 1000);
 }
