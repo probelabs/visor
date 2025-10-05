@@ -6,5 +6,4 @@
 - Secure credentials: prefer GitHub App in production; scope/rotate API keys.
 - Make feedback actionable: group related checks; use `/review --check ...` triggers; enable `reuse_ai_session` for follow-ups.
 - Keep suppressions intentional: annotate context; audit `visor-disable-file` periodically.
-- Validate locally: `node dist/index.js --cli --check security --output markdown`; run tests; `--fail-fast` for fast lanes.
-
+- Validate locally: `npx @probelabs/visor --check security --output markdown`; run tests; `--fail-fast` for fast lanes.

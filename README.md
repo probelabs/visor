@@ -244,6 +244,38 @@ Example:
 node dist/index.js --cli --check all --debug
 ```
 
+Run modes
+
+- Default is CLI mode everywhere (no auto-detection).
+- For GitHub-specific behavior (comments, checks), run with `--mode github-actions` or set `with: mode: github-actions` when using the GitHub Action.
+
+Examples:
+
+```bash
+# Local/CI CLI
+npx @probelabs/visor --config .visor.yaml --check all --output json
+
+# GitHub Actions behavior from any shell/CI
+npx @probelabs/visor --mode github-actions --config .visor.yaml --check all
+```
+
+GitHub Action usage:
+
+```yaml
+- uses: probelabs/visor@vX
+  with:
+    mode: github-actions
+    checks: all
+    output-format: json
+```
+
+To force CLI mode inside a GitHub Action step, you can still use:
+
+```yaml
+env:
+  VISOR_MODE: cli
+```
+
 Learn more: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## 🔐 Security Defaults
