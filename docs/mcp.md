@@ -97,14 +97,15 @@ checks:
 
 #### How Visor passes MCP to the engine
 
-- For AI checks (`type: ai`), Visor forwards your MCP server map to the ProbeAgent SDK as:
+- For AI checks (`type: ai`), Visor forwards your MCP server configuration directly to the ProbeAgent SDK as:
   - `enableMcp: true`
   - `mcpConfig: { mcpServers: { ... } }`
-  No additional settings are required; tools are discovered from the servers.
 
-- For Claude Code checks (`type: claude-code`), Visor constructs an equivalent tool list from `claude_code.mcpServers` and passes it to the Claude Code SDK.
+  The SDK handles all MCP server lifecycle management including spawning processes, discovering tools, and routing tool calls.
 
-Tip: run with `--debug` to see how many MCP servers and tools were detected for a check.
+- For Claude Code checks (`type: claude-code`), Visor passes `claude_code.mcpServers` configuration directly to the Claude Code SDK via the query object. The SDK manages all server operations internally.
+
+Tip: run with `--debug` to see how many MCP servers were configured for a check.
 ```
 
 #### Available MCP Servers
