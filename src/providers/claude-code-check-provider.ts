@@ -166,7 +166,6 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     }
   }
 
-
   /**
    * Group files by their file extension for template context
    */

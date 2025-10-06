@@ -407,7 +407,6 @@ export class AICheckProvider extends CheckProvider {
     }
   }
 
-
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
