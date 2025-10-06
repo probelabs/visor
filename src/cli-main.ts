@@ -411,6 +411,16 @@ export async function main(): Promise<void> {
       return result.content.includes('Not a git repository');
     });
 
+    // Cleanup AI sessions before exit to prevent process hanging
+    const { SessionRegistry } = await import('./session-registry');
+    const sessionRegistry = SessionRegistry.getInstance();
+    if (sessionRegistry.getActiveSessionIds().length > 0) {
+      logger.debug(
+        `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
+      );
+      sessionRegistry.clearAllSessions();
+    }
+
     if (criticalCount > 0 || hasRepositoryError) {
       process.exit(1);
     }
