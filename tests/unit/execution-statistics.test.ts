@@ -109,7 +109,7 @@ describe('Execution Statistics', () => {
       expect(checkStats?.skipCondition).toContain('always()');
     });
 
-    it('should track command failures as issues not failed runs', async () => {
+    it('should track command failures as failed runs with issues', async () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
         checks: {
@@ -127,16 +127,16 @@ describe('Execution Statistics', () => {
       });
 
       expect(result.executionStatistics).toBeDefined();
-      // Command failures are reported as issues, not failed executions
-      expect(result.executionStatistics?.successfulExecutions).toBe(1);
-      expect(result.executionStatistics?.failedExecutions).toBe(0);
+      // Command failures are reported as both failed executions AND issues
+      expect(result.executionStatistics?.successfulExecutions).toBe(0);
+      expect(result.executionStatistics?.failedExecutions).toBe(1);
 
       const checkStats = result.executionStatistics?.checks.find(
         c => c.checkName === 'failing-check'
       );
       expect(checkStats).toBeDefined();
-      expect(checkStats?.successfulRuns).toBe(1);
-      expect(checkStats?.failedRuns).toBe(0);
+      expect(checkStats?.successfulRuns).toBe(0);
+      expect(checkStats?.failedRuns).toBe(1);
       expect(checkStats?.issuesFound).toBeGreaterThan(0);
     });
 
@@ -217,13 +217,15 @@ describe('Execution Statistics', () => {
 
       expect(result.executionStatistics).toBeDefined();
       expect(result.executionStatistics?.totalChecksConfigured).toBe(3);
-      expect(result.executionStatistics?.successfulExecutions).toBe(2); // success-check and fail-check both succeed
-      expect(result.executionStatistics?.failedExecutions).toBe(0); // Command failures are issues, not failed executions
+      expect(result.executionStatistics?.successfulExecutions).toBe(1); // Only success-check succeeds
+      expect(result.executionStatistics?.failedExecutions).toBe(1); // fail-check fails
       expect(result.executionStatistics?.skippedChecks).toBeGreaterThan(0);
 
-      // fail-check should have issues
+      // fail-check should have issues and be marked as failed
       const failStats = result.executionStatistics?.checks.find(c => c.checkName === 'fail-check');
       expect(failStats?.issuesFound).toBeGreaterThan(0);
+      expect(failStats?.failedRuns).toBe(1);
+      expect(failStats?.successfulRuns).toBe(0);
     });
   });
 
