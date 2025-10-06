@@ -1823,22 +1823,34 @@ export class CheckExecutionEngine {
             }
           }
 
-          // If any direct dependency failed (errors/critical or */error ruleIds), skip this check
+          // If any direct dependency failed or was skipped, skip this check
           const directDeps = checkConfig.depends_on || [];
           const failedDeps: string[] = [];
           for (const depId of directDeps) {
             const depRes = results.get(depId);
             if (!depRes) continue;
-            // Only treat command provider execution/transform failures as dependency-fatal
-            const hasFatalCommandFailure = (depRes.issues || []).some(issue => {
+
+            // Check if dependency was skipped
+            const wasSkipped = (depRes.issues || []).some(issue => {
+              const id = issue.ruleId || '';
+              return id.endsWith('/__skipped');
+            });
+
+            // Check for fatal failures: command provider execution/transform failures and forEach iteration errors
+            const hasFatalFailure = (depRes.issues || []).some(issue => {
               const id = issue.ruleId || '';
               return (
+                id === 'command/execution_error' ||
                 id.endsWith('/command/execution_error') ||
+                id === 'command/transform_js_error' ||
                 id.endsWith('/command/transform_js_error') ||
-                id.endsWith('/command/transform_error')
+                id === 'command/transform_error' ||
+                id.endsWith('/command/transform_error') ||
+                id.endsWith('/forEach/iteration_error')
               );
             });
-            if (hasFatalCommandFailure) failedDeps.push(depId);
+
+            if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
           }
 
           if (failedDeps.length > 0) {
@@ -2039,11 +2051,23 @@ export class CheckExecutionEngine {
               );
 
               // Record iteration completion
+              // Check if this iteration had fatal errors
+              const hadFatalError = (itemResult.issues || []).some(issue => {
+                const id = issue.ruleId || '';
+                return (
+                  id === 'command/execution_error' ||
+                  id.endsWith('/command/execution_error') ||
+                  id === 'command/transform_js_error' ||
+                  id.endsWith('/command/transform_js_error') ||
+                  id === 'command/transform_error' ||
+                  id.endsWith('/command/transform_error')
+                );
+              });
               const iterationDuration = (Date.now() - iterationStart) / 1000;
               this.recordIterationComplete(
                 checkName,
                 iterationStart,
-                true,
+                !hadFatalError, // Success if no fatal errors
                 itemResult.issues || [],
                 (itemResult as any).output
               );
@@ -2075,7 +2099,26 @@ export class CheckExecutionEngine {
 
             for (const result of forEachResults) {
               if (result.status === 'rejected') {
-                throw result.reason;
+                // Instead of throwing, record the failure and continue with other iterations
+                const error = result.reason;
+                const errorMessage = error instanceof Error ? error.message : String(error);
+
+                // Create an error issue for this failed iteration
+                allIssues.push({
+                  ruleId: `${checkName}/forEach/iteration_error`,
+                  severity: 'error',
+                  category: 'logic',
+                  message: `forEach iteration failed: ${errorMessage}`,
+                  file: '',
+                  line: 0,
+                });
+
+                if (debug) {
+                  log(
+                    `🔄 Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
+                  );
+                }
+                continue;
               }
 
               // Skip results from skipped items (those that failed if condition)
@@ -2279,11 +2322,24 @@ export class CheckExecutionEngine {
         const checkConfig = config.checks[checkName];
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
-          // Skip storing results for skipped checks (they should not appear in outputs)
+          // For skipped checks, store a marker so dependent checks can detect the skip
           if ((result.value as any).skipped) {
             if (debug) {
-              log(`🔧 Debug: Not storing result for skipped check "${checkName}"`);
+              log(`🔧 Debug: Storing skip marker for skipped check "${checkName}"`);
             }
+            // Store a special marker result with a skip issue so dependencies can detect it
+            results.set(checkName, {
+              issues: [
+                {
+                  ruleId: `${checkName}/__skipped`,
+                  severity: 'info',
+                  category: 'logic',
+                  message: 'Check was skipped',
+                  file: '',
+                  line: 0,
+                },
+              ],
+            });
             continue;
           }
 
@@ -2717,7 +2773,11 @@ export class CheckExecutionEngine {
         }
 
         // Issues are already prefixed and enriched with group/schema info
-        aggregatedIssues.push(...(result.issues || []));
+        // Filter out internal __skipped markers
+        const nonInternalIssues = (result.issues || []).filter(
+          issue => !issue.ruleId?.endsWith('/__skipped')
+        );
+        aggregatedIssues.push(...nonInternalIssues);
 
         const resultSummary = result as ExtendedReviewSummary;
         const resultContent = resultSummary.content;
