@@ -139,8 +139,22 @@ export class CommandCheckProvider extends CheckProvider {
         const parsed = JSON.parse(rawOutput);
         output = parsed;
       } catch {
-        // If not JSON, keep as string
-        output = rawOutput;
+        // Try to extract JSON from the end of output (for commands with debug logs)
+        const extracted = this.extractJsonFromEnd(rawOutput);
+        if (extracted) {
+          try {
+            output = JSON.parse(extracted);
+            logger.debug(
+              `🔧 Debug: Extracted and parsed JSON from end of output (${extracted.length} chars from ${rawOutput.length} total)`
+            );
+          } catch {
+            // Extraction found something but it's not valid JSON
+            output = rawOutput;
+          }
+        } else {
+          // Not JSON, keep as string
+          output = rawOutput;
+        }
       }
 
       // Apply transform if specified (Liquid or JavaScript)
@@ -400,6 +414,7 @@ export class CommandCheckProvider extends CheckProvider {
    *  - If it's a JSON string, expose parsed properties via Proxy (e.g., value.key)
    *  - When coerced to string (toString/valueOf/Symbol.toPrimitive), return the original raw string
    *  - If parsing fails or value is not a string, return the value unchanged
+   *  - Attempts to extract JSON from the end of the output if full parse fails
    */
   private makeJsonSmart<T = unknown>(value: T): T | any {
     if (typeof value !== 'string') {
@@ -408,11 +423,28 @@ export class CommandCheckProvider extends CheckProvider {
 
     const raw = value as unknown as string;
     let parsed: any;
+
+    // First try: parse the entire string as JSON
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // Not JSON, return original string
-      return raw;
+      // Second try: extract JSON from the end of the output
+      // Look for { or [ at the start of a line and take everything after it
+      const jsonMatch = this.extractJsonFromEnd(raw);
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch);
+          logger.debug(
+            `🔧 Debug: Extracted JSON from end of output (${jsonMatch.length} chars from ${raw.length} total)`
+          );
+        } catch {
+          // Not valid JSON even after extraction, return original string
+          return raw;
+        }
+      } else {
+        // Not JSON, return original string
+        return raw;
+      }
     }
 
     // Use a boxed string so string methods still work via Proxy fallback
@@ -462,6 +494,35 @@ export class CommandCheckProvider extends CheckProvider {
       },
     };
     return new Proxy(boxed, handler);
+  }
+
+  /**
+   * Extract JSON from the end of a string that may contain logs/debug output
+   * Looks for the last occurrence of { or [ and tries to parse from there
+   */
+  private extractJsonFromEnd(text: string): string | null {
+    // Strategy: Find the last line that starts with { or [
+    // Then try to parse from that point to the end
+    const lines = text.split('\n');
+
+    // Search backwards for a line starting with { or [
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        // Found potential JSON start - take everything from here to the end
+        const candidate = lines.slice(i).join('\n');
+        // Quick validation: does it look like valid JSON structure?
+        const trimmedCandidate = candidate.trim();
+        if (
+          (trimmedCandidate.startsWith('{') && trimmedCandidate.endsWith('}')) ||
+          (trimmedCandidate.startsWith('[') && trimmedCandidate.endsWith(']'))
+        ) {
+          return trimmedCandidate;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**

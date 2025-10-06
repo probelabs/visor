@@ -1943,8 +1943,10 @@ export class CheckExecutionEngine {
               );
             }
 
-            // Log forEach processing start
-            logger.info(`  Processing ${forEachItems.length} items...`);
+            // Log forEach processing start (non-debug)
+            logger.info(
+              `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
+            );
 
             const allIssues: ReviewIssue[] = [];
             const allOutputs: unknown[] = [];
@@ -2385,6 +2387,9 @@ export class CheckExecutionEngine {
             } else {
               normalizedOutput = [rawOutput];
             }
+
+            // Log forEach items found (non-debug)
+            logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
 
             try {
               const preview = JSON.stringify(normalizedOutput);
