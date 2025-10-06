@@ -1969,229 +1969,229 @@ export class CheckExecutionEngine {
                 `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
               );
 
-            const allIssues: ReviewIssue[] = [];
-            const allOutputs: unknown[] = [];
-            const aggregatedContents: string[] = [];
+              const allIssues: ReviewIssue[] = [];
+              const allOutputs: unknown[] = [];
+              const aggregatedContents: string[] = [];
 
-            // Create task functions (not executed yet) - these will be executed with controlled concurrency
-            // via executeWithLimitedParallelism to respect maxParallelism setting
-            const itemTasks = forEachItems.map((item, itemIndex) => async () => {
-              // Create modified dependency results with current item
-              // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
-              const forEachDependencyResults = new Map<string, ReviewSummary>();
-              for (const [depName, depResult] of dependencyResults) {
-                if (forEachParents.includes(depName)) {
-                  // This is a forEach parent - unwrap its output for this iteration
-                  const depForEachResult = depResult as ReviewSummary & {
-                    output?: unknown;
-                    forEachItems?: unknown[];
-                  };
-
-                  if (
-                    Array.isArray(depForEachResult.output) &&
-                    depForEachResult.output[itemIndex] !== undefined
-                  ) {
-                    // Unwrap to the item at the current index
-                    const modifiedResult: ReviewSummary & { output?: unknown } = {
-                      issues: [],
-                      output: depForEachResult.output[itemIndex],
+              // Create task functions (not executed yet) - these will be executed with controlled concurrency
+              // via executeWithLimitedParallelism to respect maxParallelism setting
+              const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                // Create modified dependency results with current item
+                // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
+                const forEachDependencyResults = new Map<string, ReviewSummary>();
+                for (const [depName, depResult] of dependencyResults) {
+                  if (forEachParents.includes(depName)) {
+                    // This is a forEach parent - unwrap its output for this iteration
+                    const depForEachResult = depResult as ReviewSummary & {
+                      output?: unknown;
+                      forEachItems?: unknown[];
                     };
-                    forEachDependencyResults.set(depName, modifiedResult);
 
-                    // Also provide -raw access to the full array
-                    const rawResult: ReviewSummary & { output?: unknown } = {
-                      issues: [],
-                      output: depForEachResult.output,
-                    };
-                    forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                    if (
+                      Array.isArray(depForEachResult.output) &&
+                      depForEachResult.output[itemIndex] !== undefined
+                    ) {
+                      // Unwrap to the item at the current index
+                      const modifiedResult: ReviewSummary & { output?: unknown } = {
+                        issues: [],
+                        output: depForEachResult.output[itemIndex],
+                      };
+                      forEachDependencyResults.set(depName, modifiedResult);
+
+                      // Also provide -raw access to the full array
+                      const rawResult: ReviewSummary & { output?: unknown } = {
+                        issues: [],
+                        output: depForEachResult.output,
+                      };
+                      forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                    } else {
+                      // Fallback: use the result as-is
+                      forEachDependencyResults.set(depName, depResult);
+                    }
                   } else {
-                    // Fallback: use the result as-is
                     forEachDependencyResults.set(depName, depResult);
                   }
-                } else {
-                  forEachDependencyResults.set(depName, depResult);
-                }
-              }
-
-              // Evaluate if condition for this forEach item
-              if (checkConfig.if) {
-                // Merge current results with forEach-specific dependency results for condition evaluation
-                const conditionResults = new Map(results);
-                for (const [depName, depResult] of forEachDependencyResults) {
-                  conditionResults.set(depName, depResult);
                 }
 
-                const shouldRun = await this.evaluateCheckCondition(
-                  checkName,
-                  checkConfig.if,
-                  prInfo,
-                  conditionResults,
-                  debug
-                );
-
-                if (!shouldRun) {
-                  if (debug) {
-                    log(
-                      `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
-                    );
+                // Evaluate if condition for this forEach item
+                if (checkConfig.if) {
+                  // Merge current results with forEach-specific dependency results for condition evaluation
+                  const conditionResults = new Map(results);
+                  for (const [depName, depResult] of forEachDependencyResults) {
+                    conditionResults.set(depName, depResult);
                   }
-                  // Return empty result for skipped items
-                  return {
-                    index: itemIndex,
-                    itemResult: { issues: [] } as ReviewSummary,
-                    skipped: true,
-                  };
+
+                  const shouldRun = await this.evaluateCheckCondition(
+                    checkName,
+                    checkConfig.if,
+                    prInfo,
+                    conditionResults,
+                    debug
+                  );
+
+                  if (!shouldRun) {
+                    if (debug) {
+                      log(
+                        `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
+                      );
+                    }
+                    // Return empty result for skipped items
+                    return {
+                      index: itemIndex,
+                      itemResult: { issues: [] } as ReviewSummary,
+                      skipped: true,
+                    };
+                  }
                 }
-              }
-
-              if (debug) {
-                log(
-                  `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
-                );
-              }
-
-              // Track iteration start
-              const iterationStart = this.recordIterationStart(checkName);
-
-              // Execute with retry/routing semantics per item
-              const itemResult = await this.executeWithRouting(
-                checkName,
-                checkConfig,
-                provider,
-                providerConfig,
-                prInfo,
-                forEachDependencyResults,
-                sessionInfo,
-                config,
-                dependencyGraph,
-                debug,
-                results,
-                /*foreachContext*/ {
-                  index: itemIndex,
-                  total: forEachItems.length,
-                  parent: forEachParentName,
-                }
-              );
-
-              // Record iteration completion
-              // Check if this iteration had fatal errors
-              const hadFatalError = (itemResult.issues || []).some(issue => {
-                const id = issue.ruleId || '';
-                return (
-                  id === 'command/execution_error' ||
-                  id.endsWith('/command/execution_error') ||
-                  id === 'command/transform_js_error' ||
-                  id.endsWith('/command/transform_js_error') ||
-                  id === 'command/transform_error' ||
-                  id.endsWith('/command/transform_error')
-                );
-              });
-              const iterationDuration = (Date.now() - iterationStart) / 1000;
-              this.recordIterationComplete(
-                checkName,
-                iterationStart,
-                !hadFatalError, // Success if no fatal errors
-                itemResult.issues || [],
-                (itemResult as any).output
-              );
-
-              // Log iteration progress
-              logger.info(
-                `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
-              );
-
-              return { index: itemIndex, itemResult };
-            });
-
-            const forEachConcurrency = Math.max(
-              1,
-              Math.min(forEachItems.length, effectiveMaxParallelism)
-            );
-
-            if (debug && forEachConcurrency > 1) {
-              log(
-                `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
-              );
-            }
-
-            const forEachResults = await this.executeWithLimitedParallelism(
-              itemTasks,
-              forEachConcurrency,
-              false
-            );
-
-            for (const result of forEachResults) {
-              if (result.status === 'rejected') {
-                // Instead of throwing, record the failure and continue with other iterations
-                const error = result.reason;
-                const errorMessage = error instanceof Error ? error.message : String(error);
-
-                // Create an error issue for this failed iteration
-                allIssues.push({
-                  ruleId: `${checkName}/forEach/iteration_error`,
-                  severity: 'error',
-                  category: 'logic',
-                  message: `forEach iteration failed: ${errorMessage}`,
-                  file: '',
-                  line: 0,
-                });
 
                 if (debug) {
                   log(
-                    `🔄 Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
+                    `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
                   );
                 }
-                continue;
+
+                // Track iteration start
+                const iterationStart = this.recordIterationStart(checkName);
+
+                // Execute with retry/routing semantics per item
+                const itemResult = await this.executeWithRouting(
+                  checkName,
+                  checkConfig,
+                  provider,
+                  providerConfig,
+                  prInfo,
+                  forEachDependencyResults,
+                  sessionInfo,
+                  config,
+                  dependencyGraph,
+                  debug,
+                  results,
+                  /*foreachContext*/ {
+                    index: itemIndex,
+                    total: forEachItems.length,
+                    parent: forEachParentName,
+                  }
+                );
+
+                // Record iteration completion
+                // Check if this iteration had fatal errors
+                const hadFatalError = (itemResult.issues || []).some(issue => {
+                  const id = issue.ruleId || '';
+                  return (
+                    id === 'command/execution_error' ||
+                    id.endsWith('/command/execution_error') ||
+                    id === 'command/transform_js_error' ||
+                    id.endsWith('/command/transform_js_error') ||
+                    id === 'command/transform_error' ||
+                    id.endsWith('/command/transform_error')
+                  );
+                });
+                const iterationDuration = (Date.now() - iterationStart) / 1000;
+                this.recordIterationComplete(
+                  checkName,
+                  iterationStart,
+                  !hadFatalError, // Success if no fatal errors
+                  itemResult.issues || [],
+                  (itemResult as any).output
+                );
+
+                // Log iteration progress
+                logger.info(
+                  `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
+                );
+
+                return { index: itemIndex, itemResult };
+              });
+
+              const forEachConcurrency = Math.max(
+                1,
+                Math.min(forEachItems.length, effectiveMaxParallelism)
+              );
+
+              if (debug && forEachConcurrency > 1) {
+                log(
+                  `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
+                );
               }
 
-              // Skip results from skipped items (those that failed if condition)
-              if ((result.value as any).skipped) {
-                continue;
+              const forEachResults = await this.executeWithLimitedParallelism(
+                itemTasks,
+                forEachConcurrency,
+                false
+              );
+
+              for (const result of forEachResults) {
+                if (result.status === 'rejected') {
+                  // Instead of throwing, record the failure and continue with other iterations
+                  const error = result.reason;
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+
+                  // Create an error issue for this failed iteration
+                  allIssues.push({
+                    ruleId: `${checkName}/forEach/iteration_error`,
+                    severity: 'error',
+                    category: 'logic',
+                    message: `forEach iteration failed: ${errorMessage}`,
+                    file: '',
+                    line: 0,
+                  });
+
+                  if (debug) {
+                    log(
+                      `🔄 Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
+                    );
+                  }
+                  continue;
+                }
+
+                // Skip results from skipped items (those that failed if condition)
+                if ((result.value as any).skipped) {
+                  continue;
+                }
+
+                const { itemResult } = result.value;
+
+                if (itemResult.issues) {
+                  allIssues.push(...itemResult.issues);
+                }
+
+                const resultWithOutput = itemResult as ReviewSummary & {
+                  output?: unknown;
+                  content?: string;
+                };
+
+                if (resultWithOutput.output !== undefined) {
+                  allOutputs.push(resultWithOutput.output);
+                }
+
+                const itemContent = resultWithOutput.content;
+                if (typeof itemContent === 'string' && itemContent.trim()) {
+                  aggregatedContents.push(itemContent.trim());
+                }
               }
 
-              const { itemResult } = result.value;
+              const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
 
-              if (itemResult.issues) {
-                allIssues.push(...itemResult.issues);
+              finalResult = {
+                issues: allIssues,
+                ...(finalOutput !== undefined ? { output: finalOutput } : {}),
+              } as ExtendedReviewSummary;
+
+              // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
+              // will also iterate over the items (propagate forEach behavior down the chain)
+              if (allOutputs.length > 0) {
+                (finalResult as ExtendedReviewSummary).isForEach = true;
+                (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
               }
 
-              const resultWithOutput = itemResult as ReviewSummary & {
-                output?: unknown;
-                content?: string;
-              };
-
-              if (resultWithOutput.output !== undefined) {
-                allOutputs.push(resultWithOutput.output);
+              if (aggregatedContents.length > 0) {
+                (finalResult as ReviewSummary & { content?: string }).content =
+                  aggregatedContents.join('\n');
               }
 
-              const itemContent = resultWithOutput.content;
-              if (typeof itemContent === 'string' && itemContent.trim()) {
-                aggregatedContents.push(itemContent.trim());
-              }
-            }
-
-            const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
-
-            finalResult = {
-              issues: allIssues,
-              ...(finalOutput !== undefined ? { output: finalOutput } : {}),
-            } as ExtendedReviewSummary;
-
-            // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
-            // will also iterate over the items (propagate forEach behavior down the chain)
-            if (allOutputs.length > 0) {
-              (finalResult as ExtendedReviewSummary).isForEach = true;
-              (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
-            }
-
-            if (aggregatedContents.length > 0) {
-              (finalResult as ReviewSummary & { content?: string }).content =
-                aggregatedContents.join('\n');
-            }
-
-            log(
-              `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
-            );
+              log(
+                `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+              );
             } // End of else block for forEachItems.length > 0
           } else {
             // Normal single execution
