@@ -536,6 +536,9 @@ export class ConfigManager {
       }
     }
 
+    // Note: Do not add special-case validation for log 'message' here.
+    // Schema (Ajv) permits 'message' and related keys; provider enforces at execution time.
+
     // HTTP input checks require endpoint field
     if (checkConfig.type === 'http_input' && !checkConfig.endpoint) {
       errors.push({
