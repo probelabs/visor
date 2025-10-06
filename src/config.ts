@@ -491,6 +491,10 @@ export class ConfigManager {
     if (!checkConfig.type) {
       checkConfig.type = 'ai';
     }
+    // Backward-compat alias: accept 'logger' as 'log'
+    if ((checkConfig as any).type === 'logger') {
+      (checkConfig as any).type = 'log';
+    }
 
     if (!this.validCheckTypes.includes(checkConfig.type)) {
       errors.push({
@@ -531,6 +535,9 @@ export class ConfigManager {
         });
       }
     }
+
+    // Note: Do not add special-case validation for log 'message' here.
+    // Schema (Ajv) permits 'message' and related keys; provider enforces at execution time.
 
     // HTTP input checks require endpoint field
     if (checkConfig.type === 'http_input' && !checkConfig.endpoint) {
