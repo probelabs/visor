@@ -2467,6 +2467,29 @@ export class CheckExecutionEngine {
       }
     }
 
+    if (debug) {
+      if (shouldStopExecution) {
+        log(
+          `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
+        );
+      } else {
+        log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
+      }
+    }
+
+    // Cleanup sessions BEFORE printing summary to avoid mixing debug logs with table output
+    if (sessionIds.size > 0 && debug) {
+      log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
+      for (const [checkName, sessionId] of sessionIds) {
+        try {
+          sessionRegistry.unregisterSession(sessionId);
+          log(`🗑️ Cleaned up session for check ${checkName}: ${sessionId}`);
+        } catch (error) {
+          log(`⚠️ Failed to cleanup session for check ${checkName}: ${error}`);
+        }
+      }
+    }
+
     // Build and log final execution summary
     const executionStatistics = this.buildExecutionStatistics();
 
@@ -2481,29 +2504,6 @@ export class CheckExecutionEngine {
     if (shouldStopExecution) {
       logger.info('');
       logger.warn(`⚠️  Execution stopped early due to fail-fast`);
-    }
-
-    if (debug) {
-      if (shouldStopExecution) {
-        log(
-          `🛑 Execution stopped early due to fail-fast after processing ${results.size} of ${checks.length} checks`
-        );
-      } else {
-        log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
-      }
-    }
-
-    // Cleanup sessions after execution
-    if (sessionIds.size > 0 && debug) {
-      log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
-      for (const [checkName, sessionId] of sessionIds) {
-        try {
-          sessionRegistry.unregisterSession(sessionId);
-          log(`🗑️ Cleaned up session for check ${checkName}: ${sessionId}`);
-        } catch (error) {
-          log(`⚠️ Failed to cleanup session for check ${checkName}: ${error}`);
-        }
-      }
     }
 
     // Aggregate all results

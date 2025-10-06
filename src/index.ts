@@ -266,6 +266,16 @@ export async function run(): Promise<void> {
     } else {
       setFailed(error instanceof Error ? error.message : 'Unknown error');
     }
+  } finally {
+    // Cleanup AI sessions before GitHub Action exits to prevent process hanging
+    const { SessionRegistry } = await import('./session-registry');
+    const sessionRegistry = SessionRegistry.getInstance();
+    if (sessionRegistry.getActiveSessionIds().length > 0) {
+      console.log(
+        `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
+      );
+      sessionRegistry.clearAllSessions();
+    }
   }
 }
 
