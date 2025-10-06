@@ -267,6 +267,27 @@ export const configSchema = {
           description:
             'Success routing configuration for this check (post-actions and optional goto)',
         },
+        message: {
+          type: 'string',
+          description: 'Message template for log checks',
+        },
+        level: {
+          type: 'string',
+          enum: ['debug', 'info', 'warn', 'error'],
+          description: 'Log level for log checks',
+        },
+        include_pr_context: {
+          type: 'boolean',
+          description: 'Include PR context in log output',
+        },
+        include_dependencies: {
+          type: 'boolean',
+          description: 'Include dependency summaries in log output',
+        },
+        include_metadata: {
+          type: 'boolean',
+          description: 'Include execution metadata in log output',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',

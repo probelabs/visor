@@ -352,6 +352,20 @@ export interface CheckConfig {
   on_fail?: OnFailConfig;
   /** Success routing configuration for this check (post-actions and optional goto) */
   on_success?: OnSuccessConfig;
+  /**
+   * Log provider specific options (optional, only used when type === 'log').
+   * Declared here to ensure JSON Schema allows these keys and Ajv does not warn.
+   */
+  /** Message template for log checks */
+  message?: string;
+  /** Log level for log checks */
+  level?: 'debug' | 'info' | 'warn' | 'error';
+  /** Include PR context in log output */
+  include_pr_context?: boolean;
+  /** Include dependency summaries in log output */
+  include_dependencies?: boolean;
+  /** Include execution metadata in log output */
+  include_metadata?: boolean;
 }
 
 /**

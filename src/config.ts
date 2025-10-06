@@ -491,6 +491,10 @@ export class ConfigManager {
     if (!checkConfig.type) {
       checkConfig.type = 'ai';
     }
+    // Backward-compat alias: accept 'logger' as 'log'
+    if ((checkConfig as any).type === 'logger') {
+      (checkConfig as any).type = 'log';
+    }
 
     if (!this.validCheckTypes.includes(checkConfig.type)) {
       errors.push({
