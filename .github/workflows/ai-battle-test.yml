@@ -35,19 +35,12 @@ jobs:
     name: AI Battle Test — ${{ matrix.ai_provider.name }} — ${{ github.event_name }}
     runs-on: ubuntu-latest
     if: >
+      github.event_name == 'pull_request' || 
+      github.event_name == 'workflow_dispatch' ||
       (
-        github.event_name == 'pull_request' || 
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'issue_comment' && 
-          github.event.issue.pull_request && 
-          contains(github.event.comment.body, '/ai-test')
-        )
-      ) && (
-        (matrix.ai_provider.name == 'Google Gemini' && secrets.GOOGLE_API_KEY != '') ||
-        (matrix.ai_provider.name == 'OpenAI GPT-4' && secrets.OPENAI_API_KEY != '') ||
-        (matrix.ai_provider.name == 'Anthropic Claude' && secrets.ANTHROPIC_API_KEY != '') ||
-        (matrix.ai_provider.name == 'Mock AI (Fallback)')
+        github.event_name == 'issue_comment' && 
+        github.event.issue.pull_request && 
+        contains(github.event.comment.body, '/ai-test')
       )
     
     strategy:
@@ -188,7 +181,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🧪 Test 4 - Different Check Types
-        if: matrix.ai_provider.api_key_secret != ''
+        if: matrix.ai_provider.api_key_secret != '' && secrets[matrix.ai_provider.api_key_secret] != ''
         continue-on-error: true  # Allow test to continue if quota issues occur
         run: |
           chmod +x ./dist/index.js
@@ -280,7 +273,7 @@ jobs:
           fi
 
       - name: 📈 Performance Benchmark
-        if: matrix.ai_provider.name == 'Google Gemini'
+        if: matrix.ai_provider.name == 'Google Gemini' && secrets.GOOGLE_API_KEY != ''
         continue-on-error: true  # Allow benchmark to continue if quota issues occur
         run: |
           chmod +x ./dist/index.js

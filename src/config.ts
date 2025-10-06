@@ -427,6 +427,53 @@ export class ConfigManager {
                 : 'Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check.',
           });
         }
+
+        // Type-specific guidance for MCP placement to avoid silent ignores
+        try {
+          const anyCheck = checkConfig as unknown as Record<string, unknown>;
+          const aiObj = (anyCheck.ai as Record<string, unknown>) || undefined;
+          const hasBareMcpAtCheck = Object.prototype.hasOwnProperty.call(anyCheck, 'mcpServers');
+          const hasAiMcp = aiObj && Object.prototype.hasOwnProperty.call(aiObj, 'mcpServers');
+          const hasClaudeCodeMcp =
+            anyCheck.claude_code &&
+            typeof anyCheck.claude_code === 'object' &&
+            Object.prototype.hasOwnProperty.call(
+              anyCheck.claude_code as Record<string, unknown>,
+              'mcpServers'
+            );
+
+          if (checkConfig.type === 'ai') {
+            if (hasBareMcpAtCheck) {
+              warnings.push({
+                field: `checks.${checkName}.mcpServers`,
+                message:
+                  "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
+                value: (anyCheck as any).mcpServers,
+              });
+            }
+            if (hasClaudeCodeMcp) {
+              warnings.push({
+                field: `checks.${checkName}.claude_code.mcpServers`,
+                message:
+                  "'claude_code.mcpServers' is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
+              });
+            }
+          }
+
+          if (checkConfig.type === 'claude-code') {
+            if (hasAiMcp || checkConfig.ai_mcp_servers) {
+              warnings.push({
+                field: hasAiMcp
+                  ? `checks.${checkName}.ai.mcpServers`
+                  : `checks.${checkName}.ai_mcp_servers`,
+                message:
+                  "For type 'claude-code', MCP must be configured under 'claude_code.mcpServers'. 'ai.mcpServers' and 'ai_mcp_servers' are ignored for this check.",
+              });
+            }
+          }
+        } catch {
+          // best-effort hints; never fail validation here
+        }
       }
     }
 
