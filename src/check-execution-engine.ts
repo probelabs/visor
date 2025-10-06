@@ -1937,16 +1937,37 @@ export class CheckExecutionEngine {
             // Record forEach preview items
             this.recordForEachPreview(checkName, forEachItems);
 
-            if (debug) {
-              log(
-                `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
-              );
-            }
+            // If the forEach parent returned an empty array, skip this check entirely
+            if (forEachItems.length === 0) {
+              if (debug) {
+                log(
+                  `🔄 Debug: Skipping check "${checkName}" - forEach check "${forEachParentName}" returned 0 items`
+                );
+              }
+              logger.info(`  forEach: no items from "${forEachParentName}", skipping check...`);
 
-            // Log forEach processing start (non-debug)
-            logger.info(
-              `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
-            );
+              // Return a special marker result so that dependent checks can detect the skip
+              finalResult = {
+                issues: [],
+                output: [],
+              } as ReviewSummary;
+
+              // Mark this result as forEach-capable but with empty items
+              (finalResult as ExtendedReviewSummary).isForEach = true;
+              (finalResult as ExtendedReviewSummary).forEachItems = [];
+
+              // Skip to the end - don't execute this check
+            } else {
+              if (debug) {
+                log(
+                  `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
+                );
+              }
+
+              // Log forEach processing start (non-debug)
+              logger.info(
+                `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
+              );
 
             const allIssues: ReviewIssue[] = [];
             const allOutputs: unknown[] = [];
@@ -2171,6 +2192,7 @@ export class CheckExecutionEngine {
             log(
               `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
             );
+            } // End of else block for forEachItems.length > 0
           } else {
             // Normal single execution
             // Evaluate if condition for non-forEach-dependent checks
