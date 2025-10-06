@@ -328,6 +328,8 @@ export interface CheckConfig {
   claude_code?: ClaudeCodeConfig;
   /** Environment variables for this check */
   env?: EnvConfig;
+  /** Timeout in seconds for command execution (default: 60) */
+  timeout?: number;
   /** Check IDs that this check depends on (optional) */
   depends_on?: string[];
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */

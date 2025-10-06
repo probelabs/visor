@@ -200,6 +200,10 @@ export const configSchema = {
           $ref: '#/definitions/EnvConfig',
           description: 'Environment variables for this check',
         },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in seconds for command execution (default: 60)',
+        },
         depends_on: {
           type: 'array',
           items: {
