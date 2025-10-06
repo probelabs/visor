@@ -421,9 +421,11 @@ export async function main(): Promise<void> {
       sessionRegistry.clearAllSessions();
     }
 
-    if (criticalCount > 0 || hasRepositoryError) {
-      process.exit(1);
-    }
+    // Force exit to prevent hanging from unclosed resources (MCP connections, etc.)
+    // This is necessary because some async resources may not be properly cleaned up
+    // and can keep the event loop alive indefinitely
+    const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
+    process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
