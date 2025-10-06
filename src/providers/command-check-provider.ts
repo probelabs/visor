@@ -360,6 +360,20 @@ export class CommandCheckProvider extends CheckProvider {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
+      // Check if this is a timeout error
+      let isTimeout = false;
+      if (error && typeof error === 'object') {
+        const execError = error as { killed?: boolean; signal?: string; code?: string | number };
+        // Node's child_process sets killed=true and signal='SIGTERM' on timeout
+        if (execError.killed && execError.signal === 'SIGTERM') {
+          isTimeout = true;
+        }
+        // Some versions may also set code to 'ETIMEDOUT'
+        if (execError.code === 'ETIMEDOUT') {
+          isTimeout = true;
+        }
+      }
+
       // Extract stderr from the error if available (child_process errors include stdout/stderr)
       let stderrOutput = '';
       if (error && typeof error === 'object') {
@@ -369,10 +383,23 @@ export class CommandCheckProvider extends CheckProvider {
         }
       }
 
-      // Construct detailed error message including stderr
-      const detailedMessage = stderrOutput
-        ? `Command execution failed: ${errorMessage}\n\nStderr output:\n${stderrOutput}`
-        : `Command execution failed: ${errorMessage}`;
+      // Construct detailed error message
+      let detailedMessage: string;
+      let ruleId: string;
+
+      if (isTimeout) {
+        const timeoutSeconds = (config.timeout as number) || 60;
+        detailedMessage = `Command execution timed out after ${timeoutSeconds} seconds`;
+        if (stderrOutput) {
+          detailedMessage += `\n\nStderr output:\n${stderrOutput}`;
+        }
+        ruleId = 'command/timeout';
+      } else {
+        detailedMessage = stderrOutput
+          ? `Command execution failed: ${errorMessage}\n\nStderr output:\n${stderrOutput}`
+          : `Command execution failed: ${errorMessage}`;
+        ruleId = 'command/execution_error';
+      }
 
       logger.error(`✗ ${detailedMessage}`);
 
@@ -381,7 +408,7 @@ export class CommandCheckProvider extends CheckProvider {
           {
             file: 'command',
             line: 0,
-            ruleId: 'command/execution_error',
+            ruleId,
             message: detailedMessage,
             severity: 'error',
             category: 'logic',
