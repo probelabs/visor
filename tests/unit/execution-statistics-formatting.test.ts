@@ -330,13 +330,15 @@ describe('Execution Statistics Formatting', () => {
       expect(stats).toBeDefined();
       expect(stats?.totalChecksConfigured).toBe(3);
       expect(stats?.totalExecutions).toBe(3);
-      expect(stats?.successfulExecutions).toBe(3); // All commands execute successfully
-      expect(stats?.failedExecutions).toBe(0); // Command failures are issues, not failed executions
+      expect(stats?.successfulExecutions).toBe(2); // check1 and check2 succeed
+      expect(stats?.failedExecutions).toBe(1); // check3 fails with exit 1
       expect(stats?.checks.length).toBe(3);
 
-      // Check3 should have issues from the failed command
+      // Check3 should have issues from the failed command and be marked as failed
       const check3Stats = stats?.checks.find(c => c.checkName === 'check3');
       expect(check3Stats?.issuesFound).toBeGreaterThan(0);
+      expect(check3Stats?.failedRuns).toBe(1);
+      expect(check3Stats?.successfulRuns).toBe(0);
     });
   });
 });

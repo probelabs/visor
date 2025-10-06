@@ -2212,10 +2212,22 @@ export class CheckExecutionEngine {
             );
 
             // Record normal (non-forEach) execution
+            // Check if this check had fatal errors
+            const hadFatalError = (finalResult.issues || []).some(issue => {
+              const id = issue.ruleId || '';
+              return (
+                id === 'command/execution_error' ||
+                id.endsWith('/command/execution_error') ||
+                id === 'command/transform_js_error' ||
+                id.endsWith('/command/transform_js_error') ||
+                id === 'command/transform_error' ||
+                id.endsWith('/command/transform_error')
+              );
+            });
             this.recordIterationComplete(
               checkName,
               checkStartTime,
-              true,
+              !hadFatalError, // Success if no fatal errors
               finalResult.issues || [],
               (finalResult as any).output
             );

@@ -189,9 +189,9 @@ describe('Execution Statistics Integration Tests', () => {
         c => c.checkName === 'error-check'
       );
       expect(errorStats).toBeDefined();
-      // Command failures are reported as issues, not failed runs
-      expect(errorStats?.successfulRuns).toBe(1);
-      expect(errorStats?.failedRuns).toBe(0);
+      // Command failures are reported as both failed runs AND issues
+      expect(errorStats?.successfulRuns).toBe(0);
+      expect(errorStats?.failedRuns).toBe(1);
       expect(errorStats?.issuesFound).toBeGreaterThan(0);
     });
   });
@@ -305,11 +305,13 @@ describe('Execution Statistics Integration Tests', () => {
         failFast: true,
       });
 
-      // Command failures produce issues, not failed executions
-      expect(result.executionStatistics?.successfulExecutions).toBeGreaterThan(0);
+      // Command failures produce issues AND are counted as failed executions
+      expect(result.executionStatistics?.failedExecutions).toBe(1);
 
       const failStats = result.executionStatistics?.checks.find(c => c.checkName === 'will-fail');
       expect(failStats?.issuesFound).toBeGreaterThan(0);
+      expect(failStats?.failedRuns).toBe(1);
+      expect(failStats?.successfulRuns).toBe(0);
 
       // The dependent check might be skipped or not executed at all
       const notRunStats = result.executionStatistics?.checks.find(
