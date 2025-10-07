@@ -146,7 +146,7 @@ checks:
         - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
         - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
     depends_on: [overview]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
+    reuse_ai_session: true  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Performance analysis - Important for all applications
@@ -192,7 +192,7 @@ checks:
         - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
         - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
     depends_on: [security]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
+    reuse_ai_session: true  # 🔄 Reuses the security check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Code quality and maintainability
@@ -244,7 +244,7 @@ checks:
         - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming)
         - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements)
     depends_on: [performance]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
+    reuse_ai_session: true  # 🔄 Reuses the performance check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Code style and formatting analysis
@@ -285,7 +285,7 @@ checks:
         - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
         - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
     depends_on: [quality]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
+    reuse_ai_session: true  # 🔄 Reuses the quality check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Command orchestrator - demonstrates noop type for triggering multiple checks

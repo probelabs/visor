@@ -340,8 +340,8 @@ export interface CheckConfig {
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */
   if?: string;
-  /** Check name to reuse AI session from, or true to use first dependency (only works with depends_on) */
-  reuse_ai_session?: string | boolean;
+  /** Whether to reuse AI session from dependency checks (only works with depends_on) */
+  reuse_ai_session?: boolean;
   /** Simple fail condition - fails check if expression evaluates to true */
   fail_if?: string;
   /** Check-specific failure conditions - optional (deprecated, use fail_if) */
@@ -612,6 +612,37 @@ export interface VisorConfig {
   tag_filter?: TagFilter;
   /** Optional routing defaults for retry/goto/run policies */
   routing?: RoutingDefaults;
+  /** Telemetry & tracing configuration */
+  telemetry?: {
+    enabled?: boolean;
+    sink?: 'otlp' | 'file' | 'console';
+    diagrams?: {
+      evaluate?: boolean;
+    };
+    redaction?: {
+      hash_files?: boolean;
+      hash_messages?: boolean;
+      include_ai_prompt?: boolean;
+      include_ai_raw?: boolean;
+    };
+    tracing?: {
+      sampler?: 'always_on' | 'ratio';
+      ratio?: number;
+      auto_instrumentations?: boolean;
+      trace_report?: {
+        enabled?: boolean;
+      };
+    };
+    otlp?: {
+      protocol?: 'http' | 'grpc';
+      endpoint?: string;
+      headers?: string;
+    };
+    file?: {
+      dir?: string;
+      ndjson?: boolean;
+    };
+  };
 }
 
 /**

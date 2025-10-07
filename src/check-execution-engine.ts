@@ -18,6 +18,9 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { addEvent, setSpanAttributes, getTracer } from './telemetry/trace-helpers';
+import { emitMermaidFromMarkdown } from './utils/mermaid-telemetry';
+import crypto from 'crypto';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
 
 type ExtendedReviewSummary = ReviewSummary & {
@@ -251,6 +254,7 @@ export class CheckExecutionEngine {
     resultsMap?: Map<string, ReviewSummary>,
     foreachContext?: { index: number; total: number; parent: string }
   ): Promise<ReviewSummary> {
+    const tracer = getTracer();
     const log = (msg: string) =>
       (this.config?.output?.pr_comment ? console.error : console.log)(msg);
     const maxLoops = config?.routing?.max_loops ?? 10;
@@ -474,10 +478,43 @@ export class CheckExecutionEngine {
     // We treat each retry/goto/run as consuming one loop budget entry
     while (true) {
       try {
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        let res: ReviewSummary;
+        const providerStart = Date.now();
+        await tracer.startActiveSpan('visor.provider', { attributes: {
+          'visor.provider.type': providerConfig.type,
+          'visor.check.id': checkName,
+          'visor.check.group': checkConfig.group || 'default',
+          'visor.check.schema': typeof checkConfig.schema === 'string' ? checkConfig.schema : 'custom',
+        } }, async span => {
+          try {
+            res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+            const totalIssues = (res.issues || []).length;
+            span.setAttribute('visor.issues.total', totalIssues);
+            span.setAttribute('visor.issues.critical', (res.issues || []).filter(i => i.severity === 'critical').length);
+            span.setAttribute('visor.issues.error', (res.issues || []).filter(i => i.severity === 'error').length);
+            span.setAttribute('visor.issues.warning', (res.issues || []).filter(i => i.severity === 'warning').length);
+            try {
+              const { recordProviderDuration } = require('./telemetry/metrics');
+              recordProviderDuration(
+                checkName,
+                String(providerConfig.type || 'unknown'),
+                Date.now() - providerStart
+              );
+            } catch {}
+          } catch (err) {
+            if (err instanceof Error) span.recordException(err);
+            span.setStatus({ code: 2 });
+            throw err;
+          } finally {
+            span.end();
+          }
+        });
+        // @ts-ignore - res is set inside the span callback
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const resFinal: ReviewSummary = (res!);
         // Success path
         // Treat result issues with severity error/critical as a soft-failure eligible for on_fail routing
-        const hasSoftFailure = (res.issues || []).some(
+        const hasSoftFailure = (resFinal.issues || []).some(
           i => i.severity === 'error' || i.severity === 'critical'
         );
         if (hasSoftFailure && onFail) {
@@ -488,13 +525,14 @@ export class CheckExecutionEngine {
           const lastError: any = {
             message: 'soft-failure: issues present',
             code: 'soft_failure',
-            issues: res.issues,
+            issues: resFinal.issues,
           };
           const dynamicRun = await evalRunJs(onFail.run_js, lastError);
           let runList = [...(onFail.run || []), ...dynamicRun].filter(Boolean);
           runList = Array.from(new Set(runList));
           if (debug) log(`🔧 Debug: on_fail.run (soft) list = [${runList.join(', ')}]`);
           if (runList.length > 0) {
+            try { addEvent('run.remediation', { check: checkName, steps: runList, kind: 'on_fail.soft' }); } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -510,6 +548,7 @@ export class CheckExecutionEngine {
           if (!target && onFail.goto) target = onFail.goto;
           if (debug) log(`🔧 Debug: on_fail.goto (soft) target = ${target}`);
           if (target) {
+            try { addEvent('goto.target', { check: checkName, target, kind: 'on_fail.soft' }); } catch {}
             if (!allAncestors.includes(target)) {
               if (debug)
                 log(
@@ -535,6 +574,7 @@ export class CheckExecutionEngine {
               throw new Error(`Routing loop budget exceeded (max_loops=${maxLoops}) during retry`);
             }
             const delay = base > 0 ? this.computeBackoffDelay(attempt, mode, base, seed) : 0;
+            try { addEvent('retry.scheduled', { check: checkName, attempt: attempt + 1, retry_max: retryMax + 1, delay_ms: delay, mode }); } catch {}
             if (debug)
               log(
                 `🔁 Debug: retrying '${checkName}' (soft) attempt ${attempt + 1}/${retryMax + 1} after ${delay}ms`
@@ -544,7 +584,7 @@ export class CheckExecutionEngine {
             continue; // loop
           }
           // No retry configured: return existing result
-          return res;
+          return resFinal;
         }
         let needRerun = false;
         if (onSuccess) {
@@ -552,6 +592,7 @@ export class CheckExecutionEngine {
           const dynamicRun = await evalRunJs(onSuccess.run_js);
           const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
           if (runList.length > 0) {
+            try { addEvent('run.remediation', { check: checkName, steps: Array.from(new Set(runList)), kind: 'on_success' }); } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -566,6 +607,7 @@ export class CheckExecutionEngine {
           let target = await evalGotoJs(onSuccess.goto_js);
           if (!target && onSuccess.goto) target = onSuccess.goto;
           if (target) {
+            try { addEvent('goto.target', { check: checkName, target, kind: 'on_success' }); } catch {}
             if (!allAncestors.includes(target)) {
               if (debug)
                 log(
@@ -589,7 +631,7 @@ export class CheckExecutionEngine {
           attempt++;
           continue; // loop will execute the check again
         }
-        return res;
+        return resFinal;
       } catch (err) {
         // Failure path
         if (!onFail) {
@@ -605,6 +647,7 @@ export class CheckExecutionEngine {
         runList = Array.from(new Set(runList));
 
         if (runList.length > 0) {
+          try { addEvent('run.remediation', { check: checkName, steps: runList, kind: 'on_fail' }); } catch {}
           loopCount++;
           if (loopCount > maxLoops) {
             throw new Error(
@@ -620,6 +663,7 @@ export class CheckExecutionEngine {
         let target = await evalGotoJs(onFail.goto_js, lastError);
         if (!target && onFail.goto) target = onFail.goto;
         if (target) {
+          try { addEvent('goto.target', { check: checkName, target, kind: 'on_fail' }); } catch {}
           if (!allAncestors.includes(target)) {
             if (debug)
               log(
@@ -646,6 +690,7 @@ export class CheckExecutionEngine {
             throw new Error(`Routing loop budget exceeded (max_loops=${maxLoops}) during retry`);
           }
           const delay = base > 0 ? this.computeBackoffDelay(attempt, mode, base, seed) : 0;
+          try { addEvent('retry.scheduled', { check: checkName, attempt: attempt + 1, retry_max: retryMax + 1, delay_ms: delay, mode }); } catch {}
           if (debug)
             log(
               `🔁 Debug: retrying '${checkName}' attempt ${attempt + 1}/${retryMax + 1} after ${delay}ms`
@@ -1263,41 +1308,6 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
-    // Validate forEach output (skip if there are already errors from transform_js or other sources)
-    if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
-      const reviewSummaryWithOutput = result as ReviewSummary & { output?: unknown };
-      const validation = this.validateAndNormalizeForEachOutput(
-        checkName,
-        reviewSummaryWithOutput.output,
-        checkConfig.group
-      );
-
-      if (!validation.isValid) {
-        return validation.error;
-      }
-    }
-
-    // Evaluate fail_if conditions
-    if (config && (config.fail_if || checkConfig.fail_if)) {
-      const failureResults = await this.evaluateFailureConditions(checkName, result, config);
-
-      // Add failure condition issues to the result
-      if (failureResults.length > 0) {
-        const failureIssues = failureResults
-          .filter(f => f.failed)
-          .map(f => ({
-            file: 'system',
-            line: 0,
-            ruleId: f.conditionName,
-            message: f.message || `Failure condition met: ${f.expression}`,
-            severity: (f.severity || 'error') as 'info' | 'warning' | 'error' | 'critical',
-            category: 'logic' as const,
-          }));
-
-        result.issues = [...(result.issues || []), ...failureIssues];
-      }
-    }
-
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
@@ -1307,83 +1317,6 @@ export class CheckExecutionEngine {
       group: checkConfig.group || 'default',
       debug: result.debug,
       issues: result.issues, // Include structured issues
-    };
-  }
-
-  /**
-   * Validate and normalize forEach output
-   * Returns normalized array or throws validation error result
-   */
-  private validateAndNormalizeForEachOutput(
-    checkName: string,
-    output: unknown,
-    checkGroup?: string
-  ):
-    | {
-        isValid: true;
-        normalizedOutput: unknown[];
-      }
-    | {
-        isValid: false;
-        error: {
-          checkName: string;
-          content: string;
-          group: string;
-          issues: Array<{
-            file: string;
-            line: number;
-            ruleId: string;
-            message: string;
-            severity: 'error';
-            category: 'logic';
-          }>;
-        };
-      } {
-    if (output === undefined) {
-      logger.error(`✗ forEach check "${checkName}" produced undefined output`);
-      return {
-        isValid: false,
-        error: {
-          checkName,
-          content: '',
-          group: checkGroup || 'default',
-          issues: [
-            {
-              file: 'system',
-              line: 0,
-              ruleId: 'forEach/undefined_output',
-              message: `forEach check "${checkName}" produced undefined output. Verify your command outputs valid data and your transform_js returns a value.`,
-              severity: 'error',
-              category: 'logic',
-            },
-          ],
-        },
-      };
-    }
-
-    // Normalize output to array
-    let normalizedOutput: unknown[];
-
-    if (Array.isArray(output)) {
-      normalizedOutput = output;
-    } else if (typeof output === 'string') {
-      try {
-        const parsed = JSON.parse(output);
-        normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
-      } catch {
-        normalizedOutput = [output];
-      }
-    } else if (output === null) {
-      normalizedOutput = [];
-    } else {
-      normalizedOutput = [output];
-    }
-
-    // Log the result (empty arrays are valid, just result in 0 iterations)
-    logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
-    return {
-      isValid: true,
-      normalizedOutput,
     };
   }
 
@@ -1658,8 +1591,16 @@ export class CheckExecutionEngine {
         throw new Error('Custom template must specify either "file" or "content"');
       }
     } else if (schemaName === 'plain') {
-      // Plain schema - return raw content directly
-      return reviewSummary.issues?.[0]?.message || '';
+      // Plain schema - return raw content directly, emit Mermaid telemetry when present
+      const msg = (reviewSummary.issues && reviewSummary.issues[0]?.message) || '';
+      try {
+        if (typeof msg === 'string' && msg.includes('```mermaid')) {
+          emitMermaidFromMarkdown(checkName, msg, 'content');
+          // Also treat as issue-origin for completeness
+          emitMermaidFromMarkdown(checkName, msg, 'issue');
+        }
+      } catch {}
+      return msg;
     } else {
       // Use built-in schema template
       const sanitizedSchema = schemaName.replace(/[^a-zA-Z0-9-]/g, '');
@@ -1676,8 +1617,21 @@ export class CheckExecutionEngine {
       checkName: checkName,
     };
 
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
+    const rendered = (await liquid.parseAndRender(templateContent, templateData)).trim();
+
+    // Emit Mermaid diagram telemetry for rendered content and issue messages
+    try {
+      emitMermaidFromMarkdown(checkName, rendered, 'content');
+    } catch {}
+    try {
+      for (const issue of reviewSummary.issues || []) {
+        if (issue && typeof issue.message === 'string' && issue.message.includes('```mermaid')) {
+          emitMermaidFromMarkdown(checkName, issue.message, 'issue');
+        }
+      }
+    } catch {}
+
+    return rendered;
   }
 
   /**
@@ -1724,18 +1678,13 @@ export class CheckExecutionEngine {
         dependencies[checkName] = checkConfig.depends_on || [];
 
         // Track checks that need session reuse
-        if (checkConfig.reuse_ai_session) {
+        if (checkConfig.reuse_ai_session === true) {
           sessionReuseChecks.add(checkName);
 
-          // Determine the session provider check name
-          if (typeof checkConfig.reuse_ai_session === 'string') {
-            // Explicit check name provided
-            sessionProviders.set(checkName, checkConfig.reuse_ai_session);
-          } else if (checkConfig.reuse_ai_session === true) {
-            // Use first dependency as fallback
-            if (checkConfig.depends_on && checkConfig.depends_on.length > 0) {
-              sessionProviders.set(checkName, checkConfig.depends_on[0]);
-            }
+          // Find the parent check that will provide the session
+          // For now, use the first dependency as the session provider
+          if (checkConfig.depends_on && checkConfig.depends_on.length > 0) {
+            sessionProviders.set(checkName, checkConfig.depends_on[0]);
           }
         }
       } else {
@@ -1873,11 +1822,30 @@ export class CheckExecutionEngine {
           };
         }
 
-        const checkStartTime = Date.now();
-        completedChecksCount++;
-        logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
+        const providerTypeEarly = checkConfig.type || 'ai';
+        return await (await import('./telemetry/trace-helpers')).withActiveSpan(
+          'visor.check',
+          {
+            'visor.check.id': checkName,
+            'visor.check.type': providerTypeEarly,
+            'visor.check.group': checkConfig.group || 'default',
+            'visor.check.schema':
+              typeof checkConfig.schema === 'string'
+                ? checkConfig.schema
+                : checkConfig.schema
+                ? 'custom'
+                : '',
+          },
+          async () => {
+            try { (await import('./telemetry/trace-helpers')).addEvent('check.started', { check: checkName }); } catch {}
+            try { (await import('./telemetry/metrics')).incActiveCheck(checkName); } catch {}
+            const checkStartTime = Date.now();
+            completedChecksCount++;
+            logger.step(
+              `Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`
+            );
 
-        try {
+            try {
           if (debug) {
             log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
           }
@@ -2093,6 +2061,16 @@ export class CheckExecutionEngine {
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                return await (await import('./telemetry/trace-helpers')).withActiveSpan(
+                  'visor.foreach.item',
+                  {
+                    'visor.check.id': checkName,
+                    'visor.foreach.index': itemIndex,
+                    'visor.foreach.total': forEachItems.length,
+                    'visor.foreach.parent': forEachParentName || '',
+                  },
+                  async () => {
+                    try { (await import('./telemetry/trace-helpers')).addEvent('foreach.started', { check: checkName, index: itemIndex }); } catch {}
                 // Create modified dependency results with current item
                 // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
                 const forEachDependencyResults = new Map<string, ReviewSummary>();
@@ -2146,12 +2124,23 @@ export class CheckExecutionEngine {
                     debug
                   );
 
+                  try {
+                    const exprHash = crypto.createHash('sha256').update(String(checkConfig.if)).digest('hex');
+                    addEvent('if.evaluated', {
+                      check: checkName,
+                      foreach_index: itemIndex,
+                      expression_hash: exprHash,
+                      result: shouldRun,
+                    });
+                  } catch {}
+
                   if (!shouldRun) {
                     if (debug) {
                       log(
                         `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
                       );
                     }
+                    try { addEvent('foreach.skipped', { check: checkName, index: itemIndex, reason: 'if_condition' }); } catch {}
                     // Return empty result for skipped items
                     return {
                       index: itemIndex,
@@ -2212,12 +2201,25 @@ export class CheckExecutionEngine {
                   (itemResult as any).output
                 );
 
+                // Metrics for forEach item duration
+                try {
+                  const { recordForEachDuration } = require('./telemetry/metrics');
+                  recordForEachDuration(
+                    checkName,
+                    itemIndex,
+                    forEachItems.length,
+                    Math.round(iterationDuration * 1000)
+                  );
+                } catch {}
+
                 // Log iteration progress
                 logger.info(
                   `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
                 );
-
+                try { (await import('./telemetry/trace-helpers')).addEvent('foreach.completed', { check: checkName, index: itemIndex, duration_ms: Math.round(iterationDuration * 1000) }); } catch {}
                 return { index: itemIndex, itemResult };
+                  }
+                );
               });
 
               const forEachConcurrency = Math.max(
@@ -2322,6 +2324,11 @@ export class CheckExecutionEngine {
                 debug
               );
 
+              try {
+                const exprHash = crypto.createHash('sha256').update(String(checkConfig.if)).digest('hex');
+                addEvent('if.evaluated', { check: checkName, expression_hash: exprHash, result: shouldRun });
+              } catch {}
+
               if (!shouldRun) {
                 // Record skip with condition
                 this.recordSkip(checkName, 'if_condition', checkConfig.if);
@@ -2384,11 +2391,11 @@ export class CheckExecutionEngine {
               }
             }
 
-            if (debug) {
-              log(
-                `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
-              );
-            }
+        if (debug) {
+          log(
+            `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+          );
+        }
           }
 
           // Add checkName, group, schema, template info and timestamp to issues from config
@@ -2410,6 +2417,22 @@ export class CheckExecutionEngine {
           const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
           const issueCount = enrichedIssues.length;
           const checkStats = this.executionStats.get(checkName);
+
+          // Metrics: check duration and issue counts by severity
+          try {
+            const { recordCheckDuration, addIssues } = require('./telemetry/metrics');
+            recordCheckDuration(checkName, Math.round(parseFloat(checkDuration) * 1000), checkConfig.group);
+            const sevCounts = {
+              critical: enrichedIssues.filter(i => i.severity === 'critical').length,
+              error: enrichedIssues.filter(i => i.severity === 'error').length,
+              warning: enrichedIssues.filter(i => i.severity === 'warning').length,
+              info: enrichedIssues.filter(i => i.severity === 'info').length,
+            };
+            if (sevCounts.critical) addIssues(checkName, 'critical', sevCounts.critical);
+            if (sevCounts.error) addIssues(checkName, 'error', sevCounts.error);
+            if (sevCounts.warning) addIssues(checkName, 'warning', sevCounts.warning);
+            if (sevCounts.info) addIssues(checkName, 'info', sevCounts.info);
+          } catch {}
 
           // Enhanced completion message with forEach stats
           if (checkStats && checkStats.totalRuns > 1) {
@@ -2448,6 +2471,10 @@ export class CheckExecutionEngine {
           this.recordIterationComplete(checkName, checkStartTime, false, [], undefined);
 
           logger.error(`✖ Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
+          try {
+            const { recordCheckDuration } = require('./telemetry/metrics');
+            recordCheckDuration(checkName, Math.round(parseFloat(checkDuration) * 1000), checkConfig.group);
+          } catch {}
 
           if (debug) {
             log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
@@ -2458,7 +2485,11 @@ export class CheckExecutionEngine {
             error: errorMessage,
             result: null,
           };
+        } finally {
+            try { (await import('./telemetry/metrics')).decActiveCheck(checkName); } catch {}
         }
+          }
+        );
       });
 
       // Execute checks in this level with controlled parallelism
@@ -2501,23 +2532,7 @@ export class CheckExecutionEngine {
           // Handle forEach logic - process array outputs
           const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
 
-          if (checkConfig?.forEach && (!reviewResult.issues || reviewResult.issues.length === 0)) {
-            const validation = this.validateAndNormalizeForEachOutput(
-              checkName,
-              reviewSummaryWithOutput.output,
-              checkConfig.group
-            );
-
-            if (!validation.isValid) {
-              results.set(
-                checkName,
-                validation.error.issues ? { issues: validation.error.issues } : {}
-              );
-              continue;
-            }
-
-            const normalizedOutput = validation.normalizedOutput;
-
+          if (checkConfig?.forEach && reviewSummaryWithOutput.output !== undefined) {
             logger.debug(
               `🔧 Debug: Raw output for forEach check ${checkName}: ${
                 Array.isArray(reviewSummaryWithOutput.output)
@@ -2525,6 +2540,26 @@ export class CheckExecutionEngine {
                   : typeof reviewSummaryWithOutput.output
               }`
             );
+            const rawOutput = reviewSummaryWithOutput.output;
+            let normalizedOutput: unknown[];
+
+            if (Array.isArray(rawOutput)) {
+              normalizedOutput = rawOutput;
+            } else if (typeof rawOutput === 'string') {
+              try {
+                const parsed = JSON.parse(rawOutput);
+                normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                normalizedOutput = [rawOutput];
+              }
+            } else if (rawOutput === undefined || rawOutput === null) {
+              normalizedOutput = [];
+            } else {
+              normalizedOutput = [rawOutput];
+            }
+
+            // Log forEach items found (non-debug)
+            logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
 
             try {
               const preview = JSON.stringify(normalizedOutput);
@@ -3452,6 +3487,11 @@ export class CheckExecutionEngine {
           globalFailIf
         );
 
+        try {
+          const exprHash = crypto.createHash('sha256').update(String(globalFailIf)).digest('hex');
+          addEvent('fail_if.evaluated', { scope: 'global', check: checkName, expression_hash: exprHash, result: failed });
+        } catch {}
+
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - global fail_if condition met: ${globalFailIf}`);
           results.push({
@@ -3462,6 +3502,8 @@ export class CheckExecutionEngine {
             message: 'Global failure condition met',
             haltExecution: false,
           });
+          try { addEvent('fail_if.triggered', { scope: 'global', check: checkName }); } catch {}
+          try { (await import('./telemetry/metrics')).addFailIfTriggered(checkName, 'global'); } catch {}
         } else {
           logger.debug(`✓ Check "${checkName}" - global fail_if condition passed`);
         }
@@ -3477,6 +3519,11 @@ export class CheckExecutionEngine {
           checkFailIf
         );
 
+        try {
+          const exprHash = crypto.createHash('sha256').update(String(checkFailIf)).digest('hex');
+          addEvent('fail_if.evaluated', { scope: 'check', check: checkName, expression_hash: exprHash, result: failed });
+        } catch {}
+
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - fail_if condition met: ${checkFailIf}`);
           results.push({
@@ -3487,6 +3534,8 @@ export class CheckExecutionEngine {
             message: `Check ${checkName} failure condition met`,
             haltExecution: false,
           });
+          try { addEvent('fail_if.triggered', { scope: 'check', check: checkName }); } catch {}
+          try { (await import('./telemetry/metrics')).addFailIfTriggered(checkName, 'check'); } catch {}
         } else {
           logger.debug(`✓ Check "${checkName}" - fail_if condition passed`);
         }
@@ -3939,6 +3988,17 @@ export class CheckExecutionEngine {
     stats.skipReason = reason;
     if (condition) {
       stats.skipCondition = condition;
+    }
+
+    try {
+      const payload: Record<string, unknown> = { check: checkName, reason };
+      if (condition) {
+        const exprHash = require('crypto').createHash('sha256').update(String(condition)).digest('hex');
+        payload['expression_hash'] = exprHash;
+      }
+      require('./telemetry/trace-helpers').addEvent('check.skipped', payload);
+    } catch {
+      // ignore
     }
   }
 

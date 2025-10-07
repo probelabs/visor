@@ -62,7 +62,7 @@ function test() {
       execSync('git config user.email "test@example.com"', { cwd: tempDir });
       execSync('git config user.name "Test User"', { cwd: tempDir });
       execSync('git add .', { cwd: tempDir });
-      execSync('git -c core.hooksPath=/dev/null commit -m "test"', { cwd: tempDir });
+      execSync('git commit -m "test"', { cwd: tempDir });
 
       const engine = new CheckExecutionEngine(tempDir);
 
@@ -138,7 +138,7 @@ function test() {
       execSync('git config user.email "test@example.com"', { cwd: tempDir });
       execSync('git config user.name "Test User"', { cwd: tempDir });
       execSync('git add .', { cwd: tempDir });
-      execSync('git -c core.hooksPath=/dev/null commit -m "test"', { cwd: tempDir });
+      execSync('git commit -m "test"', { cwd: tempDir });
 
       const engine = new CheckExecutionEngine(tempDir);
 

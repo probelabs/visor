@@ -53,6 +53,12 @@ export class CLI {
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      // Telemetry flags
+      .option('--telemetry', 'Enable telemetry and tracing (overrides config)')
+      .option('--telemetry-sink <sink>', 'Telemetry sink: otlp|file|console')
+      .option('--telemetry-endpoint <url>', 'OTLP endpoint URL for traces/metrics')
+      .option('--trace-report', 'Write a static HTML trace report to output/traces')
+      .option('--auto-instrumentations', 'Enable OpenTelemetry auto-instrumentations')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -117,6 +123,11 @@ export class CLI {
         .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
         .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+        .option('--telemetry', 'Enable telemetry and tracing (overrides config)')
+        .option('--telemetry-sink <sink>', 'Telemetry sink: otlp|file|console')
+        .option('--telemetry-endpoint <url>', 'OTLP endpoint URL for traces/metrics')
+        .option('--trace-report', 'Write a static HTML trace report to output/traces')
+        .option('--auto-instrumentations', 'Enable OpenTelemetry auto-instrumentations')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -180,6 +191,11 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        telemetry: !!options.telemetry,
+        telemetrySink: options.telemetrySink as any,
+        telemetryEndpoint: options.telemetryEndpoint,
+        traceReport: !!options.traceReport,
+        autoInstrument: !!options.autoInstrumentations,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

@@ -4,6 +4,7 @@ import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { addEvent } from '../telemetry/trace-helpers';
 
 /**
  * Check provider that sends data to an HTTP endpoint, typically used as an output/notification provider
@@ -111,7 +112,9 @@ export class HttpCheckProvider extends CheckProvider {
 
     try {
       // Send webhook request
+      try { addEvent('http.request', { url, method }); } catch {}
       const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+      try { if ((response as any).__status) addEvent('http.response', { status: (response as any).__status }); } catch {}
 
       // Parse webhook response
       const result = this.parseWebhookResponse(response, url);
@@ -162,7 +165,8 @@ export class HttpCheckProvider extends CheckProvider {
         throw new Error(`Webhook returned ${response.status}: ${response.statusText}`);
       }
 
-      return (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
+      return { ...data, __status: response.status };
     } catch (error: unknown) {
       clearTimeout(timeoutId);
 

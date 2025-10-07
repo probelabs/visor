@@ -119,11 +119,49 @@ export class CommandCheckProvider extends CheckProvider {
       const timeoutSeconds = (config.timeout as number) || 60;
       const timeoutMs = timeoutSeconds * 1000;
 
-      const { stdout, stderr } = await execAsync(renderedCommand, {
+      // Inject W3C trace context so downstream tools can join the trace
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { context, trace } = require('@opentelemetry/api');
+        const span = trace.getSpan(context.active());
+        const sc = span?.spanContext();
+        if (sc) {
+          const flags = (sc.traceFlags ?? 1).toString(16).padStart(2, '0');
+          scriptEnv.TRACEPARENT = `00-${sc.traceId}-${sc.spanId}-${flags}`;
+          // @ts-ignore
+          if (sc.traceState && typeof sc.traceState.serialize === 'function') {
+            // @ts-ignore
+            scriptEnv.TRACESTATE = sc.traceState.serialize();
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      const { withActiveSpan, addEvent } = await import('../telemetry/trace-helpers');
+      let stdout = '';
+      let stderr = '';
+      const started = Date.now();
+      await withActiveSpan(
+        'provider.command.exec',
+        { 'visor.command': renderedCommand, 'visor.timeout_ms': timeoutMs },
+        async span => {
+          try {
+            const res = await execAsync(renderedCommand, {
         env: scriptEnv,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-      });
+            });
+            stdout = res.stdout;
+            stderr = res.stderr;
+            try { addEvent('command.exec.completed', { duration_ms: Date.now() - started, stderr_len: (stderr || '').length, stdout_len: (stdout || '').length }); } catch {}
+          } catch (err: any) {
+            try { span.recordException(err); } catch {}
+            try { addEvent('command.exec.error', { duration_ms: Date.now() - started, code: err?.code, signal: err?.signal }); } catch {}
+            throw err;
+          }
+        }
+      );
 
       if (stderr) {
         logger.debug(`Command stderr: ${stderr}`);
@@ -138,7 +176,6 @@ export class CommandCheckProvider extends CheckProvider {
         // Attempt to parse as JSON
         const parsed = JSON.parse(rawOutput);
         output = parsed;
-        logger.debug(`🔧 Debug: Parsed entire output as JSON successfully`);
       } catch {
         // Try to extract JSON from the end of output (for commands with debug logs)
         const extracted = this.extractJsonFromEnd(rawOutput);
@@ -148,31 +185,13 @@ export class CommandCheckProvider extends CheckProvider {
             logger.debug(
               `🔧 Debug: Extracted and parsed JSON from end of output (${extracted.length} chars from ${rawOutput.length} total)`
             );
-            logger.debug(`🔧 Debug: Extracted JSON content: ${extracted.slice(0, 200)}`);
-          } catch (parseError) {
+          } catch {
             // Extraction found something but it's not valid JSON
-            logger.debug(
-              `🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
-            );
             output = rawOutput;
           }
         } else {
           // Not JSON, keep as string
-          logger.debug(`🔧 Debug: No JSON found in output, keeping as string`);
           output = rawOutput;
-        }
-      }
-
-      // Log the parsed structure for debugging
-      if (output !== rawOutput) {
-        try {
-          const outputType = Array.isArray(output) ? `array[${output.length}]` : typeof output;
-          logger.debug(`🔧 Debug: Parsed output type: ${outputType}`);
-          if (typeof output === 'object' && output !== null) {
-            logger.debug(`🔧 Debug: Parsed output keys: ${Object.keys(output).join(', ')}`);
-          }
-        } catch {
-          // Ignore logging errors
         }
       }
 

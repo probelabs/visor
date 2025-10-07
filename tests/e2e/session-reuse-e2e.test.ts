@@ -52,7 +52,7 @@ module.exports = { calculate_total };`
 
     // Create initial commit
     execSync('git add .', { cwd: tempDir });
-    execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', { cwd: tempDir });
+    execSync('git commit -m "Initial commit"', { cwd: tempDir });
 
     // Modify files to create diff
     fs.appendFileSync(

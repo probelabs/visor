@@ -42,7 +42,7 @@ describe('Session Reuse Integration', () => {
 
     // Add and commit files
     execSync('git add .', { cwd: tempDir });
-    execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', { cwd: tempDir });
+    execSync('git commit -m "Initial commit"', { cwd: tempDir });
 
     // Make some changes
     fs.writeFileSync(path.join(tempDir, 'test.js'), 'console.log("modified test");');

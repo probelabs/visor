@@ -13,7 +13,7 @@ module.exports = [
     },
     rules: {
       // Basic rules
-      'no-console': 'off',
+      'no-console': 'warn',
       'prefer-const': 'error',
       'no-var': 'error',
       
@@ -34,6 +34,7 @@ module.exports = [
   {
     files: ['tests/**/*.{ts,tsx}', '__mocks__/**/*.{ts,tsx}'],
     rules: {
+      'no-console': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
     },
     linterOptions: {

@@ -44,6 +44,16 @@ export interface CliOptions {
   codeContext?: 'auto' | 'enabled' | 'disabled';
   /** When set, write formatted output to this file instead of stdout */
   outputFile?: string;
+  /** Enable telemetry (overrides config) */
+  telemetry?: boolean;
+  /** Telemetry sink (otlp|file|console) */
+  telemetrySink?: 'otlp' | 'file' | 'console';
+  /** Telemetry OTLP endpoint */
+  telemetryEndpoint?: string;
+  /** Enable minimal static trace report */
+  traceReport?: boolean;
+  /** Enable auto-instrumentations */
+  autoInstrument?: boolean;
 }
 
 /**

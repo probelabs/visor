@@ -41,9 +41,6 @@ beforeEach(() => {
   process.env.ANTHROPIC_API_KEY = 'mock-test-key';
   process.env.OPENAI_API_KEY = 'mock-test-key';
   process.env.MODEL_NAME = 'mock-model';
-  // Harden git-related environment: ensure tests cannot target parent repo via hooks
-  const gitVars = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR'];
-  for (const k of gitVars) delete (process.env as NodeJS.ProcessEnv)[k];
 });
 
 afterEach(() => {
@@ -57,9 +54,6 @@ afterEach(() => {
       }
     }
   });
-  // Ensure leaked git vars are cleared after each test
-  const gitVars = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR'];
-  for (const k of gitVars) delete (process.env as NodeJS.ProcessEnv)[k];
 });
 
 // Set global Jest timeout for all tests

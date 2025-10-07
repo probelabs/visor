@@ -6,6 +6,7 @@
  */
 
 export type LogLevel = 'silent' | 'error' | 'warn' | 'info' | 'verbose' | 'debug';
+import { context as otContext, trace } from '@opentelemetry/api';
 
 function levelToNumber(level: LogLevel): number {
   switch (level) {
@@ -81,9 +82,21 @@ class Logger {
   private write(msg: string): void {
     // Always route to stderr to keep stdout clean for results
     try {
-      process.stderr.write(msg + '\n');
+      const tc = this.getTraceSuffix();
+      process.stderr.write((tc ? `${msg}${tc}` : msg) + '\n');
     } catch {
       // Ignore write errors
+    }
+  }
+
+  private getTraceSuffix(): string | '' {
+    try {
+      const span = trace.getSpan(otContext.active());
+      const ctx = span?.spanContext();
+      if (!ctx) return '';
+      return ` [trace_id=${ctx.traceId} span_id=${ctx.spanId}]`;
+    } catch {
+      return '';
     }
   }
 

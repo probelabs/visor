@@ -11,6 +11,9 @@ import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
+import { v4 as uuidv4 } from 'uuid';
+import { withActiveSpan } from './telemetry/trace-helpers';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -104,6 +107,21 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
 export async function run(): Promise<void> {
   try {
+    // Initialize telemetry early for GitHub Actions (env-driven)
+    const runId = uuidv4();
+    await initTelemetry({
+      enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
+      sink: (process.env.VISOR_TELEMETRY_SINK as any) || 'file',
+      otlp: {
+        endpoint:
+          process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
+          process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+        headers: process.env.OTEL_EXPORTER_OTLP_HEADERS,
+        protocol: 'http',
+      },
+      file: { dir: process.env.VISOR_TRACE_DIR || undefined, runId, ndjson: true },
+      patchConsole: true,
+    });
     const { octokit, authType } = await createAuthenticatedOctokit();
     console.log(`✅ Authenticated successfully using ${authType}`);
 
@@ -234,8 +252,36 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Determine which event we're handling and run appropriate checks
-    await handleEvent(octokit, inputs, eventName, context, config);
+    // If config enables telemetry but env did not, initialize now
+    try {
+      const t: any = (config as any)?.telemetry || {};
+      if (t.enabled && process.env.VISOR_TELEMETRY_ENABLED !== 'true') {
+        await initTelemetry({
+          enabled: true,
+          sink: (t.sink as any) || 'file',
+          otlp: { endpoint: t?.otlp?.endpoint, headers: t?.otlp?.headers, protocol: (t?.otlp?.protocol as any) || 'http' },
+          file: { dir: t?.file?.dir, ndjson: t?.file?.ndjson ?? true, runId },
+          patchConsole: true,
+          autoInstrument: t?.tracing?.auto_instrumentations === true || process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true',
+          traceReport: t?.tracing?.trace_report?.enabled === true || process.env.VISOR_TRACE_REPORT === 'true',
+        });
+      }
+    } catch {}
+
+    // Determine which event we're handling and run appropriate checks (single root span)
+    await (await import('./telemetry/trace-helpers')).withActiveSpan(
+      'visor.run',
+      {
+        'visor.run.id': runId,
+        'visor.run.mode': 'github-actions',
+        'visor.repo.owner': context.repository?.owner?.login || inputs.owner || 'unknown',
+        'visor.repo.name': context.repository?.name || inputs.repo || 'unknown',
+        'visor.pr.number': context.event?.pull_request?.number || undefined,
+      },
+      async () => {
+        await handleEvent(octokit, inputs, eventName, context, config);
+      }
+    );
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
@@ -276,6 +322,8 @@ export async function run(): Promise<void> {
       );
       sessionRegistry.clearAllSessions();
     }
+  } finally {
+    await shutdownTelemetry().catch(() => {});
   }
 }
 
