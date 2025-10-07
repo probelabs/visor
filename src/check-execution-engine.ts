@@ -1263,6 +1263,92 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
+    // Validate forEach output
+    if (checkConfig.forEach) {
+      const reviewSummaryWithOutput = result as ReviewSummary & { output?: unknown };
+
+      if (reviewSummaryWithOutput.output === undefined) {
+        logger.error(`✗ forEach check "${checkName}" produced undefined output`);
+        return {
+          checkName,
+          content: '',
+          group: checkConfig.group || 'default',
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'forEach/undefined_output',
+              message: `forEach check "${checkName}" produced undefined output. Verify your command outputs valid data and your transform_js returns a value.`,
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+        };
+      }
+
+      // Normalize output to array
+      let normalizedOutput: unknown[];
+      const rawOutput = reviewSummaryWithOutput.output;
+
+      if (Array.isArray(rawOutput)) {
+        normalizedOutput = rawOutput;
+      } else if (typeof rawOutput === 'string') {
+        try {
+          const parsed = JSON.parse(rawOutput);
+          normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          normalizedOutput = [rawOutput];
+        }
+      } else if (rawOutput === null) {
+        normalizedOutput = [];
+      } else {
+        normalizedOutput = [rawOutput];
+      }
+
+      // Error if no items
+      if (normalizedOutput.length === 0) {
+        logger.error(`✗ forEach check "${checkName}" produced no items to iterate over`);
+        return {
+          checkName,
+          content: '',
+          group: checkConfig.group || 'default',
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'forEach/no_items',
+              message: `forEach check "${checkName}" produced no items to iterate over. Check your command output and transform logic.`,
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+        };
+      }
+
+      logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
+    }
+
+    // Evaluate fail_if conditions
+    if (config && (config.fail_if || checkConfig.fail_if)) {
+      const failureResults = await this.evaluateFailureConditions(checkName, result, config);
+
+      // Add failure condition issues to the result
+      if (failureResults.length > 0) {
+        const failureIssues = failureResults
+          .filter(f => f.failed)
+          .map(f => ({
+            file: 'system',
+            line: 0,
+            ruleId: f.conditionName,
+            message: f.message || `Failure condition met: ${f.expression}`,
+            severity: (f.severity || 'error') as 'info' | 'warning' | 'error' | 'critical',
+            category: 'logic' as const,
+          }));
+
+        result.issues = [...(result.issues || []), ...failureIssues];
+      }
+    }
+
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
@@ -2413,6 +2499,24 @@ export class CheckExecutionEngine {
             // Log forEach items found (non-debug)
             logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
 
+            // Error if forEach check produces no items
+            if (normalizedOutput.length === 0) {
+              logger.error(`✗ forEach check "${checkName}" produced no items to iterate over`);
+              results.set(checkName, {
+                issues: [
+                  {
+                    file: 'system',
+                    line: 0,
+                    ruleId: 'forEach/no_items',
+                    message: `forEach check "${checkName}" produced no items to iterate over. Check your command output and transform logic.`,
+                    severity: 'error',
+                    category: 'logic',
+                  },
+                ],
+              });
+              continue;
+            }
+
             try {
               const preview = JSON.stringify(normalizedOutput);
               logger.debug(
@@ -2425,6 +2529,22 @@ export class CheckExecutionEngine {
             // Store the array for iteration by dependent checks
             reviewSummaryWithOutput.forEachItems = normalizedOutput;
             reviewSummaryWithOutput.isForEach = true;
+          } else if (checkConfig?.forEach && reviewSummaryWithOutput.output === undefined) {
+            // forEach is set but output is undefined - this is an error
+            logger.error(`✗ forEach check "${checkName}" produced undefined output`);
+            results.set(checkName, {
+              issues: [
+                {
+                  file: 'system',
+                  line: 0,
+                  ruleId: 'forEach/undefined_output',
+                  message: `forEach check "${checkName}" produced undefined output. Verify your command outputs valid data and your transform_js returns a value.`,
+                  severity: 'error',
+                  category: 'logic',
+                },
+              ],
+            });
+            continue;
           }
 
           results.set(checkName, reviewResult);

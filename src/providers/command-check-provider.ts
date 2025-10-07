@@ -138,6 +138,7 @@ export class CommandCheckProvider extends CheckProvider {
         // Attempt to parse as JSON
         const parsed = JSON.parse(rawOutput);
         output = parsed;
+        logger.debug(`🔧 Debug: Parsed entire output as JSON successfully`);
       } catch {
         // Try to extract JSON from the end of output (for commands with debug logs)
         const extracted = this.extractJsonFromEnd(rawOutput);
@@ -147,13 +148,29 @@ export class CommandCheckProvider extends CheckProvider {
             logger.debug(
               `🔧 Debug: Extracted and parsed JSON from end of output (${extracted.length} chars from ${rawOutput.length} total)`
             );
-          } catch {
+            logger.debug(`🔧 Debug: Extracted JSON content: ${extracted.slice(0, 200)}`);
+          } catch (parseError) {
             // Extraction found something but it's not valid JSON
+            logger.debug(`🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
             output = rawOutput;
           }
         } else {
           // Not JSON, keep as string
+          logger.debug(`🔧 Debug: No JSON found in output, keeping as string`);
           output = rawOutput;
+        }
+      }
+
+      // Log the parsed structure for debugging
+      if (output !== rawOutput) {
+        try {
+          const outputType = Array.isArray(output) ? `array[${output.length}]` : typeof output;
+          logger.debug(`🔧 Debug: Parsed output type: ${outputType}`);
+          if (typeof output === 'object' && output !== null) {
+            logger.debug(`🔧 Debug: Parsed output keys: ${Object.keys(output).join(', ')}`);
+          }
+        } catch {
+          // Ignore logging errors
         }
       }
 

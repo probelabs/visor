@@ -553,6 +553,11 @@ export class FailureConditionEvaluator {
     previousOutputs?: Record<string, ReviewSummary>
   ): FailureConditionContext {
     const { issues, debug } = reviewSummary;
+    const reviewSummaryWithOutput = reviewSummary as ReviewSummary & { output?: unknown };
+
+    // Extract output field to avoid nesting (output.output)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { output: extractedOutput, issues: _issues, ...otherFields } = reviewSummaryWithOutput as any;
 
     const context: FailureConditionContext = {
       output: {
@@ -570,8 +575,9 @@ export class FailureConditionEvaluator {
           replacement: issue.replacement,
         })),
         // Include additional schema-specific data from reviewSummary
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(reviewSummary as any), // Pass through any additional fields
+        ...otherFields,
+        // Spread the extracted output directly (avoid output.output nesting)
+        ...(extractedOutput && typeof extractedOutput === 'object' ? extractedOutput : {}),
       },
       outputs: (() => {
         if (!previousOutputs) return {};
