@@ -45,6 +45,12 @@ jobs:
           auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
           debug: 'true'
           fail-fast: 'true'
+          # Telemetry inputs
+          telemetry-enabled: 'true'
+          telemetry-sink: 'file'
+          telemetry-trace-report: 'true'
+          telemetry-auto-instrumentations: 'true'
+          telemetry-diagrams-full: 'false'
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           # AI Provider API Keys (configure one of these in your repository secrets)
