@@ -28,9 +28,8 @@ export async function withActiveSpan<T>(
     if (attrs) {
       tracer.startActiveSpan(name, { attributes: attrs as Attributes }, callback);
     } else {
-      // Use the 2-arg overload to avoid passing undefined options
-      // @ts-expect-error overload resolution
-      tracer.startActiveSpan(name, callback);
+      const tracerAny = tracer as any;
+      tracerAny.startActiveSpan(name, callback);
     }
   });
 }

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
+import type { ExportResult } from '@opentelemetry/core';
 
 export interface FileSpanExporterOptions {
   dir?: string; // output directory
@@ -25,7 +26,7 @@ export class FileSpanExporter implements SpanExporter {
     this.filePath = path.join(outDir, `run-${run}${ts}.${ext}`);
   }
 
-  export(spans: ReadableSpan[], resultCallback: (result: ExportResultCode) => void): void {
+  export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
     try {
       if (this.ndjson) {
         // Buffer spans; write on shutdown for fewer fs ops
@@ -33,9 +34,9 @@ export class FileSpanExporter implements SpanExporter {
       } else {
         for (const s of spans) this.buffer.push(serializeSpan(s));
       }
-      resultCallback(ExportResultCode.SUCCESS);
-    } catch (e) {
-      resultCallback(ExportResultCode.FAILED);
+      resultCallback({ code: ExportResultCode.SUCCESS } as ExportResult);
+    } catch {
+      resultCallback({ code: ExportResultCode.FAILED } as ExportResult);
     }
   }
 
