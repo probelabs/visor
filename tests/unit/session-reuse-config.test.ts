@@ -204,26 +204,26 @@ describe('Session Reuse Configuration Validation', () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
         checks: {
-          'overview': {
+          overview: {
             type: 'ai',
             prompt: 'PR overview',
             on: ['pr_opened'],
           },
-          'security': {
+          security: {
             type: 'ai',
             prompt: 'Security analysis',
             on: ['pr_opened'],
             depends_on: ['overview'],
             reuse_ai_session: 'overview', // Explicitly reuse overview session
           },
-          'performance': {
+          performance: {
             type: 'ai',
             prompt: 'Performance analysis',
             on: ['pr_opened'],
             depends_on: ['security'],
             reuse_ai_session: 'overview', // Also reuse overview session, not security
           },
-          'quality': {
+          quality: {
             type: 'ai',
             prompt: 'Code quality analysis',
             on: ['pr_opened'],
