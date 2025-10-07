@@ -11,7 +11,7 @@ export async function withActiveSpan<T>(
 ): Promise<T> {
   const tracer = getTracer();
   return await new Promise<T>((resolve, reject) => {
-    tracer.startActiveSpan(name, attrs ? { attributes: attrs as Attributes } : undefined, async span => {
+    const callback = async (span: Span) => {
       try {
         const res = await fn(span);
         resolve(res);
@@ -24,7 +24,14 @@ export async function withActiveSpan<T>(
       } finally {
         try { span.end(); } catch {}
       }
-    });
+    };
+    if (attrs) {
+      tracer.startActiveSpan(name, { attributes: attrs as Attributes }, callback);
+    } else {
+      // Use the 2-arg overload to avoid passing undefined options
+      // @ts-expect-error overload resolution
+      tracer.startActiveSpan(name, callback);
+    }
   });
 }
 
