@@ -38,8 +38,8 @@
           },
           "severity": {
             "type": "string",
-            "enum": ["info", "warning", "error", "critical"],
-            "description": "Issue severity level based on the NEW CODE being introduced: info (suggestions/improvements), warning (should fix), error (must fix), critical (NEW security vulnerabilities, data loss risks, or breaking changes that block deployment). IMPORTANT: Use 'critical' ONLY when NEW problematic code is INTRODUCED, NOT when existing issues are being FIXED. Fixes and improvements should use 'info' or 'warning' severity."
+            "enum": ["warning", "error", "critical"],
+            "description": "Issue severity level based on the NEW CODE being introduced: info (suggestions/improvements), warning (should fix), error (must fix), critical (NEW security vulnerabilities, data loss risks, or breaking changes that block deployment). IMPORTANT: Use 'critical' ONLY when NEW problematic code is INTRODUCED, NOT when existing issues are being FIXED. "
           },
           "category": {
             "type": "string",
