@@ -238,9 +238,9 @@ export const configSchema = {
             'Condition to determine if check should run - runs if expression evaluates to true',
         },
         reuse_ai_session: {
-          type: 'boolean',
+          type: ['string', 'boolean'],
           description:
-            'Whether to reuse AI session from dependency checks (only works with depends_on)',
+            'Check name to reuse AI session from, or true to use first dependency (only works with depends_on)',
         },
         fail_if: {
           type: 'string',
