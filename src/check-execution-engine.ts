@@ -1263,8 +1263,8 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
-    // Validate forEach output
-    if (checkConfig.forEach) {
+    // Validate forEach output (skip if there are already errors from transform_js or other sources)
+    if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
       const reviewSummaryWithOutput = result as ReviewSummary & { output?: unknown };
       const validation = this.validateAndNormalizeForEachOutput(
         checkName,
@@ -1379,29 +1379,7 @@ export class CheckExecutionEngine {
       normalizedOutput = [output];
     }
 
-    // Error if no items
-    if (normalizedOutput.length === 0) {
-      logger.error(`✗ forEach check "${checkName}" produced no items to iterate over`);
-      return {
-        isValid: false,
-        error: {
-          checkName,
-          content: '',
-          group: checkGroup || 'default',
-          issues: [
-            {
-              file: 'system',
-              line: 0,
-              ruleId: 'forEach/no_items',
-              message: `forEach check "${checkName}" produced no items to iterate over. Check your command output and transform logic.`,
-              severity: 'error',
-              category: 'logic',
-            },
-          ],
-        },
-      };
-    }
-
+    // Log the result (empty arrays are valid, just result in 0 iterations)
     logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
     return {
       isValid: true,
@@ -2518,7 +2496,7 @@ export class CheckExecutionEngine {
           // Handle forEach logic - process array outputs
           const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
 
-          if (checkConfig?.forEach) {
+          if (checkConfig?.forEach && (!reviewResult.issues || reviewResult.issues.length === 0)) {
             const validation = this.validateAndNormalizeForEachOutput(
               checkName,
               reviewSummaryWithOutput.output,
