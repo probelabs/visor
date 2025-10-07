@@ -36,8 +36,8 @@ echo ""
 # Check if we have the required dependency
 if ! npm ls @probelabs/probe > /dev/null 2>&1; then
     echo "❌ @probelabs/probe is not installed"
-    echo "📦 Installing @probelabs/probe@^0.6.0-rc102..."
-    npm install @probelabs/probe@^0.6.0-rc102
+    echo "📦 Installing @probelabs/probe@^0.6.0-rc124..."
+    npm install @probelabs/probe@^0.6.0-rc124
 fi
 
 # Get test type from command line argument (default: review)
