@@ -1953,10 +1953,10 @@ export class CheckExecutionEngine {
               return id.endsWith('/__skipped');
             });
 
-            // Check for fatal failures in direct dependencies:
+            // Treat these as fatal in direct dependencies:
             //  - command provider execution/transform failures
             //  - forEach validation/iteration errors
-            //  - any dependency issues with severity error/critical
+            //  - fail_if conditions (global or check-specific)
             const hasFatalFailure = (depRes.issues || []).some(issue => {
               const id = issue.ruleId || '';
               return (
@@ -1968,7 +1968,9 @@ export class CheckExecutionEngine {
                 id.endsWith('/command/transform_error') ||
                 id.endsWith('/forEach/iteration_error') ||
                 id === 'forEach/undefined_output' ||
-                id.endsWith('/forEach/undefined_output')
+                id.endsWith('/forEach/undefined_output') ||
+                id.endsWith('_fail_if') ||
+                id.endsWith('/global_fail_if')
               );
             });
 
