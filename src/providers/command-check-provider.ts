@@ -151,7 +151,9 @@ export class CommandCheckProvider extends CheckProvider {
             logger.debug(`🔧 Debug: Extracted JSON content: ${extracted.slice(0, 200)}`);
           } catch (parseError) {
             // Extraction found something but it's not valid JSON
-            logger.debug(`🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+            logger.debug(
+              `🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
+            );
             output = rawOutput;
           }
         } else {

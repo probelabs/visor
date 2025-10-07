@@ -556,8 +556,12 @@ export class FailureConditionEvaluator {
     const reviewSummaryWithOutput = reviewSummary as ReviewSummary & { output?: unknown };
 
     // Extract output field to avoid nesting (output.output)
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { output: extractedOutput, issues: _issues, ...otherFields } = reviewSummaryWithOutput as any;
+    const {
+      output: extractedOutput,
+      // Exclude issues from otherFields since we handle it separately
+      issues: _issues, // eslint-disable-line @typescript-eslint/no-unused-vars
+      ...otherFields
+    } = reviewSummaryWithOutput as any;
 
     const context: FailureConditionContext = {
       output: {
