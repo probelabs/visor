@@ -77,10 +77,16 @@ describe('CLI Workflow Integration Tests', () => {
       let stderr = '';
 
       // Clean environment for CLI to run properly (remove Jest variables)
-      const cleanEnv = { ...process.env };
+      const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
       delete cleanEnv.JEST_WORKER_ID;
       delete cleanEnv.NODE_ENV;
       delete cleanEnv.GITHUB_ACTIONS; // Force local CLI mode in CI runner
+      // Ensure git-related env from hooks cannot leak into the CLI process
+      delete cleanEnv.GIT_DIR;
+      delete cleanEnv.GIT_WORK_TREE;
+      delete cleanEnv.GIT_INDEX_FILE;
+      delete cleanEnv.GIT_PREFIX;
+      delete cleanEnv.GIT_COMMON_DIR;
 
       const child = spawn(command, commandArgs, {
         cwd: options.cwd || tempDir,
@@ -139,7 +145,7 @@ describe('CLI Workflow Integration Tests', () => {
       // Create initial commit
       fs.writeFileSync(path.join(dir, 'README.md'), '# Test Repository\n');
       execSync('git add .', { cwd: dir });
-      execSync('git commit -m "Initial commit"', { cwd: dir });
+      execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', { cwd: dir });
 
       // Create some test files with changes
       fs.writeFileSync(
@@ -382,7 +388,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
       const { execSync } = require('child_process');
       try {
         execSync('git add .', { cwd: tempDir });
-        execSync('git commit -m "Add test files"', { cwd: tempDir });
+        execSync('git -c core.hooksPath=/dev/null commit -m "Add test files"', { cwd: tempDir });
       } catch {
         // Ignore if no changes to commit
       }
