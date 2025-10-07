@@ -590,7 +590,7 @@ Learn more: [docs/output-formats.md](docs/output-formats.md)
 
 ## 🤝 Contributing
 
-Learn more: [docs/contributing.md](docs/contributing.md)
+Learn more: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 📚 Further Reading
 
