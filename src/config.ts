@@ -391,7 +391,7 @@ export class ConfigManager {
           checkConfig.type = 'ai';
         }
         // 'on' field is optional - if not specified, check can run on any event
-        this.validateCheckConfig(checkName, checkConfig, errors);
+        this.validateCheckConfig(checkName, checkConfig, errors, config);
 
         // Unknown/typo keys at the check level are produced by Ajv.
 
@@ -532,7 +532,8 @@ export class ConfigManager {
   private validateCheckConfig(
     checkName: string,
     checkConfig: CheckConfig,
-    errors: ConfigValidationError[]
+    errors: ConfigValidationError[],
+    config?: Partial<VisorConfig>
   ): void {
     // Default to 'ai' if no type specified
     if (!checkConfig.type) {
@@ -638,12 +639,25 @@ export class ConfigManager {
 
     // Validate reuse_ai_session configuration
     if (checkConfig.reuse_ai_session !== undefined) {
-      if (typeof checkConfig.reuse_ai_session !== 'boolean') {
+      const isString = typeof checkConfig.reuse_ai_session === 'string';
+      const isBoolean = typeof checkConfig.reuse_ai_session === 'boolean';
+
+      if (!isString && !isBoolean) {
         errors.push({
           field: `checks.${checkName}.reuse_ai_session`,
-          message: `Invalid reuse_ai_session value for "${checkName}": must be boolean`,
+          message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
           value: checkConfig.reuse_ai_session,
         });
+      } else if (isString) {
+        // When reuse_ai_session is a string, it must refer to a valid check
+        const targetCheckName = checkConfig.reuse_ai_session as string;
+        if (!config?.checks || !config.checks[targetCheckName]) {
+          errors.push({
+            field: `checks.${checkName}.reuse_ai_session`,
+            message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
+            value: checkConfig.reuse_ai_session,
+          });
+        }
       } else if (checkConfig.reuse_ai_session === true) {
         // When reuse_ai_session is true, depends_on must be specified and non-empty
         if (

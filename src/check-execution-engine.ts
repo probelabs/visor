@@ -1724,13 +1724,18 @@ export class CheckExecutionEngine {
         dependencies[checkName] = checkConfig.depends_on || [];
 
         // Track checks that need session reuse
-        if (checkConfig.reuse_ai_session === true) {
+        if (checkConfig.reuse_ai_session) {
           sessionReuseChecks.add(checkName);
 
-          // Find the parent check that will provide the session
-          // For now, use the first dependency as the session provider
-          if (checkConfig.depends_on && checkConfig.depends_on.length > 0) {
-            sessionProviders.set(checkName, checkConfig.depends_on[0]);
+          // Determine the session provider check name
+          if (typeof checkConfig.reuse_ai_session === 'string') {
+            // Explicit check name provided
+            sessionProviders.set(checkName, checkConfig.reuse_ai_session);
+          } else if (checkConfig.reuse_ai_session === true) {
+            // Use first dependency as fallback
+            if (checkConfig.depends_on && checkConfig.depends_on.length > 0) {
+              sessionProviders.set(checkName, checkConfig.depends_on[0]);
+            }
           }
         }
       } else {

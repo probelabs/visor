@@ -72,23 +72,66 @@ describe('Session Reuse Configuration Validation', () => {
       }).toThrow(/reuse_ai_session=true but missing or empty depends_on/);
     });
 
-    it('should reject non-boolean reuse_ai_session value', () => {
+    it('should accept string reuse_ai_session value referencing valid check', () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
         checks: {
-          'invalid-check': {
+          'parent-check': {
             type: 'ai',
-            prompt: 'Invalid check with non-boolean reuse_ai_session',
+            prompt: 'Parent check',
+            on: ['pr_opened'],
+          },
+          'child-check': {
+            type: 'ai',
+            prompt: 'Child check with string session reuse',
             on: ['pr_opened'],
             depends_on: ['parent-check'],
-            reuse_ai_session: 'true' as any, // Should be boolean, not string
+            reuse_ai_session: 'parent-check', // String referencing check name
           },
         },
       };
 
       expect(() => {
         (configManager as any).validateConfig(config);
-      }).toThrow(/must be boolean/);
+      }).not.toThrow();
+    });
+
+    it('should reject string reuse_ai_session referencing non-existent check', () => {
+      const config: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          'invalid-check': {
+            type: 'ai',
+            prompt: 'Invalid check with non-existent session reuse',
+            on: ['pr_opened'],
+            depends_on: ['parent-check'],
+            reuse_ai_session: 'non-existent-check', // References check that doesn't exist
+          },
+        },
+      };
+
+      expect(() => {
+        (configManager as any).validateConfig(config);
+      }).toThrow(/references non-existent check "non-existent-check"/);
+    });
+
+    it('should reject invalid reuse_ai_session type (number)', () => {
+      const config: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          'invalid-check': {
+            type: 'ai',
+            prompt: 'Invalid check with number reuse_ai_session',
+            on: ['pr_opened'],
+            depends_on: ['parent-check'],
+            reuse_ai_session: 123 as any, // Should be string or boolean
+          },
+        },
+      };
+
+      expect(() => {
+        (configManager as any).validateConfig(config);
+      }).toThrow(/must be string \(check name\) or boolean/);
     });
 
     it('should accept reuse_ai_session=false without depends_on', () => {
@@ -157,6 +200,44 @@ describe('Session Reuse Configuration Validation', () => {
   });
 
   describe('complex dependency scenarios', () => {
+    it('should validate multiple checks reusing same session via string reference', () => {
+      const config: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          'overview': {
+            type: 'ai',
+            prompt: 'PR overview',
+            on: ['pr_opened'],
+          },
+          'security': {
+            type: 'ai',
+            prompt: 'Security analysis',
+            on: ['pr_opened'],
+            depends_on: ['overview'],
+            reuse_ai_session: 'overview', // Explicitly reuse overview session
+          },
+          'performance': {
+            type: 'ai',
+            prompt: 'Performance analysis',
+            on: ['pr_opened'],
+            depends_on: ['security'],
+            reuse_ai_session: 'overview', // Also reuse overview session, not security
+          },
+          'quality': {
+            type: 'ai',
+            prompt: 'Code quality analysis',
+            on: ['pr_opened'],
+            depends_on: ['performance'],
+            reuse_ai_session: 'overview', // Also reuse overview session
+          },
+        },
+      };
+
+      expect(() => {
+        (configManager as any).validateConfig(config);
+      }).not.toThrow();
+    });
+
     it('should validate chain of session reuse dependencies', () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
