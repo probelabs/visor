@@ -1953,7 +1953,10 @@ export class CheckExecutionEngine {
               return id.endsWith('/__skipped');
             });
 
-            // Check for fatal failures: command provider execution/transform failures and forEach iteration errors
+            // Check for fatal failures in direct dependencies:
+            //  - command provider execution/transform failures
+            //  - forEach validation/iteration errors
+            //  - any dependency issues with severity error/critical
             const hasFatalFailure = (depRes.issues || []).some(issue => {
               const id = issue.ruleId || '';
               return (
@@ -1963,7 +1966,9 @@ export class CheckExecutionEngine {
                 id.endsWith('/command/transform_js_error') ||
                 id === 'command/transform_error' ||
                 id.endsWith('/command/transform_error') ||
-                id.endsWith('/forEach/iteration_error')
+                id.endsWith('/forEach/iteration_error') ||
+                id === 'forEach/undefined_output' ||
+                id.endsWith('/forEach/undefined_output')
               );
             });
 
@@ -2200,7 +2205,9 @@ export class CheckExecutionEngine {
                     id === 'command/transform_js_error' ||
                     id.endsWith('/command/transform_js_error') ||
                     id === 'command/transform_error' ||
-                    id.endsWith('/command/transform_error')
+                    id.endsWith('/command/transform_error') ||
+                    id === 'forEach/undefined_output' ||
+                    id.endsWith('/forEach/undefined_output')
                   );
                 });
                 const iterationDuration = (Date.now() - iterationStart) / 1000;
@@ -2362,7 +2369,9 @@ export class CheckExecutionEngine {
                 id === 'command/transform_js_error' ||
                 id.endsWith('/command/transform_js_error') ||
                 id === 'command/transform_error' ||
-                id.endsWith('/command/transform_error')
+                id.endsWith('/command/transform_error') ||
+                id === 'forEach/undefined_output' ||
+                id.endsWith('/forEach/undefined_output')
               );
             });
             this.recordIterationComplete(

@@ -347,6 +347,55 @@ output:
     expect(Array.isArray(output.default)).toBe(true);
   });
 
+  it('should raise error on undefined forEach output and skip dependents', () => {
+    const configContent = `
+version: "1.0"
+checks:
+  fetch-undefined:
+    type: command
+    exec: |
+      echo '{"tickets":[{"key":"A-1"}]}'
+    transform_js: |
+      // Simulate a bug where transform returns nothing
+      const data = JSON.parse(output);
+      // forgot to return data.tickets;
+      // explicitly return undefined
+      return undefined;
+    forEach: true
+
+  analyze-bug:
+    type: command
+    depends_on: [fetch-undefined]
+    exec: |
+      echo "BUG: {{ outputs['fetch-undefined'].key }}"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
+`;
+
+    fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
+
+    const result = execCLI(['--check', 'analyze-bug', '--output', 'json', '--debug'], {
+      cwd: tempDir,
+    });
+
+    // JSON should still be well-formed
+    const jsonMatch = result.match(/\{[\s\S]*\}$/);
+    const jsonString = jsonMatch ? jsonMatch[0] : result;
+    const output = JSON.parse(jsonString);
+
+    // Only the requested check appears; it should not contain content from execution
+    expect(output.default).toBeDefined();
+    const check = output.default.find((r: any) => r.checkName === 'analyze-bug');
+    expect(check).toBeDefined();
+    // Skipped dependent should not have produced command output
+    expect(check.content || '').toBe('');
+    expect(Array.isArray(check.issues)).toBe(true);
+  });
+
   it('should properly aggregate issues from forEach dependent checks', () => {
     const configContent = `
 version: "1.0"
