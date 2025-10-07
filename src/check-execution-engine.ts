@@ -520,7 +520,7 @@ export class CheckExecutionEngine {
         if (hasSoftFailure && onFail) {
           if (debug)
             log(
-              `🔧 Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
+              `🔧 Debug: Soft failure detected for '${checkName}' with ${(resFinal.issues || []).length} issue(s)`
             );
           const lastError: any = {
             message: 'soft-failure: issues present',

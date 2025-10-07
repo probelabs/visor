@@ -322,7 +322,6 @@ export async function run(): Promise<void> {
       );
       sessionRegistry.clearAllSessions();
     }
-  } finally {
     await shutdownTelemetry().catch(() => {});
   }
 }

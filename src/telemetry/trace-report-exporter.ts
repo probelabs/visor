@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { ExportResult } from '@opentelemetry/core';
 import { HrTime } from '@opentelemetry/api';
 
 function hrTimeToMillis(t: HrTime): number {
@@ -23,12 +24,12 @@ export class TraceReportExporter implements SpanExporter {
     if (!fs.existsSync(this.outDir)) fs.mkdirSync(this.outDir, { recursive: true });
   }
 
-  export(spans: ReadableSpan[], resultCallback: (result: unknown) => void): void {
+  export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
     try {
       this.spans.push(...spans);
-      resultCallback({ code: 0 });
+      resultCallback(ExportResult.SUCCESS);
     } catch (e) {
-      resultCallback({ code: 1, error: e });
+      resultCallback(ExportResult.FAILED);
     }
   }
 
@@ -107,4 +108,3 @@ body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;p
 function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
-

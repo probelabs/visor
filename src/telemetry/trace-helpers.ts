@@ -1,4 +1,4 @@
-import { context as otContext, Span, SpanStatusCode, trace } from '@opentelemetry/api';
+import { context as otContext, Span, SpanStatusCode, trace, Attributes } from '@opentelemetry/api';
 
 export function getTracer() {
   return trace.getTracer('visor');
@@ -10,17 +10,21 @@ export async function withActiveSpan<T>(
   fn: (span: Span) => Promise<T>
 ): Promise<T> {
   const tracer = getTracer();
-  return await tracer.startActiveSpan(name, attrs ? { attributes: attrs } : undefined, async span => {
-    try {
-      const res = await fn(span);
-      return res;
-    } catch (err) {
-      if (err instanceof Error) span.recordException(err);
-      span.setStatus({ code: SpanStatusCode.ERROR });
-      throw err;
-    } finally {
-      span.end();
-    }
+  return await new Promise<T>((resolve, reject) => {
+    tracer.startActiveSpan(name, attrs ? { attributes: attrs as Attributes } : undefined, async span => {
+      try {
+        const res = await fn(span);
+        resolve(res);
+      } catch (err) {
+        try {
+          if (err instanceof Error) span.recordException(err);
+          span.setStatus({ code: SpanStatusCode.ERROR });
+        } catch {}
+        reject(err);
+      } finally {
+        try { span.end(); } catch {}
+      }
+    });
   });
 }
 
@@ -28,7 +32,7 @@ export function addEvent(name: string, attrs?: Record<string, unknown>): void {
   const span = trace.getSpan(otContext.active());
   if (!span) return;
   try {
-    span.addEvent(name, attrs);
+    span.addEvent(name, attrs as Attributes);
   } catch {
     // ignore
   }
