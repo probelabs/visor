@@ -1263,6 +1263,41 @@ export class CheckExecutionEngine {
 
     const result = await provider.execute(prInfo, providerConfig);
 
+    // Validate forEach output (skip if there are already errors from transform_js or other sources)
+    if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
+      const reviewSummaryWithOutput = result as ReviewSummary & { output?: unknown };
+      const validation = this.validateAndNormalizeForEachOutput(
+        checkName,
+        reviewSummaryWithOutput.output,
+        checkConfig.group
+      );
+
+      if (!validation.isValid) {
+        return validation.error;
+      }
+    }
+
+    // Evaluate fail_if conditions
+    if (config && (config.fail_if || checkConfig.fail_if)) {
+      const failureResults = await this.evaluateFailureConditions(checkName, result, config);
+
+      // Add failure condition issues to the result
+      if (failureResults.length > 0) {
+        const failureIssues = failureResults
+          .filter(f => f.failed)
+          .map(f => ({
+            file: 'system',
+            line: 0,
+            ruleId: f.conditionName,
+            message: f.message || `Failure condition met: ${f.expression}`,
+            severity: (f.severity || 'error') as 'info' | 'warning' | 'error' | 'critical',
+            category: 'logic' as const,
+          }));
+
+        result.issues = [...(result.issues || []), ...failureIssues];
+      }
+    }
+
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
@@ -1272,6 +1307,83 @@ export class CheckExecutionEngine {
       group: checkConfig.group || 'default',
       debug: result.debug,
       issues: result.issues, // Include structured issues
+    };
+  }
+
+  /**
+   * Validate and normalize forEach output
+   * Returns normalized array or throws validation error result
+   */
+  private validateAndNormalizeForEachOutput(
+    checkName: string,
+    output: unknown,
+    checkGroup?: string
+  ):
+    | {
+        isValid: true;
+        normalizedOutput: unknown[];
+      }
+    | {
+        isValid: false;
+        error: {
+          checkName: string;
+          content: string;
+          group: string;
+          issues: Array<{
+            file: string;
+            line: number;
+            ruleId: string;
+            message: string;
+            severity: 'error';
+            category: 'logic';
+          }>;
+        };
+      } {
+    if (output === undefined) {
+      logger.error(`✗ forEach check "${checkName}" produced undefined output`);
+      return {
+        isValid: false,
+        error: {
+          checkName,
+          content: '',
+          group: checkGroup || 'default',
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'forEach/undefined_output',
+              message: `forEach check "${checkName}" produced undefined output. Verify your command outputs valid data and your transform_js returns a value.`,
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+        },
+      };
+    }
+
+    // Normalize output to array
+    let normalizedOutput: unknown[];
+
+    if (Array.isArray(output)) {
+      normalizedOutput = output;
+    } else if (typeof output === 'string') {
+      try {
+        const parsed = JSON.parse(output);
+        normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        normalizedOutput = [output];
+      }
+    } else if (output === null) {
+      normalizedOutput = [];
+    } else {
+      normalizedOutput = [output];
+    }
+
+    // Log the result (empty arrays are valid, just result in 0 iterations)
+    logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
+    return {
+      isValid: true,
+      normalizedOutput,
     };
   }
 
@@ -2384,7 +2496,23 @@ export class CheckExecutionEngine {
           // Handle forEach logic - process array outputs
           const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
 
-          if (checkConfig?.forEach && reviewSummaryWithOutput.output !== undefined) {
+          if (checkConfig?.forEach && (!reviewResult.issues || reviewResult.issues.length === 0)) {
+            const validation = this.validateAndNormalizeForEachOutput(
+              checkName,
+              reviewSummaryWithOutput.output,
+              checkConfig.group
+            );
+
+            if (!validation.isValid) {
+              results.set(
+                checkName,
+                validation.error.issues ? { issues: validation.error.issues } : {}
+              );
+              continue;
+            }
+
+            const normalizedOutput = validation.normalizedOutput;
+
             logger.debug(
               `🔧 Debug: Raw output for forEach check ${checkName}: ${
                 Array.isArray(reviewSummaryWithOutput.output)
@@ -2392,26 +2520,6 @@ export class CheckExecutionEngine {
                   : typeof reviewSummaryWithOutput.output
               }`
             );
-            const rawOutput = reviewSummaryWithOutput.output;
-            let normalizedOutput: unknown[];
-
-            if (Array.isArray(rawOutput)) {
-              normalizedOutput = rawOutput;
-            } else if (typeof rawOutput === 'string') {
-              try {
-                const parsed = JSON.parse(rawOutput);
-                normalizedOutput = Array.isArray(parsed) ? parsed : [parsed];
-              } catch {
-                normalizedOutput = [rawOutput];
-              }
-            } else if (rawOutput === undefined || rawOutput === null) {
-              normalizedOutput = [];
-            } else {
-              normalizedOutput = [rawOutput];
-            }
-
-            // Log forEach items found (non-debug)
-            logger.info(`  Found ${normalizedOutput.length} items for forEach iteration`);
 
             try {
               const preview = JSON.stringify(normalizedOutput);
