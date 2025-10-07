@@ -111,8 +111,7 @@
   },
   "optionalDependencies": {
     "@opentelemetry/exporter-metrics-otlp-http": "^0.203.0",
-    "@opentelemetry/sdk-metrics": "^2.0.1",
-    "@opentelemetry/auto-instrumentations-node": "^0.203.0"
+    "@opentelemetry/sdk-metrics": "^2.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
@@ -142,13 +141,17 @@
   },
   "peerDependencies": {
     "@anthropic/claude-code-sdk": "^1.0.0",
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.203.0"
   },
   "peerDependenciesMeta": {
     "@anthropic/claude-code-sdk": {
       "optional": true
     },
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@opentelemetry/auto-instrumentations-node": {
       "optional": true
     }
   },
