@@ -618,6 +618,8 @@ export interface VisorConfig {
     sink?: 'otlp' | 'file' | 'console';
     diagrams?: {
       evaluate?: boolean;
+      /** When true, emit full Mermaid source as telemetry (diagram.block). Default: false */
+      emit_full_source?: boolean;
     };
     redaction?: {
       hash_files?: boolean;

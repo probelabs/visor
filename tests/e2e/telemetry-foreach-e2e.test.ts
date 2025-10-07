@@ -13,7 +13,6 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
   let mockConsoleLog: jest.Mock;
   let mockConsoleError: jest.Mock;
   let mockProcessExit: jest.Mock;
-  let capturedStderr = '';
   let mockStderrWrite: jest.Mock;
 
   const tempDir = path.join(__dirname, '..', 'fixtures', 'temp');
@@ -60,11 +59,7 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
     console.error = mockConsoleError;
     process.exit = mockProcessExit as any;
 
-    capturedStderr = '';
-    mockStderrWrite = jest.fn((chunk: any) => {
-      capturedStderr += String(chunk);
-      return true;
-    });
+    mockStderrWrite = jest.fn(() => true);
     (process.stderr.write as unknown as jest.Mock | ((...a: any[]) => any)) =
       mockStderrWrite as any;
 
@@ -130,7 +125,8 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
 
     // Validate foreach span count and attributes for child check
     const foreachSpans = lines.filter(
-      (s: any) => s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'process-item'
+      (s: any) =>
+        s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'process-item'
     );
     expect(foreachSpans.length).toBe(2); // alpha, beta
     foreachSpans.forEach((s: any) => {

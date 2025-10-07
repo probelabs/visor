@@ -26,13 +26,12 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   if (!enabled || sdk) return;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { NodeSDK } = require('@opentelemetry/sdk-node');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const { Resource } = require('@opentelemetry/resources');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const { SemanticResourceAttributes } = require('@opentelemetry/semantic-conventions');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const { BatchSpanProcessor, ConsoleSpanExporter } = require('@opentelemetry/sdk-trace-base');
 
     const sink = opts.sink || (process.env.VISOR_TELEMETRY_SINK as any) || 'file';
@@ -42,17 +41,20 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     if (sink === 'otlp') {
       const protocol = opts.otlp?.protocol || 'http';
       if (protocol === 'http') {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
         const exporter = new OTLPTraceExporter({
-          url: opts.otlp?.endpoint || process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+          url:
+            opts.otlp?.endpoint ||
+            process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
+            process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
           headers: opts.otlp?.headers || process.env.OTEL_EXPORTER_OTLP_HEADERS,
         });
         processors.push(new BatchSpanProcessor(exporter, batchParams()));
       } else {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { OTLPTraceExporter: GrpcExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+          const {
+            OTLPTraceExporter: GrpcExporter,
+          } = require('@opentelemetry/exporter-trace-otlp-grpc');
           processors.push(new BatchSpanProcessor(new GrpcExporter({}), batchParams()));
         } catch {
           // fallback to console if grpc exporter not present
@@ -63,9 +65,13 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       processors.push(new BatchSpanProcessor(new ConsoleSpanExporter(), batchParams()));
     } else {
       // file (serverless) exporter
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+
       const { FileSpanExporter } = require('./file-span-exporter');
-      const exporter = new FileSpanExporter({ dir: opts.file?.dir, ndjson: opts.file?.ndjson, runId: opts.file?.runId });
+      const exporter = new FileSpanExporter({
+        dir: opts.file?.dir,
+        ndjson: opts.file?.ndjson,
+        runId: opts.file?.runId,
+      });
       processors.push(new BatchSpanProcessor(exporter, batchParams()));
     }
 
@@ -103,7 +109,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       opts.autoInstrument === true || process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true';
     if (autoInstr) {
       try {
-        const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node');
+        const {
+          getNodeAutoInstrumentations,
+        } = require('@opentelemetry/auto-instrumentations-node');
         instrumentations = [getNodeAutoInstrumentations()];
       } catch {
         // ignore if package not installed
@@ -115,7 +123,11 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       try {
         const { TraceReportExporter } = require('./trace-report-exporter');
         const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
-        processors.push(new BatchSpanProcessor(new TraceReportExporter({ dir: opts.file?.dir, runId: opts.file?.runId })));
+        processors.push(
+          new BatchSpanProcessor(
+            new TraceReportExporter({ dir: opts.file?.dir, runId: opts.file?.runId })
+          )
+        );
       } catch {
         // ignore
       }
@@ -134,7 +146,7 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     await sdk.start();
 
     if (opts.patchConsole !== false) patchConsole();
-  } catch (e) {
+  } catch {
     // OTel not installed or failed to init; continue silently
   }
 }
@@ -168,7 +180,6 @@ function batchParams() {
 function patchConsole() {
   if (patched) return;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { context, trace } = require('@opentelemetry/api');
     const methods: Array<'log' | 'info' | 'warn' | 'error'> = ['log', 'info', 'warn', 'error'];
     for (const m of methods) {
@@ -183,9 +194,11 @@ function patchConsole() {
             const suffix = ` [trace_id=${ctx.traceId} span_id=${ctx.spanId}]`;
             if (typeof args[0] === 'string') args[0] = (args[0] as string) + suffix;
             else args.push(suffix);
-          } catch {/* noop */}
+          } catch {
+            /* noop */
+          }
         }
-        return orig(...args as [unknown]);
+        return orig(...(args as [unknown]));
       };
     }
     patched = true;

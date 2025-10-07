@@ -13,7 +13,6 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
   let mockConsoleLog: jest.Mock;
   let mockConsoleError: jest.Mock;
   let mockProcessExit: jest.Mock;
-  let capturedStderr = '';
   let mockStderrWrite: jest.Mock;
 
   const tempDir = path.join(__dirname, '..', 'fixtures', 'temp');
@@ -81,7 +80,6 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
     console.error = mockConsoleError;
     process.exit = mockProcessExit as any;
 
-    capturedStderr = '';
     mockStderrWrite = jest.fn((chunk: any) => {
       capturedStderr += String(chunk);
       return true;
@@ -107,7 +105,16 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
   });
 
   it('writes JSON file and traces with forEach spans', async () => {
-    process.argv = ['node', 'visor', '--config', configPath, '--output', 'json', '--output-file', outFile];
+    process.argv = [
+      'node',
+      'visor',
+      '--config',
+      configPath,
+      '--output',
+      'json',
+      '--output-file',
+      outFile,
+    ];
     const { main } = await import('../../src/cli-main');
     await main();
 
@@ -130,19 +137,27 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
       .map(f => ({ f, t: fs.statSync(path.join(tracesDir, f)).mtimeMs }))
       .sort((a, b) => b.t - a.t)[0].f;
 
-    const lines = fs.readFileSync(path.join(tracesDir, newest), 'utf8').trim().split(/\r?\n/).map(l => JSON.parse(l));
+    const lines = fs
+      .readFileSync(path.join(tracesDir, newest), 'utf8')
+      .trim()
+      .split(/\r?\n/)
+      .map(l => JSON.parse(l));
     const names = lines.map((s: any) => s.name);
-    expect(names).toEqual(expect.arrayContaining(['visor.run', 'visor.check', 'visor.foreach.item']));
+    expect(names).toEqual(
+      expect.arrayContaining(['visor.run', 'visor.check', 'visor.foreach.item'])
+    );
 
     // Validate foreach span counts for both chains
     const feProcess = lines.filter(
-      (s: any) => s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'process-item'
+      (s: any) =>
+        s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'process-item'
     );
     expect(feProcess.length).toBe(2); // items A,B
     feProcess.forEach((s: any) => expect(s.attributes['visor.foreach.total']).toBe(2));
 
     const feAnalyze = lines.filter(
-      (s: any) => s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'analyze-file'
+      (s: any) =>
+        s.name === 'visor.foreach.item' && s.attributes?.['visor.check.id'] === 'analyze-file'
     );
     expect(feAnalyze.length).toBe(2); // file1.js, file2.js
     feAnalyze.forEach((s: any) => expect(s.attributes['visor.foreach.total']).toBe(2));

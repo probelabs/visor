@@ -22,7 +22,6 @@ describe('Telemetry E2E — Mermaid diagram telemetry (full code)', () => {
     fs.mkdirSync(tempDir, { recursive: true });
     fs.mkdirSync(tracesDir, { recursive: true });
 
-    const mermaid = `\n\n\n\n\n\n\n\n\n\n\n\n`;
     // Build a check that renders a template containing a mermaid block
     const cfg = {
       version: '1.0',
@@ -62,27 +61,33 @@ describe('Telemetry E2E — Mermaid diagram telemetry (full code)', () => {
   });
 
   it('emits diagram.block events with full mermaid code', async () => {
-    process.argv = ['node', 'visor', '--config', configPath, '--output', 'json', '--output-file', outFile];
+    process.env.VISOR_TRACE_REPORT = 'true';
+    process.argv = [
+      'node',
+      'visor',
+      '--config',
+      configPath,
+      '--output',
+      'json',
+      '--output-file',
+      outFile,
+    ];
 
     const { main } = await import('../../src/cli-main');
     await main();
 
-    // Verify NDJSON contains diagram.block event with code that includes graph TD
-    const files = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
-    expect(files.length).toBeGreaterThan(0);
-    const newest = files
+    // Verify trace JSON contains diagram.block event with code that includes graph TD
+    const jsonFiles = fs.readdirSync(tracesDir).filter(f => f.endsWith('.trace.json'));
+    expect(jsonFiles.length).toBeGreaterThan(0);
+    const newest = jsonFiles
       .map(f => ({ f, t: fs.statSync(path.join(tracesDir, f)).mtimeMs }))
       .sort((a, b) => b.t - a.t)[0].f;
-    const lines = fs
-      .readFileSync(path.join(tracesDir, newest), 'utf8')
-      .trim()
-      .split(/\r?\n/)
-      .map(l => JSON.parse(l));
-
-    const eventHasDiagram = lines.some((span: any) =>
-      (span.events || []).some((e: any) => e.name === 'diagram.block' && /graph TD/.test(String(e.attributes?.code || '')))
+    const trace = JSON.parse(fs.readFileSync(path.join(tracesDir, newest), 'utf8'));
+    const eventHasDiagram = (trace.spans || []).some((span: any) =>
+      (span.events || []).some(
+        (e: any) => e.name === 'diagram.block' && /graph TD/.test(String(e.attrs?.code || ''))
+      )
     );
     expect(eventHasDiagram).toBe(true);
   });
 });
-
