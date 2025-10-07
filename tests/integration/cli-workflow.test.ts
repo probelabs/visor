@@ -145,7 +145,7 @@ describe('CLI Workflow Integration Tests', () => {
       // Create initial commit
       fs.writeFileSync(path.join(dir, 'README.md'), '# Test Repository\n');
       execSync('git add .', { cwd: dir });
-      execSync('git commit -m "Initial commit"', { cwd: dir });
+      execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', { cwd: dir });
 
       // Create some test files with changes
       fs.writeFileSync(
@@ -388,7 +388,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
       const { execSync } = require('child_process');
       try {
         execSync('git add .', { cwd: tempDir });
-        execSync('git commit -m "Add test files"', { cwd: tempDir });
+        execSync('git -c core.hooksPath=/dev/null commit -m "Add test files"', { cwd: tempDir });
       } catch {
         // Ignore if no changes to commit
       }

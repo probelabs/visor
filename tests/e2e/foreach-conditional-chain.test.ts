@@ -131,7 +131,7 @@ checks:
       cwd: testDir,
     });
     fs.writeFileSync(path.join(testDir, 'test.txt'), 'test content');
-    execSync('git add . && git commit -m "Initial commit"', {
+    execSync('git add . && git -c core.hooksPath=/dev/null commit -m "Initial commit"', {
       cwd: testDir,
     });
   });

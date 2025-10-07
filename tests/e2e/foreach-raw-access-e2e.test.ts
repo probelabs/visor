@@ -68,7 +68,7 @@ describe('forEach raw array access E2E Tests', () => {
     execSync('git config user.name "Test User"', { cwd: tempDir });
     fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
     execSync('git add .', { cwd: tempDir });
-    execSync('git commit -q -m "initial"', { cwd: tempDir });
+    execSync('git -c core.hooksPath=/dev/null commit -q -m "initial"', { cwd: tempDir });
   });
 
   afterEach(() => {
