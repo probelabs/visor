@@ -78,6 +78,121 @@ export const configSchema = {
           $ref: '#/definitions/RoutingDefaults',
           description: 'Optional routing defaults for retry/goto/run policies',
         },
+        telemetry: {
+          type: 'object',
+          properties: {
+            enabled: {
+              type: 'boolean',
+            },
+            sink: {
+              type: 'string',
+              enum: ['otlp', 'file', 'console'],
+            },
+            diagrams: {
+              type: 'object',
+              properties: {
+                evaluate: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            redaction: {
+              type: 'object',
+              properties: {
+                hash_files: {
+                  type: 'boolean',
+                },
+                hash_messages: {
+                  type: 'boolean',
+                },
+                include_ai_prompt: {
+                  type: 'boolean',
+                },
+                include_ai_raw: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            tracing: {
+              type: 'object',
+              properties: {
+                sampler: {
+                  type: 'string',
+                  enum: ['always_on', 'ratio'],
+                },
+                ratio: {
+                  type: 'number',
+                },
+                auto_instrumentations: {
+                  type: 'boolean',
+                },
+                trace_report: {
+                  type: 'object',
+                  properties: {
+                    enabled: {
+                      type: 'boolean',
+                    },
+                  },
+                  additionalProperties: false,
+                  patternProperties: {
+                    '^x-': {},
+                  },
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            otlp: {
+              type: 'object',
+              properties: {
+                protocol: {
+                  type: 'string',
+                  enum: ['http', 'grpc'],
+                },
+                endpoint: {
+                  type: 'string',
+                },
+                headers: {
+                  type: 'string',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            file: {
+              type: 'object',
+              properties: {
+                dir: {
+                  type: 'string',
+                },
+                ndjson: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+          },
+          additionalProperties: false,
+          description: 'Telemetry & tracing configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
       },
       required: ['version', 'checks', 'output'],
       additionalProperties: false,
