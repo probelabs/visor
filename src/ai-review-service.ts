@@ -463,7 +463,7 @@ ${prContext}
     const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
 
     // Log the decision for transparency
-    const log = this.config.debug ? console.error : () => {};
+    const log = this.config.debug ? (msg: string) => logger.debug(msg) : () => {};
     if (isPRContext) {
       log('🔍 Including full code diffs in AI context (PR mode)');
     } else if (!includeCodeContext) {
@@ -811,7 +811,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       return { response, effectiveSchema };
     } catch (error) {
-      console.error('❌ ProbeAgent session reuse failed:', error);
+      logger.error(`ProbeAgent session reuse failed: ${error instanceof Error ? error.message : String(error)}`);
       throw new Error(
         `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -874,7 +874,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
-      const options: ProbeAgentOptions = {
+      type ProbeAgentOptionsX = ProbeAgentOptions & {
+        enableMcp?: boolean;
+        mcpConfig?: { mcpServers: Record<string, import('./types/config').McpServerConfig> };
+      };
+      const options: ProbeAgentOptionsX = {
         sessionId: sessionId,
         promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
@@ -883,8 +887,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Wire MCP configuration when provided
       if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
-        (options as any).enableMcp = true;
-        (options as any).mcpConfig = { mcpServers: this.config.mcpServers };
+        options.enableMcp = true;
+        options.mcpConfig = { mcpServers: this.config.mcpServers };
       }
 
       // Add provider-specific options if configured
@@ -993,7 +997,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       return { response, effectiveSchema };
     } catch (error) {
-      console.error('❌ ProbeAgent failed:', error);
+      logger.error(`ProbeAgent failed: ${error instanceof Error ? error.message : String(error)}`);
       throw new Error(
         `ProbeAgent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1140,7 +1144,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             response.toLowerCase().includes('i cannot') ||
             response.toLowerCase().includes('unable to')
           ) {
-            console.error('🚫 AI refused to analyze - returning empty result');
+            logger.error('AI refused to analyze - returning empty result');
             return {
               issues: [],
             };
@@ -1279,40 +1283,40 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
-      console.error('❌ Failed to parse AI response:', error);
-      console.error('📄 FULL RAW RESPONSE:');
-      console.error('='.repeat(80));
-      console.error(response);
-      console.error('='.repeat(80));
-      console.error(`📏 Response length: ${response.length} characters`);
+      logger.error(`Failed to parse AI response: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error('FULL RAW RESPONSE:');
+      logger.error('='.repeat(80));
+      logger.error(response);
+      logger.error('='.repeat(80));
+      logger.error(`Response length: ${response.length} characters`);
 
       // Try to provide more helpful error information
       if (error instanceof SyntaxError) {
-        console.error('🔍 JSON parsing error - the response may not be valid JSON');
-        console.error('🔍 Error details:', error.message);
+        logger.error('JSON parsing error - the response may not be valid JSON');
+        logger.error(`Error details: ${error.message}`);
 
         // Try to identify where the parsing failed
         const errorMatch = error.message.match(/position (\d+)/);
         if (errorMatch) {
           const position = parseInt(errorMatch[1]);
-          console.error(`🔍 Error at position ${position}:`);
+          logger.error(`Error at position ${position}:`);
           const start = Math.max(0, position - 50);
           const end = Math.min(response.length, position + 50);
-          console.error(`🔍 Context: "${response.substring(start, end)}"`);
+          logger.error(`Context: "${response.substring(start, end)}"`);
 
           // Show the first 100 characters to understand what format the AI returned
-          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
+          logger.error(`Response beginning: "${response.substring(0, 100)}"`);
         }
 
         // Check if response contains common non-JSON patterns
         if (response.includes('I cannot')) {
-          console.error('🔍 Response appears to be a refusal/explanation rather than JSON');
+          logger.error('Response appears to be a refusal/explanation rather than JSON');
         }
         if (response.includes('```')) {
-          console.error('🔍 Response appears to contain markdown code blocks');
+          logger.error('Response appears to contain markdown code blocks');
         }
         if (response.startsWith('<')) {
-          console.error('🔍 Response appears to start with XML/HTML');
+          logger.error('Response appears to start with XML/HTML');
         }
       }
 

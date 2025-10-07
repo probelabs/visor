@@ -13,13 +13,17 @@ module.exports = [
     },
     rules: {
       // Basic rules
+<<<<<<< Updated upstream
       'no-console': 'warn',
+=======
+      'no-console': 'error',
+>>>>>>> Stashed changes
       'prefer-const': 'error',
       'no-var': 'error',
-      
+
       // TypeScript rules
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
     },
   },
   {

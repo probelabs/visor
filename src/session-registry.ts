@@ -1,4 +1,5 @@
 import { ProbeAgent } from '@probelabs/probe';
+import { logger } from './logger';
 
 /**
  * Registry to manage active ProbeAgent sessions for session reuse
@@ -27,7 +28,7 @@ export class SessionRegistry {
    * Register a ProbeAgent session
    */
   public registerSession(sessionId: string, agent: ProbeAgent): void {
-    console.error(`🔄 Registering AI session: ${sessionId}`);
+    logger.info(`Registering AI session: ${sessionId}`);
     this.sessions.set(sessionId, agent);
   }
 
@@ -37,7 +38,7 @@ export class SessionRegistry {
   public getSession(sessionId: string): ProbeAgent | undefined {
     const agent = this.sessions.get(sessionId);
     if (agent) {
-      console.error(`♻️  Reusing AI session: ${sessionId}`);
+      logger.info(`Reusing AI session: ${sessionId}`);
     }
     return agent;
   }
@@ -47,18 +48,17 @@ export class SessionRegistry {
    */
   public unregisterSession(sessionId: string): void {
     if (this.sessions.has(sessionId)) {
-      console.error(`🗑️  Unregistering AI session: ${sessionId}`);
+      logger.info(`Unregistering AI session: ${sessionId}`);
       const agent = this.sessions.get(sessionId);
       this.sessions.delete(sessionId);
 
       // Cleanup the ProbeAgent instance to prevent hanging processes
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (agent && typeof (agent as any).cleanup === 'function') {
+      const withCleanup = agent as unknown as { cleanup?: () => void };
+      if (withCleanup && typeof withCleanup.cleanup === 'function') {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (agent as any).cleanup();
+          withCleanup.cleanup();
         } catch (error) {
-          console.error(`⚠️  Warning: Failed to cleanup ProbeAgent: ${error}`);
+          logger.warn(`Warning: Failed to cleanup ProbeAgent: ${error}`);
         }
       }
     }
@@ -68,15 +68,14 @@ export class SessionRegistry {
    * Clear all sessions (useful for cleanup)
    */
   public clearAllSessions(): void {
-    console.error(`🧹 Clearing all AI sessions (${this.sessions.size} sessions)`);
+    logger.info(`Clearing all AI sessions (${this.sessions.size} sessions)`);
 
     // Cleanup each ProbeAgent instance before clearing
     for (const [, agent] of this.sessions.entries()) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (agent && typeof (agent as any).cleanup === 'function') {
+      const withCleanup = agent as unknown as { cleanup?: () => void };
+      if (withCleanup && typeof withCleanup.cleanup === 'function') {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (agent as any).cleanup();
+          withCleanup.cleanup();
         } catch {
           // Silent fail during bulk cleanup
         }
@@ -110,7 +109,7 @@ export class SessionRegistry {
 
     const cleanupAndExit = (signal: string) => {
       if (this.sessions.size > 0) {
-        console.error(`\n🧹 [${signal}] Cleaning up ${this.sessions.size} active AI sessions...`);
+        logger.info(`\n[${signal}] Cleaning up ${this.sessions.size} active AI sessions...`);
         this.clearAllSessions();
       }
     };
@@ -118,14 +117,13 @@ export class SessionRegistry {
     // Handle normal process exit
     process.on('exit', () => {
       if (this.sessions.size > 0) {
-        console.error(`🧹 [exit] Cleaning up ${this.sessions.size} active AI sessions...`);
+        logger.info(`[exit] Cleaning up ${this.sessions.size} active AI sessions...`);
         // Note: async operations won't complete here, but sync cleanup methods will
         for (const [, agent] of this.sessions.entries()) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (agent && typeof (agent as any).cleanup === 'function') {
+          const withCleanup = agent as unknown as { cleanup?: () => void };
+          if (withCleanup && typeof withCleanup.cleanup === 'function') {
             try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (agent as any).cleanup();
+              withCleanup.cleanup();
             } catch {
               // Silent fail on exit
             }

@@ -114,7 +114,14 @@ export class HttpCheckProvider extends CheckProvider {
       // Send webhook request
       try { addEvent('http.request', { url, method }); } catch {}
       const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+<<<<<<< Updated upstream
       try { if ((response as any).__status) addEvent('http.response', { status: (response as any).__status }); } catch {}
+=======
+      try {
+        const statusMaybe = (response as { __status?: number | string } | undefined)?.__status;
+        if (statusMaybe !== undefined) addEvent('http.response', { status: statusMaybe });
+      } catch {}
+>>>>>>> Stashed changes
 
       // Parse webhook response
       const result = this.parseWebhookResponse(response, url);

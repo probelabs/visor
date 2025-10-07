@@ -346,7 +346,8 @@ export class PRReviewer {
       fs.writeFileSync(filepath, content, 'utf8');
       return filename;
     } catch (error) {
-      console.error('Failed to save debug artifact:', error);
+      const { logger } = await import('./logger');
+      logger.warn(`Failed to save debug artifact: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }

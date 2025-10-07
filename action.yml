@@ -97,6 +97,32 @@ inputs:
     required: false
     default: 'false'
 
+  # Telemetry inputs
+  telemetry-enabled:
+    description: 'Enable telemetry and tracing'
+    required: false
+    default: 'false'
+  telemetry-sink:
+    description: 'Telemetry sink (otlp|file|console)'
+    required: false
+    default: ''
+  telemetry-endpoint:
+    description: 'OTLP endpoint URL for traces/metrics'
+    required: false
+    default: ''
+  telemetry-trace-report:
+    description: 'Write static HTML trace report as artifact'
+    required: false
+    default: 'false'
+  telemetry-auto-instrumentations:
+    description: 'Enable OpenTelemetry auto-instrumentations'
+    required: false
+    default: 'false'
+  telemetry-diagrams-full:
+    description: 'Emit full Mermaid diagram source as telemetry (optional)'
+    required: false
+    default: 'false'
+
   tags:
     description: 'Include checks with these tags (comma-separated)'
     required: false

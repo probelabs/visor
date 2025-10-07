@@ -452,7 +452,8 @@ export async function extractFileContext(
       deletedFiles,
     };
   } catch (error) {
-    console.error('Failed to extract file context:', error);
+    const { logger } = await import('./logger');
+    logger.error(`Failed to extract file context: ${error instanceof Error ? error.message : String(error)}`);
     return {};
   }
 }

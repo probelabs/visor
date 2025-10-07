@@ -11,6 +11,7 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
+import { logger } from './logger';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -31,9 +32,9 @@ export class FailureConditionEvaluator {
       Math,
       // Allow console for debugging (in controlled environment)
       console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
+        log: (...args: unknown[]) => logger.debug(['Debug:', ...args].join(' ')),
+        warn: (...args: unknown[]) => logger.warn(args.map(a => String(a)).join(' ')),
+        error: (...args: unknown[]) => logger.error(args.map(a => String(a)).join(' ')),
       },
     };
 
@@ -106,7 +107,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      console.warn(`Failed to evaluate fail_if expression: ${error}`);
+      logger.warn(`Failed to evaluate fail_if expression: ${error instanceof Error ? error.message : String(error)}`);
       return false; // Don't fail on evaluation errors
     }
   }
@@ -205,7 +206,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
+      logger.warn(`Failed to evaluate if expression for check '${checkName}': ${error instanceof Error ? error.message : String(error)}`);
       // Default to running the check if evaluation fails
       return true;
     }
@@ -377,9 +378,9 @@ export class FailureConditionEvaluator {
       const success = (): boolean => true;
       const failure = (): boolean => false;
 
-      // Debug logging function for printing to console
+      // Debug logging function hooked into centralized logger
       const log = (...args: unknown[]): void => {
-        console.log('🔍 Debug:', ...args);
+        logger.debug(['Debug:', ...args].map(a => String(a)).join(' '));
       };
 
       // Helper functions for array operations
@@ -508,7 +509,7 @@ export class FailureConditionEvaluator {
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
-      console.error('❌ Failed to evaluate expression:', condition, error);
+      logger.error(`Failed to evaluate expression: ${String(condition)} :: ${error instanceof Error ? error.message : String(error)}`);
       // Re-throw the error so it can be caught at a higher level for error reporting
       throw error;
     }
@@ -570,8 +571,12 @@ export class FailureConditionEvaluator {
           replacement: issue.replacement,
         })),
         // Include additional schema-specific data from reviewSummary
+<<<<<<< Updated upstream
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(reviewSummary as any), // Pass through any additional fields
+=======
+        ...(reviewSummary as unknown as Record<string, unknown>),
+>>>>>>> Stashed changes
       },
       outputs: (() => {
         if (!previousOutputs) return {};

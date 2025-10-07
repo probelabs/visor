@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { CheckType } from './types/cli';
 import { VisorConfig } from './types/config';
+import { logger } from './logger';
 
 export interface GitHubActionInputs {
   'github-token': string;
@@ -204,7 +205,7 @@ export class ActionCliBridge {
         env.INPUT_REPO = inputs.repo;
       }
 
-      console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);
+      logger.info(`Executing Visor CLI with args: ${cliArgs.join(' ')}`);
 
       // Use bundled index.js for CLI execution
       // When running as a GitHub Action, GITHUB_ACTION_PATH points to the action's directory
@@ -368,7 +369,7 @@ export class ActionCliBridge {
 
       return {};
     } catch {
-      console.log('Could not parse CLI output as JSON, using default values');
+      logger.warn('Could not parse CLI output as JSON, using default values');
       return {};
     }
   }
@@ -436,7 +437,7 @@ export class ActionCliBridge {
 
       return tempConfigPath;
     } catch (error) {
-      console.error('Failed to create temporary config file:', error);
+      logger.error(`Failed to create temporary config file: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }

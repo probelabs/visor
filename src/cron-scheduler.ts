@@ -1,5 +1,6 @@
 import * as cron from 'node-cron';
 import { VisorConfig, CheckConfig } from './types/config';
+import { logger } from './logger';
 import { CheckExecutionEngine } from './check-execution-engine';
 
 export interface ScheduledCheck {
@@ -27,7 +28,7 @@ export class CronScheduler {
    * Initialize scheduler and register all scheduled checks
    */
   public initialize(): void {
-    console.log('🕐 Initializing cron scheduler...');
+    logger.info('Initializing cron scheduler...');
 
     // Find all checks with schedule configuration
     for (const [checkName, checkConfig] of Object.entries(this.config.checks || {})) {
@@ -36,7 +37,7 @@ export class CronScheduler {
       }
     }
 
-    console.log(`🕐 Registered ${this.scheduledChecks.size} scheduled checks`);
+    logger.info(`Registered ${this.scheduledChecks.size} scheduled checks`);
   }
 
   /**
@@ -47,7 +48,7 @@ export class CronScheduler {
 
     // Validate cron expression
     if (!cron.validate(schedule)) {
-      console.error(`❌ Invalid cron expression for check "${checkName}": ${schedule}`);
+      logger.error(`Invalid cron expression for check "${checkName}": ${schedule}`);
       return;
     }
 
@@ -72,14 +73,14 @@ export class CronScheduler {
     scheduledCheck.task = task;
     this.scheduledChecks.set(checkName, scheduledCheck);
 
-    console.log(`📅 Scheduled check "${checkName}" with cron: ${schedule}`);
+    logger.info(`Scheduled check "${checkName}" with cron: ${schedule}`);
   }
 
   /**
    * Execute a scheduled check
    */
   private async executeScheduledCheck(checkName: string, _checkConfig: CheckConfig): Promise<void> {
-    console.log(`⏰ Executing scheduled check: ${checkName}`);
+    logger.info(`Executing scheduled check: ${checkName}`);
 
     try {
       // Create a synthetic PR info for scheduled executions (not currently used)
@@ -95,7 +96,7 @@ export class CronScheduler {
       // Handle the results (could send to webhook, write to file, etc.)
       await this.handleScheduledResults(checkName, result);
     } catch (error) {
-      console.error(`❌ Failed to execute scheduled check "${checkName}":`, error);
+      logger.error(`Failed to execute scheduled check "${checkName}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -104,10 +105,10 @@ export class CronScheduler {
    */
   private async handleScheduledResults(
     checkName: string,
-    result: any // eslint-disable-line @typescript-eslint/no-explicit-any
+    result: { failureReasons?: unknown[] } | unknown
   ): Promise<void> {
     // Log the results
-    console.log(`✅ Scheduled check "${checkName}" completed`);
+    logger.info(`Scheduled check "${checkName}" completed`);
 
     // Could extend this to:
     // - Send results to webhook
@@ -116,8 +117,9 @@ export class CronScheduler {
     // - Send email notification
     // etc.
 
-    if (result.failureReasons && result.failureReasons.length > 0) {
-      console.warn(`⚠️  Check "${checkName}" has failures:`, result.failureReasons);
+    const fr = (result as { failureReasons?: unknown[] }).failureReasons;
+    if (Array.isArray(fr) && fr.length > 0) {
+      logger.warn(`Check "${checkName}" has failures: ${fr.length}`);
     }
   }
 
@@ -126,11 +128,11 @@ export class CronScheduler {
    */
   public start(): void {
     if (this.isRunning) {
-      console.log('🕐 Scheduler is already running');
+      logger.info('Scheduler is already running');
       return;
     }
 
-    console.log('🚀 Starting cron scheduler...');
+    logger.info('Starting cron scheduler...');
 
     for (const scheduledCheck of this.scheduledChecks.values()) {
       if (scheduledCheck.task) {
@@ -139,7 +141,7 @@ export class CronScheduler {
     }
 
     this.isRunning = true;
-    console.log(`✅ Started ${this.scheduledChecks.size} scheduled tasks`);
+    logger.info(`Started ${this.scheduledChecks.size} scheduled tasks`);
   }
 
   /**
@@ -147,11 +149,11 @@ export class CronScheduler {
    */
   public stop(): void {
     if (!this.isRunning) {
-      console.log('🕐 Scheduler is not running');
+      logger.info('Scheduler is not running');
       return;
     }
 
-    console.log('🛑 Stopping cron scheduler...');
+    logger.info('Stopping cron scheduler...');
 
     for (const scheduledCheck of this.scheduledChecks.values()) {
       if (scheduledCheck.task) {
@@ -160,7 +162,7 @@ export class CronScheduler {
     }
 
     this.isRunning = false;
-    console.log('✅ Scheduler stopped');
+    logger.info('Scheduler stopped');
   }
 
   /**
@@ -195,7 +197,7 @@ export class CronScheduler {
       throw new Error(`No scheduled check found with name: ${checkName}`);
     }
 
-    console.log(`🔧 Manually triggering check: ${checkName}`);
+    logger.info(`Manually triggering check: ${checkName}`);
     await this.executeScheduledCheck(checkName, scheduledCheck.checkConfig);
   }
 

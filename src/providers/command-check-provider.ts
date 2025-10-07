@@ -121,7 +121,10 @@ export class CommandCheckProvider extends CheckProvider {
 
       // Inject W3C trace context so downstream tools can join the trace
       try {
+<<<<<<< Updated upstream
         // eslint-disable-next-line @typescript-eslint/no-var-requires
+=======
+>>>>>>> Stashed changes
         const { context, trace } = require('@opentelemetry/api');
         const span = trace.getSpan(context.active());
         const sc = span?.spanContext();
@@ -155,9 +158,18 @@ export class CommandCheckProvider extends CheckProvider {
             stdout = res.stdout;
             stderr = res.stderr;
             try { addEvent('command.exec.completed', { duration_ms: Date.now() - started, stderr_len: (stderr || '').length, stdout_len: (stdout || '').length }); } catch {}
+<<<<<<< Updated upstream
           } catch (err: any) {
             try { span.recordException(err); } catch {}
             try { addEvent('command.exec.error', { duration_ms: Date.now() - started, code: err?.code, signal: err?.signal }); } catch {}
+=======
+          } catch (err: unknown) {
+            try { span.recordException(err as Error); } catch {}
+            try {
+              const e = err as { code?: unknown; signal?: unknown };
+              addEvent('command.exec.error', { duration_ms: Date.now() - started, code: e?.code as unknown, signal: e?.signal as unknown });
+            } catch {}
+>>>>>>> Stashed changes
             throw err;
           }
         }
@@ -481,13 +493,13 @@ export class CommandCheckProvider extends CheckProvider {
    *  - If parsing fails or value is not a string, return the value unchanged
    *  - Attempts to extract JSON from the end of the output if full parse fails
    */
-  private makeJsonSmart<T = unknown>(value: T): T | any {
+  private makeJsonSmart<T = unknown>(value: T): T | unknown {
     if (typeof value !== 'string') {
       return value;
     }
 
     const raw = value as unknown as string;
-    let parsed: any;
+    let parsed: unknown;
 
     // First try: parse the entire string as JSON
     try {
@@ -514,7 +526,7 @@ export class CommandCheckProvider extends CheckProvider {
 
     // Use a boxed string so string methods still work via Proxy fallback
     const boxed = new String(raw);
-    const handler: ProxyHandler<any> = {
+    const handler: ProxyHandler<String> = {
       get(target, prop, receiver) {
         if (prop === 'toString' || prop === 'valueOf') {
           return () => raw;
@@ -523,22 +535,22 @@ export class CommandCheckProvider extends CheckProvider {
           return () => raw;
         }
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          if (prop in parsed) {
-            return (parsed as any)[prop as any];
+          if (typeof prop === 'string' && prop in (parsed as Record<string, unknown>)) {
+            return (parsed as Record<string, unknown>)[prop];
           }
         }
         return Reflect.get(target, prop, receiver);
       },
       has(_target, prop) {
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          if (prop in parsed) return true;
+          if (typeof prop === 'string' && prop in (parsed as Record<string, unknown>)) return true;
         }
         return false;
       },
       ownKeys(_target) {
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
           try {
-            return Reflect.ownKeys(parsed);
+            return Reflect.ownKeys(parsed as object);
           } catch {
             return [];
           }
@@ -547,7 +559,7 @@ export class CommandCheckProvider extends CheckProvider {
       },
       getOwnPropertyDescriptor(_target, prop) {
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          const descriptor = Object.getOwnPropertyDescriptor(parsed, prop as any);
+          const descriptor = Object.getOwnPropertyDescriptor(parsed as object, prop as PropertyKey);
           if (descriptor) return descriptor;
         }
         return {

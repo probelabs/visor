@@ -520,8 +520,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
       // Pass MCP servers directly to the SDK - let it handle spawning and tool discovery
       if (claudeCodeConfig.mcpServers && Object.keys(claudeCodeConfig.mcpServers).length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (query as any).mcpServers = claudeCodeConfig.mcpServers;
+        (query as unknown as { mcpServers?: unknown }).mcpServers = claudeCodeConfig.mcpServers;
       }
 
       // Execute query with Claude Code
@@ -589,7 +588,10 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Log detailed error information
-      console.error(`❌ Claude Code Check Provider Error: ${errorMessage}`);
+      {
+        const { logger } = await import('../logger');
+        logger.error(`Claude Code Check Provider Error: ${errorMessage}`);
+      }
 
       // Check if this is a critical error
       const isCriticalError =
@@ -599,12 +601,9 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         errorMessage.includes('authentication');
 
       if (isCriticalError) {
-        console.error(
-          `🚨 CRITICAL ERROR: Claude Code provider authentication or setup issue detected`
-        );
-        console.error(
-          `🚨 This check cannot proceed without valid API credentials and SDK installation`
-        );
+        const { logger } = await import('../logger');
+        logger.error(`CRITICAL ERROR: Claude Code provider authentication or setup issue detected`);
+        logger.error(`This check cannot proceed without valid API credentials and SDK installation`);
       }
 
       // Re-throw with more context

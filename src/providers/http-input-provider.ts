@@ -133,9 +133,8 @@ export class HttpInputProvider extends CheckProvider {
       | Map<string, Record<string, unknown>>
       | undefined;
     if (globalWebhookStore && globalWebhookStore.get) {
-      console.warn(
-        'HttpInputProvider: Using deprecated global webhook store. Please use webhook context instead.'
-      );
+      const { logger } = await import('../logger');
+      logger.warn('HttpInputProvider: Using deprecated global webhook store. Please use webhook context instead.');
       return globalWebhookStore.get(endpoint) || null;
     }
 

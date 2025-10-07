@@ -98,7 +98,7 @@ export class ConfigManager {
         // Load and merge all parent configurations
         let mergedConfig: Partial<VisorConfig> = {};
         for (const source of extends_) {
-          console.log(`📦 Extending from: ${source}`);
+          logger.info(`Extending from: ${source}`);
           const parentConfig = await loader.fetchConfig(source);
           mergedConfig = merger.merge(mergedConfig, parentConfig);
         }
@@ -250,8 +250,8 @@ export class ConfigManager {
       }
 
       if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
-        // Always log to stderr to avoid contaminating formatted output
-        console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
+        // Always log via centralized logger
+        logger.info(`Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
         const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
 
@@ -265,9 +265,8 @@ export class ConfigManager {
       }
     } catch (error) {
       // Silently fail and return null - will fall back to minimal default
-      console.warn(
-        'Failed to load bundled default config:',
-        error instanceof Error ? error.message : String(error)
+      logger.warn(
+        `Failed to load bundled default config: ${error instanceof Error ? error.message : String(error)}`
       );
     }
 
@@ -448,7 +447,7 @@ export class ConfigManager {
                 field: `checks.${checkName}.mcpServers`,
                 message:
                   "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
-                value: (anyCheck as any).mcpServers,
+              value: (anyCheck as unknown as { mcpServers?: unknown }).mcpServers,
               });
             }
             if (hasClaudeCodeMcp) {
@@ -539,8 +538,8 @@ export class ConfigManager {
       checkConfig.type = 'ai';
     }
     // Backward-compat alias: accept 'logger' as 'log'
-    if ((checkConfig as any).type === 'logger') {
-      (checkConfig as any).type = 'log';
+    if ((checkConfig as unknown as { type?: string }).type === 'logger') {
+      (checkConfig as unknown as { type?: string }).type = 'log';
     }
 
     if (!this.validCheckTypes.includes(checkConfig.type)) {
@@ -804,7 +803,7 @@ export class ConfigManager {
             : '';
           const msg = e.message || 'Invalid configuration';
           if (e.keyword === 'additionalProperties') {
-            const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
+            const addl = (e.params && (e.params as { additionalProperty?: string }).additionalProperty) || 'unknown';
             const fullField = pathStr ? `${pathStr}.${addl}` : addl;
             const topLevel = !pathStr;
             warnings.push({

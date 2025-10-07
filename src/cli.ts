@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { CliOptions, CheckType, OutputFormat } from './types/cli';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger';
 
 /**
  * CLI argument parser and command handler
@@ -192,7 +193,11 @@ export class CLI {
         version: options.version,
         codeContext,
         telemetry: !!options.telemetry,
+<<<<<<< Updated upstream
         telemetrySink: options.telemetrySink as any,
+=======
+        telemetrySink: options.telemetrySink as 'otlp' | 'file' | 'console' | undefined,
+>>>>>>> Stashed changes
         telemetryEndpoint: options.telemetryEndpoint,
         traceReport: !!options.traceReport,
         autoInstrument: !!options.autoInstrumentations,
@@ -379,6 +384,6 @@ Examples:
    * Display version
    */
   public showVersion(): void {
-    console.log(this.getVersion());
+    logger.info(this.getVersion());
   }
 }

@@ -6,6 +6,7 @@ import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from './liquid-extensions';
 import { CheckExecutionEngine } from './check-execution-engine';
+import { logger } from './logger';
 
 export interface WebhookPayload {
   endpoint: string;
@@ -51,13 +52,13 @@ export class WebhookServer {
    */
   public async start(): Promise<void> {
     if (!this.config.enabled) {
-      console.log('🔌 HTTP server is disabled in configuration');
+      logger.info('HTTP server is disabled in configuration');
       return;
     }
 
     // Don't start server in GitHub Actions environment
     if (this.isGitHubActions) {
-      console.log('🔌 HTTP server disabled in GitHub Actions environment');
+      logger.info('HTTP server disabled in GitHub Actions environment');
       return;
     }
 
@@ -79,14 +80,12 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       this.server!.listen(port, host, () => {
         const protocol = this.config.tls?.enabled ? 'https' : 'http';
-        console.log(
-          `🔌 ${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`
-        );
+        logger.info(`${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`);
 
         if (this.config.endpoints && this.config.endpoints.length > 0) {
-          console.log('📍 Registered endpoints:');
+          logger.info('Registered endpoints:');
           for (const endpoint of this.config.endpoints) {
-            console.log(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
+            logger.info(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
           }
         }
 
@@ -94,7 +93,7 @@ export class WebhookServer {
       });
 
       this.server!.on('error', error => {
-        console.error('❌ Failed to start HTTP server:', error);
+        logger.error('Failed to start HTTP server:', String(error instanceof Error ? error.message : error));
         reject(error);
       });
     });
@@ -185,7 +184,7 @@ export class WebhookServer {
 
     return new Promise(resolve => {
       this.server!.close(() => {
-        console.log('🛑 HTTP server stopped');
+        logger.info('HTTP server stopped');
         resolve();
       });
     });
@@ -236,7 +235,7 @@ export class WebhookServer {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'success', endpoint: endpoint.path }));
     } catch (error) {
-      console.error('❌ Error handling webhook request:', error);
+      logger.error(`Error handling webhook request: ${error instanceof Error ? error.message : String(error)}`);
 
       // Handle request body too large errors with proper HTTP status
       if (error instanceof Error && error.message.includes('Request body too large')) {
@@ -271,7 +270,7 @@ export class WebhookServer {
 
       case 'hmac':
         if (!auth.secret) {
-          console.warn('HMAC authentication configured but no secret provided');
+          logger.warn('HMAC authentication configured but no secret provided');
           return false;
         }
         return this.verifyHmacSignature(req, rawBody, auth.secret);
@@ -298,7 +297,7 @@ export class WebhookServer {
       // Get signature from header
       const receivedSignature = req.headers['x-webhook-signature'] as string;
       if (!receivedSignature) {
-        console.warn('Missing x-webhook-signature header for HMAC authentication');
+        logger.warn('Missing x-webhook-signature header for HMAC authentication');
         return false;
       }
 
@@ -310,7 +309,7 @@ export class WebhookServer {
       // Use timing-safe comparison to prevent timing attacks
       return this.timingSafeEqual(receivedSignature, calculatedSignature);
     } catch (error) {
-      console.error('Error verifying HMAC signature:', error);
+      logger.error(`Error verifying HMAC signature: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -329,7 +328,7 @@ export class WebhookServer {
       const bufferB = Buffer.from(b, 'utf8');
       return crypto.timingSafeEqual(bufferA, bufferB);
     } catch (error) {
-      console.error('Timing-safe comparison failed:', error);
+      logger.error(`Timing-safe comparison failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -402,7 +401,7 @@ export class WebhookServer {
     payload: WebhookPayload,
     endpoint: { path: string; transform?: string; name?: string }
   ): Promise<void> {
-    console.log(`🔔 Received webhook on ${endpoint.path}`);
+    logger.info(`Received webhook on ${endpoint.path}`);
 
     let processedData = payload.body;
 
@@ -417,7 +416,7 @@ export class WebhookServer {
         const rendered = await this.liquid.parseAndRender(endpoint.transform, context);
         processedData = JSON.parse(rendered);
       } catch (error) {
-        console.error(`❌ Failed to transform webhook data:`, error);
+        logger.error(`Failed to transform webhook data: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -446,11 +445,11 @@ export class WebhookServer {
     }
 
     if (checksToRun.length === 0) {
-      console.log(`ℹ️  No checks configured for webhook endpoint: ${endpoint}`);
+      logger.info(`No checks configured for webhook endpoint: ${endpoint}`);
       return;
     }
 
-    console.log(`🚀 Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
+    logger.info(`Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
 
     try {
       // Execute the checks with webhook context
@@ -464,9 +463,9 @@ export class WebhookServer {
         },
       });
 
-      console.log(`✅ Webhook checks completed for: ${endpoint}`);
+      logger.info(`Webhook checks completed for: ${endpoint}`);
     } catch (error) {
-      console.error(`❌ Failed to execute webhook checks:`, error);
+      logger.error(`Failed to execute webhook checks: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
