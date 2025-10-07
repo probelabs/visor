@@ -1907,6 +1907,9 @@ export class CheckExecutionEngine {
             eventContext: prInfo.eventContext, // Pass event context for templates
             transform: checkConfig.transform,
             transform_js: checkConfig.transform_js,
+            // Important: pass through provider-level timeout from check config
+            // (e.g., command/http_client providers expect seconds/ms here)
+            timeout: checkConfig.timeout,
             level: extendedCheckConfig.level,
             message: extendedCheckConfig.message,
             env: checkConfig.env,
