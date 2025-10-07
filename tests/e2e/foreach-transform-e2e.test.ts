@@ -10,10 +10,16 @@ describe('forEach with transform_js E2E Tests', () => {
 
   // Helper function to execute CLI with clean environment
   const execCLI = (args: string[], options: any = {}): string => {
-    const cleanEnv = { ...process.env };
+    const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
     delete cleanEnv.GITHUB_ACTIONS;
+    // Ensure git-related env from hooks cannot leak into the CLI process
+    delete cleanEnv.GIT_DIR;
+    delete cleanEnv.GIT_WORK_TREE;
+    delete cleanEnv.GIT_INDEX_FILE;
+    delete cleanEnv.GIT_PREFIX;
+    delete cleanEnv.GIT_COMMON_DIR;
 
     const finalOptions = {
       ...options,

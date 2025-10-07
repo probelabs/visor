@@ -77,10 +77,16 @@ describe('CLI Workflow Integration Tests', () => {
       let stderr = '';
 
       // Clean environment for CLI to run properly (remove Jest variables)
-      const cleanEnv = { ...process.env };
+      const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
       delete cleanEnv.JEST_WORKER_ID;
       delete cleanEnv.NODE_ENV;
       delete cleanEnv.GITHUB_ACTIONS; // Force local CLI mode in CI runner
+      // Ensure git-related env from hooks cannot leak into the CLI process
+      delete cleanEnv.GIT_DIR;
+      delete cleanEnv.GIT_WORK_TREE;
+      delete cleanEnv.GIT_INDEX_FILE;
+      delete cleanEnv.GIT_PREFIX;
+      delete cleanEnv.GIT_COMMON_DIR;
 
       const child = spawn(command, commandArgs, {
         cwd: options.cwd || tempDir,

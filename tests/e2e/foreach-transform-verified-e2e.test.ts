@@ -10,11 +10,17 @@ describe('forEach with transform_js E2E Verification Tests', () => {
 
   // Helper function to execute CLI with clean environment
   const execCLI = (args: string[], options: any = {}): string => {
-    // Clear Jest environment variables so the CLI runs properly
-    const cleanEnv = { ...process.env };
+    // Clear Jest and Git environment variables so the CLI runs properly and
+    // cannot be affected by the parent repository's hook environment
+    const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
     delete cleanEnv.GITHUB_ACTIONS;
+    delete cleanEnv.GIT_DIR;
+    delete cleanEnv.GIT_WORK_TREE;
+    delete cleanEnv.GIT_INDEX_FILE;
+    delete cleanEnv.GIT_PREFIX;
+    delete cleanEnv.GIT_COMMON_DIR;
 
     // Merge options with clean environment
     const finalOptions = {
