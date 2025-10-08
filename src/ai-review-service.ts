@@ -250,13 +250,15 @@ export class AIReviewService {
 
   /**
    * Execute AI review using session reuse - reuses an existing ProbeAgent session
+   * @param sessionMode - 'clone' (default) clones history, 'append' shares history
    */
   async executeReviewWithSessionReuse(
     prInfo: PRInfo,
     customPrompt: string,
     parentSessionId: string,
     schema?: string | Record<string, unknown>,
-    checkName?: string
+    checkName?: string,
+    sessionMode: 'clone' | 'append' = 'clone'
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -272,7 +274,30 @@ export class AIReviewService {
     // Build prompt from custom instructions
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
 
-    log(`🔄 Reusing AI session ${parentSessionId} for review...`);
+    // Determine which agent to use based on session mode
+    let agentToUse: typeof existingAgent;
+    let currentSessionId: string;
+
+    if (sessionMode === 'clone') {
+      // Clone the session - creates a new agent with copied history
+      currentSessionId = `${parentSessionId}-clone-${Date.now()}`;
+      log(`📋 Cloning AI session ${parentSessionId} → ${currentSessionId}...`);
+
+      const clonedAgent = await this.sessionRegistry.cloneSession(
+        parentSessionId,
+        currentSessionId
+      );
+      if (!clonedAgent) {
+        throw new Error(`Failed to clone session ${parentSessionId}. Falling back to append mode.`);
+      }
+      agentToUse = clonedAgent;
+    } else {
+      // Append mode - use the same agent instance
+      log(`🔄 Appending to AI session ${parentSessionId} (shared history)...`);
+      agentToUse = existingAgent;
+      currentSessionId = parentSessionId;
+    }
+
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
     log(`Schema type: ${schema || 'none (no schema)'}`);
 
@@ -296,9 +321,9 @@ export class AIReviewService {
     }
 
     try {
-      // Use existing agent's answer method instead of creating new agent
+      // Use the determined agent (cloned or original)
       const { response, effectiveSchema } = await this.callProbeAgentWithExistingSession(
-        existingAgent,
+        agentToUse,
         prompt,
         schema,
         debugInfo,

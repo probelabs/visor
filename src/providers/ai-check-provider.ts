@@ -551,9 +551,12 @@ export class AICheckProvider extends CheckProvider {
 
       // Check if we should use session reuse
       if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+        // Get session_mode from config, default to 'clone'
+        const sessionMode = (config.session_mode as 'clone' | 'append') || 'clone';
+
         if (aiConfig.debug) {
           console.error(
-            `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
+            `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId} (mode: ${sessionMode})`
           );
         }
         result = await service.executeReviewWithSessionReuse(
@@ -561,7 +564,8 @@ export class AICheckProvider extends CheckProvider {
           processedPrompt,
           sessionInfo.parentSessionId,
           schema,
-          config.checkName
+          config.checkName,
+          sessionMode
         );
       } else {
         if (aiConfig.debug) {
