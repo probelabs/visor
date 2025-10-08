@@ -2858,10 +2858,9 @@ export class CheckExecutionEngine {
                       }
                     }
                     const failures = await this.evaluateFailureConditions(parent, rForEval, config);
-                    logger.info(`forEach-gate: parent=${parent} idx=${idx} outputType=${typeof (rForEval as any).output} failed=${failures.some(f=>f.failed)}`);
                     if (failures.some(f => f.failed)) {
                       // Temporary: surface why index is gated
-                      logger.info(`forEach gating: parent ${parent} item ${idx + 1} fail_if triggered`);
+                      
                     }
                     if (failures.some(f => f.failed)) return true;
                   }

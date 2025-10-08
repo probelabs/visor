@@ -130,7 +130,6 @@ export class CommandCheckProvider extends CheckProvider {
 
       // Keep raw output for transforms
       const rawOutput = stdout.trim();
-      logger.info(`prov-raw: ${rawOutput}`);
 
       // Try to parse output as JSON for default behavior
       let output: unknown = rawOutput;
