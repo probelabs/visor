@@ -102,6 +102,12 @@ visor --help
 
 See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
 
+Additional guides:
+
+- fail conditions: [docs/fail-if.md](docs/fail-if.md)
+- forEach behavior and dependent propagation: [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
+- timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
