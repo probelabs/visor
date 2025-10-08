@@ -1965,6 +1965,8 @@ export class CheckExecutionEngine {
               return (
                 id === 'command/execution_error' ||
                 id.endsWith('/command/execution_error') ||
+                id === 'command/timeout' ||
+                id.endsWith('/command/timeout') ||
                 id === 'command/transform_js_error' ||
                 id.endsWith('/command/transform_js_error') ||
                 id === 'command/transform_error' ||
@@ -2371,6 +2373,8 @@ export class CheckExecutionEngine {
               return (
                 id === 'command/execution_error' ||
                 id.endsWith('/command/execution_error') ||
+                id === 'command/timeout' ||
+                id.endsWith('/command/timeout') ||
                 id === 'command/transform_js_error' ||
                 id.endsWith('/command/transform_js_error') ||
                 id === 'command/transform_error' ||
