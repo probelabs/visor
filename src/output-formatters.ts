@@ -67,8 +67,11 @@ export class OutputFormatters {
     const { showDetails = false, groupByCategory = true } = options;
     let output = '';
 
-    // Calculate metrics from issues once at the top
-    const issues = result.reviewSummary.issues || [];
+    // Filter out system-level issues (fail_if conditions, internal errors)
+    // These should not appear in user-facing output
+    const issues = (result.reviewSummary.issues || []).filter(
+      issue => !(issue.file === 'system' && issue.line === 0)
+    );
     const totalIssues = issues.length;
     const criticalIssues = issues.filter(i => i.severity === 'critical').length;
 
@@ -264,8 +267,10 @@ export class OutputFormatters {
    * Format analysis results as JSON
    */
   static formatAsJSON(result: AnalysisResult, options: OutputFormatterOptions = {}): string {
-    // Calculate metrics from issues
-    const issues = result.reviewSummary.issues;
+    // Filter out system-level issues (fail_if conditions, internal errors)
+    const issues = result.reviewSummary.issues.filter(
+      issue => !(issue.file === 'system' && issue.line === 0)
+    );
     const totalIssues = calculateTotalIssues(issues);
     const criticalIssues = calculateCriticalIssues(issues);
 
@@ -303,8 +308,10 @@ export class OutputFormatters {
    * Format analysis results as SARIF 2.1.0
    */
   static formatAsSarif(result: AnalysisResult, _options: OutputFormatterOptions = {}): string {
-    // Get issues from result
-    const issues = result.reviewSummary.issues;
+    // Filter out system-level issues (fail_if conditions, internal errors)
+    const issues = result.reviewSummary.issues.filter(
+      issue => !(issue.file === 'system' && issue.line === 0)
+    );
 
     // Generate unique rule definitions for each issue category
     const rules: Array<{
@@ -440,8 +447,10 @@ export class OutputFormatters {
     const { showDetails = false, groupByCategory = true } = options;
     let output = '';
 
-    // Calculate metrics from issues
-    const issues = result.reviewSummary.issues;
+    // Filter out system-level issues (fail_if conditions, internal errors)
+    const issues = result.reviewSummary.issues.filter(
+      issue => !(issue.file === 'system' && issue.line === 0)
+    );
     const totalIssues = calculateTotalIssues(issues);
     const criticalIssues = calculateCriticalIssues(issues);
 
