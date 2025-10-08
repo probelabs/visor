@@ -200,7 +200,7 @@ describe('forEach Failure and Dependency Skip', () => {
       // dependent-check should NOT be skipped; it should execute for the successful items (item1 and item3)
       const stats = result.executionStatistics?.checks.find(c => c.checkName === 'dependent-check');
       expect(stats?.skipped).toBe(false);
-      expect((stats?.totalRuns || 0)).toBeGreaterThanOrEqual(2);
+      expect(stats?.totalRuns || 0).toBeGreaterThanOrEqual(2);
     });
   });
 

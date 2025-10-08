@@ -600,7 +600,15 @@ export class FailureConditionEvaluator {
     // and also derive common boolean flags generically (e.g., key:true/false) for fail_if usage.
     try {
       if (typeof extractedOutput === 'string') {
-        const parsed = this.tryExtractJsonFromEnd(extractedOutput) ?? (() => { try { return JSON.parse(extractedOutput); } catch { return null; } })();
+        const parsed =
+          this.tryExtractJsonFromEnd(extractedOutput) ??
+          (() => {
+            try {
+              return JSON.parse(extractedOutput);
+            } catch {
+              return null;
+            }
+          })();
         if (parsed !== null) {
           if (Array.isArray(parsed)) {
             (aggregatedOutput as any).items = parsed;
@@ -611,8 +619,12 @@ export class FailureConditionEvaluator {
         // Generic boolean key extraction for simple text outputs (no special provider cases)
         const lower = extractedOutput.toLowerCase();
         const boolFrom = (key: string): boolean | null => {
-          const reTrue = new RegExp(`(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*true(?:[^a-z0-9_]|$)`);
-          const reFalse = new RegExp(`(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*false(?:[^a-z0-9_]|$)`);
+          const reTrue = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*true(?:[^a-z0-9_]|$)`
+          );
+          const reFalse = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*false(?:[^a-z0-9_]|$)`
+          );
           if (reTrue.test(lower)) return true;
           if (reFalse.test(lower)) return false;
           return null;

@@ -30,10 +30,10 @@ describe('E2E: forEach branch-first execution order', () => {
       checks: {
         'list-issues': {
           type: 'command',
-          exec: "bash -lc \"printf '[\\\"ISSUE-1\\\",\\\"ISSUE-2\\\",\\\"ISSUE-3\\\"]'\"",
+          exec: 'bash -lc "printf \'[\\"ISSUE-1\\",\\"ISSUE-2\\",\\"ISSUE-3\\"]\'"',
           forEach: true,
         },
-        'categorize': {
+        categorize: {
           type: 'command',
           // Emit both an issue for order tracing and JSON output; ISSUE-2 fails via error=true
           exec:

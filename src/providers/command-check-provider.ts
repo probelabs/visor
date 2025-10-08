@@ -580,9 +580,18 @@ export class CommandCheckProvider extends CheckProvider {
       let escape = false;
       for (let j = i; j < n; j++) {
         const ch = text[j];
-        if (escape) { escape = false; continue; }
-        if (ch === '\\') { escape = true; continue; }
-        if (ch === '"') { inString = !inString; continue; }
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
         if (inString) continue;
         if (ch === '{' || ch === '[') open++;
         else if (ch === '}' || ch === ']') open--;

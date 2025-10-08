@@ -19,32 +19,36 @@ describe('E2E: forEach branch-first deep DAG', () => {
       checks: {
         root: {
           type: 'command',
-          exec: "bash -lc \"printf '[\\\"ISSUE-1\\\",\\\"ISSUE-2\\\",\\\"ISSUE-3\\\"]'\"",
+          exec: 'bash -lc "printf \'[\\"ISSUE-1\\",\\"ISSUE-2\\",\\"ISSUE-3\\"]\'"',
           forEach: true,
         },
         A: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '({ issues: [{ message: `A:${outputs["root"]}`, severity: "info", category: "logic", ruleId: "a" }], item: outputs["root"] })',
+          transform_js:
+            '({ issues: [{ message: `A:${outputs["root"]}`, severity: "info", category: "logic", ruleId: "a" }], item: outputs["root"] })',
           depends_on: ['root'],
         },
         B: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '(() => { const ITEM = outputs["A"].item; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
+          transform_js:
+            '(() => { const ITEM = outputs["A"].item; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
           depends_on: ['A'],
           fail_if: 'output.error',
         },
         C: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '({ issues: [{ message: `C:${outputs["B"].item}`, severity: "info", category: "logic", ruleId: "c" }] })',
+          transform_js:
+            '({ issues: [{ message: `C:${outputs["B"].item}`, severity: "info", category: "logic", ruleId: "c" }] })',
           depends_on: ['B'],
         },
         D: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '({ issues: [{ message: `D:${outputs["B"].item}`, severity: "info", category: "logic", ruleId: "d" }] })',
+          transform_js:
+            '({ issues: [{ message: `D:${outputs["B"].item}`, severity: "info", category: "logic", ruleId: "d" }] })',
           depends_on: ['C'],
         },
       },

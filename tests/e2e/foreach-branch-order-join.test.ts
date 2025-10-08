@@ -22,26 +22,29 @@ describe('E2E: forEach branch-first with join', () => {
       checks: {
         root: {
           type: 'command',
-          exec: "bash -lc \"printf '[\\\"ISSUE-1\\\",\\\"ISSUE-2\\\",\\\"ISSUE-3\\\"]'\"",
+          exec: 'bash -lc "printf \'[\\"ISSUE-1\\",\\"ISSUE-2\\",\\"ISSUE-3\\"]\'"',
           forEach: true,
         },
         A: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '({ issues: [{ message: `A:${outputs["root"]}`, severity: "info", category: "logic", ruleId: "a" }], item: outputs["root"] })',
+          transform_js:
+            '({ issues: [{ message: `A:${outputs["root"]}`, severity: "info", category: "logic", ruleId: "a" }], item: outputs["root"] })',
           depends_on: ['root'],
         },
         B: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '(() => { const ITEM = outputs["root"]; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
+          transform_js:
+            '(() => { const ITEM = outputs["root"]; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
           depends_on: ['root'],
           fail_if: 'output.error',
         },
         C: {
           type: 'command',
           exec: 'bash -lc "true"',
-          transform_js: '({ issues: [{ message: `C:${outputs["A"].item}`, severity: "info", category: "logic", ruleId: "c" }] })',
+          transform_js:
+            '({ issues: [{ message: `C:${outputs["A"].item}`, severity: "info", category: "logic", ruleId: "c" }] })',
           depends_on: ['A', 'B'],
         },
       },
