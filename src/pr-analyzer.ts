@@ -81,7 +81,8 @@ export class PRAnalyzer {
     } catch (error) {
       const { logger } = require('./logger');
       logger.warn(
-        `Failed to fetch commit diff for ${commitSha}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to fetch commit diff for ${commitSha}:`,
+        error instanceof Error ? error : new Error(String(error))
       );
       return '';
     }

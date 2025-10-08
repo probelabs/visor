@@ -60,3 +60,13 @@ debug-trace.js
 # Workshop artifacts
 workshop/build/
 !workshop/Visor-Workshop.pdf
+
+# Test temp artifacts
+/tests/fixtures/temp/
+/tmprepo/
+# Serverless trace outputs
+/output/traces/
+# Generic local traces and reports
+*.ndjson
+*.report.html
+*.trace.json

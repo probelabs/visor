@@ -29,8 +29,10 @@ export class FileSpanExporter implements SpanExporter {
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
     try {
       if (this.ndjson) {
-        // Buffer spans; write on shutdown for fewer fs ops
-        for (const s of spans) this.buffer.push(serializeSpan(s));
+        for (const s of spans) {
+          const line = JSON.stringify(serializeSpan(s)) + '\n';
+          fs.appendFileSync(this.filePath, line, 'utf8');
+        }
       } else {
         for (const s of spans) this.buffer.push(serializeSpan(s));
       }
@@ -44,12 +46,7 @@ export class FileSpanExporter implements SpanExporter {
     return new Promise(resolve => {
       try {
         if (this.ndjson) {
-          const fd = fs.openSync(this.filePath, 'w');
-          for (const span of this.buffer) {
-            fs.writeSync(fd, JSON.stringify(span));
-            fs.writeSync(fd, '\n');
-          }
-          fs.closeSync(fd);
+          // already written incrementally
         } else {
           fs.writeFileSync(this.filePath, JSON.stringify({ spans: this.buffer }, null, 2), 'utf8');
         }

@@ -48,7 +48,7 @@ export class CronScheduler {
 
     // Validate cron expression
     if (!cron.validate(schedule)) {
-      logger.error(`Invalid cron expression for check "${checkName}": ${schedule}`);
+      logger.error(`❌ Invalid cron expression for check "${checkName}": ${schedule}`);
       return;
     }
 
@@ -97,7 +97,8 @@ export class CronScheduler {
       await this.handleScheduledResults(checkName, result);
     } catch (error) {
       logger.error(
-        `Failed to execute scheduled check "${checkName}": ${error instanceof Error ? error.message : String(error)}`
+        `❌ Failed to execute scheduled check "${checkName}":`,
+        error instanceof Error ? error : new Error(String(error))
       );
     }
   }
@@ -134,7 +135,7 @@ export class CronScheduler {
       return;
     }
 
-    logger.info('Starting cron scheduler...');
+    logger.info('🚀 Starting cron scheduler...');
 
     for (const scheduledCheck of this.scheduledChecks.values()) {
       if (scheduledCheck.task) {
@@ -143,7 +144,7 @@ export class CronScheduler {
     }
 
     this.isRunning = true;
-    logger.info(`Started ${this.scheduledChecks.size} scheduled tasks`);
+    logger.info(`✅ Started ${this.scheduledChecks.size} scheduled tasks`);
   }
 
   /**
@@ -151,7 +152,7 @@ export class CronScheduler {
    */
   public stop(): void {
     if (!this.isRunning) {
-      logger.info('Scheduler is not running');
+      logger.info('🕐 Scheduler is not running');
       return;
     }
 

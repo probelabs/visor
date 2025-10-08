@@ -7,6 +7,8 @@ describe('Trace Report Exporter E2E', () => {
   const tempDir = path.join(__dirname, '..', 'fixtures', 'temp');
   const tracesDir = path.join(tempDir, 'traces-report');
   const configPath = path.join(tempDir, 'trace-report.yaml');
+  const originalExit = process.exit;
+  let mockProcessExit: jest.Mock;
 
   beforeAll(() => {
     fs.mkdirSync(tracesDir, { recursive: true });
@@ -18,6 +20,16 @@ describe('Trace Report Exporter E2E', () => {
       telemetry: { enabled: true },
     } as const;
     fs.writeFileSync(configPath, yaml.dump(cfg), 'utf8');
+  });
+
+  beforeEach(() => {
+    mockProcessExit = jest.fn();
+    process.exit = mockProcessExit as any;
+  });
+
+  afterEach(() => {
+    process.exit = originalExit;
+    jest.clearAllMocks();
   });
 
   it('writes an HTML trace report when enabled', async () => {

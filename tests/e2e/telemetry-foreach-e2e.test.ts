@@ -135,8 +135,8 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
     });
 
     // Provider span present
-    const names = lines.map((s: any) => s.name);
-    expect(names).toEqual(expect.arrayContaining(['visor.provider']));
+    const names2 = lines.map((s: any) => s.name);
+    expect(names2).toEqual(expect.arrayContaining(['visor.provider']));
 
     // Check started/completed events present
     const checkSpans = lines.filter(

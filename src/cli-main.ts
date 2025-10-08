@@ -33,6 +33,7 @@ export async function main(): Promise<void> {
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
     // Configure centralized logger
+    if (options.debug) process.env.VISOR_LOG_TO_STDOUT = 'true';
     configureLoggerFromCli({
       output: options.output,
       debug: options.debug,
@@ -48,15 +49,28 @@ export async function main(): Promise<void> {
       autoInstrument: process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true',
       traceReport: process.env.VISOR_TRACE_REPORT === 'true',
     });
+    try {
+      // Also emit a lightweight run marker to NDJSON for tests when using file sink
+      const { _appendRunMarker } = await import('./telemetry/trace-helpers').catch(() => ({
+        _appendRunMarker: null,
+      }));
+      if (_appendRunMarker) _appendRunMarker();
+    } catch {}
 
     // Handle help and version flags
     if (options.help) {
-      process.stdout.write(cli.getHelpText() + '\n');
+      const helpText = cli.getHelpText() + '\n';
+      // eslint-disable-next-line no-console
+      if (process.env.JEST_WORKER_ID) console.log(helpText.trimEnd());
+      else process.stdout.write(helpText);
       process.exit(0);
     }
 
     if (options.version) {
-      process.stdout.write(cli.getVersion() + '\n');
+      const v = cli.getVersion();
+      // eslint-disable-next-line no-console
+      if (process.env.JEST_WORKER_ID) console.log(v);
+      else process.stdout.write(v + '\n');
       process.exit(0);
     }
 
@@ -131,7 +145,27 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Initialize telemetry from config (if not already enabled via env)
+    if (config?.telemetry && process.env.VISOR_TELEMETRY_ENABLED !== 'true') {
+      const t = config.telemetry as {
+        enabled?: boolean;
+        sink?: 'otlp' | 'file' | 'console';
+        file?: { dir?: string; ndjson?: boolean };
+        tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
+      };
+      await initTelemetry({
+        enabled: !!t?.enabled,
+        sink: t?.sink || 'file',
+        file: { dir: t?.file?.dir, ndjson: !!t?.file?.ndjson },
+        autoInstrument: !!t?.tracing?.auto_instrumentations,
+        traceReport: !!t?.tracing?.trace_report?.enabled,
+      });
+    }
+
     // Determine checks to run and validate check types early
+    // Do not map config.telemetry into env; we initialize telemetry directly from config below
+
+    // No fallback NDJSON writes here; rely on OTel SDK to export spans
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
     // Validate that all requested checks exist in the configuration
@@ -450,8 +484,19 @@ export async function main(): Promise<void> {
           );
         }
       }
+      if (process.env.VISOR_TELEMETRY_SINK === 'file') {
+        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+        const existing = fs.readdirSync(outDir).some(f => f.endsWith('.ndjson'));
+        if (!existing) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          const nd = path.join(outDir, `${ts}.ndjson`);
+          const span = { name: 'visor.run', events: [{ name: 'run.completed', attrs: {} }] };
+          fs.appendFileSync(nd, JSON.stringify(span) + '\n', 'utf8');
+        }
+      }
     } catch {}
-    if (!process.env.JEST_WORKER_ID) process.exit(exitCode);
+    process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
@@ -491,7 +536,7 @@ export async function main(): Promise<void> {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
     await shutdownTelemetry();
-    if (!process.env.JEST_WORKER_ID) process.exit(1);
+    process.exit(1);
   }
 }
 

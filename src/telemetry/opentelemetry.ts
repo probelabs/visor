@@ -6,7 +6,7 @@
  */
 
 import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
-import type { SpanProcessor, ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { MetricReader } from '@opentelemetry/sdk-metrics';
 import type { NodeSDK as NodeSDKType } from '@opentelemetry/sdk-node';
 import type { Instrumentation } from '@opentelemetry/instrumentation';
@@ -140,25 +140,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       }
     }
 
-    class FanOutSpanProcessor implements SpanProcessor {
-      constructor(private readonly procs: SpanProcessor[]) {}
-      onStart(span: ReadableSpan, ctx: unknown): void {
-        for (const p of this.procs) p.onStart(span as unknown as never, ctx as unknown as never);
-      }
-      onEnd(span: ReadableSpan): void {
-        for (const p of this.procs) p.onEnd(span as unknown as never);
-      }
-      shutdown(): Promise<void> {
-        return Promise.all(this.procs.map(p => p.shutdown())).then(() => undefined);
-      }
-      forceFlush(): Promise<void> {
-        return Promise.all(this.procs.map(p => p.forceFlush())).then(() => undefined);
-      }
-    }
-
     const nodeSdk: NodeSDKType = new NodeSDK({
       resource,
-      spanProcessor: processors.length === 1 ? processors[0] : new FanOutSpanProcessor(processors),
+      spanProcessor: processors[0],
       metricReader,
       instrumentations,
       // Auto-instrumentations can be added later when desired

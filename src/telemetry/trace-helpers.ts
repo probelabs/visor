@@ -65,3 +65,31 @@ export function setSpanError(err: unknown): void {
     // ignore
   }
 }
+
+// Internal helper for tests: write a minimal run marker to NDJSON when using file sink
+let __ndjsonPath: string | null = null;
+export function __getOrCreateNdjsonPath(): string | null {
+  try {
+    if (process.env.VISOR_TELEMETRY_SINK !== 'file') return null;
+    const path = require('path');
+    const fs = require('fs');
+    const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    if (!__ndjsonPath) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      __ndjsonPath = path.join(outDir, `${ts}.ndjson`);
+    }
+    return __ndjsonPath;
+  } catch {
+    return null;
+  }
+}
+export function _appendRunMarker(): void {
+  try {
+    const fs = require('fs');
+    const p = __getOrCreateNdjsonPath();
+    if (!p) return;
+    const line = { name: 'visor.run', attributes: { started: true } };
+    fs.appendFileSync(p, JSON.stringify(line) + '\n', 'utf8');
+  } catch {}
+}

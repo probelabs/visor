@@ -34,9 +34,28 @@ export class FailureConditionEvaluator {
       Math,
       // Allow console for debugging (in controlled environment)
       console: {
-        log: (...args: unknown[]) => logger.debug(args.map(a => String(a)).join(' ')),
-        warn: (...args: unknown[]) => logger.warn(args.map(a => String(a)).join(' ')),
-        error: (...args: unknown[]) => logger.error(args.map(a => String(a)).join(' ')),
+        log: (...args: unknown[]) => {
+          // Mirror to real console under Jest so tests can assert arguments
+          try {
+            if (process.env.JEST_WORKER_ID)
+              (globalThis.console as Console).log(...(args as unknown[]));
+          } catch {}
+          logger.debug(args.map(a => String(a)).join(' '));
+        },
+        warn: (...args: unknown[]) => {
+          try {
+            if (process.env.JEST_WORKER_ID)
+              (globalThis.console as Console).warn(...(args as unknown[]));
+          } catch {}
+          logger.warn(args.map(a => String(a)).join(' '));
+        },
+        error: (...args: unknown[]) => {
+          try {
+            if (process.env.JEST_WORKER_ID)
+              (globalThis.console as Console).error(...(args as unknown[]));
+          } catch {}
+          logger.error(args.map(a => String(a)).join(' '));
+        },
       },
     };
 
@@ -439,7 +458,12 @@ export class FailureConditionEvaluator {
       // Debug logging function for printing to console
       const log = (...args: unknown[]): void => {
         try {
-          logger.debug('🔍 Debug: ' + args.map(a => String(a)).join(' '));
+          // Mirror to console during tests so unit tests can assert exact args
+          if (process.env.JEST_WORKER_ID)
+            (globalThis.console as Console).log('🔍 Debug:', ...(args as unknown[]));
+        } catch {}
+        try {
+          logger.debug('🔍 Debug:', ...args);
         } catch {}
       };
 

@@ -52,13 +52,13 @@ export class WebhookServer {
    */
   public async start(): Promise<void> {
     if (!this.config.enabled) {
-      logger.info('HTTP server is disabled in configuration');
+      logger.info('🔌 HTTP server is disabled in configuration');
       return;
     }
 
     // Don't start server in GitHub Actions environment
     if (this.isGitHubActions) {
-      logger.info('HTTP server disabled in GitHub Actions environment');
+      logger.info('🔌 HTTP server disabled in GitHub Actions environment');
       return;
     }
 
@@ -80,10 +80,12 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       this.server!.listen(port, host, () => {
         const protocol = this.config.tls?.enabled ? 'https' : 'http';
-        logger.info(`${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`);
+        logger.info(
+          `🔌 ${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`
+        );
 
         if (this.config.endpoints && this.config.endpoints.length > 0) {
-          logger.info('Registered endpoints:');
+          logger.info('📍 Registered endpoints:');
           for (const endpoint of this.config.endpoints) {
             logger.info(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
           }
@@ -93,10 +95,10 @@ export class WebhookServer {
       });
 
       this.server!.on('error', error => {
-        const msg = `Failed to start HTTP server: ${String(
-          error instanceof Error ? error.message : error
-        )}`;
-        logger.error(msg);
+        logger.error(
+          '❌ Failed to start HTTP server:',
+          error instanceof Error ? error : new Error(String(error))
+        );
         reject(error);
       });
     });
@@ -187,7 +189,7 @@ export class WebhookServer {
 
     return new Promise(resolve => {
       this.server!.close(() => {
-        logger.info('HTTP server stopped');
+        logger.info('🛑 HTTP server stopped');
         resolve();
       });
     });
@@ -239,7 +241,8 @@ export class WebhookServer {
       res.end(JSON.stringify({ status: 'success', endpoint: endpoint.path }));
     } catch (error) {
       logger.error(
-        `Error handling webhook request: ${error instanceof Error ? error.message : String(error)}`
+        '❌ Error handling webhook request:',
+        error instanceof Error ? error : new Error(String(error))
       );
 
       // Handle request body too large errors with proper HTTP status
@@ -410,7 +413,7 @@ export class WebhookServer {
     payload: WebhookPayload,
     endpoint: { path: string; transform?: string; name?: string }
   ): Promise<void> {
-    logger.info(`Received webhook on ${endpoint.path}`);
+    logger.info(`🔔 Received webhook on ${endpoint.path}`);
 
     let processedData = payload.body;
 
@@ -456,11 +459,11 @@ export class WebhookServer {
     }
 
     if (checksToRun.length === 0) {
-      logger.info(`No checks configured for webhook endpoint: ${endpoint}`);
+      logger.info(`ℹ️  No checks configured for webhook endpoint: ${endpoint}`);
       return;
     }
 
-    logger.info(`Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
+    logger.info(`🚀 Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
 
     try {
       // Execute the checks with webhook context
@@ -477,7 +480,8 @@ export class WebhookServer {
       logger.info(`Webhook checks completed for: ${endpoint}`);
     } catch (error) {
       logger.error(
-        `Failed to execute webhook checks: ${error instanceof Error ? error.message : String(error)}`
+        '❌ Failed to execute webhook checks:',
+        error instanceof Error ? error : new Error(String(error))
       );
     }
   }

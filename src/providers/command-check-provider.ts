@@ -63,6 +63,17 @@ export class CommandCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
+    try {
+      const { __getOrCreateNdjsonPath } = require('../telemetry/trace-helpers');
+      const fs = require('fs');
+      const p = __getOrCreateNdjsonPath();
+      if (p)
+        fs.appendFileSync(
+          p,
+          JSON.stringify({ name: 'visor.provider', attributes: { provider: 'command' } }) + '\n',
+          'utf8'
+        );
+    } catch {}
     const command = config.exec as string;
     const transform = config.transform as string | undefined;
     const transformJs = config.transform_js as string | undefined;
@@ -94,6 +105,12 @@ export class CommandCheckProvider extends CheckProvider {
       }
 
       logger.debug(`🔧 Debug: Rendered command: ${renderedCommand}`);
+
+      // Normalize embedded newlines to be safe for shells and node -e code strings
+      // Converts literal newlines into \n so JS snippets stay valid
+      if (/\bnode\s+-e\b/.test(renderedCommand) && renderedCommand.includes('\n')) {
+        renderedCommand = renderedCommand.replace(/\n/g, '\\n');
+      }
 
       // Prepare environment variables - convert all to strings
       const scriptEnv: Record<string, string> = {};
@@ -259,7 +276,12 @@ export class CommandCheckProvider extends CheckProvider {
             const outputs = scope.outputs;
             const env = scope.env;
             const log = (...args) => {
-              console.log('🔍 Debug:', ...args);
+              try {
+                if (process.env.JEST_WORKER_ID && globalThis.console && typeof globalThis.console.log === 'function') {
+                  globalThis.console.log('🔍 Debug:', ...args);
+                }
+              } catch {}
+              logger.debug('🔍 Debug:', ...args);
             };
             return ${transformExpression};
           `;

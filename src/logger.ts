@@ -29,6 +29,7 @@ class Logger {
   private level: LogLevel = 'info';
   private isJsonLike: boolean = false;
   private isTTY: boolean = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
+  private toStdout: boolean = false;
 
   configure(
     opts: {
@@ -61,9 +62,13 @@ class Logger {
     const output = opts.outputFormat || process.env.VISOR_OUTPUT_FORMAT || 'table';
     // In JSON/SARIF we suppress non-error logs unless explicitly verbose/debug
     this.isJsonLike = output === 'json' || output === 'sarif';
+    // Route to stdout only when not producing machine-readable output
+    const wantStdout = process.env.VISOR_LOG_TO_STDOUT === 'true';
+    this.toStdout = this.isJsonLike ? false : wantStdout;
   }
 
   private shouldLog(level: LogLevel): boolean {
+    if (level === 'debug' && process.env.VISOR_DEBUG === 'true') return true;
     const desired = levelToNumber(level);
     const current = levelToNumber(this.level);
     if (desired > current) return false;
@@ -80,10 +85,11 @@ class Logger {
   }
 
   private write(msg: string): void {
-    // Always route to stderr to keep stdout clean for results
     try {
       const tc = this.getTraceSuffix();
-      process.stderr.write((tc ? `${msg}${tc}` : msg) + '\n');
+      const line = (tc ? `${msg}${tc}` : msg) + '\n';
+      if (this.toStdout) process.stdout.write(line);
+      else process.stderr.write(line);
     } catch {
       // Ignore write errors
     }
@@ -100,44 +106,44 @@ class Logger {
     }
   }
 
-  info(msg: string): void {
-    if (this.shouldLog('info')) {
-      this.write(msg);
-      try {
-        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(msg);
-      } catch {}
-    }
+  info(...args: unknown[]): void {
+    if (!this.shouldLog('info')) return;
+    const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+    this.write(msg);
+    try {
+      if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(...args);
+    } catch {}
   }
 
-  warn(msg: string): void {
-    if (this.shouldLog('warn')) {
-      this.write(msg);
-      try {
-        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).warn(msg);
-      } catch {}
-    }
+  warn(...args: unknown[]): void {
+    if (!this.shouldLog('warn')) return;
+    const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+    this.write(msg);
+    try {
+      if (process.env.JEST_WORKER_ID) (globalThis.console as Console).warn(...args);
+    } catch {}
   }
 
-  error(msg: string): void {
-    if (this.shouldLog('error')) {
-      this.write(msg);
-      try {
-        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).error(msg);
-      } catch {}
-    }
+  error(...args: unknown[]): void {
+    if (!this.shouldLog('error')) return;
+    const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+    this.write(msg);
+    try {
+      if (process.env.JEST_WORKER_ID) (globalThis.console as Console).error(...args);
+    } catch {}
   }
 
   verbose(msg: string): void {
     if (this.shouldLog('verbose')) this.write(msg);
   }
 
-  debug(msg: string): void {
-    if (this.shouldLog('debug')) {
-      this.write(msg);
-      try {
-        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(msg);
-      } catch {}
-    }
+  debug(...args: unknown[]): void {
+    if (!this.shouldLog('debug')) return;
+    const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+    this.write(msg);
+    try {
+      if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(...args);
+    } catch {}
   }
 
   step(msg: string): void {

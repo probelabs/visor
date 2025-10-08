@@ -9,6 +9,9 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
   const originalConsoleLog = console.log;
   const originalConsoleError = console.error;
   const originalStderrWrite = process.stderr.write;
+  // no-op placeholder to keep earlier structure
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _capturedStderr_placeholder = '';
 
   let mockConsoleLog: jest.Mock;
   let mockConsoleError: jest.Mock;
@@ -80,10 +83,7 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
     console.error = mockConsoleError;
     process.exit = mockProcessExit as any;
 
-    mockStderrWrite = jest.fn((chunk: any) => {
-      capturedStderr += String(chunk);
-      return true;
-    });
+    mockStderrWrite = jest.fn(() => true);
     (process.stderr.write as unknown as jest.Mock | ((...a: any[]) => any)) =
       mockStderrWrite as any;
 
