@@ -107,6 +107,7 @@ Additional guides:
 - fail conditions: [docs/fail-if.md](docs/fail-if.md)
 - forEach behavior and dependent propagation: [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
 - timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
+- output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 
 ## 🧩 Core Concepts (1 minute)
 
