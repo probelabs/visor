@@ -1984,33 +1984,12 @@ export class CheckExecutionEngine {
             //  - command provider execution/transform failures
             //  - forEach validation/iteration errors
             //  - fail_if conditions (global or check-specific)
-            let hasFatalFailure = false;
-            if (!isDepForEachParent) {
-              hasFatalFailure = (depRes.issues || []).some(issue => {
-                const id = issue.ruleId || '';
-                return (
-                  id === 'command/execution_error' ||
-                  id.endsWith('/command/execution_error') ||
-                  id === 'command/timeout' ||
-                  id.endsWith('/command/timeout') ||
-                  id === 'command/transform_js_error' ||
-                  id.endsWith('/command/transform_js_error') ||
-                  id === 'command/transform_error' ||
-                  id.endsWith('/command/transform_error') ||
-                  id.endsWith('/forEach/iteration_error') ||
-                  id === 'forEach/undefined_output' ||
-                  id.endsWith('/forEach/undefined_output') ||
-                  id.endsWith('_fail_if') ||
-                  id.endsWith('/global_fail_if')
-                );
-              });
-            }
+            let hasFatalFailure = !isDepForEachParent ? this.hasFatal(depRes.issues || []) : false;
 
             // As a fallback, evaluate fail_if on the dependency result now (in case the provider path didn't add issues yet)
-            if (!isDepForEachParent) {
-              if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
-                const failIfResults = await this.evaluateFailureConditions(depId, depRes, config);
-                hasFatalFailure = failIfResults.some(r => r.failed);
+            if (!isDepForEachParent && !hasFatalFailure) {
+              if (config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
               }
             }
 
@@ -2161,6 +2140,7 @@ export class CheckExecutionEngine {
                 perItemResults: ReviewSummary[];
               }>();
 
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
               const execInlineDescendants = async (
                 parentName: string,
                 itemIndex: number,
@@ -2339,21 +2319,7 @@ export class CheckExecutionEngine {
                   if (typeof c === 'string' && c.trim()) agg.contents.push(c.trim());
 
                   // Record iteration completion for stats
-                  const childHadFatal = (childItemRes.issues || []).some(issue => {
-                    const id = issue.ruleId || '';
-                    return (
-                      id === 'command/execution_error' ||
-                      id.endsWith('/command/execution_error') ||
-                      id === 'command/timeout' ||
-                      id.endsWith('/command/timeout') ||
-                      id === 'command/transform_js_error' ||
-                      id.endsWith('/command/transform_js_error') ||
-                      id === 'command/transform_error' ||
-                      id.endsWith('/command/transform_error') ||
-                      id === 'forEach/undefined_output' ||
-                      id.endsWith('/forEach/undefined_output')
-                    );
-                  });
+                  const childHadFatal = this.hasFatal(childItemRes.issues || []);
                   this.recordIterationComplete(
                     childName,
                     childIterStart,
@@ -2605,26 +2571,7 @@ export class CheckExecutionEngine {
 
                 const isFatal = (r: ReviewSummary | undefined): boolean => {
                   if (!r) return true;
-                  return (r.issues || []).some(issue => {
-                    const id = issue.ruleId || '';
-                    return (
-                      issue.severity === 'error' ||
-                      issue.severity === 'critical' ||
-                      id === 'command/execution_error' ||
-                      id.endsWith('/command/execution_error') ||
-                      id === 'command/timeout' ||
-                      id.endsWith('/command/timeout') ||
-                      id === 'command/transform_js_error' ||
-                      id.endsWith('/command/transform_js_error') ||
-                      id === 'command/transform_error' ||
-                      id.endsWith('/command/transform_error') ||
-                      id.endsWith('/forEach/iteration_error') ||
-                      id === 'forEach/undefined_output' ||
-                      id.endsWith('/forEach/undefined_output') ||
-                      id.endsWith('_fail_if') ||
-                      id.endsWith('/global_fail_if')
-                    );
-                  });
+                  return this.hasFatal(r.issues || []);
                 };
 
                 while (true) {
@@ -2979,31 +2926,12 @@ export class CheckExecutionEngine {
               (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
               (finalResult as ExtendedReviewSummary).forEachItemResults = perItemResults as ReviewSummary[];
               // Compute fatal mask
-              try {
-                const mask: boolean[] = (finalResult as ExtendedReviewSummary).forEachItemResults
-                  ? await Promise.all(Array.from({ length: forEachItems.length }, async (_, idx) => {
+                try {
+                  const mask: boolean[] = (finalResult as ExtendedReviewSummary).forEachItemResults
+                    ? await Promise.all(Array.from({ length: forEachItems.length }, async (_, idx) => {
                       const r = (finalResult as ExtendedReviewSummary).forEachItemResults![idx];
                       if (!r) return true; // no result → treat as fatal for descendants
-                      let hadFatal = (r.issues || []).some(issue => {
-                        const id = issue.ruleId || '';
-                        return (
-                          issue.severity === 'error' ||
-                          issue.severity === 'critical' ||
-                          id === 'command/execution_error' ||
-                          id.endsWith('/command/execution_error') ||
-                          id === 'command/timeout' ||
-                          id.endsWith('/command/timeout') ||
-                          id === 'command/transform_js_error' ||
-                          id.endsWith('/command/transform_js_error') ||
-                          id === 'command/transform_error' ||
-                          id.endsWith('/command/transform_error') ||
-                          id.endsWith('/forEach/iteration_error') ||
-                          id === 'forEach/undefined_output' ||
-                          id.endsWith('/forEach/undefined_output') ||
-                          id.endsWith('_fail_if') ||
-                          id.endsWith('/global_fail_if')
-                        );
-                      });
+                      let hadFatal = this.hasFatal(r.issues || []);
                       if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
                         try {
                           const failures = await this.evaluateFailureConditions(checkName, r, config);
@@ -4786,6 +4714,43 @@ export class CheckExecutionEngine {
       totalDuration,
       checks,
     };
+  }
+
+  // Generic fatality helpers to avoid duplication
+  private isFatalRule(id: string, severity?: string): boolean {
+    const sev = (severity || '').toLowerCase();
+    return (
+      sev === 'error' ||
+      sev === 'critical' ||
+      id === 'command/execution_error' ||
+      id.endsWith('/command/execution_error') ||
+      id === 'command/timeout' ||
+      id.endsWith('/command/timeout') ||
+      id === 'command/transform_js_error' ||
+      id.endsWith('/command/transform_js_error') ||
+      id === 'command/transform_error' ||
+      id.endsWith('/command/transform_error') ||
+      id.endsWith('/forEach/iteration_error') ||
+      id === 'forEach/undefined_output' ||
+      id.endsWith('/forEach/undefined_output') ||
+      id.endsWith('_fail_if') ||
+      id.endsWith('/global_fail_if')
+    );
+  }
+
+  private hasFatal(issues: ReviewIssue[] | undefined): boolean {
+    if (!issues || issues.length === 0) return false;
+    return issues.some(i => this.isFatalRule(i.ruleId || '', i.severity));
+  }
+
+  private async failIfTriggered(
+    checkName: string,
+    result: ReviewSummary,
+    config?: import('./types/config').VisorConfig
+  ): Promise<boolean> {
+    if (!config) return false;
+    const failures = await this.evaluateFailureConditions(checkName, result, config);
+    return failures.some(f => f.failed);
   }
 
   /**
