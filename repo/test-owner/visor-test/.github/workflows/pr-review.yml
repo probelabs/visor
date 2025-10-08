@@ -1,0 +1,75 @@
+name: PR Review Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]  # Include edited for complete PR lifecycle
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened]
+    
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build action
+        run: npm run build
+
+      - name: PR Review Bot
+        id: visor_review
+        uses: ./
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          installation-id: ${{ secrets.APP_INSTALLATION_ID }}
+          auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          debug: 'true'
+          fail-fast: 'true'
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+          # AI Provider API Keys (configure one of these in your repository secrets)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional: Specify the AI model to use (use Google model with Google API key)
+          MODEL_NAME: ${{ secrets.AI_MODEL_NAME || 'gemini-2.0-flash-exp' }}
+
+      - name: Upload Debug Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visor-debug-${{ github.run_number }}
+          path: debug-artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
+          
+      - name: Validate Review Results
+        if: steps.visor_review.outputs.review-score
+        run: |
+          echo "✅ Visor Review Completed Successfully"
+          echo "📊 Review Score: ${{ steps.visor_review.outputs.review-score }}/100"
+          echo "🔍 Total Issues: ${{ steps.visor_review.outputs.total-issues }}"
+          echo "🚨 Critical Issues: ${{ steps.visor_review.outputs.critical-issues || '0' }}"
+          echo "📝 PR Action: ${{ steps.visor_review.outputs.pr-action }}"
+          echo "🔄 Incremental Analysis: ${{ steps.visor_review.outputs.incremental-analysis }}"
+          echo "✅ Auto Review Completed: ${{ steps.visor_review.outputs.auto-review-completed }}"

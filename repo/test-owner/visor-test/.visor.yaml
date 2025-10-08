@@ -1,0 +1,29 @@
+version: '1.0'
+checks:
+  security-review:
+    type: ai
+    prompt: >-
+      Review for security vulnerabilities focusing on authentication,
+      authorization, and data validation
+    'on':
+      - pr_opened
+      - pr_updated
+    triggers:
+      - '**/*.{js,ts,py}'
+      - src/auth/**/*
+  performance-review:
+    type: ai
+    prompt: >-
+      Analyze performance implications including database queries, caching, and
+      algorithmic complexity
+    'on':
+      - pr_opened
+      - pr_updated
+    triggers:
+      - '**/*.sql'
+      - src/database/**/*
+output:
+  pr_comment:
+    format: table
+    group_by: check
+    collapse: true

@@ -445,41 +445,18 @@ export class ActionCliBridge {
    * Get AI prompt for a specific check type
    */
   private getPromptForCheck(check: CheckType): string {
+    const sharedNoPraise = `\nStrict output policy:\n- Report only actual problems, risks, or deficiencies.\n- Do not write praise, congratulations, or celebratory text.\n- Do not create issues that merely restate improvements or say \"no action needed\".\n- Keep feedback concise, specific, and actionable.\n- If no issues are found for this focus, return no issues.\n`;
+
     const prompts: Record<CheckType, string> = {
-      security: `Review this code for security vulnerabilities, focusing on:
-- SQL injection, XSS, CSRF vulnerabilities
-- Authentication and authorization flaws
-- Sensitive data exposure
-- Input validation issues
-- Cryptographic weaknesses`,
+      security: `Review this code for security vulnerabilities, focusing on:\n- SQL injection, XSS, CSRF vulnerabilities\n- Authentication and authorization flaws\n- Sensitive data exposure\n- Input validation issues\n- Cryptographic weaknesses\n\nCategory constraint: Only report security issues; ignore non-security concerns.${sharedNoPraise}`,
 
-      performance: `Analyze this code for performance issues, focusing on:
-- Database query efficiency (N+1 problems, missing indexes)
-- Memory usage and potential leaks
-- Algorithmic complexity issues
-- Caching opportunities
-- Resource utilization`,
+      performance: `Analyze this code for performance issues, focusing on:\n- Database query efficiency (N+1 problems, missing indexes)\n- Memory usage and potential leaks\n- Algorithmic complexity issues\n- Caching opportunities\n- Resource utilization\n\nCategory constraint: Only report performance issues; ignore non-performance concerns.${sharedNoPraise}`,
 
-      architecture: `Review the architectural aspects of this code, focusing on:
-- Design patterns and code organization
-- Separation of concerns
-- SOLID principles adherence
-- Code maintainability and extensibility
-- Technical debt`,
+      architecture: `Review the architectural aspects of this code, focusing on:\n- Design patterns and code organization\n- Separation of concerns\n- SOLID principles adherence\n- Code maintainability and extensibility\n- Technical debt\n\nCategory constraint: Only report architecture issues; ignore other categories.${sharedNoPraise}`,
 
-      style: `Review code style and maintainability, focusing on:
-- Consistent naming conventions
-- Code formatting and readability
-- Documentation quality
-- Error handling patterns
-- Code complexity`,
+      style: `Review code style and maintainability, focusing on:\n- Consistent naming conventions\n- Code formatting and readability\n- Documentation quality\n- Error handling patterns\n- Code complexity\n\nCategory constraint: Only report style/maintainability issues; ignore other categories.${sharedNoPraise}`,
 
-      all: `Perform a comprehensive code review covering:
-- Security vulnerabilities and best practices
-- Performance optimization opportunities
-- Architectural improvements
-- Code style and maintainability
-- Documentation and testing coverage`,
+      all: `Perform a comprehensive code review covering:\n- Security vulnerabilities and best practices\n- Performance optimization opportunities\n- Architectural improvements\n- Code style and maintainability\n- Documentation and testing coverage\n\nOutput discipline for all categories:\n- Report only actual problems; no praise/celebrations.\n- Keep to the relevant category for each issue.\n- If no issues are found, return none.${sharedNoPraise}`,
     };
 
     return prompts[check];

@@ -427,7 +427,8 @@ ${prContext}
     <rule>For INCREMENTAL analysis, ONLY review changes in commit_diff section</rule>
     <rule>For FULL analysis, review all changes in full_diff section</rule>
     <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
-    <rule>SEVERITY ASSIGNMENT: All severity levels (critical, error, warning, info) should be based on the NEW code being introduced, not on what it fixes. When code INTRODUCES new problems (bugs, vulnerabilities, performance issues, breaking changes), assign appropriate severity (critical/error/warning). When code FIXES or IMPROVES existing issues, use lower severity (info/warning) to acknowledge the improvement. This applies to all issue types: security, performance, style, logic, documentation. The schema provides detailed severity level definitions.</rule>
+    <rule>STRICT OUTPUT POLICY: Report only actual problems, risks, or deficiencies. Do not write praise, congratulations, or celebratory text. Do not create issues that merely restate improvements or say "no action needed".</rule>
+    <rule>SEVERITY ASSIGNMENT: Assign severity ONLY to problems introduced or left unresolved by this change (critical/error/warning/info as appropriate). Do NOT create issue entries solely to acknowledge improvements; if no problems exist, return zero issues.</rule>
   </rules>
 </review_request>`;
     }
