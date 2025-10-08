@@ -13,11 +13,7 @@ module.exports = [
     },
     rules: {
       // Basic rules
-<<<<<<< Updated upstream
-      'no-console': 'warn',
-=======
       'no-console': 'error',
->>>>>>> Stashed changes
       'prefer-const': 'error',
       'no-var': 'error',
 

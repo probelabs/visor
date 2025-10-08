@@ -1,0 +1,16 @@
+{
+  "spans": [
+    {
+      "events": [
+        {
+          "name": "diagram.block",
+          "attrs": {
+            "check": "emit-mermaid",
+            "origin": "content",
+            "code": "graph TD\n  A[Client] --> B[API]\n  B --> C[DB]"
+          }
+        }
+      ]
+    }
+  ]
+}

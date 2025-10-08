@@ -11,6 +11,9 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
+import * as fs from 'fs';
+import * as path from 'path';
+import { logger } from './logger';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -31,9 +34,9 @@ export class FailureConditionEvaluator {
       Math,
       // Allow console for debugging (in controlled environment)
       console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
+        log: (...args: unknown[]) => logger.debug(args.map(a => String(a)).join(' ')),
+        warn: (...args: unknown[]) => logger.warn(args.map(a => String(a)).join(' ')),
+        error: (...args: unknown[]) => logger.error(args.map(a => String(a)).join(' ')),
       },
     };
 
@@ -84,6 +87,21 @@ export class FailureConditionEvaluator {
     });
   }
 
+  private writeNdjsonEvent(name: string, attrs: Record<string, unknown>): void {
+    try {
+      if (process.env.VISOR_TELEMETRY_SINK !== 'file') return;
+      const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const jsonPath = path.join(outDir, `${ts}.ndjson`);
+      try {
+        logger.debug(`fallback-telemetry: append ${name} -> ${jsonPath}`);
+      } catch {}
+      const span = { events: [{ name, attrs }] };
+      fs.appendFileSync(jsonPath, JSON.stringify(span) + '\n', 'utf8');
+    } catch {}
+  }
+
   /**
    * Evaluate simple fail_if condition
    */
@@ -106,7 +124,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      console.warn(`Failed to evaluate fail_if expression: ${error}`);
+      logger.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
     }
   }
@@ -205,7 +223,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
+      logger.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
       // Default to running the check if evaluation fails
       return true;
     }
@@ -268,8 +286,49 @@ export class FailureConditionEvaluator {
 
     for (const [conditionName, condition] of Object.entries(conditions)) {
       try {
+        const expression = this.extractExpression(condition);
+        // Telemetry: evaluated event
+        try {
+          const { addEvent } = await import('./telemetry/trace-helpers');
+          addEvent('fail_if.evaluated', {
+            check: context.checkName,
+            scope: source,
+            name: conditionName,
+            expression,
+          });
+        } catch {}
+        this.writeNdjsonEvent('fail_if.evaluated', {
+          check: context.checkName,
+          scope: source,
+          name: conditionName,
+          expression,
+        });
+
         const result = await this.evaluateSingleCondition(conditionName, condition, context);
         results.push(result);
+
+        // Telemetry + metrics for triggered conditions
+        if (result.failed) {
+          try {
+            const { addEvent } = await import('./telemetry/trace-helpers');
+            addEvent('fail_if.triggered', {
+              check: context.checkName,
+              scope: source,
+              name: conditionName,
+              expression: result.expression,
+            });
+          } catch {}
+          this.writeNdjsonEvent('fail_if.triggered', {
+            check: context.checkName,
+            scope: source,
+            name: conditionName,
+            expression: result.expression,
+          });
+          try {
+            const { addFailIfTriggered } = await import('./telemetry/metrics');
+            addFailIfTriggered(context.checkName || 'unknown', source);
+          } catch {}
+        }
       } catch (error) {
         // If evaluation fails, create an error result
         results.push({
@@ -379,7 +438,9 @@ export class FailureConditionEvaluator {
 
       // Debug logging function for printing to console
       const log = (...args: unknown[]): void => {
-        console.log('🔍 Debug:', ...args);
+        try {
+          logger.debug('🔍 Debug: ' + args.map(a => String(a)).join(' '));
+        } catch {}
       };
 
       // Helper functions for array operations
@@ -508,7 +569,11 @@ export class FailureConditionEvaluator {
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
-      console.error('❌ Failed to evaluate expression:', condition, error);
+      logger.error(
+        `❌ Failed to evaluate expression: ${condition} — ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       // Re-throw the error so it can be caught at a higher level for error reporting
       throw error;
     }
@@ -561,7 +626,7 @@ export class FailureConditionEvaluator {
       // Exclude issues from otherFields since we handle it separately
       issues: _issues, // eslint-disable-line @typescript-eslint/no-unused-vars
       ...otherFields
-    } = reviewSummaryWithOutput as any;
+    } = reviewSummaryWithOutput as unknown as Record<string, unknown>;
 
     const context: FailureConditionContext = {
       output: {

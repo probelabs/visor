@@ -22,14 +22,15 @@ export async function withActiveSpan<T>(
         } catch {}
         reject(err);
       } finally {
-        try { span.end(); } catch {}
+        try {
+          span.end();
+        } catch {}
       }
     };
     if (attrs) {
       tracer.startActiveSpan(name, { attributes: attrs as Attributes }, callback);
     } else {
-      const tracerAny = tracer as any;
-      tracerAny.startActiveSpan(name, callback);
+      tracer.startActiveSpan(name, callback as (span: Span) => void);
     }
   });
 }

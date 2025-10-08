@@ -93,7 +93,10 @@ export class WebhookServer {
       });
 
       this.server!.on('error', error => {
-        logger.error('Failed to start HTTP server:', String(error instanceof Error ? error.message : error));
+        const msg = `Failed to start HTTP server: ${String(
+          error instanceof Error ? error.message : error
+        )}`;
+        logger.error(msg);
         reject(error);
       });
     });
@@ -235,7 +238,9 @@ export class WebhookServer {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'success', endpoint: endpoint.path }));
     } catch (error) {
-      logger.error(`Error handling webhook request: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Error handling webhook request: ${error instanceof Error ? error.message : String(error)}`
+      );
 
       // Handle request body too large errors with proper HTTP status
       if (error instanceof Error && error.message.includes('Request body too large')) {
@@ -309,7 +314,9 @@ export class WebhookServer {
       // Use timing-safe comparison to prevent timing attacks
       return this.timingSafeEqual(receivedSignature, calculatedSignature);
     } catch (error) {
-      logger.error(`Error verifying HMAC signature: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Error verifying HMAC signature: ${error instanceof Error ? error.message : String(error)}`
+      );
       return false;
     }
   }
@@ -328,7 +335,9 @@ export class WebhookServer {
       const bufferB = Buffer.from(b, 'utf8');
       return crypto.timingSafeEqual(bufferA, bufferB);
     } catch (error) {
-      logger.error(`Timing-safe comparison failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Timing-safe comparison failed: ${error instanceof Error ? error.message : String(error)}`
+      );
       return false;
     }
   }
@@ -416,7 +425,9 @@ export class WebhookServer {
         const rendered = await this.liquid.parseAndRender(endpoint.transform, context);
         processedData = JSON.parse(rendered);
       } catch (error) {
-        logger.error(`Failed to transform webhook data: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error(
+          `Failed to transform webhook data: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
 
@@ -465,7 +476,9 @@ export class WebhookServer {
 
       logger.info(`Webhook checks completed for: ${endpoint}`);
     } catch (error) {
-      logger.error(`Failed to execute webhook checks: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Failed to execute webhook checks: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 

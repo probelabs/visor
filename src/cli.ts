@@ -363,6 +363,6 @@ Examples:
    * Display version
    */
   public showVersion(): void {
-    console.log(this.getVersion());
+    process.stdout.write(this.getVersion() + '\n');
   }
 }

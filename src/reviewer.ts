@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { logger } from './logger';
 
 export interface ReviewIssue {
   // Location
@@ -346,7 +347,9 @@ export class PRReviewer {
       fs.writeFileSync(filepath, content, 'utf8');
       return filename;
     } catch (error) {
-      logger.warn(`Failed to save debug artifact: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(
+        `Failed to save debug artifact: ${error instanceof Error ? error.message : String(error)}`
+      );
       return null;
     }
   }

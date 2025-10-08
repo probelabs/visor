@@ -13,7 +13,7 @@ export interface FileSpanExporterOptions {
 
 export class FileSpanExporter implements SpanExporter {
   private filePath: string;
-  private buffer: any[] = [];
+  private buffer: ReturnType<typeof serializeSpan>[] = [];
   private ndjson: boolean;
 
   constructor(opts: FileSpanExporterOptions = {}) {

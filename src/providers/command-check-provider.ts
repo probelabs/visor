@@ -462,13 +462,13 @@ export class CommandCheckProvider extends CheckProvider {
    *  - If parsing fails or value is not a string, return the value unchanged
    *  - Attempts to extract JSON from the end of the output if full parse fails
    */
-  private makeJsonSmart<T = unknown>(value: T): T | any {
+  private makeJsonSmart<T = unknown>(value: T): T | unknown {
     if (typeof value !== 'string') {
       return value;
     }
 
     const raw = value as unknown as string;
-    let parsed: any;
+    let parsed: unknown;
 
     // First try: parse the entire string as JSON
     try {
@@ -495,7 +495,7 @@ export class CommandCheckProvider extends CheckProvider {
 
     // Use a boxed string so string methods still work via Proxy fallback
     const boxed = new String(raw);
-    const handler: ProxyHandler<any> = {
+    const handler: ProxyHandler<String> = {
       get(target, prop, receiver) {
         if (prop === 'toString' || prop === 'valueOf') {
           return () => raw;
@@ -503,17 +503,23 @@ export class CommandCheckProvider extends CheckProvider {
         if (prop === Symbol.toPrimitive) {
           return () => raw;
         }
-        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          if (prop in parsed) {
-            return (parsed as any)[prop as any];
-          }
+        if (
+          parsed != null &&
+          (typeof parsed === 'object' || Array.isArray(parsed)) &&
+          typeof prop === 'string'
+        ) {
+          const rec = parsed as Record<string, unknown>;
+          if (prop in rec) return rec[prop];
         }
         return Reflect.get(target, prop, receiver);
       },
       has(_target, prop) {
-        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          if (prop in parsed) return true;
-        }
+        if (
+          parsed != null &&
+          (typeof parsed === 'object' || Array.isArray(parsed)) &&
+          typeof prop === 'string'
+        )
+          return prop in (parsed as Record<string, unknown>);
         return false;
       },
       ownKeys(_target) {
@@ -528,7 +534,10 @@ export class CommandCheckProvider extends CheckProvider {
       },
       getOwnPropertyDescriptor(_target, prop) {
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          const descriptor = Object.getOwnPropertyDescriptor(parsed, prop as any);
+          const descriptor = Object.getOwnPropertyDescriptor(
+            parsed as object,
+            prop as keyof object
+          );
           if (descriptor) return descriptor;
         }
         return {

@@ -194,7 +194,7 @@ export class CheckExecutionEngine {
       ...Sandbox.SAFE_GLOBALS,
       Math,
       JSON,
-      console: { log: console.log },
+      console: { log: (...args: unknown[]) => logger.debug(args.map(a => String(a)).join(' ')) },
     };
     const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
     this.routingSandbox = new Sandbox({ globals, prototypeWhitelist });
@@ -251,8 +251,7 @@ export class CheckExecutionEngine {
     resultsMap?: Map<string, ReviewSummary>,
     foreachContext?: { index: number; total: number; parent: string }
   ): Promise<ReviewSummary> {
-    const log = (msg: string) =>
-      (this.config?.output?.pr_comment ? console.error : console.log)(msg);
+    const log = (msg: string) => logger.debug(msg);
     const maxLoops = config?.routing?.max_loops ?? 10;
     const defaults = config?.routing?.defaults?.on_fail || {};
 
@@ -441,7 +440,7 @@ export class CheckExecutionEngine {
         // Try to log a small preview of dependent outputs if available
         const depPreview: Record<string, unknown> = {};
         for (const [k, v] of depResults.entries()) {
-          const out = (v as any)?.output;
+          const out = (v as ReviewSummary & { output?: unknown })?.output;
           if (out !== undefined) depPreview[k] = out;
         }
         if (debug) {
@@ -450,7 +449,7 @@ export class CheckExecutionEngine {
       } catch {}
 
       if (debug) {
-        const execStr = (provCfg as any).exec;
+        const execStr = provCfg.exec;
         if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
       }
       const r = await prov.execute(prInfo, provCfg, depResults, sessionInfo);
@@ -485,7 +484,7 @@ export class CheckExecutionEngine {
             log(
               `🔧 Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
             );
-          const lastError: any = {
+          const lastError: { message: string; code: string; issues?: ReviewIssue[] } = {
             message: 'soft-failure: issues present',
             code: 'soft_failure',
             issues: res.issues,
@@ -680,7 +679,7 @@ export class CheckExecutionEngine {
     config: import('./types/config').VisorConfig | undefined,
     tagFilter: import('./types/config').TagFilter | undefined
   ): string[] {
-    const logFn = this.config?.output?.pr_comment ? console.error : console.log;
+    const logFn = (m: string) => logger.debug(m);
 
     return checks.filter(checkName => {
       const checkConfig = config?.checks?.[checkName];
@@ -1115,12 +1114,7 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
-    const logFn =
-      outputFormat === 'json' || outputFormat === 'sarif'
-        ? debug
-          ? console.error
-          : () => {}
-        : console.log;
+    const logFn = (m: string) => logger.debug(m);
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -1677,6 +1671,13 @@ export class CheckExecutionEngine {
     };
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
+    try {
+      const { emitMermaidFromMarkdown } = await import('./utils/mermaid-telemetry');
+      const { withActiveSpan } = await import('./telemetry/trace-helpers');
+      await withActiveSpan('check.render', { check: checkName }, async () => {
+        emitMermaidFromMarkdown(checkName, rendered, 'content');
+      });
+    } catch {}
     return rendered.trim();
   }
 
@@ -1693,7 +1694,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean
   ): Promise<ReviewSummary> {
-    const log = logFn || console.error;
+    const log = logFn || ((m: string) => logger.debug(m));
 
     if (debug) {
       log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
@@ -2221,7 +2222,7 @@ export class CheckExecutionEngine {
                   iterationStart,
                   !hadFatalError, // Success if no fatal errors
                   itemResult.issues || [],
-                  (itemResult as any).output
+                  (itemResult as ReviewSummary & { output?: unknown }).output
                 );
 
                 // Log iteration progress
@@ -2274,7 +2275,7 @@ export class CheckExecutionEngine {
                 }
 
                 // Skip results from skipped items (those that failed if condition)
-                if ((result.value as any).skipped) {
+                if ((result.value as unknown as { skipped?: boolean }).skipped) {
                   continue;
                 }
 
@@ -2384,7 +2385,7 @@ export class CheckExecutionEngine {
               checkStartTime,
               !hadFatalError, // Success if no fatal errors
               finalResult.issues || [],
-              (finalResult as any).output
+              (finalResult as ReviewSummary & { output?: unknown }).output
             );
 
             if (checkConfig.forEach) {
@@ -2490,7 +2491,7 @@ export class CheckExecutionEngine {
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
-          if ((result.value as any).skipped) {
+          if ((result.value as unknown as { skipped?: boolean }).skipped) {
             if (debug) {
               log(`🔧 Debug: Storing skip marker for skipped check "${checkName}"`);
             }
@@ -2642,12 +2643,8 @@ export class CheckExecutionEngine {
     // Build and log final execution summary
     const executionStatistics = this.buildExecutionStatistics();
 
-    // Show detailed summary table (only if logFn outputs to console)
-    // Skip when output format is JSON/SARIF to avoid polluting structured output
-    // Check if logFn is console.log (not a no-op or console.error)
-    if (logFn === console.log) {
-      this.logExecutionSummary(executionStatistics);
-    }
+    // Show detailed summary table using central logger (suppressed in JSON/SARIF by logger config)
+    this.logExecutionSummary(executionStatistics);
 
     // Add warning if execution stopped early
     if (shouldStopExecution) {
@@ -2677,7 +2674,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean
   ): Promise<ReviewSummary> {
-    const log = logFn || console.error;
+    const log = logFn || ((m: string) => logger.debug(m));
     log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
 
     if (!config?.checks) {
@@ -2707,7 +2704,7 @@ export class CheckExecutionEngine {
       }
 
       try {
-        console.error(
+        logger.debug(
           `🔧 Debug: Starting check: ${checkName} with prompt type: ${typeof checkConfig.prompt}`
         );
 
@@ -2727,7 +2724,7 @@ export class CheckExecutionEngine {
           );
 
           if (!shouldRun) {
-            console.error(
+            logger.debug(
               `🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`
             );
             return {
@@ -2756,7 +2753,7 @@ export class CheckExecutionEngine {
         };
 
         const result = await provider.execute(prInfo, providerConfig);
-        console.error(
+        logger.debug(
           `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
         );
 
@@ -2954,7 +2951,7 @@ export class CheckExecutionEngine {
     }
 
     if (debug) {
-      console.error(
+      logger.debug(
         `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
       );
     }
@@ -3115,7 +3112,7 @@ export class CheckExecutionEngine {
     });
 
     if (debug) {
-      console.error(
+      logger.debug(
         `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
       );
     }
@@ -3468,6 +3465,115 @@ export class CheckExecutionEngine {
 
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - global fail_if condition met: ${globalFailIf}`);
+          try {
+            const { addEvent } = await import('./telemetry/trace-helpers');
+            addEvent('fail_if.evaluated', {
+              check: checkName,
+              scope: 'global',
+              name: 'global_fail_if',
+              expression: globalFailIf,
+            });
+            addEvent('fail_if.triggered', {
+              check: checkName,
+              scope: 'global',
+              name: 'global_fail_if',
+              expression: globalFailIf,
+            });
+          } catch {}
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            if (process.env.VISOR_TELEMETRY_SINK === 'file') {
+              const outDir =
+                process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+              if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+              const ts = new Date().toISOString().replace(/[:.]/g, '-');
+              const jsonPath = path.join(outDir, `${ts}.ndjson`);
+              fs.appendFileSync(
+                jsonPath,
+                JSON.stringify({
+                  events: [
+                    {
+                      name: 'fail_if.evaluated',
+                      attrs: {
+                        check: checkName,
+                        scope: 'global',
+                        name: 'global_fail_if',
+                        expression: globalFailIf,
+                      },
+                    },
+                  ],
+                }) + '\n',
+                'utf8'
+              );
+              fs.appendFileSync(
+                jsonPath,
+                JSON.stringify({
+                  events: [
+                    {
+                      name: 'fail_if.triggered',
+                      attrs: {
+                        check: checkName,
+                        scope: 'global',
+                        name: 'global_fail_if',
+                        expression: globalFailIf,
+                      },
+                    },
+                  ],
+                }) + '\n',
+                'utf8'
+              );
+            }
+          } catch {}
+          try {
+            const { addFailIfTriggered } = await import('./telemetry/metrics');
+            addFailIfTriggered(checkName, 'global');
+          } catch {}
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            if (process.env.VISOR_TELEMETRY_SINK === 'file') {
+              const outDir =
+                process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+              if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+              const ts = new Date().toISOString().replace(/[:.]/g, '-');
+              const jsonPath = path.join(outDir, `${ts}.ndjson`);
+              fs.appendFileSync(
+                jsonPath,
+                JSON.stringify({
+                  events: [
+                    {
+                      name: 'fail_if.evaluated',
+                      attrs: {
+                        check: checkName,
+                        scope: 'check',
+                        name: `${checkName}_fail_if`,
+                        expression: checkFailIf,
+                      },
+                    },
+                  ],
+                }) + '\n',
+                'utf8'
+              );
+              fs.appendFileSync(
+                jsonPath,
+                JSON.stringify({
+                  events: [
+                    {
+                      name: 'fail_if.triggered',
+                      attrs: {
+                        check: checkName,
+                        scope: 'check',
+                        name: `${checkName}_fail_if`,
+                        expression: checkFailIf,
+                      },
+                    },
+                  ],
+                }) + '\n',
+                'utf8'
+              );
+            }
+          } catch {}
           results.push({
             conditionName: 'global_fail_if',
             expression: globalFailIf,
@@ -3493,6 +3599,25 @@ export class CheckExecutionEngine {
 
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - fail_if condition met: ${checkFailIf}`);
+          try {
+            const { addEvent } = await import('./telemetry/trace-helpers');
+            addEvent('fail_if.evaluated', {
+              check: checkName,
+              scope: 'check',
+              name: `${checkName}_fail_if`,
+              expression: checkFailIf,
+            });
+            addEvent('fail_if.triggered', {
+              check: checkName,
+              scope: 'check',
+              name: `${checkName}_fail_if`,
+              expression: checkFailIf,
+            });
+          } catch {}
+          try {
+            const { addFailIfTriggered } = await import('./telemetry/metrics');
+            addFailIfTriggered(checkName, 'check');
+          } catch {}
           results.push({
             conditionName: `${checkName}_fail_if`,
             expression: checkFailIf,
@@ -3642,9 +3767,9 @@ export class CheckExecutionEngine {
             summary: `AI-powered analysis is in progress for ${checkName} check.`,
           }
         );
-        console.log(`🔄 Updated ${checkName} check to in-progress status`);
+        logger.info(`🔄 Updated ${checkName} check to in-progress status`);
       } catch (error) {
-        console.error(`❌ Failed to update ${checkName} check to in-progress: ${error}`);
+        logger.error(`❌ Failed to update ${checkName} check to in-progress: ${error}`);
       }
     }
   }
@@ -3681,7 +3806,7 @@ export class CheckExecutionEngine {
       }
     }
 
-    console.log(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
+    logger.info(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
 
     for (const [checkName, checkRun] of this.checkRunMap) {
       try {
@@ -3707,9 +3832,9 @@ export class CheckExecutionEngine {
           options.githubChecks.headSha // currentCommitSha
         );
 
-        console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
+        logger.info(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
       } catch (error) {
-        console.error(`❌ Failed to complete ${checkName} check: ${error}`);
+        logger.error(`❌ Failed to complete ${checkName} check: ${error}`);
 
         // Try to mark the check as failed due to execution error
         try {
@@ -3723,7 +3848,7 @@ export class CheckExecutionEngine {
             error instanceof Error ? error.message : 'Unknown error occurred'
           );
         } catch (finalError) {
-          console.error(`❌ Failed to mark ${checkName} check as failed: ${finalError}`);
+          logger.error(`❌ Failed to mark ${checkName} check as failed: ${finalError}`);
         }
       }
     }
@@ -3737,7 +3862,7 @@ export class CheckExecutionEngine {
       return;
     }
 
-    console.log(`❌ Completing ${this.checkRunMap.size} GitHub check runs with error...`);
+    logger.info(`❌ Completing ${this.checkRunMap.size} GitHub check runs with error...`);
 
     for (const [checkName, checkRun] of this.checkRunMap) {
       try {
@@ -3750,9 +3875,9 @@ export class CheckExecutionEngine {
           [],
           errorMessage
         );
-        console.log(`❌ Completed ${checkName} check with error: ${errorMessage}`);
+        logger.info(`❌ Completed ${checkName} check with error: ${errorMessage}`);
       } catch (error) {
-        console.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
+        logger.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
       }
     }
   }

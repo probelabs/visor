@@ -1,4 +1,5 @@
 import { VisorConfig, CheckConfig } from '../types/config';
+import { logger } from '../logger';
 
 /**
  * Utility class for merging Visor configurations with proper override semantics
@@ -127,9 +128,9 @@ export class ConfigMerger {
     // Merge pr_comment
     if (child.pr_comment) {
       result.pr_comment = this.mergeObjects(
-        (parent.pr_comment || {}) as Record<string, unknown>,
-        child.pr_comment as Record<string, unknown>
-      ) as NonNullable<VisorConfig['output']>['pr_comment'];
+        (parent.pr_comment || {}) as unknown as Record<string, unknown>,
+        child.pr_comment as unknown as Record<string, unknown>
+      ) as unknown as NonNullable<VisorConfig['output']>['pr_comment'];
     }
 
     // Merge file_comment
@@ -138,9 +139,9 @@ export class ConfigMerger {
         delete result.file_comment;
       } else {
         result.file_comment = this.mergeObjects(
-          (parent.file_comment || {}) as Record<string, unknown>,
-          child.file_comment as Record<string, unknown>
-        ) as NonNullable<VisorConfig['output']>['file_comment'];
+          (parent.file_comment || {}) as unknown as Record<string, unknown>,
+          child.file_comment as unknown as Record<string, unknown>
+        ) as unknown as NonNullable<VisorConfig['output']>['file_comment'];
       }
     }
 
@@ -150,9 +151,9 @@ export class ConfigMerger {
         delete result.github_checks;
       } else {
         result.github_checks = this.mergeObjects(
-          (parent.github_checks || {}) as Record<string, unknown>,
-          child.github_checks as Record<string, unknown>
-        ) as NonNullable<VisorConfig['output']>['github_checks'];
+          (parent.github_checks || {}) as unknown as Record<string, unknown>,
+          child.github_checks as unknown as Record<string, unknown>
+        ) as unknown as NonNullable<VisorConfig['output']>['github_checks'];
       }
     }
 
@@ -286,19 +287,19 @@ export class ConfigMerger {
       result.env = this.mergeObjects(
         (parent.env || {}) as Record<string, unknown>,
         child.env as Record<string, unknown>
-      );
+      ) as unknown as NonNullable<CheckConfig['env']>;
     }
     if (child.ai) {
       result.ai = this.mergeObjects(
         (parent.ai || {}) as Record<string, unknown>,
         child.ai as Record<string, unknown>
-      );
+      ) as unknown as NonNullable<CheckConfig['ai']>;
     }
     if (child.template) {
       result.template = this.mergeObjects(
         (parent.template || {}) as Record<string, unknown>,
         child.template as Record<string, unknown>
-      );
+      ) as unknown as NonNullable<CheckConfig['template']>;
     }
 
     return result;

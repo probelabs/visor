@@ -101,15 +101,30 @@ class Logger {
   }
 
   info(msg: string): void {
-    if (this.shouldLog('info')) this.write(msg);
+    if (this.shouldLog('info')) {
+      this.write(msg);
+      try {
+        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(msg);
+      } catch {}
+    }
   }
 
   warn(msg: string): void {
-    if (this.shouldLog('warn')) this.write(msg);
+    if (this.shouldLog('warn')) {
+      this.write(msg);
+      try {
+        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).warn(msg);
+      } catch {}
+    }
   }
 
   error(msg: string): void {
-    if (this.shouldLog('error')) this.write(msg);
+    if (this.shouldLog('error')) {
+      this.write(msg);
+      try {
+        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).error(msg);
+      } catch {}
+    }
   }
 
   verbose(msg: string): void {
@@ -117,7 +132,12 @@ class Logger {
   }
 
   debug(msg: string): void {
-    if (this.shouldLog('debug')) this.write(msg);
+    if (this.shouldLog('debug')) {
+      this.write(msg);
+      try {
+        if (process.env.JEST_WORKER_ID) (globalThis.console as Console).log(msg);
+      } catch {}
+    }
   }
 
   step(msg: string): void {

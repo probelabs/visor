@@ -7,6 +7,7 @@ import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
+import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -39,14 +40,23 @@ export async function main(): Promise<void> {
       quiet: options.quiet,
     });
 
+    // Initialize telemetry if enabled via env or config
+    await initTelemetry({
+      enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
+      sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+      file: { dir: process.env.VISOR_TRACE_DIR },
+      autoInstrument: process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true',
+      traceReport: process.env.VISOR_TRACE_REPORT === 'true',
+    });
+
     // Handle help and version flags
     if (options.help) {
-      console.log(cli.getHelpText());
+      process.stdout.write(cli.getHelpText() + '\n');
       process.exit(0);
     }
 
     if (options.version) {
-      console.log(cli.getVersion());
+      process.stdout.write(cli.getVersion() + '\n');
       process.exit(0);
     }
 
@@ -374,7 +384,7 @@ export async function main(): Promise<void> {
         process.exit(1);
       }
     } else {
-      console.log(output);
+      process.stdout.write(output + '\n');
     }
 
     // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
@@ -425,7 +435,23 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
-    process.exit(exitCode);
+    await shutdownTelemetry();
+    try {
+      if (process.env.VISOR_TRACE_REPORT === 'true') {
+        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const htmlPath = path.join(outDir, `${ts}.report.html`);
+        if (!fs.existsSync(htmlPath)) {
+          fs.writeFileSync(
+            htmlPath,
+            '<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2></body></html>',
+            'utf8'
+          );
+        }
+      }
+    } catch {}
+    if (!process.env.JEST_WORKER_ID) process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
@@ -464,7 +490,8 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
-    process.exit(1);
+    await shutdownTelemetry();
+    if (!process.env.JEST_WORKER_ID) process.exit(1);
   }
 }
 
