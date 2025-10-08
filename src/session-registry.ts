@@ -132,14 +132,25 @@ export class SessionRegistry {
         sessionId: newSessionId,
       });
 
-      // Copy the conversation history to the cloned agent
-
+      // Deep copy the conversation history to ensure complete isolation
+      // Use JSON serialization for deep cloning to prevent shared object references
       if (sourceHistory.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (clonedAgent as any).conversationHistory = [...sourceHistory];
-        console.error(
-          `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages)`
-        );
+        try {
+          // Deep clone the history array and all message objects within it
+          const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (clonedAgent as any).conversationHistory = deepClonedHistory;
+          console.error(
+            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages, deep copy)`
+          );
+        } catch (cloneError) {
+          // Fallback to shallow copy if deep clone fails (e.g., circular references)
+          console.error(
+            `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (clonedAgent as any).conversationHistory = [...sourceHistory];
+        }
       } else {
         console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
       }
