@@ -1,0 +1,1241 @@
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, analyze-bug, update-labels
+▶ Running check: fetch-tickets [1/3]
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: analyze-bug [2/3]
+  forEach: processing 2 items from "fetch-tickets"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: analyze-bug (0.0s) - 2 runs, 2 issues
+▶ Running check: update-labels [3/3]
+  forEach: processing 2 items from "analyze-bug"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: update-labels (0.0s) - 2 runs
+PASS tests/integration/engine-formatting-large-output.test.ts (226.283 s)
+PASS tests/unit/cli/output-formatters.test.ts (11.161 s)
+PASS tests/errors/error-scenarios.test.ts (10.481 s)
+PASS tests/e2e/visor-integration.test.ts (9.317 s)
+PASS tests/e2e/foreach-transform-e2e.test.ts (6.952 s)
+PASS tests/integration/github-workflow.test.ts (7.221 s)
+PASS tests/integration/cli-workflow.test.ts (5.954 s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: test-check
+▶ Running check: test-check [1/1]
+✔ Check complete: test-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, process-item
+▶ Running check: list-items [1/2]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: process-item [2/2]
+  forEach: processing 3 items from "list-items"...
+  ✔ 3/3 (0.0s)
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+✔ Check complete: process-item (0.0s) - 3 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: conditional-check
+▶ Running check: conditional-check [1/1]
+⏭  Skipped (if: always() && !always())
+🔍 Analyzing local git repository...
+🤖 Executing checks: failing-check
+▶ Running check: failing-check [1/1]
+✗ Command execution failed: Unknown error
+✔ Check complete: failing-check (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: output-check
+▶ Running check: output-check [1/1]
+✔ Check complete: output-check (0.0s) - 1 items
+  Found 3 items for forEach iteration
+🔍 Analyzing local git repository...
+🤖 Executing checks: timed-check
+▶ Running check: timed-check [1/1]
+✔ Check complete: timed-check (0.1s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: success-check, skip-check, fail-check
+▶ Running check: success-check [1/3]
+▶ Running check: skip-check [2/3]
+▶ Running check: fail-check [3/3]
+⏭  Skipped (if: !always())
+✔ Check complete: success-check (0.0s) - 1 items
+✗ Command execution failed: Unknown error
+✔ Check complete: fail-check (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: test-check
+▶ Running check: test-check [1/1]
+✔ Check complete: test-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-many, process-many
+▶ Running check: list-many [1/2]
+✔ Check complete: list-many (0.0s) - 1 items
+  Found 6 items for forEach iteration
+▶ Running check: process-many [2/2]
+  forEach: processing 6 items from "list-many"...
+  ✔ 2/6 (0.0s)
+  ✔ 1/6 (0.0s)
+  ✔ 5/6 (0.0s)
+  ✔ 4/6 (0.0s)
+  ✔ 3/6 (0.1s)
+  ✔ 6/6 (0.0s)
+✔ Check complete: process-many (0.1s) - 6 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: review-check
+▶ Running check: review-check [1/1]
+✔ Check complete: review-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, process-with-failures
+▶ Running check: list-items [1/2]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: process-with-failures [2/2]
+  forEach: processing 3 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+  ✔ 3/3 (0.0s)
+✔ Check complete: process-with-failures (0.0s) - 3 runs, 1 issue
+PASS tests/unit/execution-statistics.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-categories, list-items-per-category, process-each-item
+▶ Running check: list-categories [1/3]
+✔ Check complete: list-categories (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: list-items-per-category [2/3]
+  forEach: processing 2 items from "list-categories"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: list-items-per-category (0.0s) - 2 runs
+  Found 2 items for forEach iteration
+▶ Running check: process-each-item [3/3]
+  forEach: processing 2 items from "list-items-per-category"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: process-each-item (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-numbers, process-even-only
+▶ Running check: list-numbers [1/2]
+✔ Check complete: list-numbers (0.0s) - 1 items
+  Found 5 items for forEach iteration
+▶ Running check: process-even-only [2/2]
+  forEach: processing 5 items from "list-numbers"...
+  ✔ 2/5 (0.0s)
+  ✔ 4/5 (0.0s)
+✔ Check complete: process-even-only (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: base-check, conditional-1, conditional-2, final-check
+▶ Running check: base-check [1/4]
+✔ Check complete: base-check (0.0s) - 1 items
+▶ Running check: conditional-1 [2/4]
+▶ Running check: conditional-2 [3/4]
+⏭  Skipped (if: !always())
+✔ Check complete: conditional-1 (0.0s) - 1 items
+▶ Running check: final-check [4/4]
+⏭  Skipped (dependency failed: conditional-2)
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-delays, timed-process
+▶ Running check: list-delays [1/2]
+✔ Check complete: list-delays (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: timed-process [2/2]
+  forEach: processing 3 items from "list-delays"...
+  ✔ 1/3 (0.1s)
+  ✔ 3/3 (0.1s)
+  ✔ 2/3 (0.2s)
+✔ Check complete: timed-process (0.2s) - 3 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: error-check
+▶ Running check: error-check [1/1]
+✗ Command execution failed: Unknown error
+
+Stderr output:
+Error message
+✔ Check complete: error-check (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: test-check
+▶ Running check: test-check [1/1]
+✔ Check complete: test-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: test-check
+▶ Running check: test-check [1/1]
+✔ Check complete: test-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: parallel-1, parallel-2, parallel-3
+▶ Running check: parallel-1 [1/3]
+▶ Running check: parallel-2 [2/3]
+▶ Running check: parallel-3 [3/3]
+✔ Check complete: parallel-2 (0.0s) - 1 items
+✔ Check complete: parallel-1 (0.0s) - 1 items
+✔ Check complete: parallel-3 (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: will-fail, will-not-run
+▶ Running check: will-fail [1/2]
+✗ Command execution failed: Unknown error
+✔ Check complete: will-fail (0.0s) - 1 issue found
+
+⚠️  Execution stopped early due to fail-fast
+🔍 Analyzing local git repository...
+🤖 Executing checks: tagged-check
+▶ Running check: tagged-check [1/1]
+✔ Check complete: tagged-check (0.0s) - 1 items
+PASS tests/integration/execution-statistics-integration.test.ts
+PASS tests/e2e/foreach-transform-verified-e2e.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: mixed-output, process-items
+▶ Running check: mixed-output [1/2]
+✔ Check complete: mixed-output (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: process-items [2/2]
+  forEach: processing 3 items from "mixed-output"...
+  ✔ 3/3 (0.0s)
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+✔ Check complete: process-items (0.0s) - 3 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: pure-json, process-items
+▶ Running check: pure-json [1/2]
+✔ Check complete: pure-json (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: process-items [2/2]
+  forEach: processing 2 items from "pure-json"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: process-items (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: nested-json, check-id
+▶ Running check: nested-json [1/2]
+✔ Check complete: nested-json (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: check-id [2/2]
+  forEach: processing 2 items from "nested-json"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: check-id (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: multiline-debug, use-values
+▶ Running check: multiline-debug [1/2]
+✔ Check complete: multiline-debug (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: use-values [2/2]
+  forEach: processing 2 items from "multiline-debug"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: use-values (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: no-json
+▶ Running check: no-json [1/1]
+✔ Check complete: no-json (0.0s) - 1 items
+  Found 1 items for forEach iteration
+🔍 Analyzing local git repository...
+🤖 Executing checks: array-output, process-numbers
+▶ Running check: array-output [1/2]
+✔ Check complete: array-output (0.0s) - 1 items
+  Found 5 items for forEach iteration
+▶ Running check: process-numbers [2/2]
+  forEach: processing 5 items from "array-output"...
+  ✔ 2/5 (0.0s)
+  ✔ 1/5 (0.0s)
+  ✔ 4/5 (0.0s)
+  ✔ 3/5 (0.0s)
+  ✔ 5/5 (0.0s)
+✔ Check complete: process-numbers (0.0s) - 5 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, analyze-ticket
+▶ Running check: fetch-tickets [1/2]
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: analyze-ticket [2/2]
+  forEach: processing 3 items from "fetch-tickets"...
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+  ✔ 3/3 (0.0s)
+✔ Check complete: analyze-ticket (0.0s) - 3 runs
+PASS tests/unit/json-extraction.test.ts
+Usage: visor [options]
+
+Visor - AI-powered code review tool
+
+Options:
+  -V, --version                         output the version number
+  -c, --check <type>                    Specify check type (can be used multiple
+                                        times) (default: [])
+  -o, --output <format>                 Output format (table, json, markdown,
+                                        sarif) (default: "table")
+  --output-file <path>                  Write formatted output to a file instead
+                                        of stdout
+  --config <path>                       Path to configuration file
+  --timeout <ms>                        Timeout for check operations in
+                                        milliseconds (default: 600000ms / 10
+                                        minutes)
+  --max-parallelism <count>             Maximum number of checks to run in
+                                        parallel (default: 3)
+  --debug                               Enable debug mode for detailed output
+  -v, --verbose                         Increase verbosity (without full debug)
+  -q, --quiet                           Reduce verbosity to warnings and errors
+  --fail-fast                           Stop execution on first failure
+                                        condition
+  --tags <tags>                         Include checks with these tags
+                                        (comma-separated)
+  --exclude-tags <tags>                 Exclude checks with these tags
+                                        (comma-separated)
+  --allowed-remote-patterns <patterns>  Comma-separated list of allowed URL
+                                        prefixes for remote config extends
+                                        (e.g.,
+                                        "https://github.com/,https://raw.githubusercontent.com/")
+  --enable-code-context                 Force include code diffs in analysis
+                                        (CLI mode)
+  --disable-code-context                Force exclude code diffs from analysis
+                                        (CLI mode)
+  --mode <mode>                         Run mode (cli|github-actions). Default:
+                                        cli
+  -h, --help                            display help for command
+
+Examples:
+  visor --check performance --output table
+  visor --check performance --check security --config ./.visor.yaml
+  visor --check all --output json
+  visor --check architecture --check security --output markdown
+  visor --check security --output sarif > results.sarif
+  visor --check all --output json --output-file results.json   # Save to file reliably
+  visor --check all --timeout 300000 --output json           # 5 minute timeout
+  visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
+  visor --check all --debug --output markdown                # Enable debug mode
+  visor --check all --fail-fast --output json                # Stop on first failure
+  visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
+  visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones
+0.1.42
+PASS tests/unit/cli-main.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance, style
+▶ Running check: security [1/3]
+▶ Running check: performance [2/3]
+▶ Running check: style [3/3]
+✔ Check complete: security (0.0s)
+✔ Check complete: performance (0.0s)
+✔ Check complete: style (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance, style
+▶ Running check: security [1/3]
+✔ Check complete: security (0.0s)
+▶ Running check: performance [2/3]
+✔ Check complete: performance (0.0s)
+▶ Running check: style [3/3]
+✔ Check complete: style (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance, style, architecture
+▶ Running check: security [1/4]
+▶ Running check: performance [2/4]
+✔ Check complete: security (0.0s)
+✔ Check complete: performance (0.0s)
+▶ Running check: style [3/4]
+✔ Check complete: style (0.0s)
+▶ Running check: architecture [4/4]
+✔ Check complete: architecture (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance
+▶ Running check: security [1/2]
+✖ Check failed: security (0.0s) - Security check failed
+▶ Running check: performance [2/2]
+✔ Check complete: performance (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance
+▶ Running check: security [1/2]
+✔ Check complete: security (0.0s)
+▶ Running check: performance [2/2]
+✔ Check complete: performance (0.0s)
+PASS tests/unit/check-execution-engine-dependencies.test.ts
+PASS tests/e2e/foreach-raw-access-e2e.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, process-items
+▶ Running check: list-items [1/2]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: process-items [2/2]
+  forEach: processing 3 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+  ✔ 3/3 (0.0s)
+✔ Check complete: process-items (0.0s) - 3 runs, 1 issue
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, failing-process
+▶ Running check: list-items [1/2]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: failing-process [2/2]
+  forEach: processing 2 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 1/2 (0.0s)
+✗ Command execution failed: Unknown error
+  ✔ 2/2 (0.0s)
+✔ Check complete: failing-process (0.0s) - 2 runs, 2 issues
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, failing-foreach, dependent-check
+▶ Running check: list-items [1/3]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: failing-foreach [2/3]
+  forEach: processing 2 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 1/2 (0.0s)
+✗ Command execution failed: Unknown error
+  ✔ 2/2 (0.0s)
+✔ Check complete: failing-foreach (0.0s) - 2 runs, 2 issues
+▶ Running check: dependent-check [3/3]
+⏭  Skipped (dependency failed: failing-foreach)
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, succeeding-foreach, dependent-check
+▶ Running check: list-items [1/3]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: succeeding-foreach [2/3]
+  forEach: processing 2 items from "list-items"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: succeeding-foreach (0.0s) - 2 runs
+▶ Running check: dependent-check [3/3]
+  forEach: processing 2 items from "succeeding-foreach"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: dependent-check (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, partial-fail-foreach, dependent-check
+▶ Running check: list-items [1/3]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: partial-fail-foreach [2/3]
+  forEach: processing 3 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 2/3 (0.0s)
+  ✔ 1/3 (0.0s)
+  ✔ 3/3 (0.0s)
+✔ Check complete: partial-fail-foreach (0.0s) - 3 runs, 1 issue
+▶ Running check: dependent-check [3/3]
+⏭  Skipped (dependency failed: partial-fail-foreach)
+🔍 Analyzing local git repository...
+🤖 Executing checks: list-items, failing-foreach, level-2-check, level-3-check
+▶ Running check: list-items [1/4]
+✔ Check complete: list-items (0.0s) - 1 items
+  Found 1 items for forEach iteration
+▶ Running check: failing-foreach [2/4]
+  forEach: processing 1 items from "list-items"...
+✗ Command execution failed: Unknown error
+  ✔ 1/1 (0.0s)
+✔ Check complete: failing-foreach (0.0s) - 1 issue found
+▶ Running check: level-2-check [3/4]
+⏭  Skipped (dependency failed: failing-foreach)
+▶ Running check: level-3-check [4/4]
+⏭  Skipped (dependency failed: level-2-check)
+PASS tests/unit/foreach-failure-dependency-skip.test.ts
+PASS tests/e2e/foreach-conditional-chain.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-scan, security-follow-up
+▶ Running check: security-scan [1/2]
+✔ Check complete: security-scan (0.0s) - 1 issue found
+▶ Running check: security-follow-up [2/2]
+✔ Check complete: security-follow-up (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: base-check, reuse-check-1, reuse-check-2
+▶ Running check: base-check [1/3]
+✔ Check complete: base-check (0.0s) - 1 issue found
+▶ Running check: reuse-check-1 [2/3]
+✔ Check complete: reuse-check-1 (0.0s) - 1 issue found
+▶ Running check: reuse-check-2 [3/3]
+✔ Check complete: reuse-check-2 (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: parent-check, child-check
+▶ Running check: parent-check [1/2]
+✔ Check complete: parent-check (0.0s) - 1 issue found
+▶ Running check: child-check [2/2]
+✔ Check complete: child-check (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: level-1, level-2, level-3
+▶ Running check: level-1 [1/3]
+✔ Check complete: level-1 (0.0s) - 1 issue found
+▶ Running check: level-2 [2/3]
+✔ Check complete: level-2 (0.0s) - 1 issue found
+▶ Running check: level-3 [3/3]
+✔ Check complete: level-3 (0.0s) - 1 issue found
+PASS tests/integration/session-reuse-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: flaky
+▶ Running check: flaky [1/1]
+✔ Check complete: flaky (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: unit-tests, setup-env
+▶ Running check: setup-env [1/2]
+✔ Check complete: setup-env (0.0s) - 1 items
+▶ Running check: unit-tests [2/2]
+✗ Command execution failed: Unknown error
+✔ Check complete: unit-tests (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: build, unit-tests
+▶ Running check: unit-tests [1/2]
+✔ Check complete: unit-tests (0.0s) - 1 items
+▶ Running check: build [2/2]
+✔ Check complete: build (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: process, list
+▶ Running check: list [1/2]
+✔ Check complete: list (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: process [2/2]
+  forEach: processing 2 items from "list"...
+✗ Command execution failed: Unknown error
+✗ Command execution failed: Unknown error
+  ✔ 1/2 (0.1s)
+  ✔ 2/2 (0.1s)
+✔ Check complete: process (0.1s) - 2 runs
+PASS tests/integration/routing-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, process-ticket
+▶ Running check: fetch-tickets [1/2]
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 0 items for forEach iteration
+▶ Running check: process-ticket [2/2]
+  forEach: no items from "fetch-tickets", skipping check...
+✔ Check complete: process-ticket (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, process-ticket, notify-ticket
+▶ Running check: fetch-tickets [1/3]
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 0 items for forEach iteration
+▶ Running check: process-ticket [2/3]
+  forEach: no items from "fetch-tickets", skipping check...
+✔ Check complete: process-ticket (0.0s)
+▶ Running check: notify-ticket [3/3]
+  forEach: no items from "process-ticket", skipping check...
+✔ Check complete: notify-ticket (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-data, process-data
+▶ Running check: fetch-data [1/2]
+✔ Check complete: fetch-data (0.0s) - 1 items
+  Found 0 items for forEach iteration
+▶ Running check: process-data [2/2]
+  forEach: no items from "fetch-data", skipping check...
+✔ Check complete: process-data (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, process-ticket
+▶ Running check: fetch-tickets [1/2]
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: process-ticket [2/2]
+  forEach: processing 2 items from "fetch-tickets"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: process-ticket (0.0s) - 2 runs
+PASS tests/unit/foreach-empty-skip.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: failing-command, dependent-check
+▶ Running check: failing-command [1/2]
+✗ Command execution failed: Unknown error
+✔ Check complete: failing-command (0.0s) - 1 issue found
+▶ Running check: dependent-check [2/2]
+⏭  Skipped (dependency failed: failing-command)
+🔍 Analyzing local git repository...
+🤖 Executing checks: succeeding-command, dependent-check
+▶ Running check: succeeding-command [1/2]
+✔ Check complete: succeeding-command (0.0s) - 1 items
+▶ Running check: dependent-check [2/2]
+✔ Check complete: dependent-check (0.0s) - 1 items
+🔍 Analyzing local git repository...
+🤖 Executing checks: failing-command, level-2, level-3
+▶ Running check: failing-command [1/3]
+✗ Command execution failed: Unknown error
+✔ Check complete: failing-command (0.0s) - 1 issue found
+▶ Running check: level-2 [2/3]
+⏭  Skipped (dependency failed: failing-command)
+▶ Running check: level-3 [3/3]
+⏭  Skipped (dependency failed: level-2)
+🔍 Analyzing local git repository...
+🤖 Executing checks: failing-command
+▶ Running check: failing-command [1/1]
+✗ Command execution failed: Unknown error
+✔ Check complete: failing-command (0.0s) - 1 issue found
+PASS tests/unit/command-check-failure-detection.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-items, process-items
+▶ Running check: fetch-items [1/2]
+✔ Check complete: fetch-items (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: process-items [2/2]
+  forEach: processing 2 items from "fetch-items"...
+  ✔ 1/2 (0.0s)
+  ✔ 2/2 (0.0s)
+✔ Check complete: process-items (0.0s) - 2 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-data, process-data
+▶ Running check: fetch-data [1/2]
+✔ Check complete: fetch-data (0.0s) - 1 items
+  Found 3 items for forEach iteration
+▶ Running check: process-data [2/2]
+  forEach: processing 3 items from "fetch-data"...
+  ✔ 1/3 (0.0s)
+  ✔ 2/3 (0.0s)
+  ✔ 3/3 (0.0s)
+✔ Check complete: process-data (0.0s) - 3 runs
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-empty, process-empty
+▶ Running check: fetch-empty [1/2]
+✔ Check complete: fetch-empty (0.0s) - 1 items
+  Found 0 items for forEach iteration
+▶ Running check: process-empty [2/2]
+  forEach: no items from "fetch-empty", skipping check...
+✔ Check complete: process-empty (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-single, process-single
+▶ Running check: fetch-single [1/2]
+✔ Check complete: fetch-single (0.0s) - 1 items
+  Found 1 items for forEach iteration
+▶ Running check: process-single [2/2]
+  forEach: processing 1 items from "fetch-single"...
+  ✔ 1/1 (0.0s)
+✔ Check complete: process-single (0.0s)
+PASS tests/integration/foreach-transform-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: fetch-tickets, analyze-bug
+▶ Running check: fetch-tickets [1/2]
+✗ Command execution timed out after 1 seconds
+✔ Check complete: fetch-tickets (1.0s) - 1 issue found
+▶ Running check: analyze-bug [2/2]
+⏭  Skipped (dependency failed: fetch-tickets)
+PASS tests/integration/timeout-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-analysis, security-remediation, performance-analysis
+▶ Running check: security-analysis [1/3]
+▶ Running check: performance-analysis [2/3]
+✔ Check complete: security-analysis (0.0s) - 1 issue found
+✔ Check complete: performance-analysis (0.0s) - 1 issue found
+▶ Running check: security-remediation [3/3]
+✔ Check complete: security-remediation (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: initial-scan, detailed-security, security-report, independent-performance
+▶ Running check: initial-scan [1/4]
+▶ Running check: independent-performance [2/4]
+✔ Check complete: initial-scan (0.0s) - 1 issue found
+✔ Check complete: independent-performance (0.0s) - 1 issue found
+▶ Running check: detailed-security [3/4]
+✔ Check complete: detailed-security (0.0s) - 1 issue found
+▶ Running check: security-report [4/4]
+✔ Check complete: security-report (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: context-builder, context-aware-security, context-aware-performance
+▶ Running check: context-builder [1/3]
+✔ Check complete: context-builder (0.0s) - 1 issue found
+▶ Running check: context-aware-security [2/3]
+✔ Check complete: context-aware-security (0.0s) - 1 issue found
+▶ Running check: context-aware-performance [3/3]
+✔ Check complete: context-aware-performance (0.0s) - 1 issue found
+PASS tests/e2e/session-reuse-e2e.test.ts
+PASS tests/scenarios/pr-events.test.ts
+PASS tests/scenarios/workflow-integration.test.ts
+PASS tests/scenarios/comment-commands.test.ts
+PASS tests/e2e/pr-detection-e2e.test.ts
+PASS tests/integration.test.ts
+error: option '-c, --check <type>' argument missing
+error: option '-o, --output <format>' argument missing
+(node:4057539) TimeoutNaNWarning: NaN is not a number.
+Timeout duration was set to 1.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS tests/edge-cases/edge-cases.test.ts
+PASS tests/unit/config-extends.test.ts
+PASS tests/unit/ai-review-service-session-reuse.test.ts
+Visor 0.1.42 • Probe unknown • Node v24.7.0
+▶ Discovering configuration
+📝 Code context: ENABLED (code-review schema detected in local mode)
+▶ Analyzing repository
+Usage: visor [options]
+
+Visor - AI-powered code review tool
+
+Options:
+  -V, --version                         output the version number
+  -c, --check <type>                    Specify check type (can be used multiple
+                                        times) (default: [])
+  -o, --output <format>                 Output format (table, json, markdown,
+                                        sarif) (default: "table")
+  --output-file <path>                  Write formatted output to a file instead
+                                        of stdout
+  --config <path>                       Path to configuration file
+  --timeout <ms>                        Timeout for check operations in
+                                        milliseconds (default: 600000ms / 10
+                                        minutes)
+  --max-parallelism <count>             Maximum number of checks to run in
+                                        parallel (default: 3)
+  --debug                               Enable debug mode for detailed output
+  -v, --verbose                         Increase verbosity (without full debug)
+  -q, --quiet                           Reduce verbosity to warnings and errors
+  --fail-fast                           Stop execution on first failure
+                                        condition
+  --tags <tags>                         Include checks with these tags
+                                        (comma-separated)
+  --exclude-tags <tags>                 Exclude checks with these tags
+                                        (comma-separated)
+  --allowed-remote-patterns <patterns>  Comma-separated list of allowed URL
+                                        prefixes for remote config extends
+                                        (e.g.,
+                                        "https://github.com/,https://raw.githubusercontent.com/")
+  --enable-code-context                 Force include code diffs in analysis
+                                        (CLI mode)
+  --disable-code-context                Force exclude code diffs from analysis
+                                        (CLI mode)
+  --mode <mode>                         Run mode (cli|github-actions). Default:
+                                        cli
+  -h, --help                            display help for command
+
+Examples:
+  visor --check performance --output table
+  visor --check performance --check security --config ./.visor.yaml
+  visor --check all --output json
+  visor --check architecture --check security --output markdown
+  visor --check security --output sarif > results.sarif
+  visor --check all --output json --output-file results.json   # Save to file reliably
+  visor --check all --timeout 300000 --output json           # 5 minute timeout
+  visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
+  visor --check all --debug --output markdown                # Enable debug mode
+  visor --check all --fail-fast --output json                # Stop on first failure
+  visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
+  visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0
+❌ Error: No changes to analyze. Make some file changes first.
+📂 Repository: main branch
+📁 Files changed: 0
+▶ Executing 8 check(s)
+▶ Running check: overview [1/7]
+✔ Check complete: overview (0.0s) - 1 issue found
+▶ Running check: issue-assistant [2/7]
+✔ Check complete: issue-assistant (0.0s) - 1 issue found
+▶ Running check: security [3/7]
+✔ Check complete: security (0.0s)
+▶ Running check: performance [4/7]
+✔ Check complete: performance (0.0s)
+▶ Running check: quality [5/7]
+✔ Check complete: quality (0.0s)
+▶ Running check: style [6/7]
+✔ Check complete: style (0.0s)
+▶ Running check: review-all [7/7]
+⏭  Skipped (if: event.isPullRequest)
+
+┌─────────────────────────────────────────┐
+│ Execution Complete (0.0s)               │
+├─────────────────────────────────────────┤
+│ Checks: 7 configured → 6 executions     │
+├─────────────────────────────────────────┤
+│ Status: 6 ✔ │ 0 ✖ │ 1 ⏭                 │
+├─────────────────────────────────────────┤
+│ Issues: 2 total                         │
+└─────────────────────────────────────────┘
+
+Check Details:
+[90m┌─────────────────────[39m[90m┬──────────[39m[90m┬──────────[39m[90m┬─────────────────────┐[39m
+[90m│[39m[36m Check               [39m[90m│[39m[36m Duration [39m[90m│[39m[36m Status   [39m[90m│[39m[36m Details             [39m[90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m overview            [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m 1💡                 [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m security            [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m                     [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m performance         [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m                     [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m quality             [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m                     [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m style               [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m                     [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m review-all          [90m│[39m -        [90m│[39m ⏭ if     [90m│[39m event.isPullRequest [90m│[39m
+[90m├─────────────────────[39m[90m┼──────────[39m[90m┼──────────[39m[90m┼─────────────────────┤[39m
+[90m│[39m issue-assistant     [90m│[39m 0.0s     [90m│[39m ✔        [90m│[39m 1💡                 [90m│[39m
+[90m└─────────────────────[39m[90m┴──────────[39m[90m┴──────────[39m[90m┴─────────────────────┘[39m
+
+Legend: ✔=success │ ✖=failed │ ⏭=skipped │ ×N=iterations │ →N=outputs │ N🔴=critical │ N⚠️=warnings
+▶ Formatting results as table
+✔ Completed 7 check(s): 2 issues (0 critical, 0 error, 0 warning)
+(node:4057539) [DEP0147] DeprecationWarning: In future versions of Node.js, fs.rmdir(path, { recursive: true }) will be removed. Use fs.rm(path, { recursive: true }) instead
+PASS tests/e2e/failure-conditions-workflow.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: full-review
+▶ Running check: full-review [1/1]
+✖ Check failed: full-review (0.0s) - provider.execute is not a function
+PASS tests/integration/schema-template-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: analyze-bug, log-results
+▶ Running check: analyze-bug [1/2]
+⚠️  Check "analyze-bug" - fail_if condition met: output.error
+✔ Check complete: analyze-bug (0.0s) - 1 items
+▶ Running check: log-results [2/2]
+⏭  Skipped (dependency failed: analyze-bug)
+PASS tests/integration/fail-if-ai-custom-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: analyze-bug, log-results
+▶ Running check: analyze-bug [1/2]
+⚠️  Check "analyze-bug" - fail_if condition met: output.error
+✔ Check complete: analyze-bug (0.0s) - 1 items
+▶ Running check: log-results [2/2]
+⏭  Skipped (dependency failed: analyze-bug)
+PASS tests/integration/fail-if-command-integration.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: check1, check2, check3
+▶ Running check: check1 [1/3]
+▶ Running check: check2 [2/3]
+▶ Running check: check3 [3/3]
+✔ Check complete: check2 (0.0s) - 1 items
+✔ Check complete: check1 (0.0s) - 1 items
+✗ Command execution failed: Unknown error
+✔ Check complete: check3 (0.0s) - 1 issue found
+PASS tests/unit/execution-statistics-formatting.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+🔍 Analyzing local git repository...
+🤖 Executing checks: performance
+🔍 Analyzing local git repository...
+🤖 Executing checks: style
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+🔍 Analyzing local git repository...
+🤖 Executing checks: performance
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: all
+🔍 Analyzing local git repository...
+🤖 Executing checks: architecture
+🔍 Analyzing local git repository...
+🤖 Executing checks: security, performance, style
+🔍 Analyzing local git repository...
+🔍 Analyzing local git repository...
+Error executing checks: Git command failed
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+Error executing checks: Review failed
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+🔍 Analyzing local git repository...
+Error executing checks: Test error message
+🔍 Analyzing local git repository...
+Error executing checks: String error
+🔍 Analyzing local git repository...
+🤖 Executing checks: security
+PASS tests/unit/cli/check-execution-engine.test.ts
+PASS tests/unit/webhook-server.test.ts
+PASS tests/unit/github-comments.test.ts
+PASS tests/unit.test.ts
+PASS tests/unit/config-extends-github-action.test.ts
+⚠️  Config warning [ai]: Unknown top-level key 'ai' will be ignored.
+⚠️  Config warning [github]: Unknown top-level key 'github' will be ignored.
+⚠️  Config warning [configFile]: Unknown top-level key 'configFile' will be ignored.
+PASS tests/regression/regression-test-suite-fixed.test.ts
+PASS tests/unit/cli/git-repository-analyzer.test.ts
+PASS tests/integration/suppression.test.ts
+PASS tests/unit/config.test.ts
+PASS tests/memory/resource-cleanup.test.ts
+✗ Command execution failed: Command not found
+✗ Command execution failed: Command failed with exit code 1
+
+Stderr output:
+Error: File not found
+Stack trace...
+✗ Failed to apply Liquid transform: expected "|" before filter, line:1, col:27
+PASS tests/unit/providers/command-check-provider.test.ts
+PASS tests/unit/config-extends-comprehensive.test.ts
+PASS tests/unit/config-default-type.test.ts
+PASS tests/errors/config-corruption.test.ts
+PASS tests/unit/liquid-extensions.test.ts
+PASS tests/unit/schema-template.test.ts
+PASS tests/unit/tag-validation.test.ts
+PASS tests/unit/session-reuse-config.test.ts
+PASS tests/unit/cron-scheduler.test.ts
+PASS tests/unit/providers/check-provider-registry.test.ts
+PASS tests/unit/config-validation-warnings.test.ts
+PASS tests/unit/ai-review-service.test.ts
+error: unknown option '--unknown-flag'
+error: option '-c, --check <type>' argument missing
+error: option '-o, --output <format>' argument missing
+error: option '--config <path>' argument missing
+error: option '--timeout <ms>' argument missing
+PASS tests/unit/cli.test.ts
+Visor 0.1.42 • Probe unknown • Node v24.7.0
+▶ Discovering configuration
+📝 Code context: DISABLED (no code-review schema found in local mode)
+▶ Analyzing repository
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0.0
+📂 Repository: main branch
+📁 Files changed: 1
+▶ Executing 1 check(s)
+❌ Error: analyzer.toPRInfo is not a function
+Visor 0.1.42 • Probe unknown • Node v24.7.0
+▶ Discovering configuration
+📝 Code context: DISABLED (no code-review schema found in local mode)
+▶ Analyzing repository
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0.0
+📂 Repository: main branch
+📁 Files changed: 1
+▶ Executing 1 check(s)
+❌ Error: analyzer.toPRInfo is not a function
+Visor 0.1.42 • Probe unknown • Node v24.7.0
+▶ Discovering configuration
+📝 Code context: DISABLED (no code-review schema found in local mode)
+▶ Analyzing repository
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0.0
+📂 Repository: main branch
+📁 Files changed: 1
+▶ Executing 1 check(s)
+❌ Error: analyzer.toPRInfo is not a function
+PASS tests/unit/cli-failure-conditions.test.ts
+PASS tests/memory/memory-leak-detection.test.ts
+error: unknown option '--unknown-option'
+error: option '-c, --check <type>' argument missing
+error: option '-o, --output <format>' argument missing
+error: option '--config <path>' argument missing
+PASS tests/errors/malformed-data.test.ts
+Usage: visor [options]
+
+Visor - AI-powered code review tool
+
+Options:
+  -V, --version                         output the version number
+  -c, --check <type>                    Specify check type (can be used multiple
+                                        times) (default: [])
+  -o, --output <format>                 Output format (table, json, markdown,
+                                        sarif) (default: "table")
+  --output-file <path>                  Write formatted output to a file instead
+                                        of stdout
+  --config <path>                       Path to configuration file
+  --timeout <ms>                        Timeout for check operations in
+                                        milliseconds (default: 600000ms / 10
+                                        minutes)
+  --max-parallelism <count>             Maximum number of checks to run in
+                                        parallel (default: 3)
+  --debug                               Enable debug mode for detailed output
+  -v, --verbose                         Increase verbosity (without full debug)
+  -q, --quiet                           Reduce verbosity to warnings and errors
+  --fail-fast                           Stop execution on first failure
+                                        condition
+  --tags <tags>                         Include checks with these tags
+                                        (comma-separated)
+  --exclude-tags <tags>                 Exclude checks with these tags
+                                        (comma-separated)
+  --allowed-remote-patterns <patterns>  Comma-separated list of allowed URL
+                                        prefixes for remote config extends
+                                        (e.g.,
+                                        "https://github.com/,https://raw.githubusercontent.com/")
+  --enable-code-context                 Force include code diffs in analysis
+                                        (CLI mode)
+  --disable-code-context                Force exclude code diffs from analysis
+                                        (CLI mode)
+  --mode <mode>                         Run mode (cli|github-actions). Default:
+                                        cli
+  -h, --help                            display help for command
+
+Examples:
+  visor --check performance --output table
+  visor --check performance --check security --config ./.visor.yaml
+  visor --check all --output json
+  visor --check architecture --check security --output markdown
+  visor --check security --output sarif > results.sarif
+  visor --check all --output json --output-file results.json   # Save to file reliably
+  visor --check all --timeout 300000 --output json           # 5 minute timeout
+  visor --check all --max-parallelism 5 --output json        # Run up to 5 checks in parallel
+  visor --check all --debug --output markdown                # Enable debug mode
+  visor --check all --fail-fast --output json                # Stop on first failure
+  visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
+  visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones
+0.1.42
+PASS tests/unit/reviewer.test.ts
+PASS tests/unit/failure-condition-evaluator.test.ts
+PASS tests/unit/env-resolver.test.ts
+⚠️  Config warning [output.markdown]: Unknown key 'markdown' will be ignored
+PASS tests/unit/jira-mcp-config.test.ts
+✗ Failed to transform webhook data: Template error
+✗ Failed to transform webhook data: Unexpected token 'o', "not json" is not valid JSON
+PASS tests/unit/providers/http-input-provider.test.ts
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check
+▶ Running check: security-check [1/1]
+⚠️  Check "security-check" - global fail_if condition met: metadata.criticalIssues > 0
+⚠️  Check "security-check" - fail_if condition met: metadata.totalIssues > 0
+✔ Check complete: security-check (0.0s) - 3 issues found
+⚠️  Check "security-check" - global fail_if condition met: metadata.criticalIssues > 0
+⚠️  Check "security-check" - fail_if condition met: metadata.totalIssues > 0
+🔍 Analyzing local git repository...
+🤖 Executing checks: style-check
+▶ Running check: style-check [1/1]
+✔ Check complete: style-check (0.0s) - 1 issue found
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check
+▶ Running check: security-check [1/1]
+⚠️  Check "security-check" - fail_if condition met: contains(metadata.checkName, "security") && metadata.totalIssues > 0
+✔ Check complete: security-check (0.0s) - 2 issues found
+⚠️  Check "security-check" - fail_if condition met: contains(metadata.checkName, "security") && metadata.totalIssues > 0
+🔍 Analyzing local git repository...
+🤖 Executing checks: always-fail
+▶ Running check: always-fail [1/1]
+✖ Check failed: always-fail (0.0s) - Cannot read properties of undefined (reading 'issues')
+⚠️  Check "always-fail" - fail_if condition met: always()
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check
+▶ Running check: security-check [1/1]
+⚠️  Check "security-check" - fail_if condition met: always()
+✔ Check complete: security-check (0.0s) - 2 issues found
+⚠️  Check "security-check" - fail_if condition met: always()
+🔍 Analyzing local git repository...
+🤖 Executing checks: performance-check
+▶ Running check: performance-check [1/1]
+✔ Check complete: performance-check (0.0s)
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check
+▶ Running check: security-check [1/1]
+⚠️  Check "security-check" - fail_if condition met: (metadata.errorIssues > 0 && metadata.warningIssues > 0) || metadata.criticalIssues > 0
+✔ Check complete: security-check (0.0s) - 2 issues found
+⚠️  Check "security-check" - fail_if condition met: (metadata.errorIssues > 0 && metadata.warningIssues > 0) || metadata.criticalIssues > 0
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check
+▶ Running check: security-check [1/1]
+⚠️  Check "security-check" - fail_if condition met: hasIssue(issues, "category", "security") && hasFileMatching(issues, "auth")
+✔ Check complete: security-check (0.0s) - 2 issues found
+⚠️  Check "security-check" - fail_if condition met: hasIssue(issues, "category", "security") && hasFileMatching(issues, "auth")
+🔍 Analyzing local git repository...
+🤖 Executing checks: security-check, performance-check, combined-check
+▶ Running check: security-check [1/3]
+▶ Running check: performance-check [2/3]
+⚠️  Check "security-check" - fail_if condition met: metadata.criticalIssues > 0
+✔ Check complete: security-check (0.0s) - 2 issues found
+✔ Check complete: performance-check (0.0s)
+▶ Running check: combined-check [3/3]
+⏭  Skipped (dependency failed: security-check)
+PASS tests/integration/fail-if-integration.test.ts
+PASS tests/unit/providers/http-check-provider.test.ts
+▶ Running check: local-security [1/2]
+▶ Running check: remote-security-comprehensive [2/2]
+✔ Check complete: local-security (0.0s)
+✔ Check complete: remote-security-comprehensive (0.0s)
+▶ Running check: local-security [1/3]
+▶ Running check: local-performance [2/3]
+▶ Running check: local-style [3/3]
+✔ Check complete: local-security (0.0s)
+✔ Check complete: local-performance (0.0s)
+✔ Check complete: local-style (0.0s)
+▶ Running check: remote-security-comprehensive [1/3]
+▶ Running check: remote-performance-analysis [2/3]
+▶ Running check: experimental-ai-review [3/3]
+✔ Check complete: remote-security-comprehensive (0.0s)
+✔ Check complete: remote-performance-analysis (0.0s)
+✔ Check complete: experimental-ai-review (0.0s)
+⚠️ No checks remain after tag filtering
+▶ Running check: local-security [1/4]
+▶ Running check: local-performance [2/4]
+▶ Running check: remote-security-comprehensive [3/4]
+✔ Check complete: local-security (0.0s)
+✔ Check complete: local-performance (0.0s)
+✔ Check complete: remote-security-comprehensive (0.0s)
+▶ Running check: remote-performance-analysis [4/4]
+✔ Check complete: remote-performance-analysis (0.0s)
+PASS tests/integration/tag-based-execution.test.ts
+PASS tests/integration/failure-conditions-integration.test.ts
+PASS tests/unit/providers/http-client-provider.test.ts
+PASS tests/unit/event-mapper.test.ts
+PASS tests/unit/action-cli-bridge.test.ts
+ℹ️ **INFO**: Simple test message
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.452Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: PR #123 by testuser
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.453Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Test
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.454Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Test
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.455Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Test with deps
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Dependency Results
+- **security-check**: 1 issues, 0 suggestions
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.455Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Test message
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.456Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+⚠️ **WARN**: Test message
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.456Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+❌ **ERROR**: Test message
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.456Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Analyzing 1 files
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.457Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+ℹ️ **INFO**: Dependency count: 1
+
+### PR Context
+- **PR #123**: Test PR
+- **Author**: testuser
+- **Base**: main → **Head**: feature
+- **Changes**: +10 -5
+- **Files Modified**: 1
+
+### Dependency Results
+- **test-check**: 0 issues, 0 suggestions
+
+### Execution Metadata
+- **Timestamp**: 2025-10-08T10:21:59.458Z
+- **Node Version**: v24.7.0
+- **Platform**: linux
+- **Working Directory**: /home/buger/projects/visor2
+PASS tests/unit/providers/log-check-provider.test.ts
+PASS tests/unit/providers/ai-check-provider.test.ts
+PASS tests/unit/github-check-service.test.ts
+PASS tests/unit/pr-analyzer.test.ts
+PASS tests/unit/issue-filter.test.ts
+PASS tests/unit/github-actions-functions.test.ts
+PASS tests/unit/dependency-resolver.test.ts
+PASS tests/unit/tag-filtering.test.ts
+PASS tests/unit/path-traversal-security.test.ts
+PASS tests/unit/mermaid-production-scenario.test.ts
+PASS tests/unit/if-condition.test.ts
+PASS tests/unit/event-filtering.test.ts
+PASS tests/unit/mermaid-preservation.test.ts
+PASS tests/unit/dependency-resolution.test.ts
+PASS tests/unit/session-registry.test.ts
+PASS tests/unit/fail-if-simple.test.ts
+PASS tests/unit/foreach-custom-schema-integration.test.ts
+PASS tests/unit/providers/output-exposure.test.ts
+PASS tests/unit/group-based-comments.test.ts
+PASS tests/unit/pr-detector.test.ts
+PASS tests/unit/noop-check-provider.test.ts
+PASS tests/unit/if-condition-foreach.test.ts
+PASS tests/unit/commands.test.ts
+PASS tests/unit/ai-xml-tag-stripping.test.ts
+PASS tests/unit/html-rendering-debug.test.ts
+PASS tests/unit/custom-schema-preservation.test.ts
+PASS tests/unit/ai-provider-mcp.test.ts
+PASS tests/unit/transitive-dependency-outputs.test.ts
+PASS tests/unit/severity-levels.test.ts
+PASS tests/unit/github-comment-promise-fix.test.ts
+PASS tests/unit/html-whitespace-test.test.ts
+PASS tests/unit/foreach-chain-propagation.test.ts
+PASS tests/unit/ai-prompt-rules.test.ts
+
+Test Suites: 1 skipped, 107 passed, 107 of 108 total
+Tests:       21 skipped, 1209 passed, 1230 total
+Snapshots:   0 total
+Time:        336.828 s
+Ran all test suites.

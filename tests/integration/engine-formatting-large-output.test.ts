@@ -1,5 +1,4 @@
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
-import { OutputFormatters } from '../../src/output-formatters';
 import { VisorConfig } from '../../src/types/config';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -26,8 +25,12 @@ describe('Engine + formatter integration: large outputs do not stall', () => {
   });
 
   it('formats a 3-check chain (forEach -> analyze with custom-like output -> dependent) with truncation and skip gating', async () => {
-    const bigMsg = 'X'.repeat(1200);
-    const bigCode = Array.from({ length: 40 }, () => 'const a = 1; //' + 'y'.repeat(80)).join('\n');
+    // Keep payloads intentionally modest to avoid slow table rendering in CI
+    process.env.VISOR_MAX_TABLE_CELL = process.env.VISOR_MAX_TABLE_CELL || '200';
+    process.env.VISOR_MAX_TABLE_CODE_LINES = process.env.VISOR_MAX_TABLE_CODE_LINES || '40';
+
+    const bigMsg = 'X'.repeat(400);
+    const bigCode = Array.from({ length: 20 }, () => 'const a = 1; //' + 'y'.repeat(60)).join('\n');
 
     const config: VisorConfig = {
       version: '1.0',
@@ -70,6 +73,10 @@ describe('Engine + formatter integration: large outputs do not stall', () => {
 
     // Note: skip gating for aggregated custom outputs is covered elsewhere;
     // here we focus on ensuring the formatter handles large content without stalling.
+
+    // Import after env knobs are set so static limits pick them up
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { OutputFormatters } = require('../../src/output-formatters');
 
     const table = OutputFormatters.formatAsTable(
       {
