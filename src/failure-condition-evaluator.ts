@@ -104,7 +104,8 @@ export class FailureConditionEvaluator {
     );
 
     try {
-      return this.evaluateExpression(expression, context);
+      const res = this.evaluateExpression(expression, context);
+      return res;
     } catch (error) {
       console.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
@@ -595,6 +596,53 @@ export class FailureConditionEvaluator {
       Object.assign(aggregatedOutput, extractedOutput as Record<string, unknown>);
     }
 
+    // If output is a string, try to parse JSON (full or from end) to enrich context,
+    // and also derive common boolean flags generically (e.g., key:true/false) for fail_if usage.
+    try {
+      if (typeof extractedOutput === 'string') {
+        const parsed = this.tryExtractJsonFromEnd(extractedOutput) ?? (() => { try { return JSON.parse(extractedOutput); } catch { return null; } })();
+        if (parsed !== null) {
+          if (Array.isArray(parsed)) {
+            (aggregatedOutput as any).items = parsed;
+          } else if (typeof parsed === 'object') {
+            Object.assign(aggregatedOutput, parsed as Record<string, unknown>);
+          }
+        }
+        // Generic boolean key extraction for simple text outputs (no special provider cases)
+        const lower = extractedOutput.toLowerCase();
+        const boolFrom = (key: string): boolean | null => {
+          const reTrue = new RegExp(`(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*true(?:[^a-z0-9_]|$)`);
+          const reFalse = new RegExp(`(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*false(?:[^a-z0-9_]|$)`);
+          if (reTrue.test(lower)) return true;
+          if (reFalse.test(lower)) return false;
+          return null;
+        };
+        const keys = ['error'];
+        for (const k of keys) {
+          const v = boolFrom(k);
+          if (v !== null && (aggregatedOutput as any)[k] === undefined) {
+            (aggregatedOutput as any)[k] = v;
+          }
+        }
+      }
+    } catch {}
+
+    // Try to parse JSON from content as a last resort when no structured output is present
+    try {
+      const rsAny = reviewSummaryWithOutput as any;
+      const hasStructuredOutput = extractedOutput !== undefined && extractedOutput !== null;
+      if (!hasStructuredOutput && typeof rsAny?.content === 'string') {
+        const parsedFromContent = this.tryExtractJsonFromEnd(rsAny.content);
+        if (parsedFromContent !== null && parsedFromContent !== undefined) {
+          if (Array.isArray(parsedFromContent)) {
+            (aggregatedOutput as any).items = parsedFromContent;
+          } else if (typeof parsedFromContent === 'object') {
+            Object.assign(aggregatedOutput, parsedFromContent as Record<string, unknown>);
+          }
+        }
+      }
+    } catch {}
+
     const context: FailureConditionContext = {
       output: aggregatedOutput,
       outputs: (() => {
@@ -625,6 +673,26 @@ export class FailureConditionEvaluator {
     }
 
     return context;
+  }
+
+  // Minimal JSON-from-end extractor for fail_if context fallback
+  private tryExtractJsonFromEnd(text: string): unknown | null {
+    try {
+      const lines = text.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const t = lines[i].trim();
+        if (t.startsWith('{') || t.startsWith('[')) {
+          const candidate = lines.slice(i).join('\n').trim();
+          if (
+            (candidate.startsWith('{') && candidate.endsWith('}')) ||
+            (candidate.startsWith('[') && candidate.endsWith(']'))
+          ) {
+            return JSON.parse(candidate);
+          }
+        }
+      }
+    } catch {}
+    return null;
   }
 
   /**

@@ -92,7 +92,6 @@ export class CommandCheckProvider extends CheckProvider {
       if (command.includes('{{') || command.includes('{%')) {
         renderedCommand = await this.renderCommandTemplate(command, templateContext);
       }
-
       logger.debug(`🔧 Debug: Rendered command: ${renderedCommand}`);
 
       // Prepare environment variables - convert all to strings
@@ -131,6 +130,7 @@ export class CommandCheckProvider extends CheckProvider {
 
       // Keep raw output for transforms
       const rawOutput = stdout.trim();
+      logger.info(`prov-raw: ${rawOutput}`);
 
       // Try to parse output as JSON for default behavior
       let output: unknown = rawOutput;
@@ -141,25 +141,25 @@ export class CommandCheckProvider extends CheckProvider {
         logger.debug(`🔧 Debug: Parsed entire output as JSON successfully`);
       } catch {
         // Try to extract JSON from the end of output (for commands with debug logs)
-        const extracted = this.extractJsonFromEnd(rawOutput);
-        if (extracted) {
+        const extractedTail = this.extractJsonFromEnd(rawOutput);
+        if (extractedTail) {
           try {
-            output = JSON.parse(extracted);
-            logger.debug(
-              `🔧 Debug: Extracted and parsed JSON from end of output (${extracted.length} chars from ${rawOutput.length} total)`
-            );
-            logger.debug(`🔧 Debug: Extracted JSON content: ${extracted.slice(0, 200)}`);
-          } catch (parseError) {
-            // Extraction found something but it's not valid JSON
-            logger.debug(
-              `🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
-            );
+            output = JSON.parse(extractedTail);
+          } catch {
             output = rawOutput;
           }
         } else {
-          // Not JSON, keep as string
-          logger.debug(`🔧 Debug: No JSON found in output, keeping as string`);
-          output = rawOutput;
+          // Try to extract any balanced JSON substring anywhere
+          const extractedAny = this.extractJsonAnywhere(rawOutput);
+          if (extractedAny) {
+            try {
+              output = JSON.parse(extractedAny);
+            } catch {
+              output = rawOutput;
+            }
+          } else {
+            output = rawOutput;
+          }
         }
       }
 
@@ -547,28 +547,57 @@ export class CommandCheckProvider extends CheckProvider {
    * Looks for the last occurrence of { or [ and tries to parse from there
    */
   private extractJsonFromEnd(text: string): string | null {
-    // Strategy: Find the last line that starts with { or [
-    // Then try to parse from that point to the end
-    const lines = text.split('\n');
-
-    // Search backwards for a line starting with { or [
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const trimmed = lines[i].trim();
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        // Found potential JSON start - take everything from here to the end
-        const candidate = lines.slice(i).join('\n');
-        // Quick validation: does it look like valid JSON structure?
-        const trimmedCandidate = candidate.trim();
-        if (
-          (trimmedCandidate.startsWith('{') && trimmedCandidate.endsWith('}')) ||
-          (trimmedCandidate.startsWith('[') && trimmedCandidate.endsWith(']'))
-        ) {
-          return trimmedCandidate;
+    // Robust strategy: find the last closing brace/bracket, then walk backwards to the matching opener
+    const lastBrace = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+    if (lastBrace === -1) return null;
+    // Scan backwards to find matching opener with a simple counter
+    let open = 0;
+    for (let i = lastBrace; i >= 0; i--) {
+      const ch = text[i];
+      if (ch === '}' || ch === ']') open++;
+      else if (ch === '{' || ch === '[') open--;
+      if (open === 0 && (ch === '{' || ch === '[')) {
+        const candidate = text.slice(i, lastBrace + 1).trim();
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch {
+          return null;
         }
       }
     }
-
     return null;
+  }
+
+  // Extract any balanced JSON object/array substring from anywhere in the text
+  private extractJsonAnywhere(text: string): string | null {
+    const n = text.length;
+    let best: string | null = null;
+    for (let i = 0; i < n; i++) {
+      const start = text[i];
+      if (start !== '{' && start !== '[') continue;
+      let open = 0;
+      let inString = false;
+      let escape = false;
+      for (let j = i; j < n; j++) {
+        const ch = text[j];
+        if (escape) { escape = false; continue; }
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{' || ch === '[') open++;
+        else if (ch === '}' || ch === ']') open--;
+        if (open === 0 && (ch === '}' || ch === ']')) {
+          const candidate = text.slice(i, j + 1).trim();
+          try {
+            JSON.parse(candidate);
+            best = candidate; // keep the last valid one we find
+          } catch {}
+          break;
+        }
+      }
+    }
+    return best;
   }
 
   /**
@@ -809,10 +838,18 @@ export class CommandCheckProvider extends CheckProvider {
     }
   ): Promise<string> {
     try {
-      return await this.liquid.parseAndRender(template, context);
+      // First perform JS-expression substitutions to avoid altering escape sequences
+      const jsFirst = this.renderWithJsExpressions(template, context);
+      // Then run Liquid in case filters/logic are present; fall back to JS-only if Liquid errs
+      try {
+        const rendered = await this.liquid.parseAndRender(jsFirst, context);
+        return rendered.includes('{{') ? this.renderWithJsExpressions(rendered, context) : rendered;
+      } catch {
+        return jsFirst;
+      }
     } catch (error) {
-      logger.debug(`🔧 Debug: Liquid rendering failed, falling back to JS evaluation: ${error}`);
-      return this.renderWithJsExpressions(template, context);
+      logger.debug(`🔧 Debug: Templating failed, returning original template: ${error}`);
+      return template;
     }
   }
 
@@ -833,13 +870,9 @@ export class CommandCheckProvider extends CheckProvider {
     };
 
     const expressionRegex = /\{\{\s*([^{}]+?)\s*\}\}/g;
-
     return template.replace(expressionRegex, (_match, expr) => {
       const expression = String(expr).trim();
-      if (!expression) {
-        return '';
-      }
-
+      if (!expression) return '';
       try {
         const evalCode = `
           const pr = scope.pr;
@@ -848,15 +881,11 @@ export class CommandCheckProvider extends CheckProvider {
           const env = scope.env;
           return (${expression});
         `;
-
-        if (!this.sandbox) {
-          this.sandbox = this.createSecureSandbox();
-        }
+        if (!this.sandbox) this.sandbox = this.createSecureSandbox();
         const evaluator = this.sandbox.compile(evalCode);
         const result = evaluator({ scope }).run();
         return result === undefined || result === null ? '' : String(result);
-      } catch (evaluationError) {
-        logger.debug(`🔧 Debug: Failed to evaluate expression: ${expression} - ${evaluationError}`);
+      } catch {
         return '';
       }
     });
