@@ -6,6 +6,7 @@ import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
+import { logger } from '../logger';
 import path from 'path';
 import {
   ClaudeCodeQuery,
@@ -588,10 +589,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Log detailed error information
-      {
-        const { logger } = await import('../logger');
-        logger.error(`Claude Code Check Provider Error: ${errorMessage}`);
-      }
+      logger.error(`Claude Code Check Provider Error: ${errorMessage}`);
 
       // Check if this is a critical error
       const isCriticalError =
@@ -601,7 +599,6 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         errorMessage.includes('authentication');
 
       if (isCriticalError) {
-        const { logger } = await import('../logger');
         logger.error(`CRITICAL ERROR: Claude Code provider authentication or setup issue detected`);
         logger.error(`This check cannot proceed without valid API credentials and SDK installation`);
       }

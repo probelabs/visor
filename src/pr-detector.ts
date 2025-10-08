@@ -39,10 +39,8 @@ export class PRDetector {
 
   private log(message: string, ...args: unknown[]): void {
     if (this.debug) {
-      // Lazy import to avoid cycles
-      import('./logger').then(({ logger }) => {
-        logger.debug(`[PR Detector] ${message} ${args.map(a => String(a)).join(' ')}`);
-      });
+      const { logger } = require('./logger');
+      logger.debug(`[PR Detector] ${message} ${args.map(a => String(a)).join(' ')}`);
     }
   }
 

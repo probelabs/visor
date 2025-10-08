@@ -266,7 +266,7 @@ ${content}
     if (resetTime) {
       const resetDate = new Date(parseInt(resetTime) * 1000);
       const waitTime = Math.max(resetDate.getTime() - Date.now(), this.retryConfig.baseDelay);
-      const { logger } = await import('./logger');
+      const { logger } = require('./logger');
       logger.warn(`Rate limit exceeded. Waiting ${Math.round(waitTime / 1000)}s until reset...`);
       await this.sleep(Math.min(waitTime, this.retryConfig.maxDelay));
     } else {

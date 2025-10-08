@@ -510,7 +510,7 @@ export class AICheckProvider extends CheckProvider {
     if (Object.keys(mcpServers).length > 0) {
       (aiConfig as unknown as { mcpServers?: unknown }).mcpServers = mcpServers;
       if (aiConfig.debug) {
-        const { logger } = await import('../logger');
+        const { logger } = require('../logger');
         logger.debug(`AI check MCP configured with ${Object.keys(mcpServers).length} servers`);
       }
     }
@@ -530,12 +530,12 @@ export class AICheckProvider extends CheckProvider {
     const schema = config.schema as string | Record<string, unknown> | undefined;
 
     // Only output debug messages if debug mode is enabled
-    if (aiConfig.debug) {
-      const { logger } = await import('../logger');
-      logger.debug(`AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`);
-      logger.debug(`AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-      logger.debug(`AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
-    }
+      if (aiConfig.debug) {
+        const { logger } = require('../logger');
+        logger.debug(`AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`);
+        logger.debug(`AICheckProvider schema from config: ${JSON.stringify(schema)}`);
+        logger.debug(`AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+      }
 
     try {
       if (aiConfig.debug) {
@@ -548,7 +548,7 @@ export class AICheckProvider extends CheckProvider {
       // Check if we should use session reuse
       if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
         if (aiConfig.debug) {
-          const { logger } = await import('../logger');
+          const { logger } = require('../logger');
           logger.debug(`Using session reuse with parent session: ${sessionInfo.parentSessionId}`);
         }
         result = await service.executeReviewWithSessionReuse(
@@ -560,7 +560,7 @@ export class AICheckProvider extends CheckProvider {
         );
       } else {
         if (aiConfig.debug) {
-          const { logger } = await import('../logger');
+          const { logger } = require('../logger');
           logger.debug(`Creating new AI session for check: ${config.checkName}`);
         }
         result = await service.executeReview(

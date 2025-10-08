@@ -94,6 +94,11 @@ export const configSchema = {
                 evaluate: {
                   type: 'boolean',
                 },
+                emit_full_source: {
+                  type: 'boolean',
+                  description:
+                    'When true, emit full Mermaid source as telemetry (diagram.block). Default: false',
+                },
               },
               additionalProperties: false,
               patternProperties: {

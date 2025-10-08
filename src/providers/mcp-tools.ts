@@ -518,7 +518,7 @@ export class McpServerManager {
           allTools.push({ serverName, tool });
         });
       } catch (error) {
-        const { logger } = await import('../logger');
+        const { logger } = require('../logger');
         logger.warn(`Failed to list tools from server ${serverName}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -532,7 +532,7 @@ export class McpServerManager {
   async closeAll(): Promise<void> {
     const closePromises = Array.from(this.servers.values()).map(server =>
       server.close().catch(async error => {
-        const { logger } = await import('../logger');
+        const { logger } = require('../logger');
         logger.warn(`Error closing MCP server: ${error instanceof Error ? error.message : String(error)}`);
       })
     );

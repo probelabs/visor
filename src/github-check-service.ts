@@ -3,6 +3,7 @@
  */
 
 import { Octokit } from '@octokit/rest';
+import { logger } from './logger';
 import { FailureConditionResult } from './types/config';
 import { ReviewIssue } from './reviewer';
 
@@ -497,7 +498,6 @@ export class GitHubCheckService {
           url: checkRun.url,
         });
       } catch (error) {
-        const { logger } = await import('./logger');
         logger.error(`Failed to create check run for ${checkResult.checkName}: ${error instanceof Error ? error.message : String(error)}`);
         // Continue with other checks even if one fails
       }
@@ -593,17 +593,13 @@ export class GitHubCheckService {
       const oldRuns = allCheckRuns.filter(run => run.id !== currentCheckRunId);
 
       if (oldRuns.length === 0) {
-        const { logger } = await import('./logger');
         logger.debug(`No old check runs to clear for ${checkName} on commit ${currentCommitSha}`);
         return;
       }
 
-      {
-        const { logger } = await import('./logger');
-        logger.debug(
-          `Clearing ${oldRuns.length} old check run(s) for ${checkName} on commit ${currentCommitSha.substring(0, 7)} (keeping current run ${currentCheckRunId})`
-        );
-      }
+      logger.debug(
+        `Clearing ${oldRuns.length} old check run(s) for ${checkName} on commit ${currentCommitSha.substring(0, 7)} (keeping current run ${currentCheckRunId})`
+      );
 
       // Update each old check run to have empty annotations
       for (const run of oldRuns) {
@@ -618,18 +614,13 @@ export class GitHubCheckService {
               annotations: [], // Clear annotations
             },
           });
-          {
-            const { logger } = await import('./logger');
-            logger.debug(`✓ Cleared annotations from check run ${run.id}`);
-          }
+          logger.debug(`✓ Cleared annotations from check run ${run.id}`);
         } catch (error) {
-          const { logger } = await import('./logger');
           logger.debug(`Could not clear annotations for check run ${run.id}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     } catch (error) {
       // Don't fail the whole check if we can't clear old annotations
-      const { logger } = await import('./logger');
       logger.warn(`Failed to clear old annotations: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
