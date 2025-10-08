@@ -11,7 +11,6 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
-import { logger } from './logger';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -32,9 +31,9 @@ export class FailureConditionEvaluator {
       Math,
       // Allow console for debugging (in controlled environment)
       console: {
-        log: (...args: unknown[]) => logger.debug(['Debug:', ...args].join(' ')),
-        warn: (...args: unknown[]) => logger.warn(args.map(a => String(a)).join(' ')),
-        error: (...args: unknown[]) => logger.error(args.map(a => String(a)).join(' ')),
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
       },
     };
 
@@ -107,7 +106,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      logger.warn(`Failed to evaluate fail_if expression: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
     }
   }
@@ -206,7 +205,7 @@ export class FailureConditionEvaluator {
     try {
       return this.evaluateExpression(expression, context);
     } catch (error) {
-      logger.warn(`Failed to evaluate if expression for check '${checkName}': ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
       // Default to running the check if evaluation fails
       return true;
     }
@@ -378,9 +377,9 @@ export class FailureConditionEvaluator {
       const success = (): boolean => true;
       const failure = (): boolean => false;
 
-      // Debug logging function hooked into centralized logger
+      // Debug logging function for printing to console
       const log = (...args: unknown[]): void => {
-        logger.debug(['Debug:', ...args].map(a => String(a)).join(' '));
+        console.log('🔍 Debug:', ...args);
       };
 
       // Helper functions for array operations
@@ -509,7 +508,7 @@ export class FailureConditionEvaluator {
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
-      logger.error(`Failed to evaluate expression: ${String(condition)} :: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('❌ Failed to evaluate expression:', condition, error);
       // Re-throw the error so it can be caught at a higher level for error reporting
       throw error;
     }
@@ -554,6 +553,15 @@ export class FailureConditionEvaluator {
     previousOutputs?: Record<string, ReviewSummary>
   ): FailureConditionContext {
     const { issues, debug } = reviewSummary;
+    const reviewSummaryWithOutput = reviewSummary as ReviewSummary & { output?: unknown };
+
+    // Extract output field to avoid nesting (output.output)
+    const {
+      output: extractedOutput,
+      // Exclude issues from otherFields since we handle it separately
+      issues: _issues, // eslint-disable-line @typescript-eslint/no-unused-vars
+      ...otherFields
+    } = reviewSummaryWithOutput as any;
 
     const context: FailureConditionContext = {
       output: {
@@ -571,12 +579,9 @@ export class FailureConditionEvaluator {
           replacement: issue.replacement,
         })),
         // Include additional schema-specific data from reviewSummary
-<<<<<<< Updated upstream
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(reviewSummary as any), // Pass through any additional fields
-=======
-        ...(reviewSummary as unknown as Record<string, unknown>),
->>>>>>> Stashed changes
+        ...otherFields,
+        // Spread the extracted output directly (avoid output.output nesting)
+        ...(extractedOutput && typeof extractedOutput === 'object' ? extractedOutput : {}),
       },
       outputs: (() => {
         if (!previousOutputs) return {};

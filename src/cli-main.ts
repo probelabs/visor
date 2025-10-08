@@ -7,13 +7,6 @@ import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
-import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
-<<<<<<< Updated upstream
-import { withActiveSpan, setSpanAttributes } from './telemetry/trace-helpers';
-=======
-import { withActiveSpan } from './telemetry/trace-helpers';
->>>>>>> Stashed changes
-import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -48,12 +41,12 @@ export async function main(): Promise<void> {
 
     // Handle help and version flags
     if (options.help) {
-      process.stdout.write(cli.getHelpText() + '\n');
+      console.log(cli.getHelpText());
       process.exit(0);
     }
 
     if (options.version) {
-      process.stdout.write(cli.getVersion() + '\n');
+      console.log(cli.getVersion());
       process.exit(0);
     }
 
@@ -127,57 +120,6 @@ export async function main(): Promise<void> {
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());
     }
-
-    // Initialize telemetry (config with CLI/env overrides)
-    const runId = uuidv4();
-<<<<<<< Updated upstream
-    const t = (config?.telemetry || {}) as any;
-    // Apply CLI → env overrides for telemetry
-    if (options.telemetry === true) process.env.VISOR_TELEMETRY_ENABLED = 'true';
-    if (options.telemetrySink) process.env.VISOR_TELEMETRY_SINK = options.telemetrySink as any;
-=======
-    type TelemetryCfg = Partial<{
-      enabled: boolean;
-      sink: 'otlp' | 'file' | 'console';
-      otlp: { endpoint?: string; headers?: string; protocol?: 'http' | 'grpc' };
-      file: { dir?: string; ndjson?: boolean };
-      tracing: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-    }>;
-    const t: TelemetryCfg = (config?.telemetry || {}) as unknown as TelemetryCfg;
-    // Apply CLI → env overrides for telemetry
-    if (options.telemetry === true) process.env.VISOR_TELEMETRY_ENABLED = 'true';
-    if (options.telemetrySink) process.env.VISOR_TELEMETRY_SINK = options.telemetrySink as string;
->>>>>>> Stashed changes
-    if (options.telemetryEndpoint) process.env.OTEL_EXPORTER_OTLP_ENDPOINT = options.telemetryEndpoint;
-    if (options.traceReport) process.env.VISOR_TRACE_REPORT = 'true';
-    if (options.autoInstrument) process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS = 'true';
-
-    const telemetryEnabled = process.env.VISOR_TELEMETRY_ENABLED === 'true' || t.enabled === true;
-    await initTelemetry({
-      enabled: telemetryEnabled,
-<<<<<<< Updated upstream
-      sink: ((process.env.VISOR_TELEMETRY_SINK as any) || t.sink || 'file') as any,
-=======
-      sink: ((process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console' | undefined) || t.sink || 'file'),
->>>>>>> Stashed changes
-      otlp: {
-        endpoint:
-          process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
-          process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
-          t?.otlp?.endpoint,
-        headers: process.env.OTEL_EXPORTER_OTLP_HEADERS || t?.otlp?.headers,
-<<<<<<< Updated upstream
-        protocol: (t?.otlp?.protocol as any) || 'http',
-=======
-        protocol: (t?.otlp?.protocol as 'http' | 'grpc' | undefined) || 'http',
->>>>>>> Stashed changes
-      },
-      file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, runId, ndjson: t?.file?.ndjson ?? true },
-      patchConsole: true,
-      autoInstrument:
-        process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true' || t?.tracing?.auto_instrumentations === true,
-      traceReport: process.env.VISOR_TRACE_REPORT === 'true' || t?.tracing?.trace_report?.enabled === true,
-    });
 
     // Determine checks to run and validate check types early
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
@@ -307,27 +249,16 @@ export async function main(): Promise<void> {
     prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
-    const executionResult = await withActiveSpan(
-      'visor.run',
-      {
-        'visor.run.id': runId,
-        'visor.run.mode': 'cli',
-        'visor.max_parallelism': options.maxParallelism ?? config.max_parallelism ?? 3,
-        'visor.fail_fast': !!(options.failFast ?? config.fail_fast ?? false),
-        'visor.files.changed_count': repositoryInfo.files?.length || 0,
-      },
-      async () =>
-        await engine.executeGroupedChecks(
-          prInfo,
-          checksToRun,
-          options.timeout,
-          config,
-          options.output,
-          options.debug || false,
-          options.maxParallelism,
-          options.failFast,
-          tagFilter
-        )
+    const executionResult = await engine.executeGroupedChecks(
+      prInfo,
+      checksToRun,
+      options.timeout,
+      config,
+      options.output,
+      options.debug || false,
+      options.maxParallelism,
+      options.failFast,
+      tagFilter
     );
 
     // Extract results and statistics from the execution result
@@ -443,7 +374,7 @@ export async function main(): Promise<void> {
         process.exit(1);
       }
     } else {
-      process.stdout.write(output + '\n');
+      console.log(output);
     }
 
     // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
@@ -494,7 +425,6 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
-    await shutdownTelemetry().catch(() => {});
     process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
@@ -534,7 +464,6 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
-    await shutdownTelemetry().catch(() => {});
     process.exit(1);
   }
 }
