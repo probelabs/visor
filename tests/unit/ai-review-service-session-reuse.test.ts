@@ -20,6 +20,7 @@ const mockSessionRegistry = {
   hasSession: jest.fn(),
   clearAllSessions: jest.fn(),
   getActiveSessionIds: jest.fn(),
+  cloneSession: jest.fn(),
 };
 
 jest.mock('../../src/session-registry', () => ({
@@ -110,12 +111,14 @@ describe('AIReviewService Session Reuse', () => {
 
       mockSessionRegistry.getSession.mockReturnValue(existingAgent);
 
+      // Use append mode to test the original behavior
       const result = await service.executeReviewWithSessionReuse(
         mockPRInfo,
         'Reuse session prompt',
         parentSessionId,
         'code-review',
-        'dependent-check'
+        'dependent-check',
+        'append' // Use append mode for backward compatibility
       );
 
       expect(mockSessionRegistry.getSession).toHaveBeenCalledWith(parentSessionId);
@@ -178,7 +181,8 @@ describe('AIReviewService Session Reuse', () => {
         'Test prompt',
         parentSessionId,
         'code-review',
-        'dependent-check'
+        'dependent-check',
+        'append' // Use append mode
       );
 
       expect(existingAgent.answer).toHaveBeenCalledWith(
@@ -205,7 +209,8 @@ describe('AIReviewService Session Reuse', () => {
         'Test prompt',
         parentSessionId,
         'code-review', // Pass schema to ensure debug path is taken
-        'dependent-check'
+        'dependent-check',
+        'append' // Use append mode
       );
 
       expect(result.issues).toHaveLength(1);
@@ -255,12 +260,126 @@ describe('AIReviewService Session Reuse', () => {
         'Test prompt',
         parentSessionId,
         undefined,
-        'dependent-check'
+        'dependent-check',
+        'append' // Use append mode
       );
 
       // Should use mock response, not call the existing agent
       expect(existingAgent.answer).not.toHaveBeenCalled();
       expect(result.issues).toBeDefined();
+    });
+  });
+
+  describe('Session Mode: Clone vs Append', () => {
+    beforeEach(() => {
+      // Mock the cloneSession method
+      mockSessionRegistry.cloneSession = jest.fn();
+    });
+
+    it('should clone session by default (session_mode not specified)', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+      const clonedAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+      mockSessionRegistry.cloneSession.mockResolvedValue(clonedAgent);
+
+      await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check'
+        // sessionMode defaults to 'clone'
+      );
+
+      // Should clone the session
+      expect(mockSessionRegistry.cloneSession).toHaveBeenCalledWith(
+        parentSessionId,
+        expect.stringContaining('clone')
+      );
+
+      // Should use the cloned agent, not the original
+      expect(clonedAgent.answer).toHaveBeenCalled();
+      expect(existingAgent.answer).not.toHaveBeenCalled();
+    });
+
+    it('should clone session when session_mode is explicitly set to "clone"', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+      const clonedAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+      mockSessionRegistry.cloneSession.mockResolvedValue(clonedAgent);
+
+      await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check',
+        'clone'
+      );
+
+      expect(mockSessionRegistry.cloneSession).toHaveBeenCalledWith(
+        parentSessionId,
+        expect.stringContaining('clone')
+      );
+      expect(clonedAgent.answer).toHaveBeenCalled();
+      expect(existingAgent.answer).not.toHaveBeenCalled();
+    });
+
+    it('should append to shared session when session_mode is "append"', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      await service.executeReviewWithSessionReuse(
+        mockPRInfo,
+        'Test prompt',
+        parentSessionId,
+        undefined,
+        'dependent-check',
+        'append'
+      );
+
+      // Should NOT clone the session
+      expect(mockSessionRegistry.cloneSession).not.toHaveBeenCalled();
+
+      // Should use the original agent directly
+      expect(existingAgent.answer).toHaveBeenCalled();
+    });
+
+    it('should handle clone failure gracefully', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+      mockSessionRegistry.cloneSession.mockResolvedValue(undefined); // Clone fails
+
+      await expect(
+        service.executeReviewWithSessionReuse(
+          mockPRInfo,
+          'Test prompt',
+          parentSessionId,
+          undefined,
+          'dependent-check',
+          'clone'
+        )
+      ).rejects.toThrow('Failed to clone session');
     });
   });
 });

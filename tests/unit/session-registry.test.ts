@@ -126,4 +126,59 @@ describe('SessionRegistry', () => {
       expect(registry.hasSession('session-2')).toBe(false);
     });
   });
+
+  describe('cloneSession', () => {
+    it('should deep clone conversation history', async () => {
+      // Create a mock agent with conversation history
+      const originalHistory = [
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Hi there' },
+      ];
+
+      const sourceAgent = {
+        answer: jest.fn(),
+        conversationHistory: originalHistory,
+        options: { sessionId: 'source-session' },
+      } as any;
+
+      registry.registerSession('source-session', sourceAgent);
+
+      // Clone the session
+      const clonedAgent = await registry.cloneSession('source-session', 'cloned-session');
+
+      expect(clonedAgent).toBeDefined();
+
+      // Verify the cloned agent has a copy of the history
+      expect((clonedAgent as any).conversationHistory).toEqual(originalHistory);
+
+      // Modify the original history
+      originalHistory[0].content = 'Modified';
+
+      // Verify the cloned history is NOT affected (deep copy)
+      expect((clonedAgent as any).conversationHistory[0].content).toBe('Hello');
+
+      // Verify they are different object references
+      expect((clonedAgent as any).conversationHistory).not.toBe(originalHistory);
+      expect((clonedAgent as any).conversationHistory[0]).not.toBe(originalHistory[0]);
+    });
+
+    it('should return undefined if source session does not exist', async () => {
+      const clonedAgent = await registry.cloneSession('non-existent', 'cloned-session');
+      expect(clonedAgent).toBeUndefined();
+    });
+
+    it('should register cloned session automatically', async () => {
+      const sourceAgent = {
+        answer: jest.fn(),
+        conversationHistory: [{ role: 'user', content: 'Test' }],
+        options: { sessionId: 'source-session' },
+      } as any;
+
+      registry.registerSession('source-session', sourceAgent);
+
+      await registry.cloneSession('source-session', 'cloned-session');
+
+      expect(registry.hasSession('cloned-session')).toBe(true);
+    });
+  });
 });

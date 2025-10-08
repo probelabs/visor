@@ -342,6 +342,8 @@ export interface CheckConfig {
   if?: string;
   /** Check name to reuse AI session from, or true to use first dependency (only works with depends_on) */
   reuse_ai_session?: string | boolean;
+  /** How to reuse AI session: 'clone' (default, copy history) or 'append' (share history) */
+  session_mode?: 'clone' | 'append';
   /** Simple fail condition - fails check if expression evaluates to true */
   fail_if?: string;
   /** Check-specific failure conditions - optional (deprecated, use fail_if) */
