@@ -56,7 +56,11 @@ test-*.json
 cli-traces/
 debug-trace.js
 .claude/settings.local.json
- 
+
+# MockGithub and temp test repos/fixtures (never commit)
+repo/
+tests/fixtures/temp/
+
 # Workshop artifacts
 workshop/build/
 !workshop/Visor-Workshop.pdf

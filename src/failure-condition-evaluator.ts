@@ -563,26 +563,40 @@ export class FailureConditionEvaluator {
       ...otherFields
     } = reviewSummaryWithOutput as any;
 
+    // Build output object with safety for array-based outputs (forEach aggregation)
+    const aggregatedOutput: Record<string, unknown> = {
+      issues: (issues || []).map(issue => ({
+        file: issue.file,
+        line: issue.line,
+        endLine: issue.endLine,
+        ruleId: issue.ruleId,
+        message: issue.message,
+        severity: issue.severity,
+        category: issue.category,
+        group: issue.group,
+        schema: issue.schema,
+        suggestion: issue.suggestion,
+        replacement: issue.replacement,
+      })),
+      // Include additional schema-specific data from reviewSummary
+      ...otherFields,
+    };
+
+    if (Array.isArray(extractedOutput)) {
+      // Preserve items array and lift common flags for convenience (e.g., output.error)
+      aggregatedOutput.items = extractedOutput;
+      const anyError = extractedOutput.find(
+        it => it && typeof it === 'object' && (it as Record<string, unknown>).error
+      ) as Record<string, unknown> | undefined;
+      if (anyError && anyError.error !== undefined) {
+        aggregatedOutput.error = anyError.error;
+      }
+    } else if (extractedOutput && typeof extractedOutput === 'object') {
+      Object.assign(aggregatedOutput, extractedOutput as Record<string, unknown>);
+    }
+
     const context: FailureConditionContext = {
-      output: {
-        issues: (issues || []).map(issue => ({
-          file: issue.file,
-          line: issue.line,
-          endLine: issue.endLine,
-          ruleId: issue.ruleId,
-          message: issue.message,
-          severity: issue.severity,
-          category: issue.category,
-          group: issue.group,
-          schema: issue.schema,
-          suggestion: issue.suggestion,
-          replacement: issue.replacement,
-        })),
-        // Include additional schema-specific data from reviewSummary
-        ...otherFields,
-        // Spread the extracted output directly (avoid output.output nesting)
-        ...(extractedOutput && typeof extractedOutput === 'object' ? extractedOutput : {}),
-      },
+      output: aggregatedOutput,
       outputs: (() => {
         if (!previousOutputs) return {};
         const outputs: Record<string, unknown> = {};
