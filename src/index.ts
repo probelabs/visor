@@ -211,8 +211,9 @@ export async function run(): Promise<void> {
     } catch (configError) {
       // Log the error for debugging
       logger.warn(
-        '⚠️ Error loading config:',
-        configError instanceof Error ? configError.message : String(configError)
+        `⚠️ Error loading config: ${
+          configError instanceof Error ? configError.message : String(configError)
+        }`
       );
 
       // Fall back to bundled default config
