@@ -2637,6 +2637,15 @@ export class CheckExecutionEngine {
                       `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
                     );
                   }
+
+                  // Track cloned session IDs returned by provider for cleanup
+                  const frAny = finalResult as unknown as { sessionId?: string };
+                  if (frAny && typeof frAny.sessionId === 'string' && frAny.sessionId) {
+                    sessionIds.set(checkName, frAny.sessionId);
+                    if (debug) {
+                      log(`🔧 Debug: Tracked cloned session for cleanup: ${frAny.sessionId}`);
+                    }
+                  }
                 }
 
                 // Add checkName, group, schema, template info and timestamp to issues from config
@@ -2885,14 +2894,14 @@ export class CheckExecutionEngine {
     }
 
     // Cleanup sessions BEFORE printing summary to avoid mixing debug logs with table output
-    if (sessionIds.size > 0 && debug) {
-      log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
+    if (sessionIds.size > 0) {
+      if (debug) log(`🧹 Cleaning up ${sessionIds.size} AI sessions...`);
       for (const [checkName, sessionId] of sessionIds) {
         try {
           sessionRegistry.unregisterSession(sessionId);
-          log(`🗑️ Cleaned up session for check ${checkName}: ${sessionId}`);
+          if (debug) log(`🗑️ Cleaned up session for check ${checkName}: ${sessionId}`);
         } catch (error) {
-          log(`⚠️ Failed to cleanup session for check ${checkName}: ${error}`);
+          if (debug) log(`⚠️ Failed to cleanup session for check ${checkName}: ${error}`);
         }
       }
     }

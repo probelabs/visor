@@ -101,6 +101,71 @@ export class SessionRegistry {
   }
 
   /**
+   * Clone a session with a new session ID
+   * Creates a new ProbeAgent with a copy of the conversation history
+   */
+  public async cloneSession(
+    sourceSessionId: string,
+    newSessionId: string
+  ): Promise<ProbeAgent | undefined> {
+    const sourceAgent = this.sessions.get(sourceSessionId);
+    if (!sourceAgent) {
+      console.error(`⚠️  Cannot clone session: ${sourceSessionId} not found`);
+      return undefined;
+    }
+
+    try {
+      // Access the conversation history from the source agent
+      // ProbeAgent stores history in a private field, we need to access it via 'any'
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sourceHistory = (sourceAgent as any).conversationHistory || [];
+
+      // Create a new agent with the same configuration
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sourceOptions = (sourceAgent as any).options || {};
+
+      // Import ProbeAgent dynamically to create new instance
+      const { ProbeAgent: ProbeAgentClass } = await import('@probelabs/probe');
+
+      const clonedAgent = new ProbeAgentClass({
+        ...sourceOptions,
+        sessionId: newSessionId,
+      });
+
+      // Deep copy the conversation history to ensure complete isolation
+      // Use JSON serialization for deep cloning to prevent shared object references
+      if (sourceHistory.length > 0) {
+        try {
+          // Deep clone the history array and all message objects within it
+          const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (clonedAgent as any).conversationHistory = deepClonedHistory;
+          console.error(
+            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages, deep copy)`
+          );
+        } catch (cloneError) {
+          // Fallback to shallow copy if deep clone fails (e.g., circular references)
+          console.error(
+            `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (clonedAgent as any).conversationHistory = [...sourceHistory];
+        }
+      } else {
+        console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
+      }
+
+      // Register the cloned session
+      this.registerSession(newSessionId, clonedAgent);
+
+      return clonedAgent;
+    } catch (error) {
+      console.error(`⚠️  Failed to clone session ${sourceSessionId}: ${error}`);
+      return undefined;
+    }
+  }
+
+  /**
    * Register process exit handlers to cleanup sessions on exit
    */
   private registerExitHandlers(): void {
