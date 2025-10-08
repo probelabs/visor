@@ -530,12 +530,14 @@ export class AICheckProvider extends CheckProvider {
     const schema = config.schema as string | Record<string, unknown> | undefined;
 
     // Only output debug messages if debug mode is enabled
-      if (aiConfig.debug) {
-        const { logger } = require('../logger');
-        logger.debug(`AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`);
-        logger.debug(`AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-        logger.debug(`AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
-      }
+    if (aiConfig.debug) {
+      const { logger } = require('../logger');
+      logger.debug(
+        `AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
+      );
+      logger.debug(`AICheckProvider schema from config: ${JSON.stringify(schema)}`);
+      logger.debug(`AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+    }
 
     try {
       if (aiConfig.debug) {

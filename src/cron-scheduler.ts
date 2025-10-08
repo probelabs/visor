@@ -96,7 +96,9 @@ export class CronScheduler {
       // Handle the results (could send to webhook, write to file, etc.)
       await this.handleScheduledResults(checkName, result);
     } catch (error) {
-      logger.error(`Failed to execute scheduled check "${checkName}": ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Failed to execute scheduled check "${checkName}": ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 

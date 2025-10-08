@@ -37,4 +37,3 @@ describe('Trace Report Exporter E2E', () => {
     expect(html).toContain('Visor Trace Report');
   });
 });
-

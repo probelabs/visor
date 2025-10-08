@@ -447,7 +447,7 @@ export class ConfigManager {
                 field: `checks.${checkName}.mcpServers`,
                 message:
                   "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
-              value: (anyCheck as unknown as { mcpServers?: unknown }).mcpServers,
+                value: (anyCheck as unknown as { mcpServers?: unknown }).mcpServers,
               });
             }
             if (hasClaudeCodeMcp) {
@@ -803,7 +803,9 @@ export class ConfigManager {
             : '';
           const msg = e.message || 'Invalid configuration';
           if (e.keyword === 'additionalProperties') {
-            const addl = (e.params && (e.params as { additionalProperty?: string }).additionalProperty) || 'unknown';
+            const addl =
+              (e.params && (e.params as { additionalProperty?: string }).additionalProperty) ||
+              'unknown';
             const fullField = pathStr ? `${pathStr}.${addl}` : addl;
             const topLevel = !pathStr;
             warnings.push({

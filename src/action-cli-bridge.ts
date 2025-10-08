@@ -437,7 +437,9 @@ export class ActionCliBridge {
 
       return tempConfigPath;
     } catch (error) {
-      logger.error(`Failed to create temporary config file: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Failed to create temporary config file: ${error instanceof Error ? error.message : String(error)}`
+      );
       return null;
     }
   }

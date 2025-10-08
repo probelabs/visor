@@ -498,7 +498,9 @@ export class GitHubCheckService {
           url: checkRun.url,
         });
       } catch (error) {
-        logger.error(`Failed to create check run for ${checkResult.checkName}: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error(
+          `Failed to create check run for ${checkResult.checkName}: ${error instanceof Error ? error.message : String(error)}`
+        );
         // Continue with other checks even if one fails
       }
     }
@@ -616,12 +618,16 @@ export class GitHubCheckService {
           });
           logger.debug(`✓ Cleared annotations from check run ${run.id}`);
         } catch (error) {
-          logger.debug(`Could not clear annotations for check run ${run.id}: ${error instanceof Error ? error.message : String(error)}`);
+          logger.debug(
+            `Could not clear annotations for check run ${run.id}: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
     } catch (error) {
       // Don't fail the whole check if we can't clear old annotations
-      logger.warn(`Failed to clear old annotations: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(
+        `Failed to clear old annotations: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 }

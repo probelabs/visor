@@ -600,7 +600,9 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
       if (isCriticalError) {
         logger.error(`CRITICAL ERROR: Claude Code provider authentication or setup issue detected`);
-        logger.error(`This check cannot proceed without valid API credentials and SDK installation`);
+        logger.error(
+          `This check cannot proceed without valid API credentials and SDK installation`
+        );
       }
 
       // Re-throw with more context

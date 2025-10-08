@@ -453,7 +453,9 @@ export async function extractFileContext(
     };
   } catch (error) {
     const { logger } = require('./logger');
-    logger.error(`Failed to extract file context: ${error instanceof Error ? error.message : String(error)}`);
+    logger.error(
+      `Failed to extract file context: ${error instanceof Error ? error.message : String(error)}`
+    );
     return {};
   }
 }

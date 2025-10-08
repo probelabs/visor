@@ -73,7 +73,12 @@ export function recordProviderDuration(check: string, providerType: string, dura
   } catch {}
 }
 
-export function recordForEachDuration(check: string, index: number, total: number, durationMs: number) {
+export function recordForEachDuration(
+  check: string,
+  index: number,
+  total: number,
+  durationMs: number
+) {
   ensureInstruments();
   try {
     foreachDurationHist?.record(durationMs, {

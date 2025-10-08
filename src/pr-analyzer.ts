@@ -80,7 +80,9 @@ export class PRAnalyzer {
       return patches;
     } catch (error) {
       const { logger } = require('./logger');
-      logger.warn(`Failed to fetch commit diff for ${commitSha}: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(
+        `Failed to fetch commit diff for ${commitSha}: ${error instanceof Error ? error.message : String(error)}`
+      );
       return '';
     }
   }
@@ -192,7 +194,9 @@ export class PRAnalyzer {
       logger.info(`Retrieved ${comments.length} comments`);
     } catch (error) {
       const { logger } = require('./logger');
-      logger.warn(`Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      logger.warn(
+        `Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       (prInfo as PRInfo & { comments: PRComment[] }).comments = [];
     }
 

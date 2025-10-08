@@ -55,7 +55,11 @@ export class TraceReportExporter implements SpanExporter {
         start: hrTimeToMillis(s.startTime),
         end: hrTimeToMillis(s.endTime),
         attrs: s.attributes,
-        events: s.events?.map(e => ({ name: e.name, time: hrTimeToMillis(e.time), attrs: e.attributes })),
+        events: s.events?.map(e => ({
+          name: e.name,
+          time: hrTimeToMillis(e.time),
+          attrs: e.attributes,
+        })),
         traceId: s.spanContext().traceId,
         spanId: s.spanContext().spanId,
         parentSpanId: s.parentSpanId,
@@ -107,5 +111,8 @@ body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;p
 }
 
 function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+  return s.replace(
+    /[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
+  );
 }

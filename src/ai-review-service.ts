@@ -811,7 +811,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       return { response, effectiveSchema };
     } catch (error) {
-      logger.error(`ProbeAgent session reuse failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : String(error)}`
+      );
       throw new Error(
         `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1283,7 +1285,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
-      logger.error(`Failed to parse AI response: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Failed to parse AI response: ${error instanceof Error ? error.message : String(error)}`
+      );
       logger.error('FULL RAW RESPONSE:');
       logger.error('='.repeat(80));
       logger.error(response);

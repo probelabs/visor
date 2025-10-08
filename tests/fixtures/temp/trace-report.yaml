@@ -1,7 +1,0 @@
-version: '1.0'
-checks:
-  demo:
-    type: noop
-    group: default
-telemetry:
-  enabled: true

@@ -30,7 +30,7 @@ describe('Telemetry E2E — fail_if events and metrics', () => {
       const config: any = {
         version: '1.0',
         checks: {
-          'sample': { type: 'noop', fail_if: 'true', group: 'test' },
+          sample: { type: 'noop', fail_if: 'true', group: 'test' },
         },
       };
       const reviewSummary = { issues: [] };
@@ -54,10 +54,13 @@ describe('Telemetry E2E — fail_if events and metrics', () => {
       .trim()
       .split(/\r?\n/)
       .map(l => JSON.parse(l));
-    const hasEvaluated = lines.some((s: any) => (s.events || []).some((e: any) => e.name === 'fail_if.evaluated'));
-    const hasTriggered = lines.some((s: any) => (s.events || []).some((e: any) => e.name === 'fail_if.triggered'));
+    const hasEvaluated = lines.some((s: any) =>
+      (s.events || []).some((e: any) => e.name === 'fail_if.evaluated')
+    );
+    const hasTriggered = lines.some((s: any) =>
+      (s.events || []).some((e: any) => e.name === 'fail_if.triggered')
+    );
     expect(hasEvaluated).toBe(true);
     expect(hasTriggered).toBe(true);
   });
 });
-

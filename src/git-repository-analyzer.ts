@@ -214,7 +214,9 @@ export class GitRepositoryAnalyzer {
 
       return changes;
     } catch (error) {
-      logger.error(`Error getting uncommitted changes: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Error getting uncommitted changes: ${error instanceof Error ? error.message : String(error)}`
+      );
       return [];
     }
   }
@@ -275,7 +277,9 @@ export class GitRepositoryAnalyzer {
         deletions = 1; // Placeholder - in real git we'd need the previous version
       }
     } catch (error) {
-      logger.error(`Error analyzing file change for ${filename}: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `Error analyzing file change for ${filename}: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
 
     return {
