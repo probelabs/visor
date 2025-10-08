@@ -79,11 +79,7 @@ export class PRAnalyzer {
 
       return patches;
     } catch (error) {
-      const { logger } = require('./logger');
-      logger.warn(
-        `Failed to fetch commit diff for ${commitSha}:`,
-        error instanceof Error ? error : new Error(String(error))
-      );
+      console.warn(`Failed to fetch commit diff for ${commitSha}:`, error);
       return '';
     }
   }
@@ -188,31 +184,28 @@ export class PRAnalyzer {
 
     // Fetch comment history for better context
     try {
-      const { logger } = require('./logger');
-      logger.info(`Fetching comment history for PR #${prInfo.number}`);
+      console.log(`💬 Fetching comment history for PR #${prInfo.number}`);
       const comments = await this.fetchPRComments(owner, repo, prInfo.number);
       (prInfo as PRInfo & { comments: PRComment[] }).comments = comments;
-      logger.info(`Retrieved ${comments.length} comments`);
+      console.log(`✅ Retrieved ${comments.length} comments`);
     } catch (error) {
-      const { logger } = require('./logger');
-      logger.warn(
-        `Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
+      console.warn(
+        `⚠️ Could not fetch comments: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       (prInfo as PRInfo & { comments: PRComment[] }).comments = [];
     }
 
     // Add commit diff for incremental analysis
     if (commitSha) {
-      const { logger } = require('./logger');
-      logger.info(`Fetching incremental diff for commit: ${commitSha}`);
+      console.log(`🔧 Fetching incremental diff for commit: ${commitSha}`);
       prInfo.commitDiff = await this.fetchCommitDiff(owner, repo, commitSha);
       prInfo.isIncremental = true;
       if (!prInfo.commitDiff || prInfo.commitDiff.length === 0) {
-        const { logger } = require('./logger');
-        logger.warn(`No commit diff retrieved for ${commitSha}, will use full diff as fallback`);
+        console.warn(
+          `⚠️ No commit diff retrieved for ${commitSha}, will use full diff as fallback`
+        );
       } else {
-        const { logger } = require('./logger');
-        logger.info(`Incremental diff retrieved (${prInfo.commitDiff.length} chars)`);
+        console.log(`✅ Incremental diff retrieved (${prInfo.commitDiff.length} chars)`);
       }
     } else {
       prInfo.isIncremental = false;

@@ -7,9 +7,10 @@ import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
-import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import * as fs from 'fs';
 import * as path from 'path';
+import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
+import { withActiveSpan } from './telemetry/trace-helpers';
 
 /**
  * Main CLI entry point for Visor
@@ -33,7 +34,6 @@ export async function main(): Promise<void> {
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
     // Configure centralized logger
-    if (options.debug) process.env.VISOR_LOG_TO_STDOUT = 'true';
     configureLoggerFromCli({
       output: options.output,
       debug: options.debug,
@@ -41,36 +41,14 @@ export async function main(): Promise<void> {
       quiet: options.quiet,
     });
 
-    // Initialize telemetry if enabled via env or config
-    await initTelemetry({
-      enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-      sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-      file: { dir: process.env.VISOR_TRACE_DIR },
-      autoInstrument: process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true',
-      traceReport: process.env.VISOR_TRACE_REPORT === 'true',
-    });
-    try {
-      // Also emit a lightweight run marker to NDJSON for tests when using file sink
-      const { _appendRunMarker } = await import('./telemetry/trace-helpers').catch(() => ({
-        _appendRunMarker: null,
-      }));
-      if (_appendRunMarker) _appendRunMarker();
-    } catch {}
-
     // Handle help and version flags
     if (options.help) {
-      const helpText = cli.getHelpText() + '\n';
-      // eslint-disable-next-line no-console
-      if (process.env.JEST_WORKER_ID) console.log(helpText.trimEnd());
-      else process.stdout.write(helpText);
+      console.log(cli.getHelpText());
       process.exit(0);
     }
 
     if (options.version) {
-      const v = cli.getVersion();
-      // eslint-disable-next-line no-console
-      if (process.env.JEST_WORKER_ID) console.log(v);
-      else process.stdout.write(v + '\n');
+      console.log(cli.getVersion());
       process.exit(0);
     }
 
@@ -145,27 +123,38 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
-    // Initialize telemetry from config (if not already enabled via env)
-    if (config?.telemetry && process.env.VISOR_TELEMETRY_ENABLED !== 'true') {
-      const t = config.telemetry as {
+    // Initialize telemetry (env or config)
+    if ((config as any)?.telemetry) {
+      const t = (config as any).telemetry as {
         enabled?: boolean;
         sink?: 'otlp' | 'file' | 'console';
         file?: { dir?: string; ndjson?: boolean };
         tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
       };
       await initTelemetry({
-        enabled: !!t?.enabled,
-        sink: t?.sink || 'file',
-        file: { dir: t?.file?.dir, ndjson: !!t?.file?.ndjson },
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' ? true : !!t?.enabled,
+        sink:
+          (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
+        file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
         autoInstrument: !!t?.tracing?.auto_instrumentations,
         traceReport: !!t?.tracing?.trace_report?.enabled,
       });
+    } else {
+      await initTelemetry();
     }
+    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
+    } catch {}
+
+    try {
+      (await import('./telemetry/trace-helpers'))._appendRunMarker();
+    } catch {}
 
     // Determine checks to run and validate check types early
-    // Do not map config.telemetry into env; we initialize telemetry directly from config below
-
-    // No fallback NDJSON writes here; rely on OTel SDK to export spans
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
     // Validate that all requested checks exist in the configuration
@@ -293,16 +282,21 @@ export async function main(): Promise<void> {
     prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
-    const executionResult = await engine.executeGroupedChecks(
-      prInfo,
-      checksToRun,
-      options.timeout,
-      config,
-      options.output,
-      options.debug || false,
-      options.maxParallelism,
-      options.failFast,
-      tagFilter
+    const executionResult = await withActiveSpan(
+      'visor.run',
+      { 'visor.run.checks_configured': checksToRun.length },
+      async () =>
+        engine.executeGroupedChecks(
+          prInfo,
+          checksToRun,
+          options.timeout,
+          config,
+          options.output,
+          options.debug || false,
+          options.maxParallelism,
+          options.failFast,
+          tagFilter
+        )
     );
 
     // Extract results and statistics from the execution result
@@ -418,7 +412,7 @@ export async function main(): Promise<void> {
         process.exit(1);
       }
     } else {
-      process.stdout.write(output + '\n');
+      console.log(output);
     }
 
     // Summarize execution (stderr only; suppressed in JSON/SARIF unless verbose/debug)
@@ -469,14 +463,15 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
-    await shutdownTelemetry();
+    // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
         const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const htmlPath = path.join(outDir, `${ts}.report.html`);
-        if (!fs.existsSync(htmlPath)) {
+        fs.mkdirSync(outDir, { recursive: true });
+        const hasReport = fs.readdirSync(outDir).some(f => f.endsWith('.report.html'));
+        if (!hasReport) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          const htmlPath = path.join(outDir, `${ts}.report.html`);
           fs.writeFileSync(
             htmlPath,
             '<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2></body></html>',
@@ -484,17 +479,9 @@ export async function main(): Promise<void> {
           );
         }
       }
-      if (process.env.VISOR_TELEMETRY_SINK === 'file') {
-        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-        const existing = fs.readdirSync(outDir).some(f => f.endsWith('.ndjson'));
-        if (!existing) {
-          const ts = new Date().toISOString().replace(/[:.]/g, '-');
-          const nd = path.join(outDir, `${ts}.ndjson`);
-          const span = { name: 'visor.run', events: [{ name: 'run.completed', attrs: {} }] };
-          fs.appendFileSync(nd, JSON.stringify(span) + '\n', 'utf8');
-        }
-      }
+    } catch {}
+    try {
+      await shutdownTelemetry();
     } catch {}
     process.exit(exitCode);
   } catch (error) {
@@ -535,7 +522,9 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
-    await shutdownTelemetry();
+    try {
+      await shutdownTelemetry();
+    } catch {}
     process.exit(1);
   }
 }

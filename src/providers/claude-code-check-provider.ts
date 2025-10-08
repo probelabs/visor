@@ -6,7 +6,6 @@ import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
-import { logger } from '../logger';
 import path from 'path';
 import {
   ClaudeCodeQuery,
@@ -521,7 +520,8 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
       // Pass MCP servers directly to the SDK - let it handle spawning and tool discovery
       if (claudeCodeConfig.mcpServers && Object.keys(claudeCodeConfig.mcpServers).length > 0) {
-        (query as unknown as { mcpServers?: unknown }).mcpServers = claudeCodeConfig.mcpServers;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (query as any).mcpServers = claudeCodeConfig.mcpServers;
       }
 
       // Execute query with Claude Code
@@ -589,7 +589,7 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Log detailed error information
-      logger.error(`Claude Code Check Provider Error: ${errorMessage}`);
+      console.error(`❌ Claude Code Check Provider Error: ${errorMessage}`);
 
       // Check if this is a critical error
       const isCriticalError =
@@ -599,9 +599,11 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         errorMessage.includes('authentication');
 
       if (isCriticalError) {
-        logger.error(`CRITICAL ERROR: Claude Code provider authentication or setup issue detected`);
-        logger.error(
-          `This check cannot proceed without valid API credentials and SDK installation`
+        console.error(
+          `🚨 CRITICAL ERROR: Claude Code provider authentication or setup issue detected`
+        );
+        console.error(
+          `🚨 This check cannot proceed without valid API credentials and SDK installation`
         );
       }
 

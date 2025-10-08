@@ -73,6 +73,13 @@ export function __getOrCreateNdjsonPath(): string | null {
     if (process.env.VISOR_TELEMETRY_SINK !== 'file') return null;
     const path = require('path');
     const fs = require('fs');
+    // Prefer explicit fallback file path if set by the CLI
+    if (process.env.VISOR_FALLBACK_TRACE_FILE) {
+      __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      const dir = path.dirname(__ndjsonPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      return __ndjsonPath;
+    }
     const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {

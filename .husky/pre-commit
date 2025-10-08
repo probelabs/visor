@@ -1,6 +1,16 @@
 #!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
 # Run lint-staged for linting and formatting
 npx lint-staged
+
+# Run tests with sanitized Git environment so E2E repos
+# cannot accidentally write commits to this repository during hooks.
+# Unset common git env variables that Git sets when invoking hooks.
+unset GIT_DIR
+unset GIT_WORK_TREE
+unset GIT_INDEX_FILE
+unset GIT_PREFIX
 
 # Run tests to ensure everything still works
 npm test

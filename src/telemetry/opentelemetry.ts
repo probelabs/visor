@@ -36,7 +36,11 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
 
     const { SemanticResourceAttributes } = require('@opentelemetry/semantic-conventions');
 
-    const { BatchSpanProcessor, ConsoleSpanExporter } = require('@opentelemetry/sdk-trace-base');
+    const {
+      BatchSpanProcessor,
+      ConsoleSpanExporter,
+      MultiSpanProcessor,
+    } = require('@opentelemetry/sdk-trace-base');
 
     const sink = (opts.sink || (process.env.VISOR_TELEMETRY_SINK as string) || 'file') as
       | 'otlp'
@@ -75,7 +79,7 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
 
       const { FileSpanExporter } = require('./file-span-exporter');
       const exporter = new FileSpanExporter({
-        dir: opts.file?.dir,
+        dir: opts.file?.dir || process.env.VISOR_TRACE_DIR,
         ndjson: opts.file?.ndjson,
         runId: opts.file?.runId,
       });
@@ -132,7 +136,10 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
         const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
         processors.push(
           new BatchSpanProcessor(
-            new TraceReportExporter({ dir: opts.file?.dir, runId: opts.file?.runId })
+            new TraceReportExporter({
+              dir: opts.file?.dir || process.env.VISOR_TRACE_DIR,
+              runId: opts.file?.runId,
+            })
           )
         );
       } catch {
@@ -140,9 +147,12 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       }
     }
 
+    const spanProcessor: SpanProcessor =
+      processors.length > 1 ? new MultiSpanProcessor(processors) : processors[0];
+
     const nodeSdk: NodeSDKType = new NodeSDK({
       resource,
-      spanProcessor: processors[0],
+      spanProcessor,
       metricReader,
       instrumentations,
       // Auto-instrumentations can be added later when desired
@@ -183,25 +193,8 @@ export async function shutdownTelemetry(): Promise<void> {
         }
       }
     } catch {}
-    try {
-      if (process.env.VISOR_TELEMETRY_SINK === 'file') {
-        const fs = require('fs');
-        const path = require('path');
-        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const nd = path.join(outDir, `${ts}.ndjson`);
-        if (!fs.existsSync(nd)) {
-          const span = {
-            events: [
-              { name: 'fail_if.evaluated', attrs: {} },
-              { name: 'fail_if.triggered', attrs: {} },
-            ],
-          };
-          fs.appendFileSync(nd, JSON.stringify(span) + '\n', 'utf8');
-        }
-      }
-    } catch {}
+    // Do not emit synthetic NDJSON lines here; real events are produced
+    // from evaluators/providers and exported by the SDK.
   }
 }
 

@@ -3,7 +3,6 @@
  */
 
 import { Octokit } from '@octokit/rest';
-import { logger } from './logger';
 import { FailureConditionResult } from './types/config';
 import { ReviewIssue } from './reviewer';
 
@@ -498,9 +497,7 @@ export class GitHubCheckService {
           url: checkRun.url,
         });
       } catch (error) {
-        logger.error(
-          `Failed to create check run for ${checkResult.checkName}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        console.error(`Failed to create check run for ${checkResult.checkName}:`, error);
         // Continue with other checks even if one fails
       }
     }
@@ -595,11 +592,11 @@ export class GitHubCheckService {
       const oldRuns = allCheckRuns.filter(run => run.id !== currentCheckRunId);
 
       if (oldRuns.length === 0) {
-        logger.debug(`No old check runs to clear for ${checkName} on commit ${currentCommitSha}`);
+        console.debug(`No old check runs to clear for ${checkName} on commit ${currentCommitSha}`);
         return;
       }
 
-      logger.debug(
+      console.debug(
         `Clearing ${oldRuns.length} old check run(s) for ${checkName} on commit ${currentCommitSha.substring(0, 7)} (keeping current run ${currentCheckRunId})`
       );
 
@@ -616,18 +613,14 @@ export class GitHubCheckService {
               annotations: [], // Clear annotations
             },
           });
-          logger.debug(`✓ Cleared annotations from check run ${run.id}`);
+          console.debug(`✓ Cleared annotations from check run ${run.id}`);
         } catch (error) {
-          logger.debug(
-            `Could not clear annotations for check run ${run.id}: ${error instanceof Error ? error.message : String(error)}`
-          );
+          console.debug(`Could not clear annotations for check run ${run.id}:`, error);
         }
       }
     } catch (error) {
       // Don't fail the whole check if we can't clear old annotations
-      logger.warn(
-        `Failed to clear old annotations: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.warn('Failed to clear old annotations:', error);
     }
   }
 }

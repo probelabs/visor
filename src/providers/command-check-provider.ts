@@ -63,17 +63,6 @@ export class CommandCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
-    try {
-      const { __getOrCreateNdjsonPath } = require('../telemetry/trace-helpers');
-      const fs = require('fs');
-      const p = __getOrCreateNdjsonPath();
-      if (p)
-        fs.appendFileSync(
-          p,
-          JSON.stringify({ name: 'visor.provider', attributes: { provider: 'command' } }) + '\n',
-          'utf8'
-        );
-    } catch {}
     const command = config.exec as string;
     const transform = config.transform as string | undefined;
     const transformJs = config.transform_js as string | undefined;
@@ -106,12 +95,6 @@ export class CommandCheckProvider extends CheckProvider {
 
       logger.debug(`🔧 Debug: Rendered command: ${renderedCommand}`);
 
-      // Normalize embedded newlines to be safe for shells and node -e code strings
-      // Converts literal newlines into \n so JS snippets stay valid
-      if (/\bnode\s+-e\b/.test(renderedCommand) && renderedCommand.includes('\n')) {
-        renderedCommand = renderedCommand.replace(/\n/g, '\\n');
-      }
-
       // Prepare environment variables - convert all to strings
       const scriptEnv: Record<string, string> = {};
       for (const [key, value] of Object.entries(process.env)) {
@@ -136,7 +119,15 @@ export class CommandCheckProvider extends CheckProvider {
       const timeoutSeconds = (config.timeout as number) || 60;
       const timeoutMs = timeoutSeconds * 1000;
 
-      const { stdout, stderr } = await execAsync(renderedCommand, {
+      // Heuristic: when executing `node -e` snippets loaded from YAML, literal newlines
+      // inside the argument often originate from YAML escape processing ("\n" -> newline).
+      // This breaks JS string literals like 'file1\nfile2' into invalid multi-line strings.
+      // To keep expected behavior, convert literal newlines to \n only for `node -e`.
+      const safeCommand = /^\s*node\s+-e\s+/.test(renderedCommand)
+        ? renderedCommand.replace(/\n/g, '\\n')
+        : renderedCommand;
+
+      const { stdout, stderr } = await execAsync(safeCommand, {
         env: scriptEnv,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
@@ -276,12 +267,7 @@ export class CommandCheckProvider extends CheckProvider {
             const outputs = scope.outputs;
             const env = scope.env;
             const log = (...args) => {
-              try {
-                if (process.env.JEST_WORKER_ID && globalThis.console && typeof globalThis.console.log === 'function') {
-                  globalThis.console.log('🔍 Debug:', ...args);
-                }
-              } catch {}
-              logger.debug('🔍 Debug:', ...args);
+              console.log('🔍 Debug:', ...args);
             };
             return ${transformExpression};
           `;
@@ -484,13 +470,13 @@ export class CommandCheckProvider extends CheckProvider {
    *  - If parsing fails or value is not a string, return the value unchanged
    *  - Attempts to extract JSON from the end of the output if full parse fails
    */
-  private makeJsonSmart<T = unknown>(value: T): T | unknown {
+  private makeJsonSmart<T = unknown>(value: T): T | any {
     if (typeof value !== 'string') {
       return value;
     }
 
     const raw = value as unknown as string;
-    let parsed: unknown;
+    let parsed: any;
 
     // First try: parse the entire string as JSON
     try {
@@ -517,7 +503,7 @@ export class CommandCheckProvider extends CheckProvider {
 
     // Use a boxed string so string methods still work via Proxy fallback
     const boxed = new String(raw);
-    const handler: ProxyHandler<String> = {
+    const handler: ProxyHandler<any> = {
       get(target, prop, receiver) {
         if (prop === 'toString' || prop === 'valueOf') {
           return () => raw;
@@ -525,23 +511,17 @@ export class CommandCheckProvider extends CheckProvider {
         if (prop === Symbol.toPrimitive) {
           return () => raw;
         }
-        if (
-          parsed != null &&
-          (typeof parsed === 'object' || Array.isArray(parsed)) &&
-          typeof prop === 'string'
-        ) {
-          const rec = parsed as Record<string, unknown>;
-          if (prop in rec) return rec[prop];
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          if (prop in parsed) {
+            return (parsed as any)[prop as any];
+          }
         }
         return Reflect.get(target, prop, receiver);
       },
       has(_target, prop) {
-        if (
-          parsed != null &&
-          (typeof parsed === 'object' || Array.isArray(parsed)) &&
-          typeof prop === 'string'
-        )
-          return prop in (parsed as Record<string, unknown>);
+        if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
+          if (prop in parsed) return true;
+        }
         return false;
       },
       ownKeys(_target) {
@@ -556,10 +536,7 @@ export class CommandCheckProvider extends CheckProvider {
       },
       getOwnPropertyDescriptor(_target, prop) {
         if (parsed != null && (typeof parsed === 'object' || Array.isArray(parsed))) {
-          const descriptor = Object.getOwnPropertyDescriptor(
-            parsed as object,
-            prop as keyof object
-          );
+          const descriptor = Object.getOwnPropertyDescriptor(parsed, prop as any);
           if (descriptor) return descriptor;
         }
         return {

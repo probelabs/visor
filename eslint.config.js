@@ -13,13 +13,13 @@ module.exports = [
     },
     rules: {
       // Basic rules
-      'no-console': 'error',
+      'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
-
+      
       // TypeScript rules
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
   {
@@ -34,7 +34,6 @@ module.exports = [
   {
     files: ['tests/**/*.{ts,tsx}', '__mocks__/**/*.{ts,tsx}'],
     rules: {
-      'no-console': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
     },
     linterOptions: {

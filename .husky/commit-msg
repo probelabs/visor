@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
 # Validate commit message format
 # Conventional Commits format: type(scope): description
 commit_regex='^(feat|fix|docs|style|refactor|test|chore|ci|build|perf)(\(.+\))?: .{1,50}'

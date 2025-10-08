@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { VisorConfig } from '../types/config';
-import { logger } from '../logger';
 
 /**
  * Configuration source types
@@ -203,21 +202,16 @@ export class ConfigLoader {
     if (cacheEntry && Date.now() - cacheEntry.timestamp < cacheEntry.ttl) {
       // Use stderr to avoid contaminating JSON/SARIF output
       const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-      if (outputFormat === 'json' || outputFormat === 'sarif') {
-        logger.debug(`Using cached configuration from: ${url}`);
-      } else {
-        logger.info(`Using cached configuration from: ${url}`);
-      }
+      const logFn =
+        outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+      logFn(`📦 Using cached configuration from: ${url}`);
       return cacheEntry.config;
     }
 
     // Use stderr to avoid contaminating JSON/SARIF output
     const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-    if (outputFormat === 'json' || outputFormat === 'sarif') {
-      logger.debug(`Fetching remote configuration from: ${url}`);
-    } else {
-      logger.info(`Fetching remote configuration from: ${url}`);
-    }
+    const logFn = outputFormat === 'json' || outputFormat === 'sarif' ? console.error : console.log;
+    logFn(`⬇️  Fetching remote configuration from: ${url}`);
 
     const controller = new AbortController();
     const timeoutMs = this.options.timeout ?? 30000;
@@ -298,8 +292,8 @@ export class ConfigLoader {
     }
 
     if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
-      // Always log via centralized logger to avoid contaminating formatted output
-      logger.info(`Loading bundled default configuration from ${defaultConfigPath}`);
+      // Always log to stderr to avoid contaminating formatted output
+      console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
 
@@ -316,7 +310,7 @@ export class ConfigLoader {
     }
 
     // Return minimal default if bundled config not found
-    logger.warn('Bundled default configuration not found, using minimal defaults');
+    console.warn('⚠️  Bundled default configuration not found, using minimal defaults');
     return {
       version: '1.0',
       checks: {},

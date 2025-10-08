@@ -39,8 +39,7 @@ export class PRDetector {
 
   private log(message: string, ...args: unknown[]): void {
     if (this.debug) {
-      const { logger } = require('./logger');
-      logger.debug(`[PR Detector] ${message} ${args.map(a => String(a)).join(' ')}`);
+      console.error(`[PR Detector] ${message}`, ...args);
     }
   }
 

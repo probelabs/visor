@@ -5,5 +5,4 @@ coverage/
 *.yml
 *.yaml
 *.md
-tests/fixtures/temp/
 package-lock.json

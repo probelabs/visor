@@ -7,7 +7,6 @@ import { NoopCheckProvider } from './noop-check-provider';
 import { LogCheckProvider } from './log-check-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 import { CommandCheckProvider } from './command-check-provider';
-import { logger } from '../logger';
 
 /**
  * Registry for managing check providers
@@ -48,7 +47,7 @@ export class CheckProviderRegistry {
     try {
       this.register(new ClaudeCodeCheckProvider());
     } catch (error) {
-      logger.warn(
+      console.error(
         `Warning: Failed to register ClaudeCodeCheckProvider: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
@@ -67,7 +66,7 @@ export class CheckProviderRegistry {
     this.providers.set(name, provider);
     // Only log provider registration in debug mode to avoid contaminating output
     if (process.env.VISOR_DEBUG === 'true') {
-      logger.debug(`Registered check provider: ${name}`);
+      console.error(`Registered check provider: ${name}`);
     }
   }
 
@@ -80,7 +79,7 @@ export class CheckProviderRegistry {
     }
     this.providers.delete(name);
     // Send provider unregistration messages to stderr to avoid contaminating JSON output
-    logger.debug(`Unregistered check provider: ${name}`);
+    console.error(`Unregistered check provider: ${name}`);
   }
 
   /**

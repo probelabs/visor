@@ -427,7 +427,8 @@ ${prContext}
     <rule>For INCREMENTAL analysis, ONLY review changes in commit_diff section</rule>
     <rule>For FULL analysis, review all changes in full_diff section</rule>
     <rule>Reference specific XML elements like files_summary, metadata when providing context</rule>
-    <rule>SEVERITY ASSIGNMENT: All severity levels (critical, error, warning, info) should be based on the NEW code being introduced, not on what it fixes. When code INTRODUCES new problems (bugs, vulnerabilities, performance issues, breaking changes), assign appropriate severity (critical/error/warning). When code FIXES or IMPROVES existing issues, use lower severity (info/warning) to acknowledge the improvement. This applies to all issue types: security, performance, style, logic, documentation. The schema provides detailed severity level definitions.</rule>
+    <rule>STRICT OUTPUT POLICY: Report only actual problems, risks, or deficiencies. Do not write praise, congratulations, or celebratory text. Do not create issues that merely restate improvements or say "no action needed".</rule>
+    <rule>SEVERITY ASSIGNMENT: Assign severity ONLY to problems introduced or left unresolved by this change (critical/error/warning/info as appropriate). Do NOT create issue entries solely to acknowledge improvements; if no problems exist, return zero issues.</rule>
   </rules>
 </review_request>`;
     }
@@ -463,7 +464,7 @@ ${prContext}
     const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
 
     // Log the decision for transparency
-    const log = this.config.debug ? (msg: string) => logger.debug(msg) : () => {};
+    const log = this.config.debug ? console.error : () => {};
     if (isPRContext) {
       log('🔍 Including full code diffs in AI context (PR mode)');
     } else if (!includeCodeContext) {
@@ -811,9 +812,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       return { response, effectiveSchema };
     } catch (error) {
-      logger.error(
-        `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('❌ ProbeAgent session reuse failed:', error);
       throw new Error(
         `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -876,11 +875,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
-      type ProbeAgentOptionsX = ProbeAgentOptions & {
-        enableMcp?: boolean;
-        mcpConfig?: { mcpServers: Record<string, import('./types/config').McpServerConfig> };
-      };
-      const options: ProbeAgentOptionsX = {
+      const options: ProbeAgentOptions = {
         sessionId: sessionId,
         promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
@@ -889,8 +884,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Wire MCP configuration when provided
       if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
-        options.enableMcp = true;
-        options.mcpConfig = { mcpServers: this.config.mcpServers };
+        (options as any).enableMcp = true;
+        (options as any).mcpConfig = { mcpServers: this.config.mcpServers };
       }
 
       // Add provider-specific options if configured
@@ -999,7 +994,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       return { response, effectiveSchema };
     } catch (error) {
-      logger.error(`ProbeAgent failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('❌ ProbeAgent failed:', error);
       throw new Error(
         `ProbeAgent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1146,7 +1141,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             response.toLowerCase().includes('i cannot') ||
             response.toLowerCase().includes('unable to')
           ) {
-            logger.error('AI refused to analyze - returning empty result');
+            console.error('🚫 AI refused to analyze - returning empty result');
             return {
               issues: [],
             };
@@ -1285,42 +1280,40 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
-      logger.error(
-        `Failed to parse AI response: ${error instanceof Error ? error.message : String(error)}`
-      );
-      logger.error('FULL RAW RESPONSE:');
-      logger.error('='.repeat(80));
-      logger.error(response);
-      logger.error('='.repeat(80));
-      logger.error(`Response length: ${response.length} characters`);
+      console.error('❌ Failed to parse AI response:', error);
+      console.error('📄 FULL RAW RESPONSE:');
+      console.error('='.repeat(80));
+      console.error(response);
+      console.error('='.repeat(80));
+      console.error(`📏 Response length: ${response.length} characters`);
 
       // Try to provide more helpful error information
       if (error instanceof SyntaxError) {
-        logger.error('JSON parsing error - the response may not be valid JSON');
-        logger.error(`Error details: ${error.message}`);
+        console.error('🔍 JSON parsing error - the response may not be valid JSON');
+        console.error('🔍 Error details:', error.message);
 
         // Try to identify where the parsing failed
         const errorMatch = error.message.match(/position (\d+)/);
         if (errorMatch) {
           const position = parseInt(errorMatch[1]);
-          logger.error(`Error at position ${position}:`);
+          console.error(`🔍 Error at position ${position}:`);
           const start = Math.max(0, position - 50);
           const end = Math.min(response.length, position + 50);
-          logger.error(`Context: "${response.substring(start, end)}"`);
+          console.error(`🔍 Context: "${response.substring(start, end)}"`);
 
           // Show the first 100 characters to understand what format the AI returned
-          logger.error(`Response beginning: "${response.substring(0, 100)}"`);
+          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
         }
 
         // Check if response contains common non-JSON patterns
         if (response.includes('I cannot')) {
-          logger.error('Response appears to be a refusal/explanation rather than JSON');
+          console.error('🔍 Response appears to be a refusal/explanation rather than JSON');
         }
         if (response.includes('```')) {
-          logger.error('Response appears to contain markdown code blocks');
+          console.error('🔍 Response appears to contain markdown code blocks');
         }
         if (response.startsWith('<')) {
-          logger.error('Response appears to start with XML/HTML');
+          console.error('🔍 Response appears to start with XML/HTML');
         }
       }
 

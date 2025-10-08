@@ -6,7 +6,6 @@ import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from './liquid-extensions';
 import { CheckExecutionEngine } from './check-execution-engine';
-import { logger } from './logger';
 
 export interface WebhookPayload {
   endpoint: string;
@@ -52,13 +51,13 @@ export class WebhookServer {
    */
   public async start(): Promise<void> {
     if (!this.config.enabled) {
-      logger.info('🔌 HTTP server is disabled in configuration');
+      console.log('🔌 HTTP server is disabled in configuration');
       return;
     }
 
     // Don't start server in GitHub Actions environment
     if (this.isGitHubActions) {
-      logger.info('🔌 HTTP server disabled in GitHub Actions environment');
+      console.log('🔌 HTTP server disabled in GitHub Actions environment');
       return;
     }
 
@@ -80,14 +79,14 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       this.server!.listen(port, host, () => {
         const protocol = this.config.tls?.enabled ? 'https' : 'http';
-        logger.info(
+        console.log(
           `🔌 ${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`
         );
 
         if (this.config.endpoints && this.config.endpoints.length > 0) {
-          logger.info('📍 Registered endpoints:');
+          console.log('📍 Registered endpoints:');
           for (const endpoint of this.config.endpoints) {
-            logger.info(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
+            console.log(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
           }
         }
 
@@ -95,10 +94,7 @@ export class WebhookServer {
       });
 
       this.server!.on('error', error => {
-        logger.error(
-          '❌ Failed to start HTTP server:',
-          error instanceof Error ? error : new Error(String(error))
-        );
+        console.error('❌ Failed to start HTTP server:', error);
         reject(error);
       });
     });
@@ -189,7 +185,7 @@ export class WebhookServer {
 
     return new Promise(resolve => {
       this.server!.close(() => {
-        logger.info('🛑 HTTP server stopped');
+        console.log('🛑 HTTP server stopped');
         resolve();
       });
     });
@@ -240,10 +236,7 @@ export class WebhookServer {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'success', endpoint: endpoint.path }));
     } catch (error) {
-      logger.error(
-        '❌ Error handling webhook request:',
-        error instanceof Error ? error : new Error(String(error))
-      );
+      console.error('❌ Error handling webhook request:', error);
 
       // Handle request body too large errors with proper HTTP status
       if (error instanceof Error && error.message.includes('Request body too large')) {
@@ -278,7 +271,7 @@ export class WebhookServer {
 
       case 'hmac':
         if (!auth.secret) {
-          logger.warn('HMAC authentication configured but no secret provided');
+          console.warn('HMAC authentication configured but no secret provided');
           return false;
         }
         return this.verifyHmacSignature(req, rawBody, auth.secret);
@@ -305,7 +298,7 @@ export class WebhookServer {
       // Get signature from header
       const receivedSignature = req.headers['x-webhook-signature'] as string;
       if (!receivedSignature) {
-        logger.warn('Missing x-webhook-signature header for HMAC authentication');
+        console.warn('Missing x-webhook-signature header for HMAC authentication');
         return false;
       }
 
@@ -317,9 +310,7 @@ export class WebhookServer {
       // Use timing-safe comparison to prevent timing attacks
       return this.timingSafeEqual(receivedSignature, calculatedSignature);
     } catch (error) {
-      logger.error(
-        `Error verifying HMAC signature: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('Error verifying HMAC signature:', error);
       return false;
     }
   }
@@ -338,9 +329,7 @@ export class WebhookServer {
       const bufferB = Buffer.from(b, 'utf8');
       return crypto.timingSafeEqual(bufferA, bufferB);
     } catch (error) {
-      logger.error(
-        `Timing-safe comparison failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('Timing-safe comparison failed:', error);
       return false;
     }
   }
@@ -413,7 +402,7 @@ export class WebhookServer {
     payload: WebhookPayload,
     endpoint: { path: string; transform?: string; name?: string }
   ): Promise<void> {
-    logger.info(`🔔 Received webhook on ${endpoint.path}`);
+    console.log(`🔔 Received webhook on ${endpoint.path}`);
 
     let processedData = payload.body;
 
@@ -428,9 +417,7 @@ export class WebhookServer {
         const rendered = await this.liquid.parseAndRender(endpoint.transform, context);
         processedData = JSON.parse(rendered);
       } catch (error) {
-        logger.error(
-          `Failed to transform webhook data: ${error instanceof Error ? error.message : String(error)}`
-        );
+        console.error(`❌ Failed to transform webhook data:`, error);
       }
     }
 
@@ -459,11 +446,11 @@ export class WebhookServer {
     }
 
     if (checksToRun.length === 0) {
-      logger.info(`ℹ️  No checks configured for webhook endpoint: ${endpoint}`);
+      console.log(`ℹ️  No checks configured for webhook endpoint: ${endpoint}`);
       return;
     }
 
-    logger.info(`🚀 Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
+    console.log(`🚀 Triggering ${checksToRun.length} checks for webhook: ${endpoint}`);
 
     try {
       // Execute the checks with webhook context
@@ -477,12 +464,9 @@ export class WebhookServer {
         },
       });
 
-      logger.info(`Webhook checks completed for: ${endpoint}`);
+      console.log(`✅ Webhook checks completed for: ${endpoint}`);
     } catch (error) {
-      logger.error(
-        '❌ Failed to execute webhook checks:',
-        error instanceof Error ? error : new Error(String(error))
-      );
+      console.error(`❌ Failed to execute webhook checks:`, error);
     }
   }
 

@@ -2,7 +2,6 @@ import { simpleGit, SimpleGit, type DefaultLogFields, type ListLogLine } from 's
 import * as path from 'path';
 import * as fs from 'fs';
 import { PRInfo, PRDiff } from './pr-analyzer';
-import { logger } from './logger';
 
 export interface GitFileChange {
   filename: string;
@@ -63,7 +62,7 @@ export class GitRepositoryAnalyzer {
         lastCommit = recentCommits.latest;
       } catch {
         // Repository has no commits yet - this is OK
-        logger.info('Repository has no commits yet, analyzing uncommitted changes');
+        console.log('📝 Repository has no commits yet, analyzing uncommitted changes');
       }
 
       // Get author from git config if no commits exist
@@ -98,7 +97,7 @@ export class GitRepositoryAnalyzer {
     } catch (error) {
       // Don't log the full error object to avoid confusing stack traces
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error(`Error analyzing git repository: ${errorMessage}`);
+      console.error('Error analyzing git repository:', errorMessage);
       return this.createEmptyRepositoryInfo('Error analyzing git repository');
     }
   }
@@ -214,9 +213,7 @@ export class GitRepositoryAnalyzer {
 
       return changes;
     } catch (error) {
-      logger.error(
-        `Error getting uncommitted changes: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error('Error getting uncommitted changes:', error);
       return [];
     }
   }
@@ -277,9 +274,7 @@ export class GitRepositoryAnalyzer {
         deletions = 1; // Placeholder - in real git we'd need the previous version
       }
     } catch (error) {
-      logger.error(
-        `Error analyzing file change for ${filename}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error(`Error analyzing file change for ${filename}:`, error);
     }
 
     return {

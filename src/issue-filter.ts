@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ReviewIssue } from './reviewer';
-import { logger } from './logger';
 
 /**
  * Filter for suppressing Visor issues based on special comments in code
@@ -40,9 +39,9 @@ export class IssueFilter {
     // Log suppression summary if any issues were suppressed
     const totalSuppressed = Object.values(suppressedCount).reduce((sum, count) => sum + count, 0);
     if (totalSuppressed > 0) {
-      logger.info(`Suppressed ${totalSuppressed} issue(s) via visor-disable comments:`);
+      console.log(`🔇 Suppressed ${totalSuppressed} issue(s) via visor-disable comments:`);
       for (const [file, count] of Object.entries(suppressedCount)) {
-        logger.info(`   - ${file}: ${count} issue(s)`);
+        console.log(`   - ${file}: ${count} issue(s)`);
       }
     }
 

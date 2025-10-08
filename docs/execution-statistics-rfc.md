@@ -1,7 +1,5 @@
 # RFC: Enhanced Execution Logging & Statistics
 
-Note (2025-10-07): The unified Telemetry & Tracing Platform RFC (docs/telemetry-tracing-rfc.md) now defines the canonical span/attribute schema and how ExecutionStatistics maps into tracing/metrics. This document remains for historical rationale and detailed background on statistics, but new work should reference the unified RFC.
-
 **Status:** Implemented
 **Date:** 2025-10-04
 **Version:** 1.0

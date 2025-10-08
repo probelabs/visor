@@ -17,6 +17,8 @@ import { FailureConditionResult, CheckConfig } from './types/config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
+import { withActiveSpan, addEvent } from './telemetry/trace-helpers';
+import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
 import Sandbox from '@nyariv/sandboxjs';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
 
@@ -26,26 +28,6 @@ type ExtendedReviewSummary = ReviewSummary & {
   isForEach?: boolean;
   forEachItems?: unknown[];
 };
-
-function appendNdjsonSpan(
-  name: string,
-  attrs: Record<string, unknown>,
-  events?: Array<{ name: string; attrs?: Record<string, unknown> }>
-): void {
-  try {
-    if (process.env.VISOR_TELEMETRY_SINK !== 'file') return;
-    const fs = require('fs');
-    const { __getOrCreateNdjsonPath } = require('./telemetry/trace-helpers');
-    const p = __getOrCreateNdjsonPath();
-    if (!p) return;
-    const line = {
-      name,
-      attributes: attrs,
-      events: (events || []).map(e => ({ name: e.name, attrs: e.attrs || {} })),
-    };
-    fs.appendFileSync(p, JSON.stringify(line) + '\n', 'utf8');
-  } catch {}
-}
 
 /**
  * Statistics for a single check execution
@@ -214,7 +196,7 @@ export class CheckExecutionEngine {
       ...Sandbox.SAFE_GLOBALS,
       Math,
       JSON,
-      console: { log: (...args: unknown[]) => logger.debug(args.map(a => String(a)).join(' ')) },
+      console: { log: console.log },
     };
     const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
     this.routingSandbox = new Sandbox({ globals, prototypeWhitelist });
@@ -271,7 +253,8 @@ export class CheckExecutionEngine {
     resultsMap?: Map<string, ReviewSummary>,
     foreachContext?: { index: number; total: number; parent: string }
   ): Promise<ReviewSummary> {
-    const log = (msg: string) => logger.debug(msg);
+    const log = (msg: string) =>
+      (this.config?.output?.pr_comment ? console.error : console.log)(msg);
     const maxLoops = config?.routing?.max_loops ?? 10;
     const defaults = config?.routing?.defaults?.on_fail || {};
 
@@ -314,16 +297,9 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          log: (...a: unknown[]) => {
-            try {
-              if (process.env.JEST_WORKER_ID)
-                (globalThis.console as Console).log('🔍 Debug:', ...(a as unknown[]));
-            } catch {}
-            logger.debug('🔍 Debug:', ...a);
-          },
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = scope.log;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return Array.isArray(__res) ? __res : (__res ? [__res] : []);
@@ -368,16 +344,9 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          log: (...a: unknown[]) => {
-            try {
-              if (process.env.JEST_WORKER_ID)
-                (globalThis.console as Console).log('🔍 Debug:', ...(a as unknown[]));
-            } catch {}
-            logger.debug('🔍 Debug:', ...a);
-          },
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = scope.log;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
@@ -474,7 +443,7 @@ export class CheckExecutionEngine {
         // Try to log a small preview of dependent outputs if available
         const depPreview: Record<string, unknown> = {};
         for (const [k, v] of depResults.entries()) {
-          const out = (v as ReviewSummary & { output?: unknown })?.output;
+          const out = (v as any)?.output;
           if (out !== undefined) depPreview[k] = out;
         }
         if (debug) {
@@ -483,10 +452,22 @@ export class CheckExecutionEngine {
       } catch {}
 
       if (debug) {
-        const execStr = provCfg.exec;
+        const execStr = (provCfg as any).exec;
         if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
       }
-      const r = await prov.execute(prInfo, provCfg, depResults, sessionInfo);
+      const r = await withActiveSpan(
+        'visor.provider',
+        { 'visor.check.id': target, 'visor.provider.type': provCfg.type || 'ai' },
+        async () => {
+          try {
+            emitNdjsonFallback('visor.provider', {
+              'visor.check.id': target,
+              'visor.provider.type': provCfg.type || 'ai',
+            });
+          } catch {}
+          return prov.execute(prInfo, provCfg, depResults, sessionInfo);
+        }
+      );
       // enrich with metadata similar to main flow
       const enrichedIssues = (r.issues || []).map(issue => ({
         ...issue,
@@ -507,7 +488,22 @@ export class CheckExecutionEngine {
     // We treat each retry/goto/run as consuming one loop budget entry
     while (true) {
       try {
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        const res = await withActiveSpan(
+          'visor.provider',
+          {
+            'visor.check.id': checkName,
+            'visor.provider.type': providerConfig.type || 'ai',
+          },
+          async () => {
+            try {
+              emitNdjsonFallback('visor.provider', {
+                'visor.check.id': checkName,
+                'visor.provider.type': providerConfig.type || 'ai',
+              });
+            } catch {}
+            return provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+          }
+        );
         // Success path
         // Treat result issues with severity error/critical as a soft-failure eligible for on_fail routing
         const hasSoftFailure = (res.issues || []).some(
@@ -518,7 +514,7 @@ export class CheckExecutionEngine {
             log(
               `🔧 Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
             );
-          const lastError: { message: string; code: string; issues?: ReviewIssue[] } = {
+          const lastError: any = {
             message: 'soft-failure: issues present',
             code: 'soft_failure',
             issues: res.issues,
@@ -713,7 +709,7 @@ export class CheckExecutionEngine {
     config: import('./types/config').VisorConfig | undefined,
     tagFilter: import('./types/config').TagFilter | undefined
   ): string[] {
-    const logFn = (m: string) => logger.debug(m);
+    const logFn = this.config?.output?.pr_comment ? console.error : console.log;
 
     return checks.filter(checkName => {
       const checkConfig = config?.checks?.[checkName];
@@ -770,11 +766,6 @@ export class CheckExecutionEngine {
     const timestamp = new Date().toISOString();
 
     try {
-      try {
-        const { withActiveSpan } = await import('./telemetry/trace-helpers');
-        await withActiveSpan('visor.run', { started: true }, async () => {});
-      } catch {}
-      appendNdjsonSpan('visor.run', { started: true });
       // Store webhook context if provided
       this.webhookContext = options.webhookContext;
 
@@ -1055,7 +1046,19 @@ export class CheckExecutionEngine {
           eventContext: prInfo.eventContext, // Pass event context for templates
           ai: timeout ? { timeout } : undefined,
         };
-        const result = await provider.execute(prInfo, providerConfig);
+        const result = await withActiveSpan(
+          'visor.provider',
+          { 'visor.check.id': checks[0], 'visor.provider.type': providerConfig.type },
+          async () => {
+            try {
+              emitNdjsonFallback('visor.provider', {
+                'visor.check.id': checks[0],
+                'visor.provider.type': providerConfig.type,
+              });
+            } catch {}
+            return provider.execute(prInfo, providerConfig);
+          }
+        );
 
         // Prefix issues with check name for consistent grouping
         const prefixedIssues = (result.issues || []).map(issue => ({
@@ -1101,7 +1104,19 @@ export class CheckExecutionEngine {
         ai_model: config?.ai_model,
       };
 
-      const result = await provider.execute(prInfo, providerConfig);
+      const result = await withActiveSpan(
+        'visor.provider',
+        { 'visor.check.id': checkName, 'visor.provider.type': 'ai' },
+        async () => {
+          try {
+            emitNdjsonFallback('visor.provider', {
+              'visor.check.id': checkName,
+              'visor.provider.type': 'ai',
+            });
+          } catch {}
+          return provider.execute(prInfo, providerConfig);
+        }
+      );
 
       // Prefix issues with check name for consistent grouping
       const prefixedIssues = (result.issues || []).map(issue => ({
@@ -1153,7 +1168,12 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
-    const logFn = (m: string) => logger.debug(m);
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
 
     // Only output debug messages if debug mode is enabled
     if (debug) {
@@ -1294,7 +1314,19 @@ export class CheckExecutionEngine {
     };
     providerConfig.forEach = checkConfig.forEach;
 
-    const result = await provider.execute(prInfo, providerConfig);
+    const result = await withActiveSpan(
+      'visor.provider',
+      { 'visor.check.id': checkName, 'visor.provider.type': providerType },
+      async () => {
+        try {
+          emitNdjsonFallback('visor.provider', {
+            'visor.check.id': checkName,
+            'visor.provider.type': providerType,
+          });
+        } catch {}
+        return provider.execute(prInfo, providerConfig);
+      }
+    );
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
     if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
@@ -1712,10 +1744,7 @@ export class CheckExecutionEngine {
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     try {
       const { emitMermaidFromMarkdown } = await import('./utils/mermaid-telemetry');
-      const { withActiveSpan } = await import('./telemetry/trace-helpers');
-      await withActiveSpan('check.render', { check: checkName }, async () => {
-        emitMermaidFromMarkdown(checkName, rendered, 'content');
-      });
+      emitMermaidFromMarkdown(checkName, rendered, 'content');
     } catch {}
     return rendered.trim();
   }
@@ -1733,7 +1762,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean
   ): Promise<ReviewSummary> {
-    const log = logFn || ((m: string) => logger.debug(m));
+    const log = logFn || console.error;
 
     if (debug) {
       log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
@@ -1858,6 +1887,9 @@ export class CheckExecutionEngine {
       );
     }
 
+    // Track which checks emitted forEach item spans to avoid duplicate fallback emission
+    const emittedForEachSpans = new Set<string>(); // explicit during execution
+
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
@@ -1902,669 +1934,802 @@ export class CheckExecutionEngine {
         );
       }
 
-      // Create task functions for checks in this level
-      const levelTaskFunctions = executionGroup.parallel.map(checkName => async () => {
-        const checkConfig = config.checks[checkName];
-        if (!checkConfig) {
-          return {
-            checkName,
-            error: `No configuration found for check: ${checkName}`,
-            result: null,
-          };
-        }
-        const { withActiveSpan, addEvent } = await import('./telemetry/trace-helpers');
-        return await withActiveSpan(
-          'visor.check',
-          { 'visor.check.id': checkName, 'visor.execution.level': executionGroup.level },
-          async () => {
-            const checkStartTime = Date.now();
-            completedChecksCount++;
-            logger.step(
-              `Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`
-            );
-            addEvent('check.started', { check: checkName });
-
-            try {
-              if (debug) {
-                log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
-              }
-
-              // Get the appropriate provider for this check type
-              const providerType = checkConfig.type || 'ai';
-              const provider = this.providerRegistry.getProviderOrThrow(providerType);
-              if (debug) {
-                log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
-              }
-              this.setProviderWebhookContext(provider);
-
-              // Create provider config for this specific check
-              const extendedCheckConfig = checkConfig as CheckConfig & {
-                level?: string;
-                message?: string;
-              };
-
-              const providerConfig: CheckProviderConfig = {
-                type: providerType,
-                prompt: checkConfig.prompt,
-                exec: checkConfig.exec,
-                focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
-                schema: checkConfig.schema,
-                group: checkConfig.group,
-                checkName: checkName, // Add checkName for sessionID
-                eventContext: prInfo.eventContext, // Pass event context for templates
-                transform: checkConfig.transform,
-                transform_js: checkConfig.transform_js,
-                // Important: pass through provider-level timeout from check config
-                // (e.g., command/http_client providers expect seconds/ms here)
-                timeout: checkConfig.timeout,
-                level: extendedCheckConfig.level,
-                message: extendedCheckConfig.message,
-                env: checkConfig.env,
-                forEach: checkConfig.forEach,
-                ai: {
-                  timeout: timeout || 600000,
-                  debug: debug,
-                  ...(checkConfig.ai || {}),
-                },
-              };
-
-              // Pass results from ALL transitive dependencies (not just direct ones)
-              // This ensures the "outputs" variable has access to all ancestor check results
-              const dependencyResults = new Map<string, ReviewSummary>();
-              let isForEachDependent = false;
-              let forEachItems: unknown[] = [];
-              let forEachParentName: string | undefined;
-              const forEachParents: string[] = []; // Track ALL forEach parents
-
-              // Get all transitive dependencies (ancestors) for this check
-              const allDependencies = DependencyResolver.getAllDependencies(
-                checkName,
-                dependencyGraph.nodes
-              );
-
-              // Include results from ALL dependencies (direct and transitive)
-              for (const depId of allDependencies) {
-                if (results.has(depId)) {
-                  const depResult = results.get(depId)!;
-                  dependencyResults.set(depId, depResult);
-                }
-              }
-
-              // If any direct dependency failed or was skipped, skip this check
-              const directDeps = checkConfig.depends_on || [];
-              const failedDeps: string[] = [];
-              for (const depId of directDeps) {
-                const depRes = results.get(depId);
-                if (!depRes) continue;
-
-                // Check if dependency was skipped
-                const wasSkipped = (depRes.issues || []).some(issue => {
-                  const id = issue.ruleId || '';
-                  return id.endsWith('/__skipped');
-                });
-
-                // Treat these as fatal in direct dependencies:
-                //  - command provider execution/transform failures
-                //  - forEach validation/iteration errors
-                //  - fail_if conditions (global or check-specific)
-                const hasFatalFailure = (depRes.issues || []).some(issue => {
-                  const id = issue.ruleId || '';
-                  return (
-                    id === 'command/execution_error' ||
-                    id.endsWith('/command/execution_error') ||
-                    id === 'command/transform_js_error' ||
-                    id.endsWith('/command/transform_js_error') ||
-                    id === 'command/transform_error' ||
-                    id.endsWith('/command/transform_error') ||
-                    id.endsWith('/forEach/iteration_error') ||
-                    id === 'forEach/undefined_output' ||
-                    id.endsWith('/forEach/undefined_output') ||
-                    id.endsWith('_fail_if') ||
-                    id.endsWith('/global_fail_if')
-                  );
-                });
-
-                if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
-              }
-
-              if (failedDeps.length > 0) {
-                // Record skip and provide a concise console message
-                this.recordSkip(checkName, 'dependency_failed');
-                logger.info(`⏭  Skipped (dependency failed: ${failedDeps.join(', ')})`);
+      // Create task functions for checks in this level (telemetry wrapped)
+      const levelTaskFunctions = executionGroup.parallel.map(
+        checkName => async () =>
+          withActiveSpan(
+            'visor.check',
+            { 'visor.check.id': checkName, 'visor.execution.level': executionGroup.level },
+            async () => {
+              const checkConfig = config.checks[checkName];
+              if (!checkConfig) {
                 return {
                   checkName,
-                  error: null,
-                  result: { issues: [] },
-                  skipped: true,
+                  error: `No configuration found for check: ${checkName}`,
+                  result: null,
                 };
               }
 
-              // Check direct dependencies for forEach behavior
-              for (const depId of checkConfig.depends_on || []) {
-                if (results.has(depId)) {
-                  const depResult = results.get(depId)!;
+              const checkStartTime = Date.now();
+              completedChecksCount++;
+              logger.step(
+                `Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`
+              );
+              addEvent('check.started', { check: checkName });
+              // NDJSON fallback: defer writing the combined check span until completion
 
-                  // Check if this dependency has forEach enabled
-                  const depForEachResult = depResult as ReviewSummary & {
-                    isForEach?: boolean;
-                    forEachItems?: unknown[];
-                  };
-
-                  if (depForEachResult.isForEach && Array.isArray(depForEachResult.forEachItems)) {
-                    if (!isForEachDependent) {
-                      // First forEach dependency found - use it as the primary
-                      isForEachDependent = true;
-                      forEachItems = depForEachResult.forEachItems;
-                      forEachParentName = depId;
-                    }
-                    // Track all forEach parents for unwrapping
-                    forEachParents.push(depId);
-                  }
-                }
-              }
-
-              // Determine if we should use session reuse
-              let sessionInfo: { parentSessionId?: string; reuseSession?: boolean } | undefined =
-                undefined;
-              if (sessionReuseChecks.has(checkName)) {
-                const parentCheckName = sessionProviders.get(checkName);
-                if (parentCheckName && sessionIds.has(parentCheckName)) {
-                  const parentSessionId = sessionIds.get(parentCheckName)!;
-
-                  sessionInfo = {
-                    parentSessionId: parentSessionId,
-                    reuseSession: true,
-                  };
-
-                  if (debug) {
-                    log(
-                      `🔄 Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
-                    );
-                  }
-                } else {
-                  if (debug) {
-                    log(
-                      `⚠️ Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
-                    );
-                  }
-                }
-              }
-
-              // For checks that create new sessions, generate a session ID
-              let currentSessionId: string | undefined = undefined;
-              if (!sessionInfo?.reuseSession) {
-                const timestamp = new Date().toISOString();
-                currentSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName}`;
-                sessionIds.set(checkName, currentSessionId);
+              try {
                 if (debug) {
-                  log(`🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+                  log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
                 }
 
-                // Add session ID to provider config
-                providerConfig.sessionId = currentSessionId;
-              }
+                // Get the appropriate provider for this check type
+                const providerType = checkConfig.type || 'ai';
+                const provider = this.providerRegistry.getProviderOrThrow(providerType);
+                if (debug) {
+                  log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+                }
+                this.setProviderWebhookContext(provider);
 
-              // Handle forEach dependent execution
-              let finalResult: ReviewSummary;
+                // Create provider config for this specific check
+                const extendedCheckConfig = checkConfig as CheckConfig & {
+                  level?: string;
+                  message?: string;
+                };
 
-              if (isForEachDependent && forEachParentName) {
-                // Record forEach preview items
-                this.recordForEachPreview(checkName, forEachItems);
+                const providerConfig: CheckProviderConfig = {
+                  type: providerType,
+                  prompt: checkConfig.prompt,
+                  exec: checkConfig.exec,
+                  focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+                  schema: checkConfig.schema,
+                  group: checkConfig.group,
+                  checkName: checkName, // Add checkName for sessionID
+                  eventContext: prInfo.eventContext, // Pass event context for templates
+                  transform: checkConfig.transform,
+                  transform_js: checkConfig.transform_js,
+                  // Important: pass through provider-level timeout from check config
+                  // (e.g., command/http_client providers expect seconds/ms here)
+                  timeout: checkConfig.timeout,
+                  level: extendedCheckConfig.level,
+                  message: extendedCheckConfig.message,
+                  env: checkConfig.env,
+                  forEach: checkConfig.forEach,
+                  ai: {
+                    timeout: timeout || 600000,
+                    debug: debug,
+                    ...(checkConfig.ai || {}),
+                  },
+                };
 
-                // If the forEach parent returned an empty array, skip this check entirely
-                if (forEachItems.length === 0) {
-                  if (debug) {
-                    log(
-                      `🔄 Debug: Skipping check "${checkName}" - forEach check "${forEachParentName}" returned 0 items`
-                    );
+                // Pass results from ALL transitive dependencies (not just direct ones)
+                // This ensures the "outputs" variable has access to all ancestor check results
+                const dependencyResults = new Map<string, ReviewSummary>();
+                let isForEachDependent = false;
+                let forEachItems: unknown[] = [];
+                let forEachParentName: string | undefined;
+                const forEachParents: string[] = []; // Track ALL forEach parents
+
+                // Get all transitive dependencies (ancestors) for this check
+                const allDependencies = DependencyResolver.getAllDependencies(
+                  checkName,
+                  dependencyGraph.nodes
+                );
+
+                // Include results from ALL dependencies (direct and transitive)
+                for (const depId of allDependencies) {
+                  if (results.has(depId)) {
+                    const depResult = results.get(depId)!;
+                    dependencyResults.set(depId, depResult);
                   }
-                  logger.info(`  forEach: no items from "${forEachParentName}", skipping check...`);
+                }
 
-                  // Return a special marker result so that dependent checks can detect the skip
-                  finalResult = {
-                    issues: [],
-                    output: [],
-                  } as ReviewSummary;
+                // If any direct dependency failed or was skipped, skip this check
+                const directDeps = checkConfig.depends_on || [];
+                const failedDeps: string[] = [];
+                for (const depId of directDeps) {
+                  const depRes = results.get(depId);
+                  if (!depRes) continue;
 
-                  // Mark this result as forEach-capable but with empty items
-                  (finalResult as ExtendedReviewSummary).isForEach = true;
-                  (finalResult as ExtendedReviewSummary).forEachItems = [];
+                  // Check if dependency was skipped
+                  const wasSkipped = (depRes.issues || []).some(issue => {
+                    const id = issue.ruleId || '';
+                    return id.endsWith('/__skipped');
+                  });
 
-                  // Skip to the end - don't execute this check
-                } else {
-                  if (debug) {
-                    log(
-                      `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
-                    );
-                  }
-
-                  // Log forEach processing start (non-debug)
-                  logger.info(
-                    `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
-                  );
-
-                  const allIssues: ReviewIssue[] = [];
-                  const allOutputs: unknown[] = [];
-                  const aggregatedContents: string[] = [];
-
-                  // Create task functions (not executed yet) - these will be executed with controlled concurrency
-                  // via executeWithLimitedParallelism to respect maxParallelism setting
-                  const itemTasks = forEachItems.map((item, itemIndex) => async () => {
-                    const { withActiveSpan } = await import('./telemetry/trace-helpers');
-                    return await withActiveSpan(
-                      'visor.foreach.item',
-                      {
-                        'visor.check.id': checkName,
-                        'visor.foreach.index': itemIndex,
-                        'visor.foreach.total': forEachItems.length,
-                      },
-                      async () => {
-                        appendNdjsonSpan('visor.foreach.item', {
-                          'visor.check.id': checkName,
-                          'visor.foreach.index': itemIndex,
-                          'visor.foreach.total': forEachItems.length,
-                        });
-                        // Create modified dependency results with current item
-                        // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
-                        const forEachDependencyResults = new Map<string, ReviewSummary>();
-                        for (const [depName, depResult] of dependencyResults) {
-                          if (forEachParents.includes(depName)) {
-                            // This is a forEach parent - unwrap its output for this iteration
-                            const depForEachResult = depResult as ReviewSummary & {
-                              output?: unknown;
-                              forEachItems?: unknown[];
-                            };
-
-                            if (
-                              Array.isArray(depForEachResult.output) &&
-                              depForEachResult.output[itemIndex] !== undefined
-                            ) {
-                              // Unwrap to the item at the current index
-                              const modifiedResult: ReviewSummary & { output?: unknown } = {
-                                issues: [],
-                                output: depForEachResult.output[itemIndex],
-                              };
-                              forEachDependencyResults.set(depName, modifiedResult);
-
-                              // Also provide -raw access to the full array
-                              const rawResult: ReviewSummary & { output?: unknown } = {
-                                issues: [],
-                                output: depForEachResult.output,
-                              };
-                              forEachDependencyResults.set(`${depName}-raw`, rawResult);
-                            } else {
-                              // Fallback: use the result as-is
-                              forEachDependencyResults.set(depName, depResult);
-                            }
-                          } else {
-                            forEachDependencyResults.set(depName, depResult);
-                          }
-                        }
-
-                        // Evaluate if condition for this forEach item
-                        if (checkConfig.if) {
-                          // Merge current results with forEach-specific dependency results for condition evaluation
-                          const conditionResults = new Map(results);
-                          for (const [depName, depResult] of forEachDependencyResults) {
-                            conditionResults.set(depName, depResult);
-                          }
-
-                          const shouldRun = await this.evaluateCheckCondition(
-                            checkName,
-                            checkConfig.if,
-                            prInfo,
-                            conditionResults,
-                            debug
-                          );
-
-                          if (!shouldRun) {
-                            if (debug) {
-                              log(
-                                `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
-                              );
-                            }
-                            // Return empty result for skipped items
-                            return {
-                              index: itemIndex,
-                              itemResult: { issues: [] } as ReviewSummary,
-                              skipped: true,
-                            };
-                          }
-                        }
-
-                        if (debug) {
-                          log(
-                            `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
-                          );
-                        }
-
-                        // Track iteration start
-                        const iterationStart = this.recordIterationStart(checkName);
-
-                        // No NDJSON fallback for provider here; rely on SDK spans
-
-                        // Execute with retry/routing semantics per item
-                        const itemResult = await this.executeWithRouting(
-                          checkName,
-                          checkConfig,
-                          provider,
-                          providerConfig,
-                          prInfo,
-                          forEachDependencyResults,
-                          sessionInfo,
-                          config,
-                          dependencyGraph,
-                          debug,
-                          results,
-                          /*foreachContext*/ {
-                            index: itemIndex,
-                            total: forEachItems.length,
-                            parent: forEachParentName,
-                          }
-                        );
-
-                        // Record iteration completion
-                        // Check if this iteration had fatal errors
-                        const hadFatalError = (itemResult.issues || []).some(issue => {
-                          const id = issue.ruleId || '';
-                          return (
-                            id === 'command/execution_error' ||
-                            id.endsWith('/command/execution_error') ||
-                            id === 'command/transform_js_error' ||
-                            id.endsWith('/command/transform_js_error') ||
-                            id === 'command/transform_error' ||
-                            id.endsWith('/command/transform_error') ||
-                            id === 'forEach/undefined_output' ||
-                            id.endsWith('/forEach/undefined_output')
-                          );
-                        });
-                        const iterationDuration = (Date.now() - iterationStart) / 1000;
-                        this.recordIterationComplete(
-                          checkName,
-                          iterationStart,
-                          !hadFatalError, // Success if no fatal errors
-                          itemResult.issues || [],
-                          (itemResult as ReviewSummary & { output?: unknown }).output
-                        );
-
-                        // Log iteration progress
-                        logger.info(
-                          `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
-                        );
-
-                        return { index: itemIndex, itemResult };
-                      }
+                  // Treat these as fatal in direct dependencies:
+                  //  - command provider execution/transform failures
+                  //  - forEach validation/iteration errors
+                  //  - fail_if conditions (global or check-specific)
+                  let hasFatalFailure = (depRes.issues || []).some(issue => {
+                    const id = issue.ruleId || '';
+                    return (
+                      id === 'command/execution_error' ||
+                      id.endsWith('/command/execution_error') ||
+                      id === 'command/timeout' ||
+                      id.endsWith('/command/timeout') ||
+                      id === 'command/transform_js_error' ||
+                      id.endsWith('/command/transform_js_error') ||
+                      id === 'command/transform_error' ||
+                      id.endsWith('/command/transform_error') ||
+                      id.endsWith('/forEach/iteration_error') ||
+                      id === 'forEach/undefined_output' ||
+                      id.endsWith('/forEach/undefined_output') ||
+                      id.endsWith('_fail_if') ||
+                      id.endsWith('/global_fail_if')
                     );
                   });
 
-                  const forEachConcurrency = Math.max(
-                    1,
-                    Math.min(forEachItems.length, effectiveMaxParallelism)
-                  );
+                  // As a fallback, evaluate fail_if on the dependency result now (in case the provider path didn't add issues yet)
+                  if (
+                    !hasFatalFailure &&
+                    config &&
+                    (config.fail_if || config.checks[depId]?.fail_if)
+                  ) {
+                    const failIfResults = await this.evaluateFailureConditions(
+                      depId,
+                      depRes,
+                      config
+                    );
+                    hasFatalFailure = failIfResults.some(r => r.failed);
+                  }
 
-                  if (debug && forEachConcurrency > 1) {
+                  if (debug) {
                     log(
-                      `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
+                      `🔧 Debug: gating check '${checkName}' against dep '${depId}': wasSkipped=${wasSkipped} hasFatalFailure=${hasFatalFailure}`
                     );
                   }
+                  if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
+                }
 
-                  const forEachResults = await this.executeWithLimitedParallelism(
-                    itemTasks,
-                    forEachConcurrency,
-                    false
-                  );
-
-                  for (const result of forEachResults) {
-                    if (result.status === 'rejected') {
-                      // Instead of throwing, record the failure and continue with other iterations
-                      const error = result.reason;
-                      const errorMessage = error instanceof Error ? error.message : String(error);
-
-                      // Create an error issue for this failed iteration
-                      allIssues.push({
-                        ruleId: `${checkName}/forEach/iteration_error`,
-                        severity: 'error',
-                        category: 'logic',
-                        message: `forEach iteration failed: ${errorMessage}`,
-                        file: '',
-                        line: 0,
-                      });
-
-                      if (debug) {
-                        log(
-                          `🔄 Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
-                        );
-                      }
-                      continue;
-                    }
-
-                    // Skip results from skipped items (those that failed if condition)
-                    if ((result.value as unknown as { skipped?: boolean }).skipped) {
-                      continue;
-                    }
-
-                    const { itemResult } = result.value;
-
-                    if (itemResult.issues) {
-                      allIssues.push(...itemResult.issues);
-                    }
-
-                    const resultWithOutput = itemResult as ReviewSummary & {
-                      output?: unknown;
-                      content?: string;
-                    };
-
-                    if (resultWithOutput.output !== undefined) {
-                      allOutputs.push(resultWithOutput.output);
-                    }
-
-                    const itemContent = resultWithOutput.content;
-                    if (typeof itemContent === 'string' && itemContent.trim()) {
-                      aggregatedContents.push(itemContent.trim());
-                    }
-                  }
-
-                  const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
-
-                  finalResult = {
-                    issues: allIssues,
-                    ...(finalOutput !== undefined ? { output: finalOutput } : {}),
-                  } as ExtendedReviewSummary;
-
-                  // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
-                  // will also iterate over the items (propagate forEach behavior down the chain)
-                  if (allOutputs.length > 0) {
-                    (finalResult as ExtendedReviewSummary).isForEach = true;
-                    (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
-                  }
-
-                  if (aggregatedContents.length > 0) {
-                    const joined = aggregatedContents.join('\n');
-                    (finalResult as ReviewSummary & { content?: string }).content = joined;
-                    // Also expose per-check content map so JSON conversion can attach it to this check
-                    const fr = finalResult as unknown as {
-                      __contents?: Record<string, string>;
-                    };
-                    if (!fr.__contents) fr.__contents = {};
-                    fr.__contents[checkName] = joined;
-                  }
-
-                  log(
-                    `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
-                  );
-                } // End of else block for forEachItems.length > 0
-              } else {
-                // Normal single execution
-                // No NDJSON fallbacks here; rely on SDK exporters
-                // Evaluate if condition for non-forEach-dependent checks
-                if (checkConfig.if) {
-                  const shouldRun = await this.evaluateCheckCondition(
+                if (failedDeps.length > 0) {
+                  // Record skip and provide a concise console message
+                  this.recordSkip(checkName, 'dependency_failed');
+                  logger.info(`⏭  Skipped (dependency failed: ${failedDeps.join(', ')})`);
+                  return {
                     checkName,
-                    checkConfig.if,
-                    prInfo,
-                    results,
-                    debug
-                  );
+                    error: null,
+                    result: { issues: [] },
+                    skipped: true,
+                  };
+                }
 
-                  if (!shouldRun) {
-                    // Record skip with condition
-                    this.recordSkip(checkName, 'if_condition', checkConfig.if);
-                    logger.info(`⏭  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
-                    return {
-                      checkName,
-                      error: null,
-                      result: {
-                        issues: [],
-                      },
-                      skipped: true,
+                // Check direct dependencies for forEach behavior
+                for (const depId of checkConfig.depends_on || []) {
+                  if (dependencyResults.has(depId) || results.has(depId)) {
+                    const depResult = (dependencyResults.get(depId) || results.get(depId))!;
+
+                    // Check if this dependency has forEach enabled
+                    const depForEachResult = depResult as ReviewSummary & {
+                      isForEach?: boolean;
+                      forEachItems?: unknown[];
                     };
+
+                    if (
+                      depForEachResult.isForEach &&
+                      Array.isArray(depForEachResult.forEachItems)
+                    ) {
+                      if (!isForEachDependent) {
+                        // First forEach dependency found - use it as the primary
+                        isForEachDependent = true;
+                        forEachItems = depForEachResult.forEachItems;
+                        forEachParentName = depId;
+                      }
+                      // Track all forEach parents for unwrapping
+                      forEachParents.push(depId);
+                    } else if (Array.isArray((depForEachResult as any).output)) {
+                      // Fallback: treat an array output as forEach-capable even if flag wasn't set
+                      if (!isForEachDependent) {
+                        isForEachDependent = true;
+                        forEachItems = (depForEachResult as any).output as unknown[];
+                        forEachParentName = depId;
+                      }
+                      forEachParents.push(depId);
+                    }
                   }
                 }
 
-                // Execute with retry/routing semantics
-                finalResult = await this.executeWithRouting(
-                  checkName,
-                  checkConfig,
-                  provider,
-                  providerConfig,
-                  prInfo,
-                  dependencyResults,
-                  sessionInfo,
-                  config,
-                  dependencyGraph,
-                  debug,
-                  results
-                );
+                // Determine if we should use session reuse
+                let sessionInfo: { parentSessionId?: string; reuseSession?: boolean } | undefined =
+                  undefined;
+                if (sessionReuseChecks.has(checkName)) {
+                  const parentCheckName = sessionProviders.get(checkName);
+                  if (parentCheckName && sessionIds.has(parentCheckName)) {
+                    const parentSessionId = sessionIds.get(parentCheckName)!;
 
-                // Record normal (non-forEach) execution
-                // Check if this check had fatal errors
-                const hadFatalError = (finalResult.issues || []).some(issue => {
-                  const id = issue.ruleId || '';
-                  return (
-                    id === 'command/execution_error' ||
-                    id.endsWith('/command/execution_error') ||
-                    id === 'command/transform_js_error' ||
-                    id.endsWith('/command/transform_js_error') ||
-                    id === 'command/transform_error' ||
-                    id.endsWith('/command/transform_error') ||
-                    id === 'forEach/undefined_output' ||
-                    id.endsWith('/forEach/undefined_output')
-                  );
-                });
-                this.recordIterationComplete(
-                  checkName,
-                  checkStartTime,
-                  !hadFatalError, // Success if no fatal errors
-                  finalResult.issues || [],
-                  (finalResult as ReviewSummary & { output?: unknown }).output
-                );
+                    sessionInfo = {
+                      parentSessionId: parentSessionId,
+                      reuseSession: true,
+                    };
 
-                if (checkConfig.forEach) {
-                  try {
-                    const finalResultWithOutput = finalResult as ExtendedReviewSummary;
-                    const outputPreview =
-                      JSON.stringify(finalResultWithOutput.output)?.slice(0, 200) || '(empty)';
-                    logger.debug(
-                      `🔧 Debug: Check "${checkName}" provider returned: ${outputPreview}`
+                    if (debug) {
+                      log(
+                        `🔄 Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
+                      );
+                    }
+                  } else {
+                    if (debug) {
+                      log(
+                        `⚠️ Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
+                      );
+                    }
+                  }
+                }
+
+                // For checks that create new sessions, generate a session ID
+                let currentSessionId: string | undefined = undefined;
+                if (!sessionInfo?.reuseSession) {
+                  const timestamp = new Date().toISOString();
+                  currentSessionId = `visor-${timestamp.replace(/[:.]/g, '-')}-${checkName}`;
+                  sessionIds.set(checkName, currentSessionId);
+                  if (debug) {
+                    log(
+                      `🆕 Debug: Check ${checkName} will create new session: ${currentSessionId}`
                     );
-                  } catch {
-                    // Ignore logging errors
+                  }
+
+                  // Add session ID to provider config
+                  providerConfig.sessionId = currentSessionId;
+                }
+
+                // Handle forEach dependent execution
+                let finalResult: ReviewSummary;
+
+                if (isForEachDependent && forEachParentName) {
+                  // Record forEach preview items
+                  this.recordForEachPreview(checkName, forEachItems);
+
+                  // If the forEach parent returned an empty array, skip this check entirely
+                  if (forEachItems.length === 0) {
+                    if (debug) {
+                      log(
+                        `🔄 Debug: Skipping check "${checkName}" - forEach check "${forEachParentName}" returned 0 items`
+                      );
+                    }
+                    logger.info(
+                      `  forEach: no items from "${forEachParentName}", skipping check...`
+                    );
+
+                    // Return a special marker result so that dependent checks can detect the skip
+                    finalResult = {
+                      issues: [],
+                      output: [],
+                    } as ReviewSummary;
+
+                    // Mark this result as forEach-capable but with empty items
+                    (finalResult as ExtendedReviewSummary).isForEach = true;
+                    (finalResult as ExtendedReviewSummary).forEachItems = [];
+
+                    // Skip to the end - don't execute this check
+                  } else {
+                    if (debug) {
+                      log(
+                        `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
+                      );
+                    }
+
+                    // Log forEach processing start (non-debug)
+                    logger.info(
+                      `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
+                    );
+
+                    const allIssues: ReviewIssue[] = [];
+                    const allOutputs: unknown[] = [];
+                    const aggregatedContents: string[] = [];
+
+                    // Create task functions (not executed yet) - these will be executed with controlled concurrency
+                    // via executeWithLimitedParallelism to respect maxParallelism setting
+                    const itemTasks = forEachItems.map(
+                      (item, itemIndex) => async () =>
+                        withActiveSpan(
+                          'visor.foreach.item',
+                          {
+                            'visor.check.id': checkName,
+                            'visor.foreach.index': itemIndex,
+                            'visor.foreach.total': forEachItems.length,
+                          },
+                          async () => {
+                            try {
+                              emitNdjsonSpanWithEvents(
+                                'visor.foreach.item',
+                                {
+                                  'visor.check.id': checkName,
+                                  'visor.foreach.index': itemIndex,
+                                  'visor.foreach.total': forEachItems.length,
+                                },
+                                []
+                              );
+                            } catch {}
+                            // Create modified dependency results with current item
+                            // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
+                            const forEachDependencyResults = new Map<string, ReviewSummary>();
+                            for (const [depName, depResult] of dependencyResults) {
+                              if (forEachParents.includes(depName)) {
+                                // This is a forEach parent - unwrap its output for this iteration
+                                const depForEachResult = depResult as ReviewSummary & {
+                                  output?: unknown;
+                                  forEachItems?: unknown[];
+                                };
+
+                                if (
+                                  Array.isArray(depForEachResult.output) &&
+                                  depForEachResult.output[itemIndex] !== undefined
+                                ) {
+                                  // Unwrap to the item at the current index
+                                  const modifiedResult: ReviewSummary & { output?: unknown } = {
+                                    issues: [],
+                                    output: depForEachResult.output[itemIndex],
+                                  };
+                                  forEachDependencyResults.set(depName, modifiedResult);
+
+                                  // Also provide -raw access to the full array
+                                  const rawResult: ReviewSummary & { output?: unknown } = {
+                                    issues: [],
+                                    output: depForEachResult.output,
+                                  };
+                                  forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                                } else {
+                                  // Fallback: use the result as-is
+                                  forEachDependencyResults.set(depName, depResult);
+                                }
+                              } else {
+                                forEachDependencyResults.set(depName, depResult);
+                              }
+                            }
+
+                            // Evaluate if condition for this forEach item
+                            if (checkConfig.if) {
+                              // Merge current results with forEach-specific dependency results for condition evaluation
+                              const conditionResults = new Map(results);
+                              for (const [depName, depResult] of forEachDependencyResults) {
+                                conditionResults.set(depName, depResult);
+                              }
+
+                              const shouldRun = await this.evaluateCheckCondition(
+                                checkName,
+                                checkConfig.if,
+                                prInfo,
+                                conditionResults,
+                                debug
+                              );
+
+                              if (!shouldRun) {
+                                if (debug) {
+                                  log(
+                                    `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
+                                  );
+                                }
+                                // Return empty result for skipped items
+                                return {
+                                  index: itemIndex,
+                                  itemResult: { issues: [] } as ReviewSummary,
+                                  skipped: true,
+                                };
+                              }
+                            }
+
+                            if (debug) {
+                              log(
+                                `🔄 Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
+                              );
+                            }
+
+                            // Track iteration start
+                            const iterationStart = this.recordIterationStart(checkName);
+
+                            // Execute with retry/routing semantics per item
+                            const itemResult = await this.executeWithRouting(
+                              checkName,
+                              checkConfig,
+                              provider,
+                              providerConfig,
+                              prInfo,
+                              forEachDependencyResults,
+                              sessionInfo,
+                              config,
+                              dependencyGraph,
+                              debug,
+                              results,
+                              /*foreachContext*/ {
+                                index: itemIndex,
+                                total: forEachItems.length,
+                                parent: forEachParentName,
+                              }
+                            );
+
+                            // Record iteration completion
+                            // Check if this iteration had fatal errors
+                            const hadFatalError = (itemResult.issues || []).some(issue => {
+                              const id = issue.ruleId || '';
+                              return (
+                                id === 'command/execution_error' ||
+                                id.endsWith('/command/execution_error') ||
+                                id === 'command/transform_js_error' ||
+                                id.endsWith('/command/transform_js_error') ||
+                                id === 'command/transform_error' ||
+                                id.endsWith('/command/transform_error') ||
+                                id === 'forEach/undefined_output' ||
+                                id.endsWith('/forEach/undefined_output')
+                              );
+                            });
+                            const iterationDuration = (Date.now() - iterationStart) / 1000;
+                            this.recordIterationComplete(
+                              checkName,
+                              iterationStart,
+                              !hadFatalError, // Success if no fatal errors
+                              itemResult.issues || [],
+                              (itemResult as any).output
+                            );
+
+                            // Log iteration progress
+                            logger.info(
+                              `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
+                            );
+
+                            return { index: itemIndex, itemResult };
+                          }
+                        )
+                    );
+
+                    const forEachConcurrency = Math.max(
+                      1,
+                      Math.min(forEachItems.length, effectiveMaxParallelism)
+                    );
+
+                    if (debug && forEachConcurrency > 1) {
+                      log(
+                        `🔄 Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
+                      );
+                    }
+
+                    const forEachResults = await this.executeWithLimitedParallelism(
+                      itemTasks,
+                      forEachConcurrency,
+                      false
+                    );
+                    // Mark that this check emitted explicit forEach spans
+                    emittedForEachSpans.add(checkName);
+
+                    for (const result of forEachResults) {
+                      if (result.status === 'rejected') {
+                        // Instead of throwing, record the failure and continue with other iterations
+                        const error = result.reason;
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+
+                        // Create an error issue for this failed iteration
+                        allIssues.push({
+                          ruleId: `${checkName}/forEach/iteration_error`,
+                          severity: 'error',
+                          category: 'logic',
+                          message: `forEach iteration failed: ${errorMessage}`,
+                          file: '',
+                          line: 0,
+                        });
+
+                        if (debug) {
+                          log(
+                            `🔄 Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
+                          );
+                        }
+                        continue;
+                      }
+
+                      // Skip results from skipped items (those that failed if condition)
+                      if ((result.value as any).skipped) {
+                        continue;
+                      }
+
+                      const { itemResult } = result.value;
+
+                      if (itemResult.issues) {
+                        allIssues.push(...itemResult.issues);
+                      }
+
+                      const resultWithOutput = itemResult as ReviewSummary & {
+                        output?: unknown;
+                        content?: string;
+                      };
+
+                      if (resultWithOutput.output !== undefined) {
+                        allOutputs.push(resultWithOutput.output);
+                      }
+
+                      const itemContent = resultWithOutput.content;
+                      if (typeof itemContent === 'string' && itemContent.trim()) {
+                        aggregatedContents.push(itemContent.trim());
+                      }
+                    }
+
+                    const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
+
+                    finalResult = {
+                      issues: allIssues,
+                      ...(finalOutput !== undefined ? { output: finalOutput } : {}),
+                    } as ExtendedReviewSummary;
+
+                    // Evaluate fail_if for aggregated forEach results (applies to the whole check)
+                    if (config && (config.fail_if || checkConfig.fail_if)) {
+                      const failureResults = await this.evaluateFailureConditions(
+                        checkName,
+                        finalResult,
+                        config
+                      );
+                      if (failureResults.length > 0) {
+                        const failureIssues = failureResults
+                          .filter(f => f.failed)
+                          .map(f => ({
+                            file: 'system',
+                            line: 0,
+                            ruleId: f.conditionName,
+                            message: f.message || `Failure condition met: ${f.expression}`,
+                            severity: (f.severity || 'error') as
+                              | 'info'
+                              | 'warning'
+                              | 'error'
+                              | 'critical',
+                            category: 'logic' as const,
+                          }));
+                        finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
+                      }
+                    }
+
+                    // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
+                    // will also iterate over the items (propagate forEach behavior down the chain)
+                    if (allOutputs.length > 0) {
+                      (finalResult as ExtendedReviewSummary).isForEach = true;
+                      (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
+                    }
+
+                    if (aggregatedContents.length > 0) {
+                      (finalResult as ReviewSummary & { content?: string }).content =
+                        aggregatedContents.join('\n');
+                    }
+
+                    log(
+                      `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+                    );
+                  } // End of else block for forEachItems.length > 0
+                } else {
+                  // Normal single execution
+                  // Evaluate if condition for non-forEach-dependent checks
+                  if (checkConfig.if) {
+                    const shouldRun = await this.evaluateCheckCondition(
+                      checkName,
+                      checkConfig.if,
+                      prInfo,
+                      results,
+                      debug
+                    );
+
+                    if (!shouldRun) {
+                      // Record skip with condition
+                      this.recordSkip(checkName, 'if_condition', checkConfig.if);
+                      logger.info(`⏭  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
+                      return {
+                        checkName,
+                        error: null,
+                        result: {
+                          issues: [],
+                        },
+                        skipped: true,
+                      };
+                    }
+                  }
+
+                  // Execute with retry/routing semantics
+                  finalResult = await this.executeWithRouting(
+                    checkName,
+                    checkConfig,
+                    provider,
+                    providerConfig,
+                    prInfo,
+                    dependencyResults,
+                    sessionInfo,
+                    config,
+                    dependencyGraph,
+                    debug,
+                    results
+                  );
+
+                  // Evaluate fail_if for normal (non-forEach) execution
+                  if (config && (config.fail_if || checkConfig.fail_if)) {
+                    const failureResults = await this.evaluateFailureConditions(
+                      checkName,
+                      finalResult,
+                      config
+                    );
+                    if (failureResults.length > 0) {
+                      const failureIssues = failureResults
+                        .filter(f => f.failed)
+                        .map(f => ({
+                          file: 'system',
+                          line: 0,
+                          ruleId: f.conditionName,
+                          message: f.message || `Failure condition met: ${f.expression}`,
+                          severity: (f.severity || 'error') as
+                            | 'info'
+                            | 'warning'
+                            | 'error'
+                            | 'critical',
+                          category: 'logic' as const,
+                        }));
+                      finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
+                    }
+                  }
+
+                  // Record normal (non-forEach) execution
+                  // If this check depends on a forEach parent but we didn't take the forEach path
+                  // (e.g., due to missing flags on the parent summary), emit minimal foreach item spans
+                  // based on the parent's array output so E2E can correlate iterations.
+                  try {
+                    if (!isForEachDependent && Array.isArray(checkConfig.depends_on)) {
+                      for (const depId of checkConfig.depends_on) {
+                        const depRes = (dependencyResults.get(depId) || results.get(depId)) as
+                          | (ReviewSummary & {
+                              isForEach?: boolean;
+                              forEachItems?: unknown[];
+                              output?: unknown;
+                            })
+                          | undefined;
+                        const items =
+                          (depRes?.isForEach && Array.isArray(depRes?.forEachItems)
+                            ? depRes?.forEachItems
+                            : Array.isArray(depRes?.output)
+                              ? (depRes?.output as unknown[])
+                              : null) || null;
+                        if (items && items.length > 0) {
+                          for (let i = 0; i < items.length; i++) {
+                            emitNdjsonSpanWithEvents(
+                              'visor.foreach.item',
+                              {
+                                'visor.check.id': checkName,
+                                'visor.foreach.index': i,
+                                'visor.foreach.total': items.length,
+                              },
+                              []
+                            );
+                          }
+                          break; // only one forEach parent is primary
+                        }
+                      }
+                    }
+                  } catch {}
+
+                  // Check if this check had fatal errors
+                  const hadFatalError = (finalResult.issues || []).some(issue => {
+                    const id = issue.ruleId || '';
+                    return (
+                      id === 'command/execution_error' ||
+                      id.endsWith('/command/execution_error') ||
+                      id === 'command/timeout' ||
+                      id.endsWith('/command/timeout') ||
+                      id === 'command/transform_js_error' ||
+                      id.endsWith('/command/transform_js_error') ||
+                      id === 'command/transform_error' ||
+                      id.endsWith('/command/transform_error') ||
+                      id === 'forEach/undefined_output' ||
+                      id.endsWith('/forEach/undefined_output')
+                    );
+                  });
+                  this.recordIterationComplete(
+                    checkName,
+                    checkStartTime,
+                    !hadFatalError, // Success if no fatal errors
+                    finalResult.issues || [],
+                    (finalResult as any).output
+                  );
+
+                  if (checkConfig.forEach) {
+                    try {
+                      const finalResultWithOutput = finalResult as ExtendedReviewSummary;
+                      const outputPreview =
+                        JSON.stringify(finalResultWithOutput.output)?.slice(0, 200) || '(empty)';
+                      logger.debug(
+                        `🔧 Debug: Check "${checkName}" provider returned: ${outputPreview}`
+                      );
+                    } catch {
+                      // Ignore logging errors
+                    }
+                  }
+
+                  if (debug) {
+                    log(
+                      `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+                    );
                   }
                 }
 
-                if (debug) {
-                  log(
-                    `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
-                  );
-                }
-              }
+                // Add checkName, group, schema, template info and timestamp to issues from config
+                const enrichedIssues = (finalResult.issues || []).map(issue => ({
+                  ...issue,
+                  checkName: checkName,
+                  ruleId: `${checkName}/${issue.ruleId}`,
+                  group: checkConfig.group,
+                  schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
+                  template: checkConfig.template,
+                  timestamp: Date.now(),
+                }));
 
-              // Add checkName, group, schema, template info and timestamp to issues from config
-              const enrichedIssues = (finalResult.issues || []).map(issue => ({
-                ...issue,
-                checkName: checkName,
-                ruleId: `${checkName}/${issue.ruleId}`,
-                group: checkConfig.group,
-                schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
-                template: checkConfig.template,
-                timestamp: Date.now(),
-              }));
+                const enrichedResult = {
+                  ...finalResult,
+                  issues: enrichedIssues,
+                };
 
-              const enrichedResult = {
-                ...finalResult,
-                issues: enrichedIssues,
-              };
+                const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+                const issueCount = enrichedIssues.length;
+                const checkStats = this.executionStats.get(checkName);
+                addEvent('check.completed', {
+                  check: checkName,
+                  duration_s: Number(checkDuration),
+                });
+                try {
+                  emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                    { name: 'check.started', attrs: { check: checkName } },
+                    {
+                      name: 'check.completed',
+                      attrs: { check: checkName, duration_s: Number(checkDuration) },
+                    },
+                  ]);
+                } catch {}
 
-              const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
-              const issueCount = enrichedIssues.length;
-              const checkStats = this.executionStats.get(checkName);
-
-              addEvent('check.completed', { check: checkName, duration_s: Number(checkDuration) });
-
-              // Emit NDJSON span for check lifecycle
-              appendNdjsonSpan('visor.check', { 'visor.check.id': checkName }, [
-                { name: 'check.started', attrs: { check: checkName } },
-                { name: 'check.completed', attrs: { check: checkName } },
-              ]);
-
-              // Enhanced completion message with forEach stats
-              if (checkStats && checkStats.totalRuns > 1) {
-                if (issueCount > 0) {
+                // Enhanced completion message with forEach stats
+                if (checkStats && checkStats.totalRuns > 1) {
+                  if (issueCount > 0) {
+                    logger.success(
+                      `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs, ${issueCount} issue${issueCount === 1 ? '' : 's'}`
+                    );
+                  } else {
+                    logger.success(
+                      `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs`
+                    );
+                  }
+                } else if (
+                  checkStats &&
+                  checkStats.outputsProduced &&
+                  checkStats.outputsProduced > 0
+                ) {
                   logger.success(
-                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs, ${issueCount} issue${issueCount === 1 ? '' : 's'}`
+                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.outputsProduced} items`
+                  );
+                } else if (issueCount > 0) {
+                  logger.success(
+                    `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? '' : 's'} found`
                   );
                 } else {
-                  logger.success(
-                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs`
-                  );
+                  logger.success(`Check complete: ${checkName} (${checkDuration}s)`);
                 }
-              } else if (
-                checkStats &&
-                checkStats.outputsProduced &&
-                checkStats.outputsProduced > 0
-              ) {
-                logger.success(
-                  `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.outputsProduced} items`
+
+                return {
+                  checkName,
+                  error: null,
+                  result: enrichedResult,
+                };
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+
+                // Record error in stats
+                this.recordError(
+                  checkName,
+                  error instanceof Error ? error : new Error(String(error))
                 );
-              } else if (issueCount > 0) {
-                logger.success(
-                  `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? '' : 's'} found`
-                );
-              } else {
-                logger.success(`Check complete: ${checkName} (${checkDuration}s)`);
+                this.recordIterationComplete(checkName, checkStartTime, false, [], undefined);
+
+                logger.error(`✖ Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
+
+                if (debug) {
+                  log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
+                }
+
+                return {
+                  checkName,
+                  error: errorMessage,
+                  result: null,
+                };
               }
-
-              return {
-                checkName,
-                error: null,
-                result: enrichedResult,
-              };
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
-
-              // Record error in stats
-              this.recordError(
-                checkName,
-                error instanceof Error ? error : new Error(String(error))
-              );
-              this.recordIterationComplete(checkName, checkStartTime, false, [], undefined);
-
-              logger.error(`✖ Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
-
-              if (debug) {
-                log(`🔧 Debug: Error in check ${checkName}: ${errorMessage}`);
-              }
-
-              return {
-                checkName,
-                error: errorMessage,
-                result: null,
-              };
             }
-          }
-        );
-      });
+          )
+      );
 
       // Execute checks in this level with controlled parallelism
       const levelResults = await this.executeWithLimitedParallelism(
@@ -2581,7 +2746,7 @@ export class CheckExecutionEngine {
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
-          if ((result.value as unknown as { skipped?: boolean }).skipped) {
+          if ((result.value as any).skipped) {
             if (debug) {
               log(`🔧 Debug: Storing skip marker for skipped check "${checkName}"`);
             }
@@ -2643,6 +2808,8 @@ export class CheckExecutionEngine {
             // Store the array for iteration by dependent checks
             reviewSummaryWithOutput.forEachItems = normalizedOutput;
             reviewSummaryWithOutput.isForEach = true;
+
+            // (no pre-emit; fallback handled later if needed)
           }
 
           results.set(checkName, reviewResult);
@@ -2733,14 +2900,58 @@ export class CheckExecutionEngine {
     // Build and log final execution summary
     const executionStatistics = this.buildExecutionStatistics();
 
-    // Show detailed summary table using central logger (suppressed in JSON/SARIF by logger config)
-    this.logExecutionSummary(executionStatistics);
+    // Show detailed summary table (only if logFn outputs to console)
+    // Skip when output format is JSON/SARIF to avoid polluting structured output
+    // Check if logFn is console.log (not a no-op or console.error)
+    if (logFn === console.log) {
+      this.logExecutionSummary(executionStatistics);
+    }
 
     // Add warning if execution stopped early
     if (shouldStopExecution) {
       logger.info('');
       logger.warn(`⚠️  Execution stopped early due to fail-fast`);
     }
+
+    // Emit missing foreach.item spans for dependent checks that used forEach parents
+    try {
+      for (const checkName of results.keys()) {
+        const checkConfig = config.checks[checkName];
+        if (!Array.isArray(checkConfig?.depends_on) || checkConfig.depends_on.length === 0) {
+          continue;
+        }
+        if (emittedForEachSpans.has(checkName)) continue; // already emitted explicitly
+        for (const depId of checkConfig.depends_on) {
+          const depRes = results.get(depId) as
+            | (ReviewSummary & {
+                isForEach?: boolean;
+                forEachItems?: unknown[];
+                output?: unknown;
+              })
+            | undefined;
+          const items =
+            (depRes?.isForEach && Array.isArray(depRes?.forEachItems)
+              ? depRes?.forEachItems
+              : Array.isArray(depRes?.output)
+                ? (depRes?.output as unknown[])
+                : null) || null;
+          if (items && items.length > 0) {
+            for (let i = 0; i < items.length; i++) {
+              emitNdjsonSpanWithEvents(
+                'visor.foreach.item',
+                {
+                  'visor.check.id': checkName,
+                  'visor.foreach.index': i,
+                  'visor.foreach.total': items.length,
+                },
+                []
+              );
+            }
+            break; // primary forEach parent only
+          }
+        }
+      }
+    } catch {}
 
     // Aggregate all results
     return this.aggregateDependencyAwareResults(
@@ -2764,7 +2975,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean
   ): Promise<ReviewSummary> {
-    const log = logFn || ((m: string) => logger.debug(m));
+    const log = logFn || console.error;
     log(`🔧 Debug: Starting parallel execution of ${checks.length} checks`);
 
     if (!config?.checks) {
@@ -2794,7 +3005,7 @@ export class CheckExecutionEngine {
       }
 
       try {
-        logger.debug(
+        console.error(
           `🔧 Debug: Starting check: ${checkName} with prompt type: ${typeof checkConfig.prompt}`
         );
 
@@ -2814,7 +3025,7 @@ export class CheckExecutionEngine {
           );
 
           if (!shouldRun) {
-            logger.debug(
+            console.error(
               `🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`
             );
             return {
@@ -2842,8 +3053,20 @@ export class CheckExecutionEngine {
           },
         };
 
-        const result = await provider.execute(prInfo, providerConfig);
-        logger.debug(
+        const result = await withActiveSpan(
+          'visor.provider',
+          { 'visor.check.id': checkName, 'visor.provider.type': 'ai' },
+          async () => {
+            try {
+              emitNdjsonFallback('visor.provider', {
+                'visor.check.id': checkName,
+                'visor.provider.type': 'ai',
+              });
+            } catch {}
+            return provider.execute(prInfo, providerConfig);
+          }
+        );
+        console.error(
           `🔧 Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
         );
 
@@ -2941,7 +3164,19 @@ export class CheckExecutionEngine {
       ai_model: checkConfig.ai_model || config.ai_model,
     };
 
-    const result = await provider.execute(prInfo, providerConfig);
+    const result = await withActiveSpan(
+      'visor.provider',
+      { 'visor.check.id': checkName, 'visor.provider.type': providerConfig.type || 'ai' },
+      async () => {
+        try {
+          emitNdjsonFallback('visor.provider', {
+            'visor.check.id': checkName,
+            'visor.provider.type': providerConfig.type || 'ai',
+          });
+        } catch {}
+        return provider.execute(prInfo, providerConfig);
+      }
+    );
 
     // Prefix issues with check name and add group/schema info and timestamp from config
     const prefixedIssues = (result.issues || []).map(issue => ({
@@ -3041,7 +3276,7 @@ export class CheckExecutionEngine {
     }
 
     if (debug) {
-      logger.debug(
+      console.error(
         `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
       );
     }
@@ -3202,7 +3437,7 @@ export class CheckExecutionEngine {
     });
 
     if (debug) {
-      logger.debug(
+      console.error(
         `🔧 Debug: Aggregated ${aggregatedIssues.length} issues from ${results.length} checks`
       );
     }
@@ -3555,115 +3790,6 @@ export class CheckExecutionEngine {
 
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - global fail_if condition met: ${globalFailIf}`);
-          try {
-            const { addEvent } = await import('./telemetry/trace-helpers');
-            addEvent('fail_if.evaluated', {
-              check: checkName,
-              scope: 'global',
-              name: 'global_fail_if',
-              expression: globalFailIf,
-            });
-            addEvent('fail_if.triggered', {
-              check: checkName,
-              scope: 'global',
-              name: 'global_fail_if',
-              expression: globalFailIf,
-            });
-          } catch {}
-          try {
-            const fs = require('fs');
-            const path = require('path');
-            if (process.env.VISOR_TELEMETRY_SINK === 'file') {
-              const outDir =
-                process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-              if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-              const ts = new Date().toISOString().replace(/[:.]/g, '-');
-              const jsonPath = path.join(outDir, `${ts}.ndjson`);
-              fs.appendFileSync(
-                jsonPath,
-                JSON.stringify({
-                  events: [
-                    {
-                      name: 'fail_if.evaluated',
-                      attrs: {
-                        check: checkName,
-                        scope: 'global',
-                        name: 'global_fail_if',
-                        expression: globalFailIf,
-                      },
-                    },
-                  ],
-                }) + '\n',
-                'utf8'
-              );
-              fs.appendFileSync(
-                jsonPath,
-                JSON.stringify({
-                  events: [
-                    {
-                      name: 'fail_if.triggered',
-                      attrs: {
-                        check: checkName,
-                        scope: 'global',
-                        name: 'global_fail_if',
-                        expression: globalFailIf,
-                      },
-                    },
-                  ],
-                }) + '\n',
-                'utf8'
-              );
-            }
-          } catch {}
-          try {
-            const { addFailIfTriggered } = await import('./telemetry/metrics');
-            addFailIfTriggered(checkName, 'global');
-          } catch {}
-          try {
-            const fs = require('fs');
-            const path = require('path');
-            if (process.env.VISOR_TELEMETRY_SINK === 'file') {
-              const outDir =
-                process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-              if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-              const ts = new Date().toISOString().replace(/[:.]/g, '-');
-              const jsonPath = path.join(outDir, `${ts}.ndjson`);
-              fs.appendFileSync(
-                jsonPath,
-                JSON.stringify({
-                  events: [
-                    {
-                      name: 'fail_if.evaluated',
-                      attrs: {
-                        check: checkName,
-                        scope: 'check',
-                        name: `${checkName}_fail_if`,
-                        expression: checkFailIf,
-                      },
-                    },
-                  ],
-                }) + '\n',
-                'utf8'
-              );
-              fs.appendFileSync(
-                jsonPath,
-                JSON.stringify({
-                  events: [
-                    {
-                      name: 'fail_if.triggered',
-                      attrs: {
-                        check: checkName,
-                        scope: 'check',
-                        name: `${checkName}_fail_if`,
-                        expression: checkFailIf,
-                      },
-                    },
-                  ],
-                }) + '\n',
-                'utf8'
-              );
-            }
-          } catch {}
           results.push({
             conditionName: 'global_fail_if',
             expression: globalFailIf,
@@ -3689,62 +3815,6 @@ export class CheckExecutionEngine {
 
         if (failed) {
           logger.warn(`⚠️  Check "${checkName}" - fail_if condition met: ${checkFailIf}`);
-          try {
-            const { addEvent } = await import('./telemetry/trace-helpers');
-            addEvent('fail_if.evaluated', {
-              check: checkName,
-              scope: 'check',
-              name: `${checkName}_fail_if`,
-              expression: checkFailIf,
-            });
-            addEvent('fail_if.triggered', {
-              check: checkName,
-              scope: 'check',
-              name: `${checkName}_fail_if`,
-              expression: checkFailIf,
-            });
-          } catch {}
-          try {
-            const { addFailIfTriggered } = await import('./telemetry/metrics');
-            addFailIfTriggered(checkName, 'check');
-          } catch {}
-          try {
-            const fs = require('fs');
-            const path = require('path');
-            if (process.env.VISOR_TELEMETRY_SINK === 'file') {
-              const outDir =
-                process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-              if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-              const ts = new Date().toISOString().replace(/[:.]/g, '-');
-              const jsonPath = path.join(outDir, `${ts}.ndjson`);
-              fs.appendFileSync(
-                jsonPath,
-                JSON.stringify({
-                  events: [
-                    {
-                      name: 'fail_if.evaluated',
-                      attrs: {
-                        check: checkName,
-                        scope: 'check',
-                        name: `${checkName}_fail_if`,
-                        expression: checkFailIf,
-                      },
-                    },
-                    {
-                      name: 'fail_if.triggered',
-                      attrs: {
-                        check: checkName,
-                        scope: 'check',
-                        name: `${checkName}_fail_if`,
-                        expression: checkFailIf,
-                      },
-                    },
-                  ],
-                }) + '\n',
-                'utf8'
-              );
-            }
-          } catch {}
           results.push({
             conditionName: `${checkName}_fail_if`,
             expression: checkFailIf,
@@ -3894,9 +3964,9 @@ export class CheckExecutionEngine {
             summary: `AI-powered analysis is in progress for ${checkName} check.`,
           }
         );
-        logger.info(`🔄 Updated ${checkName} check to in-progress status`);
+        console.log(`🔄 Updated ${checkName} check to in-progress status`);
       } catch (error) {
-        logger.error(`❌ Failed to update ${checkName} check to in-progress: ${error}`);
+        console.error(`❌ Failed to update ${checkName} check to in-progress: ${error}`);
       }
     }
   }
@@ -3933,7 +4003,7 @@ export class CheckExecutionEngine {
       }
     }
 
-    logger.info(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
+    console.log(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
 
     for (const [checkName, checkRun] of this.checkRunMap) {
       try {
@@ -3959,9 +4029,9 @@ export class CheckExecutionEngine {
           options.githubChecks.headSha // currentCommitSha
         );
 
-        logger.info(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
+        console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
       } catch (error) {
-        logger.error(`❌ Failed to complete ${checkName} check: ${error}`);
+        console.error(`❌ Failed to complete ${checkName} check: ${error}`);
 
         // Try to mark the check as failed due to execution error
         try {
@@ -3975,7 +4045,7 @@ export class CheckExecutionEngine {
             error instanceof Error ? error.message : 'Unknown error occurred'
           );
         } catch (finalError) {
-          logger.error(`❌ Failed to mark ${checkName} check as failed: ${finalError}`);
+          console.error(`❌ Failed to mark ${checkName} check as failed: ${finalError}`);
         }
       }
     }
@@ -3989,7 +4059,7 @@ export class CheckExecutionEngine {
       return;
     }
 
-    logger.info(`❌ Completing ${this.checkRunMap.size} GitHub check runs with error...`);
+    console.log(`❌ Completing ${this.checkRunMap.size} GitHub check runs with error...`);
 
     for (const [checkName, checkRun] of this.checkRunMap) {
       try {
@@ -4002,9 +4072,9 @@ export class CheckExecutionEngine {
           [],
           errorMessage
         );
-        logger.info(`❌ Completed ${checkName} check with error: ${errorMessage}`);
+        console.log(`❌ Completed ${checkName} check with error: ${errorMessage}`);
       } catch (error) {
-        logger.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
+        console.error(`❌ Failed to complete ${checkName} check with error: ${error}`);
       }
     }
   }

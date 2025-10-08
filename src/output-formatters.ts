@@ -46,6 +46,20 @@ export interface OutputFormatterOptions {
 }
 
 export class OutputFormatters {
+  // Hard safety limits to prevent pathological table rendering hangs
+  // Can be tuned via env vars if needed
+  private static readonly MAX_CELL_CHARS: number = parseInt(
+    process.env.VISOR_MAX_TABLE_CELL || '4000',
+    10
+  );
+  private static readonly MAX_CODE_LINES: number = parseInt(
+    process.env.VISOR_MAX_TABLE_CODE_LINES || '120',
+    10
+  );
+  private static readonly WRAP_WIDTH_MESSAGE = 55;
+  private static readonly WRAP_WIDTH_MESSAGE_NARROW = 45;
+  private static readonly WRAP_WIDTH_CODE = 58; // fits into Message col width ~60
+
   /**
    * Format analysis results as a table using cli-table3
    */
@@ -92,7 +106,7 @@ export class OutputFormatters {
       // Always show execution time and checks executed
       summaryTable.push(
         ['Execution Time', `${result.executionTime}ms`],
-        ['Checks Executed', result.checksExecuted.join(', ')]
+        ['Checks Executed', this.truncateCell(result.checksExecuted.join(', '))]
       );
 
       output += 'Analysis Summary\n';
@@ -112,7 +126,8 @@ export class OutputFormatters {
           const categoryTable = new CliTable3({
             head: ['File', 'Line', 'Severity', 'Message'],
             colWidths: [25, 8, 15, 60],
-            wordWrap: true,
+            // We pre-wrap and truncate ourselves to avoid expensive wrap-ansi work
+            wordWrap: false,
             style: {
               head: ['cyan', 'bold'],
               border: ['grey'],
@@ -127,28 +142,30 @@ export class OutputFormatters {
               i => i.file === comment.file && i.line === comment.line
             );
 
-            let messageContent = this.wrapText(comment.message, 55);
+            // Pre-wrap and truncate content to keep cli-table3 fast and responsive
+            let messageContent = this.safeWrapAndTruncate(
+              comment.message,
+              OutputFormatters.WRAP_WIDTH_MESSAGE
+            );
 
             // Add suggestion if available
             if (issue?.suggestion) {
-              messageContent += '\nSuggestion: ' + this.wrapText(issue.suggestion, 53);
+              messageContent +=
+                '\nSuggestion: ' +
+                this.safeWrapAndTruncate(issue.suggestion, OutputFormatters.WRAP_WIDTH_MESSAGE - 2);
             }
 
             // Add replacement code if available
             if (issue?.replacement) {
-              messageContent +=
-                '\nCode fix:\n' +
-                issue.replacement
-                  .split('\n')
-                  .map(line => '  ' + line)
-                  .join('\n');
+              const code = this.formatCodeBlock(issue.replacement);
+              messageContent += '\nCode fix:\n' + code;
             }
 
             categoryTable.push([
               comment.file,
               comment.line.toString(),
               { content: this.formatSeverity(comment.severity), hAlign: 'center' },
-              messageContent,
+              this.truncateCell(messageContent),
             ]);
           }
 
@@ -164,7 +181,7 @@ export class OutputFormatters {
         const issuesTable = new CliTable3({
           head: ['File', 'Line', 'Category', 'Severity', 'Message'],
           colWidths: [20, 6, 12, 15, 50],
-          wordWrap: true,
+          wordWrap: false,
           style: {
             head: ['cyan', 'bold'],
             border: ['grey'],
@@ -174,21 +191,25 @@ export class OutputFormatters {
         output += 'All Issues\n';
 
         for (const issue of issues.slice(0, showDetails ? undefined : 10)) {
-          let messageContent = this.wrapText(issue.message, 45);
+          let messageContent = this.safeWrapAndTruncate(
+            issue.message,
+            OutputFormatters.WRAP_WIDTH_MESSAGE_NARROW
+          );
 
           // Add suggestion if available
           if (issue.suggestion) {
-            messageContent += '\nSuggestion: ' + this.wrapText(issue.suggestion, 43);
+            messageContent +=
+              '\nSuggestion: ' +
+              this.safeWrapAndTruncate(
+                issue.suggestion,
+                OutputFormatters.WRAP_WIDTH_MESSAGE_NARROW - 2
+              );
           }
 
           // Add replacement code if available
           if (issue.replacement) {
-            messageContent +=
-              '\nCode fix:\n' +
-              issue.replacement
-                .split('\n')
-                .map(line => '  ' + line)
-                .join('\n');
+            const code = this.formatCodeBlock(issue.replacement);
+            messageContent += '\nCode fix:\n' + code;
           }
 
           issuesTable.push([
@@ -196,7 +217,7 @@ export class OutputFormatters {
             issue.line.toString(),
             issue.category,
             this.formatSeverity(issue.severity),
-            messageContent,
+            this.truncateCell(messageContent),
           ]);
         }
 
@@ -740,11 +761,48 @@ export class OutputFormatters {
         currentLine += (currentLine ? ' ' : '') + word;
       } else {
         if (currentLine) lines.push(currentLine);
-        currentLine = word;
+        // Break overly-long words to avoid pathological wrapping in cli-table3
+        if (word.length > width) {
+          const chunks = word.match(new RegExp(`.{1,${width}}`, 'g')) || [word];
+          // First chunk becomes current line, the rest are full lines
+          currentLine = chunks.shift() || '';
+          for (const chunk of chunks) lines.push(chunk);
+        } else {
+          currentLine = word;
+        }
       }
     }
     if (currentLine) lines.push(currentLine);
 
     return lines.join('\n');
+  }
+
+  // Truncate any cell content defensively
+  private static truncateCell(text: string): string {
+    if (text.length <= OutputFormatters.MAX_CELL_CHARS) return text;
+    return text.substring(0, OutputFormatters.MAX_CELL_CHARS - 12) + '\n… [truncated]\n';
+  }
+
+  // Safer wrapper that first wraps, then truncates
+  private static safeWrapAndTruncate(text: string, width: number): string {
+    return this.truncateCell(this.wrapText(text, width));
+  }
+
+  // Format code blocks with line and width limits to keep rendering fast
+  private static formatCodeBlock(code: string): string {
+    const lines = code.split('\n');
+    const limited = lines.slice(0, OutputFormatters.MAX_CODE_LINES).map(line => {
+      // Soft-wrap code lines to avoid cli-table heavy wrapping
+      const chunks = line.match(new RegExp(`.{1,${OutputFormatters.WRAP_WIDTH_CODE}}`, 'g')) || [
+        '',
+      ];
+      return chunks.map(c => '  ' + c).join('\n');
+    });
+    let out = limited.join('\n');
+    // Indicate truncation of extra lines
+    if (lines.length > OutputFormatters.MAX_CODE_LINES) {
+      out += `\n  … [${lines.length - OutputFormatters.MAX_CODE_LINES} more lines truncated]`;
+    }
+    return this.truncateCell(out);
   }
 }

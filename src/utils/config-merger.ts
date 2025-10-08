@@ -1,5 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { VisorConfig, CheckConfig } from '../types/config';
-import { logger } from '../logger';
 
 /**
  * Utility class for merging Visor configurations with proper override semantics
@@ -65,13 +65,12 @@ export class ConfigMerger {
     }
     if (obj instanceof Object) {
       const copy = {} as Record<string, unknown>;
-      const anyObj = obj as Record<string, unknown>;
-      for (const key in anyObj) {
-        if (Object.prototype.hasOwnProperty.call(anyObj, key)) {
-          copy[key] = this.deepCopy(anyObj[key]);
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          copy[key] = this.deepCopy((obj as any)[key]);
         }
       }
-      return copy as unknown as T;
+      return copy as T;
     }
     return obj;
   }
@@ -79,8 +78,8 @@ export class ConfigMerger {
   /**
    * Merge two objects (child overrides parent)
    */
-  private mergeObjects<T extends Record<string, unknown>>(parent: T, child: T): T {
-    const result: Record<string, unknown> = { ...parent };
+  private mergeObjects<T extends Record<string, any>>(parent: T, child: T): T {
+    const result: any = { ...parent };
 
     for (const key in child) {
       if (Object.prototype.hasOwnProperty.call(child, key)) {
@@ -100,8 +99,8 @@ export class ConfigMerger {
         ) {
           // Deep merge objects
           result[key] = this.mergeObjects(
-            parentValue as Record<string, unknown>,
-            childValue as Record<string, unknown>
+            parentValue as Record<string, any>,
+            childValue as Record<string, any>
           );
         } else {
           // Child overrides parent (including arrays)
@@ -110,7 +109,7 @@ export class ConfigMerger {
       }
     }
 
-    return result as T;
+    return result;
   }
 
   /**
@@ -123,14 +122,14 @@ export class ConfigMerger {
     if (!child) return parent;
     if (!parent) return child;
 
-    const result = this.deepCopy(parent) as NonNullable<VisorConfig['output']>;
+    const result: any = this.deepCopy(parent);
 
     // Merge pr_comment
     if (child.pr_comment) {
       result.pr_comment = this.mergeObjects(
-        (parent.pr_comment || {}) as unknown as Record<string, unknown>,
-        child.pr_comment as unknown as Record<string, unknown>
-      ) as unknown as NonNullable<VisorConfig['output']>['pr_comment'];
+        (parent.pr_comment || {}) as Record<string, any>,
+        child.pr_comment as Record<string, any>
+      ) as any;
     }
 
     // Merge file_comment
@@ -139,9 +138,9 @@ export class ConfigMerger {
         delete result.file_comment;
       } else {
         result.file_comment = this.mergeObjects(
-          (parent.file_comment || {}) as unknown as Record<string, unknown>,
-          child.file_comment as unknown as Record<string, unknown>
-        ) as unknown as NonNullable<VisorConfig['output']>['file_comment'];
+          (parent.file_comment || {}) as Record<string, any>,
+          child.file_comment as Record<string, any>
+        ) as any;
       }
     }
 
@@ -151,9 +150,9 @@ export class ConfigMerger {
         delete result.github_checks;
       } else {
         result.github_checks = this.mergeObjects(
-          (parent.github_checks || {}) as unknown as Record<string, unknown>,
-          child.github_checks as unknown as Record<string, unknown>
-        ) as unknown as NonNullable<VisorConfig['output']>['github_checks'];
+          (parent.github_checks || {}) as Record<string, any>,
+          child.github_checks as Record<string, any>
+        ) as any;
       }
     }
 
@@ -285,21 +284,21 @@ export class ConfigMerger {
     // Deep merge objects
     if (child.env) {
       result.env = this.mergeObjects(
-        (parent.env || {}) as Record<string, unknown>,
-        child.env as Record<string, unknown>
-      ) as unknown as NonNullable<CheckConfig['env']>;
+        (parent.env || {}) as Record<string, any>,
+        child.env as Record<string, any>
+      );
     }
     if (child.ai) {
       result.ai = this.mergeObjects(
-        (parent.ai || {}) as Record<string, unknown>,
-        child.ai as Record<string, unknown>
-      ) as unknown as NonNullable<CheckConfig['ai']>;
+        (parent.ai || {}) as Record<string, any>,
+        child.ai as Record<string, any>
+      );
     }
     if (child.template) {
       result.template = this.mergeObjects(
-        (parent.template || {}) as Record<string, unknown>,
-        child.template as Record<string, unknown>
-      ) as unknown as NonNullable<CheckConfig['template']>;
+        (parent.template || {}) as Record<string, any>,
+        child.template as Record<string, any>
+      );
     }
 
     return result;
@@ -325,7 +324,7 @@ export class ConfigMerger {
       if (!this.isCheckDisabled(checkConfig)) {
         enabledChecks[checkName] = checkConfig;
       } else {
-        logger.info(`Check '${checkName}' is disabled (empty 'on' array)`);
+        console.log(`ℹ️  Check '${checkName}' is disabled (empty 'on' array)`);
       }
     }
 

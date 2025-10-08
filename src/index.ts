@@ -11,7 +11,6 @@ import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
-import { logger } from './logger';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -24,7 +23,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
   // Prefer GitHub App authentication if app credentials are provided
   if (appId && privateKey) {
-    logger.info('🔐 Using GitHub App authentication');
+    console.log('🔐 Using GitHub App authentication');
 
     try {
       // Note: createAppAuth is used in the Octokit constructor below
@@ -60,9 +59,9 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
               repo,
             });
             finalInstallationId = installation.id;
-            logger.info(`✅ Auto-detected installation ID: ${finalInstallationId}`);
+            console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
           } catch {
-            logger.warn(
+            console.warn(
               '⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.'
             );
             throw new Error(
@@ -84,7 +83,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
       return { octokit, authType: 'github-app' };
     } catch (error) {
-      logger.error(
+      console.error(
         '❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.'
       );
       throw new Error(`GitHub App authentication failed`, { cause: error });
@@ -93,7 +92,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
   // Fall back to token authentication
   if (token) {
-    logger.info('🔑 Using GitHub token authentication');
+    console.log('🔑 Using GitHub token authentication');
     return {
       octokit: new Octokit({ auth: token }),
       authType: 'token',
@@ -106,7 +105,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 export async function run(): Promise<void> {
   try {
     const { octokit, authType } = await createAuthenticatedOctokit();
-    logger.info(`✅ Authenticated successfully using ${authType}`);
+    console.log(`✅ Authenticated successfully using ${authType}`);
 
     // Collect all GitHub Action inputs
     const inputs: GitHubActionInputs = {
@@ -149,9 +148,7 @@ export async function run(): Promise<void> {
         const eventContent = fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8');
         eventData = JSON.parse(eventContent);
       } catch (error) {
-        logger.error(
-          `Failed to load GitHub event data: ${error instanceof Error ? error.message : String(error)}`
-        );
+        console.error('Failed to load GitHub event data:', error);
       }
     }
 
@@ -169,15 +166,15 @@ export async function run(): Promise<void> {
     };
 
     // Debug logging for inputs
-    logger.debug('Debug: inputs.debug = ' + String(inputs.debug));
-    logger.debug('Debug: inputs.checks = ' + String(inputs.checks));
-    logger.debug('Debug: inputs.config-path = ' + String(inputs['config-path']));
-    logger.debug('Debug: inputs.visor-checks = ' + String(inputs['visor-checks']));
-    logger.debug('Debug: inputs.visor-config-path = ' + String(inputs['visor-config-path']));
+    console.log('Debug: inputs.debug =', inputs.debug);
+    console.log('Debug: inputs.checks =', inputs.checks);
+    console.log('Debug: inputs.config-path =', inputs['config-path']);
+    console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
+    console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
 
     // Always use config-driven mode in GitHub Actions
     // The CLI mode is only for local development, not for GitHub Actions
-    logger.info('🤖 Using config-driven mode');
+    console.log('🤖 Using config-driven mode');
     // Version banner for Action runs (mirrors CLI banner but via console)
     try {
       const visorVersion =
@@ -188,7 +185,7 @@ export async function run(): Promise<void> {
           probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
         } catch {}
       }
-      logger.info(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
+      console.log(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
     } catch {}
 
     // Load config to determine which checks should run for this event
@@ -202,25 +199,24 @@ export async function run(): Promise<void> {
       if (configPath) {
         // Load specified config
         config = await configManager.loadConfig(configPath);
-        logger.info(`📋 Loaded config from: ${configPath}`);
+        console.log(`📋 Loaded config from: ${configPath}`);
       } else {
         // Try to find config in project
         config = await configManager.findAndLoadConfig();
-        logger.info('📋 Loaded Visor config from project');
+        console.log('📋 Loaded Visor config from project');
       }
     } catch (configError) {
       // Log the error for debugging
-      logger.warn(
-        `⚠️ Error loading config: ${
-          configError instanceof Error ? configError.message : String(configError)
-        }`
+      console.warn(
+        '⚠️ Error loading config:',
+        configError instanceof Error ? configError.message : String(configError)
       );
 
       // Fall back to bundled default config
       const bundledConfig = configManager.loadBundledDefaultConfig();
       if (bundledConfig) {
         config = bundledConfig;
-        logger.info('📋 Using bundled default configuration (fallback due to error)');
+        console.log('📋 Using bundled default configuration (fallback due to error)');
       } else {
         // Ultimate fallback if even defaults/.visor.yaml can't be loaded
         config = {
@@ -234,7 +230,7 @@ export async function run(): Promise<void> {
             },
           },
         };
-        logger.warn('⚠️ Could not load defaults/.visor.yaml, using minimal configuration');
+        console.log('⚠️ Could not load defaults/.visor.yaml, using minimal configuration');
       }
     }
 
@@ -275,7 +271,7 @@ export async function run(): Promise<void> {
     const { SessionRegistry } = await import('./session-registry');
     const sessionRegistry = SessionRegistry.getInstance();
     if (sessionRegistry.getActiveSessionIds().length > 0) {
-      logger.debug(
+      console.log(
         `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
       );
       sessionRegistry.clearAllSessions();
@@ -321,14 +317,14 @@ async function handleEvent(
     throw new Error('Owner and repo are required');
   }
 
-  logger.info(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
+  console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
 
   // Debug: Log the checks that are available in the loaded config
   const allChecks = Object.keys(config.checks || {});
-  logger.info(`📚 Total checks in loaded config: ${allChecks.length}`);
+  console.log(`📚 Total checks in loaded config: ${allChecks.length}`);
   if (allChecks.length <= 10) {
     // Only log check names if there aren't too many
-    logger.debug(`📚 Available checks: ${allChecks.join(', ')}`);
+    console.log(`📚 Available checks: ${allChecks.join(', ')}`);
   }
 
   // Map GitHub event to our event trigger format
@@ -355,7 +351,7 @@ async function handleEvent(
     if (requestedChecks.includes('all')) {
       // If 'all' is specified, run all event checks
       checksToRun = eventChecks;
-      logger.info('📋 Running all available checks for this event');
+      console.log('📋 Running all available checks for this event');
     } else {
       // Filter to only the requested checks that are also configured for this event
       // Map simplified check names to actual config check names if needed
@@ -377,7 +373,7 @@ async function handleEvent(
           }
         }
       }
-      logger.info(`📋 Running requested checks: ${requestedChecks.join(', ')}`);
+      console.log(`📋 Running requested checks: ${requestedChecks.join(', ')}`);
     }
   } else {
     // No checks input provided, run all event checks
@@ -385,11 +381,11 @@ async function handleEvent(
   }
 
   if (checksToRun.length === 0) {
-    logger.info(`ℹ️ No checks configured to run for event: ${eventType}`);
+    console.log(`ℹ️ No checks configured to run for event: ${eventType}`);
     return;
   }
 
-  logger.info(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
+  console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
 
   // Handle different GitHub events
   switch (eventName) {
@@ -406,11 +402,11 @@ async function handleEvent(
       break;
     case 'push':
       // Could handle push events that are associated with PRs
-      logger.info('Push event detected - checking for associated PR');
+      console.log('Push event detected - checking for associated PR');
       break;
     default:
       // Fallback to repo info for unknown events
-      logger.info(`Unknown event: ${eventName}`);
+      console.log(`Unknown event: ${eventName}`);
       await handleRepoInfo(octokit, owner, repo);
       break;
   }
@@ -433,7 +429,7 @@ function resolveDependencies(
     }
 
     if (visiting.has(checkId)) {
-      logger.warn(`Circular dependency detected involving check: ${checkId}`);
+      console.warn(`Circular dependency detected involving check: ${checkId}`);
       continue;
     }
 
@@ -477,17 +473,17 @@ async function handleIssueEvent(
   const action = context.event?.action as string | undefined;
 
   if (!issue) {
-    logger.info('No issue found in context');
+    console.log('No issue found in context');
     return;
   }
 
   // Skip if this is a pull request (has pull_request property)
   if (issue.pull_request) {
-    logger.info('Skipping PR-related issue event');
+    console.log('Skipping PR-related issue event');
     return;
   }
 
-  logger.info(
+  console.log(
     `Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`
   );
 
@@ -512,13 +508,13 @@ async function handleIssueEvent(
 
   // Fetch comment history for issues
   try {
-    logger.info(`💬 Fetching comment history for issue #${issue.number}`);
+    console.log(`💬 Fetching comment history for issue #${issue.number}`);
     const analyzer = new PRAnalyzer(octokit);
     const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
     prInfo.comments = comments;
-    logger.info(`✅ Retrieved ${comments.length} comments for issue`);
+    console.log(`✅ Retrieved ${comments.length} comments for issue`);
   } catch (error) {
-    logger.warn(
+    console.warn(
       `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
     prInfo.comments = [];
@@ -563,18 +559,16 @@ async function handleIssueEvent(
         body: commentBody,
       });
 
-      logger.info(`✅ Posted issue assistant results to issue #${issue.number}`);
+      console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
     } else {
-      logger.info('No results from issue assistant checks');
+      console.log('No results from issue assistant checks');
     }
 
     // Set outputs for GitHub Actions
     setOutput('review-completed', 'true');
     setOutput('checks-executed', checksToRun.length.toString());
   } catch (error) {
-    logger.error(
-      `Error running issue assistant checks: ${error instanceof Error ? error.message : String(error)}`
-    );
+    console.error('Error running issue assistant checks:', error);
     setOutput('review-completed', 'false');
     setOutput('error', error instanceof Error ? error.message : 'Unknown error');
     throw error;
@@ -594,7 +588,7 @@ async function handleIssueComment(
   const issue = context.event?.issue as any;
 
   if (!comment || !issue) {
-    logger.info('No comment or issue found in context');
+    console.log('No comment or issue found in context');
     return;
   }
 
@@ -612,7 +606,7 @@ async function handleIssueComment(
       comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
 
   if (isVisorBot || hasVisorMarkers) {
-    logger.info(
+    console.log(
       `Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
     );
     return;
@@ -634,7 +628,7 @@ async function handleIssueComment(
     try {
       config = await configManager.findAndLoadConfig();
     } catch {
-      logger.warn('Could not load config, using defaults');
+      console.log('Could not load config, using defaults');
       config = undefined;
     }
   }
@@ -665,11 +659,11 @@ async function handleIssueComment(
   const availableCommands = Object.keys(commandRegistry);
   const command = parseComment(comment.body, availableCommands);
   if (!command) {
-    logger.info('No valid command found in comment');
+    console.log('No valid command found in comment');
     // For issue comments (not PRs), run event-driven checks instead of command-based logic
     // This allows checks with `on: [issue_comment]` to execute based on their `if` conditions
     if (!isPullRequest && _actionChecksToRun && _actionChecksToRun.length > 0 && config) {
-      logger.info(
+      console.log(
         '📋 No command found, but this is an issue comment - running event-driven checks'
       );
       // Run the checks that were determined by the main run() function
@@ -679,7 +673,7 @@ async function handleIssueComment(
     return;
   }
 
-  logger.info(`Processing command: ${command.type}`);
+  console.log(`Processing command: ${command.type}`);
 
   const prNumber = issue.number;
   const analyzer = new PRAnalyzer(octokit);
@@ -747,7 +741,7 @@ async function handleIssueComment(
         const initialCheckIds = commandRegistry[command.type];
         // Resolve all dependencies recursively
         const checkIds = resolveDependencies(initialCheckIds, config);
-        logger.info(
+        console.log(
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
         );
 
@@ -757,10 +751,10 @@ async function handleIssueComment(
           // It's a PR comment - fetch the PR diff
           prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
           // Add event context for templates and XML generation
-          (prInfo as unknown as Record<string, unknown>).eventContext = context.event;
+          (prInfo as any).eventContext = context.event;
           // PR context always includes code diffs
-          (prInfo as unknown as Record<string, unknown>).includeCodeContext = true;
-          (prInfo as unknown as Record<string, unknown>).isPRContext = true;
+          (prInfo as any).includeCodeContext = true;
+          (prInfo as any).isPRContext = true;
         } else {
           // It's an issue comment - create a minimal PRInfo structure for issue assistant
           prInfo = {
@@ -781,15 +775,15 @@ async function handleIssueComment(
 
           // Fetch comment history for the issue
           try {
-            logger.info(`💬 Fetching comment history for issue #${issue.number}`);
+            console.log(`💬 Fetching comment history for issue #${issue.number}`);
             const comments = await analyzer.fetchPRComments(owner, repo, issue.number);
-            (prInfo as unknown as Record<string, unknown>).comments = comments;
-            logger.info(`✅ Retrieved ${comments.length} comments for issue`);
+            (prInfo as any).comments = comments;
+            console.log(`✅ Retrieved ${comments.length} comments for issue`);
           } catch (error) {
-            logger.warn(
+            console.warn(
               `⚠️ Could not fetch issue comments: ${error instanceof Error ? error.message : 'Unknown error'}`
             );
-            (prInfo as unknown as Record<string, unknown>).comments = [];
+            (prInfo as any).comments = [];
           }
         }
 
@@ -833,7 +827,7 @@ async function handleIssueComment(
         });
 
         if (filteredCheckIds.length === 0) {
-          logger.info(`No checks configured to run for ${isPullRequest ? 'PR' : 'issue'} comments`);
+          console.log(`No checks configured to run for ${isPullRequest ? 'PR' : 'issue'} comments`);
           await octokit.rest.issues.createComment({
             owner,
             repo,
@@ -859,7 +853,7 @@ async function handleIssueComment(
             format,
           });
         } else {
-          logger.info('📝 Skipping comment (comment-on-pr is disabled)');
+          console.log('📝 Skipping comment (comment-on-pr is disabled)');
         }
 
         // Calculate total check results from grouped results
@@ -883,11 +877,11 @@ async function handlePullRequestWithConfig(
   const action = context.event?.action as string | undefined;
 
   if (!pullRequest) {
-    logger.info('No pull request found in context');
+    console.log('No pull request found in context');
     return;
   }
 
-  logger.info(`Reviewing PR #${pullRequest.number} with checks: ${checksToRun.join(', ')}`);
+  console.log(`Reviewing PR #${pullRequest.number} with checks: ${checksToRun.join(', ')}`);
 
   const prNumber = pullRequest.number;
   const analyzer = new PRAnalyzer(octokit);
@@ -901,7 +895,7 @@ async function handlePullRequestWithConfig(
 
   // Fetch PR diff (handle test scenarios gracefully)
   // In PR context, ALWAYS include full diffs for proper code review
-  logger.info('📝 Code context: ENABLED (PR context - always included)');
+  console.log('📝 Code context: ENABLED (PR context - always included)');
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
@@ -913,7 +907,7 @@ async function handlePullRequestWithConfig(
   } catch (error) {
     // Handle test scenarios with mock repos
     if (inputs['ai-provider'] === 'mock' || inputs['ai-model'] === 'mock') {
-      logger.info(`📋 Running in test mode with mock provider - using empty PR data`);
+      console.log(`📋 Running in test mode with mock provider - using empty PR data`);
       setOutput('review-completed', 'true');
       setOutput('issues-found', '0');
       setOutput('checks-executed', '0');
@@ -923,7 +917,7 @@ async function handlePullRequestWithConfig(
   }
 
   if (prInfo.files.length === 0) {
-    logger.info('⚠️ No files changed in this PR - skipping review');
+    console.log('⚠️ No files changed in this PR - skipping review');
     setOutput('review-completed', 'true');
     setOutput('issues-found', '0');
     return;
@@ -933,13 +927,13 @@ async function handlePullRequestWithConfig(
   const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
 
   if (checksToExecute.length === 0) {
-    logger.info('⚠️ No checks meet execution conditions');
+    console.log('⚠️ No checks meet execution conditions');
     setOutput('review-completed', 'true');
     setOutput('issues-found', '0');
     return;
   }
 
-  logger.info(`📋 Executing checks: ${checksToExecute.join(', ')}`);
+  console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
 
   // Create review options
   const reviewOptions = {
@@ -991,7 +985,7 @@ async function handlePullRequestWithConfig(
       commitSha: pullRequest.head?.sha,
     });
   } else {
-    logger.info('📝 Skipping PR comment (comment-on-pr is disabled)');
+    console.log('📝 Skipping PR comment (comment-on-pr is disabled)');
   }
 
   // Set outputs
@@ -1011,12 +1005,12 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
     setOutput('repo-description', repoData.description || '');
     setOutput('repo-stars', repoData.stargazers_count.toString());
 
-    logger.info(`Repository: ${repoData.full_name}`);
-    logger.info(`Description: ${repoData.description || 'No description'}`);
-    logger.info(`Stars: ${repoData.stargazers_count}`);
+    console.log(`Repository: ${repoData.full_name}`);
+    console.log(`Description: ${repoData.description || 'No description'}`);
+    console.log(`Stars: ${repoData.stargazers_count}`);
   } catch {
     // Handle test scenarios or missing repos gracefully
-    logger.info(`📋 Running in test mode or repository not accessible: ${owner}/${repo}`);
+    console.log(`📋 Running in test mode or repository not accessible: ${owner}/${repo}`);
     setOutput('repo-name', repo);
     setOutput('repo-description', 'Test repository');
     setOutput('repo-stars', '0');
@@ -1066,14 +1060,10 @@ async function filterChecksToExecute(
         if (shouldRun) {
           filteredChecks.push(checkName);
         } else {
-          logger.debug(`⚠️ Skipping check '${checkName}' - if condition not met`);
+          console.log(`⚠️ Skipping check '${checkName}' - if condition not met`);
         }
       } catch (error) {
-        logger.warn(
-          `Warning: Could not evaluate if condition for ${checkName}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        console.warn(`Warning: Could not evaluate if condition for ${checkName}:`, error);
         // Include the check if we can't evaluate the condition
         filteredChecks.push(checkName);
       }
@@ -1111,7 +1101,7 @@ async function createGitHubChecks(
 
   if (!createCheckInput || !createCheckConfig) {
     const reason = !createCheckInput ? 'create-check input' : 'configuration';
-    logger.info(`🔧 GitHub check runs disabled via ${reason}`);
+    console.log(`🔧 GitHub check runs disabled via ${reason}`);
     return {
       checkRunMap: null,
       checksApiAvailable: true,
@@ -1132,7 +1122,7 @@ async function createGitHubChecks(
     const namePrefix = config?.output?.github_checks?.name_prefix || 'Visor';
 
     if (perCheckMode) {
-      logger.info(`🔍 Creating individual GitHub check runs for ${checksToRun.length} checks...`);
+      console.log(`🔍 Creating individual GitHub check runs for ${checksToRun.length} checks...`);
 
       // Create individual check runs for each configured check
       for (const checkName of checksToRun) {
@@ -1152,19 +1142,15 @@ async function createGitHubChecks(
 
           checkRunMap.set(checkName, checkRun);
           checkRunUrls.push(checkRun.url);
-          logger.info(`✅ Created check run for ${checkName}: ${checkRun.url}`);
+          console.log(`✅ Created check run for ${checkName}: ${checkRun.url}`);
         } catch (error) {
-          logger.error(
-            `❌ Failed to create check run for ${checkName}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
+          console.error(`❌ Failed to create check run for ${checkName}:`, error);
           // Continue with other checks even if one fails
         }
       }
     } else {
       // Create a single check run for all checks
-      logger.info(`🔍 Creating single GitHub check run for ${checksToRun.length} checks...`);
+      console.log(`🔍 Creating single GitHub check run for ${checksToRun.length} checks...`);
 
       try {
         const checkRunOptions: CheckRunOptions = {
@@ -1183,13 +1169,9 @@ async function createGitHubChecks(
         // Use 'combined' as the key for all checks
         checkRunMap.set('combined', checkRun);
         checkRunUrls.push(checkRun.url);
-        logger.info(`✅ Created combined check run: ${checkRun.url}`);
+        console.log(`✅ Created combined check run: ${checkRun.url}`);
       } catch (error) {
-        logger.error(
-          `❌ Failed to create combined check run: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        console.error(`❌ Failed to create combined check run:`, error);
       }
     }
 
@@ -1205,10 +1187,10 @@ async function createGitHubChecks(
       error instanceof Error &&
       (error.message.includes('403') || error.message.includes('checks:write'))
     ) {
-      logger.warn(
+      console.warn(
         '⚠️ GitHub checks API not available - insufficient permissions. Check runs will be skipped.'
       );
-      logger.warn(
+      console.warn(
         '💡 To enable check runs, ensure your GitHub token has "checks:write" permission.'
       );
       return {
@@ -1218,11 +1200,7 @@ async function createGitHubChecks(
         checkRunUrls: [],
       };
     } else {
-      logger.error(
-        `❌ Failed to create GitHub check runs: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      console.error('❌ Failed to create GitHub check runs:', error);
       return {
         checkRunMap: null,
         checksApiAvailable: false,
@@ -1252,13 +1230,9 @@ async function updateChecksInProgress(
         title: `Analyzing with ${checkName}...`,
         summary: `AI-powered analysis is in progress for ${checkName} check.`,
       });
-      logger.info(`🔄 Updated ${checkName} check to in-progress status`);
+      console.log(`🔄 Updated ${checkName} check to in-progress status`);
     } catch (error) {
-      logger.error(
-        `❌ Failed to update ${checkName} check to in-progress: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      console.error(`❌ Failed to update ${checkName} check to in-progress:`, error);
     }
   }
 }
@@ -1279,7 +1253,7 @@ async function completeGitHubChecks(
   const checkService = new GitHubCheckService(octokit);
   const perCheckMode = config?.output?.github_checks?.per_check !== false;
 
-  logger.info(`🏁 Completing ${checkRunMap.size} GitHub check runs...`);
+  console.log(`🏁 Completing ${checkRunMap.size} GitHub check runs...`);
 
   if (perCheckMode && !checkRunMap.has('combined')) {
     // Per-check mode: complete individual check runs
@@ -1429,15 +1403,11 @@ async function completeIndividualChecks(
         checkIssues // Pass extracted issues for GitHub annotations
       );
 
-      logger.info(
+      console.log(
         `✅ Completed ${checkName} check with ${checkIssues.length} issues, ${failureResults.length} failure conditions evaluated`
       );
     } catch (error) {
-      logger.error(
-        `❌ Failed to complete ${checkName} check: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      console.error(`❌ Failed to complete ${checkName} check:`, error);
       await markCheckAsFailed(checkService, owner, repo, checkRun.id, checkName, error);
     }
   }
@@ -1505,15 +1475,11 @@ async function completeCombinedCheck(
       allIssues // Pass all extracted issues for GitHub annotations
     );
 
-    logger.info(
+    console.log(
       `✅ Completed combined check with ${allIssues.length} issues, ${failureResults.length} failure conditions evaluated`
     );
   } catch (error) {
-    logger.error(
-      `❌ Failed to complete combined check: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    console.error(`❌ Failed to complete combined check:`, error);
     await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);
   }
 }
@@ -1540,11 +1506,7 @@ async function markCheckAsFailed(
       error instanceof Error ? error.message : 'Unknown error occurred'
     );
   } catch (finalError) {
-    logger.error(
-      `❌ Failed to mark ${checkName} check as failed: ${
-        finalError instanceof Error ? finalError.message : String(finalError)
-      }`
-    );
+    console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
   }
 }
 
@@ -1583,16 +1545,12 @@ if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
       import('./cli-main')
         .then(({ main }) => {
           main().catch(error => {
-            logger.error(
-              `CLI execution failed: ${error instanceof Error ? error.message : String(error)}`
-            );
+            console.error('CLI execution failed:', error);
             process.exit(1);
           });
         })
         .catch(error => {
-          logger.error(
-            `Failed to import CLI module: ${error instanceof Error ? error.message : String(error)}`
-          );
+          console.error('Failed to import CLI module:', error);
           process.exit(1);
         });
     }

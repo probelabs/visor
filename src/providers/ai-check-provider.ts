@@ -508,10 +508,12 @@ export class AICheckProvider extends CheckProvider {
 
     // Pass MCP server config directly to AI service
     if (Object.keys(mcpServers).length > 0) {
-      (aiConfig as unknown as { mcpServers?: unknown }).mcpServers = mcpServers;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (aiConfig as any).mcpServers = mcpServers;
       if (aiConfig.debug) {
-        const { logger } = require('../logger');
-        logger.debug(`AI check MCP configured with ${Object.keys(mcpServers).length} servers`);
+        console.error(
+          `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
+        );
       }
     }
 
@@ -531,18 +533,18 @@ export class AICheckProvider extends CheckProvider {
 
     // Only output debug messages if debug mode is enabled
     if (aiConfig.debug) {
-      const { logger } = require('../logger');
-      logger.debug(
-        `AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
+      console.error(
+        `🔧 Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
       );
-      logger.debug(`AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-      logger.debug(`AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+      console.error(`🔧 Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
+      console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
     }
 
     try {
       if (aiConfig.debug) {
-        const { logger } = await import('../logger');
-        logger.debug(`AICheckProvider passing checkName: ${config.checkName} to service`);
+        console.error(
+          `🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`
+        );
       }
 
       let result: ReviewSummary;
@@ -550,8 +552,9 @@ export class AICheckProvider extends CheckProvider {
       // Check if we should use session reuse
       if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
         if (aiConfig.debug) {
-          const { logger } = require('../logger');
-          logger.debug(`Using session reuse with parent session: ${sessionInfo.parentSessionId}`);
+          console.error(
+            `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId}`
+          );
         }
         result = await service.executeReviewWithSessionReuse(
           prInfo,
@@ -562,8 +565,7 @@ export class AICheckProvider extends CheckProvider {
         );
       } else {
         if (aiConfig.debug) {
-          const { logger } = require('../logger');
-          logger.debug(`Creating new AI session for check: ${config.checkName}`);
+          console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
         }
         result = await service.executeReview(
           prInfo,
@@ -587,10 +589,7 @@ export class AICheckProvider extends CheckProvider {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Log detailed error information
-      {
-        const { logger } = await import('../logger');
-        logger.error(`AI Check Provider Error for check: ${errorMessage}`);
-      }
+      console.error(`❌ AI Check Provider Error for check: ${errorMessage}`);
 
       // Check if this is a critical error (authentication, rate limits, etc)
       const isCriticalError =
@@ -601,9 +600,8 @@ export class AICheckProvider extends CheckProvider {
         errorMessage.includes('API key');
 
       if (isCriticalError) {
-        const { logger } = await import('../logger');
-        logger.error(`CRITICAL ERROR: AI provider authentication or rate limit issue detected`);
-        logger.error(`This check cannot proceed without valid API credentials`);
+        console.error(`🚨 CRITICAL ERROR: AI provider authentication or rate limit issue detected`);
+        console.error(`🚨 This check cannot proceed without valid API credentials`);
       }
 
       // Re-throw with more context
