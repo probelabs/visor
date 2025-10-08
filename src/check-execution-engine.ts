@@ -1960,7 +1960,7 @@ export class CheckExecutionEngine {
             //  - command provider execution/transform failures
             //  - forEach validation/iteration errors
             //  - fail_if conditions (global or check-specific)
-            const hasFatalFailure = (depRes.issues || []).some(issue => {
+            let hasFatalFailure = (depRes.issues || []).some(issue => {
               const id = issue.ruleId || '';
               return (
                 id === 'command/execution_error' ||
@@ -1979,6 +1979,17 @@ export class CheckExecutionEngine {
               );
             });
 
+            // As a fallback, evaluate fail_if on the dependency result now (in case the provider path didn't add issues yet)
+            if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+              const failIfResults = await this.evaluateFailureConditions(depId, depRes, config);
+              hasFatalFailure = failIfResults.some(r => r.failed);
+            }
+
+            if (debug) {
+              log(
+                `🔧 Debug: gating check '${checkName}' against dep '${depId}': wasSkipped=${wasSkipped} hasFatalFailure=${hasFatalFailure}`
+              );
+            }
             if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
           }
 
@@ -2308,6 +2319,32 @@ export class CheckExecutionEngine {
                 ...(finalOutput !== undefined ? { output: finalOutput } : {}),
               } as ExtendedReviewSummary;
 
+              // Evaluate fail_if for aggregated forEach results (applies to the whole check)
+              if (config && (config.fail_if || checkConfig.fail_if)) {
+                const failureResults = await this.evaluateFailureConditions(
+                  checkName,
+                  finalResult,
+                  config
+                );
+                if (failureResults.length > 0) {
+                  const failureIssues = failureResults
+                    .filter(f => f.failed)
+                    .map(f => ({
+                      file: 'system',
+                      line: 0,
+                      ruleId: f.conditionName,
+                      message: f.message || `Failure condition met: ${f.expression}`,
+                      severity: (f.severity || 'error') as
+                        | 'info'
+                        | 'warning'
+                        | 'error'
+                        | 'critical',
+                      category: 'logic' as const,
+                    }));
+                  finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
+                }
+              }
+
               // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
               // will also iterate over the items (propagate forEach behavior down the chain)
               if (allOutputs.length > 0) {
@@ -2365,6 +2402,28 @@ export class CheckExecutionEngine {
               debug,
               results
             );
+
+            // Evaluate fail_if for normal (non-forEach) execution
+            if (config && (config.fail_if || checkConfig.fail_if)) {
+              const failureResults = await this.evaluateFailureConditions(
+                checkName,
+                finalResult,
+                config
+              );
+              if (failureResults.length > 0) {
+                const failureIssues = failureResults
+                  .filter(f => f.failed)
+                  .map(f => ({
+                    file: 'system',
+                    line: 0,
+                    ruleId: f.conditionName,
+                    message: f.message || `Failure condition met: ${f.expression}`,
+                    severity: (f.severity || 'error') as 'info' | 'warning' | 'error' | 'critical',
+                    category: 'logic' as const,
+                  }));
+                finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
+              }
+            }
 
             // Record normal (non-forEach) execution
             // Check if this check had fatal errors
