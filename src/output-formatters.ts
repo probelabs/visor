@@ -268,7 +268,7 @@ export class OutputFormatters {
    */
   static formatAsJSON(result: AnalysisResult, options: OutputFormatterOptions = {}): string {
     // Filter out system-level issues (fail_if conditions, internal errors)
-    const issues = result.reviewSummary.issues.filter(
+    const issues = (result.reviewSummary.issues || []).filter(
       issue => !(issue.file === 'system' && issue.line === 0)
     );
     const totalIssues = calculateTotalIssues(issues);
@@ -309,7 +309,7 @@ export class OutputFormatters {
    */
   static formatAsSarif(result: AnalysisResult, _options: OutputFormatterOptions = {}): string {
     // Filter out system-level issues (fail_if conditions, internal errors)
-    const issues = result.reviewSummary.issues.filter(
+    const issues = (result.reviewSummary.issues || []).filter(
       issue => !(issue.file === 'system' && issue.line === 0)
     );
 
@@ -448,7 +448,7 @@ export class OutputFormatters {
     let output = '';
 
     // Filter out system-level issues (fail_if conditions, internal errors)
-    const issues = result.reviewSummary.issues.filter(
+    const issues = (result.reviewSummary.issues || []).filter(
       issue => !(issue.file === 'system' && issue.line === 0)
     );
     const totalIssues = calculateTotalIssues(issues);
