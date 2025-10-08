@@ -2466,6 +2466,14 @@ export class CheckExecutionEngine {
                 `🔧 Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
               );
             }
+
+            // Track cloned session IDs for cleanup
+            if (finalResult.sessionId) {
+              sessionIds.set(checkName, finalResult.sessionId);
+              if (debug) {
+                log(`🔧 Debug: Tracked cloned session for cleanup: ${finalResult.sessionId}`);
+              }
+            }
           }
 
           // Add checkName, group, schema, template info and timestamp to issues from config

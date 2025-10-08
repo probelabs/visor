@@ -343,6 +343,12 @@ export class AIReviewService {
         result.debug = debugInfo;
       }
 
+      // Include the session ID in the result for cleanup tracking
+      // Only include if we created a new cloned session
+      if (sessionMode === 'clone' && currentSessionId !== parentSessionId) {
+        result.sessionId = currentSessionId;
+      }
+
       return result;
     } catch (error) {
       if (debugInfo) {

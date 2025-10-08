@@ -55,6 +55,8 @@ export interface GroupedCheckResults {
 export interface ReviewSummary {
   issues?: ReviewIssue[];
   debug?: AIDebugInfo;
+  /** Session ID created for this check (for cleanup tracking) */
+  sessionId?: string;
 }
 
 // Test utility function - Convert old ReviewSummary to new GroupedCheckResults format
