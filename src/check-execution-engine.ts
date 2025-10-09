@@ -3040,7 +3040,7 @@ export class CheckExecutionEngine {
                   ? await Promise.all(
                       Array.from({ length: forEachItems.length }, async (_, idx) => {
                         const r = (finalResult as ExtendedReviewSummary).forEachItemResults![idx];
-                        if (!r) return true; // no result → treat as fatal for descendants
+                        if (!r) return false; // no result (skipped) → not fatal for descendants
                         let hadFatal = this.hasFatal(r.issues || []);
                         if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
                           try {
@@ -3090,7 +3090,7 @@ export class CheckExecutionEngine {
                     { length: agg.perItemResults.length },
                     (_, idx) => {
                       const r = agg.perItemResults[idx];
-                      if (!r) return true;
+                      if (!r) return false; // skipped item is not fatal for descendants
                       const hadFatal = (r.issues || []).some(issue => {
                         const id = issue.ruleId || '';
                         return (
