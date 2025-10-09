@@ -3119,9 +3119,15 @@ export class CheckExecutionEngine {
                 results.set(childName, childFinal);
               }
 
-              console.log(
-                `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
-              );
+              if (
+                debug &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'json' &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'sarif'
+              ) {
+                console.log(
+                  `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+                );
+              }
             } // End of else block for forEachItems.length > 0
           } else {
             // Normal single execution
