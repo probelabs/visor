@@ -809,7 +809,7 @@ export class CheckExecutionEngine {
         options.timeout,
         options.config,
         options.outputFormat,
-        true,
+        options.debug,
         options.maxParallelism,
         options.failFast
       );
