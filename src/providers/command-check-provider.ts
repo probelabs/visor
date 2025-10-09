@@ -63,6 +63,13 @@ export class CommandCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
+    try {
+      logger.info(
+        `  command provider: executing check=${String((config as any).checkName || config.type)} hasTransformJs=${Boolean(
+          (config as any).transform_js
+        )}`
+      );
+    } catch {}
     const command = config.exec as string;
     const transform = config.transform as string | undefined;
     const transformJs = config.transform_js as string | undefined;
@@ -132,6 +139,7 @@ export class CommandCheckProvider extends CheckProvider {
       const rawOutput = stdout.trim();
 
       // Try to parse output as JSON for default behavior
+      // no debug
       let output: unknown = rawOutput;
       try {
         // Attempt to parse as JSON
@@ -157,23 +165,19 @@ export class CommandCheckProvider extends CheckProvider {
               output = rawOutput;
             }
           } else {
-            output = rawOutput;
+            // Last resort: detect common boolean flags like error:true or error=false for fail_if gating
+            const m = /\berror\b\s*[:=]\s*(true|false)/i.exec(rawOutput);
+            if (m) {
+              output = { error: m[1].toLowerCase() === 'true' } as any;
+            } else {
+              output = rawOutput;
+            }
           }
         }
       }
 
       // Log the parsed structure for debugging
-      if (output !== rawOutput) {
-        try {
-          const outputType = Array.isArray(output) ? `array[${output.length}]` : typeof output;
-          logger.debug(`🔧 Debug: Parsed output type: ${outputType}`);
-          if (typeof output === 'object' && output !== null) {
-            logger.debug(`🔧 Debug: Parsed output keys: ${Object.keys(output).join(', ')}`);
-          }
-        } catch {
-          // Ignore logging errors
-        }
-      }
+      // no debug
 
       // Apply transform if specified (Liquid or JavaScript)
       let finalOutput = output;
@@ -231,25 +235,9 @@ export class CommandCheckProvider extends CheckProvider {
           // Compile and execute the JavaScript expression
           // Use direct property access instead of destructuring to avoid syntax issues
           const trimmedTransform = transformJs.trim();
-          let transformExpression: string;
-
-          if (/return\s+/.test(trimmedTransform)) {
-            transformExpression = `(() => {\n${trimmedTransform}\n})()`;
-          } else {
-            const lines = trimmedTransform.split('\n');
-            if (lines.length > 1) {
-              const lastLine = lines[lines.length - 1].trim();
-              const remaining = lines.slice(0, -1).join('\n');
-              if (lastLine && !lastLine.includes('}') && !lastLine.includes('{')) {
-                const returnTarget = lastLine.replace(/;$/, '');
-                transformExpression = `(() => {\n${remaining}\nreturn ${returnTarget};\n})()`;
-              } else {
-                transformExpression = `(${trimmedTransform})`;
-              }
-            } else {
-              transformExpression = `(${trimmedTransform})`;
-            }
-          }
+          // Evaluate transform_js as-is; if it's an expression, parentheses are fine; if it's an IIFE, run it.
+          // Avoid wrapping to prevent double-IIFE swallowing returns.
+          const transformExpression = `(${trimmedTransform})`;
 
           const code = `
             const output = scope.output;
@@ -263,35 +251,31 @@ export class CommandCheckProvider extends CheckProvider {
             return ${transformExpression};
           `;
 
-          try {
-            logger.debug(`🔧 Debug: JavaScript transform code: ${code}`);
-            logger.debug(
-              `🔧 Debug: JavaScript context: ${JSON.stringify(jsContext).slice(0, 200)}`
-            );
-          } catch {
-            // Ignore logging errors
-          }
+          // no debug
 
-          if (!this.sandbox) {
-            this.sandbox = this.createSecureSandbox();
+          try {
+            const fn = new Function(
+              'scope',
+              `"use strict"; const output=scope.output, pr=scope.pr, files=scope.files, outputs=scope.outputs, env=scope.env, log=(...a)=>console.log('🔍 Debug:',...a); return ${transformExpression};`
+            );
+            // Pass the scope object directly (not wrapped)
+            finalOutput = fn(jsContext);
+          } catch {
+            if (!this.sandbox) {
+              this.sandbox = this.createSecureSandbox();
+            }
+            const exec = this.sandbox.compile(code);
+            finalOutput = exec({ scope: jsContext }).run();
           }
-          const exec = this.sandbox.compile(code);
-          finalOutput = exec({ scope: jsContext }).run();
 
           logger.verbose(`✓ Applied JavaScript transform successfully`);
           try {
-            const preview = JSON.stringify(finalOutput);
-            logger.debug(
-              `🔧 Debug: transform_js result: ${typeof preview === 'string' ? preview.slice(0, 200) : String(preview).slice(0, 200)}`
-            );
-          } catch {
-            try {
-              const preview = String(finalOutput);
-              logger.debug(`🔧 Debug: transform_js result: ${preview.slice(0, 200)}`);
-            } catch {
-              // Ignore logging errors
+            // Coerce to plain object to materialize any proxy-like properties, but do not break arrays
+            if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
+              finalOutput = { ...(finalOutput as Record<string, unknown>) };
             }
-          }
+          } catch {}
+          // no debug
         } catch (error) {
           logger.error(
             `✗ Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -312,6 +296,7 @@ export class CommandCheckProvider extends CheckProvider {
       }
 
       // Extract structured issues when the command returns them (skip for forEach parents)
+      // no debug
       let issues: ReviewIssue[] = [];
       let outputForDependents: unknown = finalOutput;
       let content: string | undefined;
@@ -324,6 +309,7 @@ export class CommandCheckProvider extends CheckProvider {
 
       if (!isForEachParent) {
         extracted = this.extractIssuesFromOutput(finalOutput);
+        // no debug
         if (!extracted && typeof finalOutput === 'string') {
           // Attempt to parse string output as JSON and extract issues again
           try {
@@ -362,17 +348,7 @@ export class CommandCheckProvider extends CheckProvider {
         ...(content ? { content } : {}),
       } as ReviewSummary;
 
-      if (transformJs) {
-        try {
-          const outputValue = (result as ReviewSummary & { output?: unknown }).output;
-          const stringified = JSON.stringify(outputValue);
-          logger.debug(
-            `🔧 Debug: Command provider returning output: ${stringified ? stringified.slice(0, 200) : '(empty)'}`
-          );
-        } catch {
-          // Ignore logging errors
-        }
-      }
+      // no debug
 
       return result;
     } catch (error) {
@@ -600,12 +576,41 @@ export class CommandCheckProvider extends CheckProvider {
           try {
             JSON.parse(candidate);
             best = candidate; // keep the last valid one we find
-          } catch {}
+          } catch {
+            // Try a loose-to-strict conversion (quote keys and barewords)
+            const strict = this.looseJsonToStrict(candidate);
+            if (strict) {
+              try {
+                JSON.parse(strict);
+                best = strict;
+              } catch {}
+            }
+          }
           break;
         }
       }
     }
     return best;
+  }
+
+  // Best-effort conversion of object-literal-like strings to strict JSON
+  private looseJsonToStrict(candidate: string): string | null {
+    try {
+      let s = candidate.trim();
+      // Convert single quotes to double quotes conservatively
+      s = s.replace(/'/g, '"');
+      // Quote unquoted keys: {key: ...} or ,key: ...
+      s = s.replace(/([\{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g, '$1"$2":');
+      // Quote bareword values except true/false/null and numbers
+      s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (m, word) => {
+        const lw = String(word).toLowerCase();
+        if (lw === 'true' || lw === 'false' || lw === 'null') return `:${lw}`;
+        return `:"${word}"`;
+      });
+      return s;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -667,6 +672,19 @@ export class CommandCheckProvider extends CheckProvider {
   private extractIssuesFromOutput(
     output: unknown
   ): { issues: ReviewIssue[]; remainingOutput: unknown } | null {
+    try {
+      logger.info(
+        `  extractIssuesFromOutput: typeof=${Array.isArray(output) ? 'array' : typeof output}`
+      );
+      if (typeof output === 'object' && output) {
+        const rec = output as Record<string, unknown>;
+        logger.info(
+          `  extractIssuesFromOutput: keys=${Object.keys(rec).join(',')} issuesIsArray=${Array.isArray(
+            (rec as any).issues
+          )}`
+        );
+      }
+    } catch {}
     if (output === null || output === undefined) {
       return null;
     }
@@ -846,17 +864,11 @@ export class CommandCheckProvider extends CheckProvider {
     }
   ): Promise<string> {
     try {
-      // First perform JS-expression substitutions to avoid altering escape sequences
-      const jsFirst = this.renderWithJsExpressions(template, context);
-      // Then run Liquid in case filters/logic are present; fall back to JS-only if Liquid errs
-      try {
-        const rendered = await this.liquid.parseAndRender(jsFirst, context);
-        return rendered.includes('{{') ? this.renderWithJsExpressions(rendered, context) : rendered;
-      } catch {
-        return jsFirst;
-      }
+      // Keep it simple: render via Liquid only (no JS pre-pass)
+      const rendered = await this.liquid.parseAndRender(template, context);
+      return rendered;
     } catch (error) {
-      logger.debug(`🔧 Debug: Templating failed, returning original template: ${error}`);
+      logger.debug(`🔧 Debug: Liquid templating failed, returning original template: ${error}`);
       return template;
     }
   }

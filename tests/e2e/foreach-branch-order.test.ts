@@ -35,20 +35,18 @@ describe('E2E: forEach branch-first execution order', () => {
         },
         categorize: {
           type: 'command',
-          // Emit both an issue for order tracing and JSON output; ISSUE-2 fails via error=true
-          exec:
-            `bash -lc "ITEM='{{ outputs[\"list-issues\"] }}'; ` +
-            `if [ \"$ITEM\" = \"ISSUE-2\" ]; then ` +
-            `echo '{"issues":[{"message":"categorize:'"$ITEM"'","severity":"info","category":"logic","ruleId":"cat"}],"item":"'"$ITEM"'","category":"bug","error":true}'; ` +
-            `else echo '{"issues":[{"message":"categorize:'"$ITEM"'","severity":"info","category":"logic","ruleId":"cat"}],"item":"'"$ITEM"'","category":"bug","error":false}'; fi"`,
+          // Deterministic JSON via transform_js; ISSUE-2 triggers error=true
+          exec: 'bash -lc "true"',
+          transform_js:
+            '(() => { const ITEM = outputs["list-issues"]; const error = ITEM === "ISSUE-2"; return { issues: [{ message: `categorize:${ITEM}`, severity: "info", category: "logic", ruleId: "cat" }], item: ITEM, category: "bug", error }; })()',
           depends_on: ['list-issues'],
           fail_if: 'output.error',
-          env: {},
         },
         'update-label': {
           type: 'command',
-          // Emit an issue per successful item so we can assert outputs
-          exec: 'echo "{\"issues\":[{\"message\":\"update:{{ outputs[\\\"categorize\\\"].item }}\",\"severity\":\"info\",\"category\":\"logic\",\"ruleId\":\"upd\"}]}"',
+          exec: 'bash -lc "true"',
+          transform_js:
+            '({ issues: [{ message: `update:${outputs["categorize"].item}`, severity: "info", category: "logic", ruleId: "upd" }] })',
           depends_on: ['categorize'],
         },
       },

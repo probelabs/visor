@@ -809,7 +809,7 @@ export class CheckExecutionEngine {
         options.timeout,
         options.config,
         options.outputFormat,
-        options.debug,
+        true,
         options.maxParallelism,
         options.failFast
       );
@@ -1370,6 +1370,8 @@ export class CheckExecutionEngine {
 
     if (Array.isArray(output)) {
       normalizedOutput = output;
+    } else if (output && typeof output === 'object' && Array.isArray((output as any).items)) {
+      normalizedOutput = (output as any).items as unknown[];
     } else if (typeof output === 'string') {
       try {
         const parsed = JSON.parse(output);
@@ -1892,6 +1894,8 @@ export class CheckExecutionEngine {
           };
         }
 
+        // (no early gating; rely on per-item scheduler after parents run)
+
         const checkStartTime = Date.now();
         completedChecksCount++;
         logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
@@ -1984,12 +1988,30 @@ export class CheckExecutionEngine {
             //  - command provider execution/transform failures
             //  - forEach validation/iteration errors
             //  - fail_if conditions (global or check-specific)
-            let hasFatalFailure = !isDepForEachParent ? this.hasFatal(depRes.issues || []) : false;
-
-            // As a fallback, evaluate fail_if on the dependency result now (in case the provider path didn't add issues yet)
-            if (!isDepForEachParent && !hasFatalFailure) {
-              if (config && (config.fail_if || config.checks[depId]?.fail_if)) {
-                hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
+            // For non-forEach parents, only provider-fatal or fail_if/global_fail_if should gate.
+            let hasFatalFailure = false;
+            if (!isDepForEachParent) {
+              const issues = depRes.issues || [];
+              hasFatalFailure = issues.some(issue => {
+                const id = issue.ruleId || '';
+                return (
+                  id === 'command/execution_error' ||
+                  id.endsWith('/command/execution_error') ||
+                  id === 'command/timeout' ||
+                  id.endsWith('/command/timeout') ||
+                  id === 'command/transform_js_error' ||
+                  id.endsWith('/command/transform_js_error') ||
+                  id === 'command/transform_error' ||
+                  id.endsWith('/command/transform_error') ||
+                  id.endsWith('_fail_if') ||
+                  id.endsWith('/global_fail_if')
+                );
+              });
+              // As a fallback, evaluate fail_if on the dependency result now
+              if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                try {
+                  hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
+                } catch {}
               }
             }
 
@@ -2089,6 +2111,18 @@ export class CheckExecutionEngine {
           let finalResult: ReviewSummary;
 
           if (isForEachDependent && forEachParentName) {
+            if (!Array.isArray(forEachItems)) {
+              forEachItems = [];
+            }
+            if (!Array.isArray(forEachItems)) {
+              this.recordSkip(checkName, 'dependency_failed');
+              return {
+                checkName,
+                error: null,
+                result: { issues: [] },
+                skipped: true,
+              };
+            }
             // Record forEach preview items
             this.recordForEachPreview(checkName, forEachItems);
 
@@ -2121,8 +2155,9 @@ export class CheckExecutionEngine {
               }
 
               // Log forEach processing start (non-debug)
+              const __itemCount = Array.isArray(forEachItems) ? forEachItems.length : 0;
               logger.info(
-                `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
+                `  forEach: processing ${__itemCount} items from "${forEachParentName}"...`
               );
 
               const allIssues: ReviewIssue[] = [];
@@ -2527,6 +2562,7 @@ export class CheckExecutionEngine {
                     parent: forEachParentName,
                   }
                 );
+                // no-op
 
                 // Evaluate fail_if per item so a single failing branch does not stop others
                 if (config && (config.fail_if || checkConfig.fail_if)) {
@@ -2834,26 +2870,7 @@ export class CheckExecutionEngine {
                 const r = (agg.forEachItemResults && agg.forEachItemResults[idx]) || undefined;
                 if (!r) return false;
                 // 1) Issues-based fatality (provider/transform/timeout/fail_if markers)
-                const hadFatalByIssues = (r.issues || []).some(issue => {
-                  const id = issue.ruleId || '';
-                  return (
-                    issue.severity === 'error' ||
-                    issue.severity === 'critical' ||
-                    id === 'command/execution_error' ||
-                    id.endsWith('/command/execution_error') ||
-                    id === 'command/timeout' ||
-                    id.endsWith('/command/timeout') ||
-                    id === 'command/transform_js_error' ||
-                    id.endsWith('/command/transform_js_error') ||
-                    id === 'command/transform_error' ||
-                    id.endsWith('/command/transform_error') ||
-                    id.endsWith('/forEach/iteration_error') ||
-                    id === 'forEach/undefined_output' ||
-                    id.endsWith('/forEach/undefined_output') ||
-                    id.endsWith('_fail_if') ||
-                    id.endsWith('/global_fail_if')
-                  );
-                });
+                const hadFatalByIssues = this.hasFatal(r.issues || []);
                 if (hadFatalByIssues) return true;
                 // 2) Fail_if based fatality evaluated directly on the parent per-item result
                 try {
@@ -2910,6 +2927,8 @@ export class CheckExecutionEngine {
                 }
                 if (ok) runnableIndices.push(idx);
               }
+
+              // no-op
               // Early skip if no runnable items after intersecting masks across all direct forEach parents
               if (runnableIndices.length === 0) {
                 this.recordSkip(checkName, 'dependency_failed');
@@ -3259,7 +3278,8 @@ export class CheckExecutionEngine {
             result: enrichedResult,
           };
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage =
+            error instanceof Error ? `${error.message}\n${error.stack || ''}` : String(error);
           const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
 
           // Record error in stats
@@ -4767,11 +4787,24 @@ export class CheckExecutionEngine {
    */
   private recordForEachPreview(checkName: string, items: unknown[] | undefined): void {
     const stats = this.executionStats.get(checkName);
-    if (!stats || !items || (Array.isArray(items) && items.length === 0)) return;
+    if (!stats) return;
+    if (!Array.isArray(items) || items.length === 0) return;
 
     // Store preview of first 3 items
-    const preview = (items as unknown[]).slice(0, 3).map(item => {
-      const str = typeof item === 'string' ? item : JSON.stringify(item);
+    const preview = items.slice(0, 3).map(item => {
+      let str: string;
+      if (typeof item === 'string') {
+        str = item;
+      } else if (item === undefined || item === null) {
+        str = '(empty)';
+      } else {
+        try {
+          const j = JSON.stringify(item);
+          str = typeof j === 'string' ? j : String(item);
+        } catch {
+          str = String(item);
+        }
+      }
       return str.length > 50 ? str.substring(0, 47) + '...' : str;
     });
 

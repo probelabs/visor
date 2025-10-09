@@ -254,6 +254,15 @@ export class FailureConditionEvaluator {
       results.push(...filteredResults, ...checkResults);
     }
 
+    try {
+      if (checkName === 'B') {
+        console.error(
+          `🔧 Debug: fail_if results for ${checkName}: ${JSON.stringify(results)} context.output=${JSON.stringify(
+            context.output
+          )}`
+        );
+      }
+    } catch {}
     return results;
   }
 
