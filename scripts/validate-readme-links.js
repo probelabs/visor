@@ -100,7 +100,9 @@ function main() {
   // Validate docs links
   const docLinks = links.filter(l => l.href.startsWith('docs/'));
   for (const l of docLinks) {
-    const file = path.join(ROOT, l.href);
+    // Strip anchor links (e.g., docs/file.md#section -> docs/file.md)
+    const filePathWithoutAnchor = l.href.split('#')[0];
+    const file = path.join(ROOT, filePathWithoutAnchor);
     if (!fs.existsSync(file)) {
       errors.push(`Missing doc file referenced from README: ${l.href}`);
     }
@@ -109,7 +111,8 @@ function main() {
   // Warn about docs that are not referenced
   if (fs.existsSync(DOCS_DIR)) {
     const allDocs = fs.readdirSync(DOCS_DIR).filter(f => f.endsWith('.md'));
-    const referenced = new Set(docLinks.map(l => path.basename(l.href)));
+    // Strip anchors from hrefs when checking references
+    const referenced = new Set(docLinks.map(l => path.basename(l.href.split('#')[0])));
     for (const f of allDocs) {
       if (!referenced.has(f)) {
         warnings.push(`Doc not referenced from README: docs/${f}`);
