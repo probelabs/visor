@@ -320,7 +320,20 @@ export class CommandCheckProvider extends CheckProvider {
               outputForDependents = extracted.remainingOutput;
             }
           } catch {
-            // Ignore JSON parse errors – leave output as-is
+            // Try to salvage JSON from anywhere within the string (stripped logs/ansi)
+            try {
+              const any = this.extractJsonAnywhere(finalOutput);
+              if (any) {
+                const parsed = JSON.parse(any);
+                extracted = this.extractIssuesFromOutput(parsed);
+                if (extracted) {
+                  issues = extracted.issues;
+                  outputForDependents = extracted.remainingOutput;
+                }
+              }
+            } catch {
+              // leave as-is
+            }
           }
         } else if (extracted) {
           issues = extracted.issues;
