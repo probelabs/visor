@@ -2148,8 +2148,9 @@ export class CheckExecutionEngine {
 
               // Skip to the end - don't execute this check
             } else {
+              // Emit explicit debug to stdout so CLI e2e can assert it
               if (debug) {
-                log(
+                console.log(
                   `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
                 );
               }
@@ -3118,7 +3119,7 @@ export class CheckExecutionEngine {
                 results.set(childName, childFinal);
               }
 
-              log(
+              console.log(
                 `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
               );
             } // End of else block for forEachItems.length > 0
