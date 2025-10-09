@@ -2926,7 +2926,8 @@ export class CheckExecutionEngine {
                     break;
                   }
                 }
-                if (ok) runnableIndices.push(idx);
+                // Only schedule indices that have a corresponding task function
+                if (ok && typeof itemTasks[idx] === 'function') runnableIndices.push(idx);
               }
 
               // no-op
@@ -2953,7 +2954,9 @@ export class CheckExecutionEngine {
                 );
               }
 
-              const scheduledTasks = runnableIndices.map(i => itemTasks[i]);
+              const scheduledTasks = runnableIndices
+                .map(i => itemTasks[i])
+                .filter(fn => typeof fn === 'function');
               const forEachResults = await this.executeWithLimitedParallelism(
                 scheduledTasks,
                 forEachConcurrency,
