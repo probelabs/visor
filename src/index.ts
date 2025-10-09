@@ -317,7 +317,41 @@ async function handleEvent(
     throw new Error('Owner and repo are required');
   }
 
-  console.log(`Event: ${eventName}, Owner: ${owner}, Repo: ${repo}`);
+  // Determine context type for better logging
+  const isPullRequest = eventName === 'pull_request';
+  const isIssue = eventName === 'issues';
+  const isIssueComment = eventName === 'issue_comment';
+  const isManualCLI = !eventName || eventName === 'unknown';
+
+  // Map GitHub event to our event trigger format
+  const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
+
+  // Enhanced event logging with context
+  if (isManualCLI) {
+    console.log(`🖥️  Mode: Manual CLI`);
+    console.log(`📂 Repository: ${owner}/${repo}`);
+  } else {
+    console.log(`🤖 Mode: GitHub Action`);
+    console.log(`📂 Repository: ${owner}/${repo}`);
+    console.log(
+      `📋 Event: ${eventName}${context.event?.action ? ` (action: ${context.event?.action})` : ''}`
+    );
+    console.log(`🎯 Trigger: ${eventType}`);
+
+    // Show context-specific information
+    if (isPullRequest) {
+      const prNumber = context.event?.pull_request?.number;
+      console.log(`🔀 Context: Pull Request #${prNumber}`);
+    } else if (isIssue) {
+      const issueNumber = context.event?.issue?.number;
+      console.log(`🎫 Context: Issue #${issueNumber}`);
+    } else if (isIssueComment) {
+      const issueOrPR = context.event?.issue;
+      const isPR = issueOrPR?.pull_request ? true : false;
+      const number = issueOrPR?.number;
+      console.log(`💬 Context: Comment on ${isPR ? 'Pull Request' : 'Issue'} #${number}`);
+    }
+  }
 
   // Debug: Log the checks that are available in the loaded config
   const allChecks = Object.keys(config.checks || {});
@@ -326,9 +360,6 @@ async function handleEvent(
     // Only log check names if there aren't too many
     console.log(`📚 Available checks: ${allChecks.join(', ')}`);
   }
-
-  // Map GitHub event to our event trigger format
-  const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
 
   // Find checks that should run for this event
   let checksToRun: string[] = [];
@@ -484,7 +515,7 @@ async function handleIssueEvent(
   }
 
   console.log(
-    `Processing issue #${issue.number} event: ${action} with checks: ${checksToRun.join(', ')}`
+    `📋 Processing issue #${issue.number} event: ${action} with ${checksToRun.length} check(s): ${checksToRun.join(', ')}`
   );
 
   // For issue events, we need to create a PR-like structure for the checks to process
@@ -536,6 +567,22 @@ async function handleIssueEvent(
 
     const { results } = executionResult;
 
+    // Log execution results for debugging (only in debug mode)
+    if (inputs.debug === 'true') {
+      console.log(`📊 Check execution completed: ${Object.keys(results).length} group(s)`);
+      for (const [group, checks] of Object.entries(results)) {
+        console.log(`   Group "${group}": ${checks.length} check(s)`);
+        for (const check of checks) {
+          const hasContent = check.content && check.content.trim();
+          const contentLength = hasContent ? check.content.trim().length : 0;
+          const issueCount = check.issues?.length || 0;
+          console.log(
+            `      - ${check.checkName}: ${hasContent ? `${contentLength} chars` : 'empty'}, ${issueCount} issue(s)`
+          );
+        }
+      }
+    }
+
     // Format and post results as a comment on the issue
     if (Object.keys(results).length > 0) {
       let commentBody = '';
@@ -549,19 +596,24 @@ async function handleIssueEvent(
         }
       }
 
-      commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+      // Only post if there's actual content (not just empty checks)
+      if (commentBody.trim()) {
+        commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
 
-      // Post comment to the issue
-      await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: issue.number,
-        body: commentBody,
-      });
+        // Post comment to the issue
+        await octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: issue.number,
+          body: commentBody,
+        });
 
-      console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
+        console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
+      } else {
+        console.log('ℹ️ No content to post - all checks returned empty results');
+      }
     } else {
-      console.log('No results from issue assistant checks');
+      console.log('⚠️ No results from issue assistant checks');
     }
 
     // Set outputs for GitHub Actions
@@ -607,7 +659,7 @@ async function handleIssueComment(
 
   if (isVisorBot || hasVisorMarkers) {
     console.log(
-      `Skipping visor comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
+      `✓ Skipping bot's own comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
     );
     return;
   }
