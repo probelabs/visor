@@ -164,6 +164,89 @@ jobs:
     comment-on-pr: 'true'  # Still comment on PR
 ```
 
+## Fork PR Support
+
+### Overview
+
+GitHub restricts permissions for workflows triggered by external contributors from forked repositories for security reasons. This affects check runs but not PR comments.
+
+**Default behavior (`pull_request` trigger)**:
+- ✅ Works for PRs from same repository (branch PRs)
+- ❌ Check runs fail with 403 error for fork PRs
+- ✅ PR comments work for all PRs (including forks)
+- ✅ Visor gracefully falls back to comments only for forks
+
+**For fork PR support with check runs** (use `pull_request_target` trigger):
+- ✅ Works for both fork and branch PRs
+- ✅ Check runs work for all PRs
+- ⚠️ Security consideration: Workflow runs with write permissions
+
+### Enabling Fork PR Support
+
+To enable check runs for external contributor PRs, change the workflow trigger:
+
+```yaml
+name: Visor Code Review
+on:
+  pull_request_target:  # Instead of pull_request
+    types: [opened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # Explicitly checkout PR code (not base branch)
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: probelabs/visor@v1
+        with:
+          # ... your configuration
+```
+
+**Key differences**:
+1. **Trigger**: `pull_request_target` instead of `pull_request`
+2. **Checkout**: Must specify `ref: ${{ github.event.pull_request.head.sha }}` to analyze PR code
+3. **Security**: Workflow definition comes from base branch (protected from malicious modifications)
+
+### Security Considerations
+
+When using `pull_request_target`:
+
+✅ **Safe** (Visor's approach):
+- Workflow file is from base branch (can't be modified by PR)
+- Only analyzes code (read-only operation)
+- Uses controlled AI providers with API keys from secrets
+- Comments and checks are the only write operations
+
+⚠️ **Risks to avoid**:
+- Don't execute arbitrary code from the PR (scripts, dependencies)
+- Don't use `npm install` if package.json is modified by PR
+- Don't run untrusted build commands
+
+### Fallback Behavior
+
+If check runs fail (403 error), Visor automatically:
+
+1. **Logs clean error message**:
+   ```
+   ⚠️  Could not create check run for security: Resource not accessible by integration
+   💬 Review will continue using PR comments instead
+   ```
+
+2. **Continues review**: All checks run normally
+3. **Uses PR comments**: Full review posted as comment
+4. **Fails if needed**: Action still fails if critical issues found
+
+No code changes needed - fallback is automatic.
+
 ## Troubleshooting
 
 ### Check Runs Not Appearing
@@ -171,6 +254,7 @@ jobs:
 2. Check action logs for permission errors
 3. Ensure `create-check: 'true'` (default)
 4. Verify configuration `output.github_checks.enabled: true`
+5. **For fork PRs**: Use `pull_request_target` trigger (see [Fork PR Support](#fork-pr-support))
 
 ### Check Runs Failing Unexpectedly
 1. Review failure conditions in configuration
@@ -178,10 +262,11 @@ jobs:
 3. Verify expressions use correct variable names
 4. Test failure conditions with sample data
 
-### Permission Denied Errors
-1. For GitHub Apps: Check repository permissions include "Checks (Write)"
-2. For PATs: Ensure token has appropriate repository scopes
-3. For default token: Usually works out of the box
+### Permission Denied Errors (403)
+1. **For fork PRs**: This is expected with `pull_request` trigger - use `pull_request_target` or accept comment-only mode
+2. For GitHub Apps: Check repository permissions include "Checks (Write)"
+3. For PATs: Ensure token has appropriate repository scopes
+4. For default token: Usually works out of the box for same-repo PRs
 
 ## Migration from Comments Only
 

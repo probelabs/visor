@@ -30,7 +30,7 @@ Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you 
 # .github/workflows/visor.yml
 name: Visor
 on:
-  pull_request: { types: [opened, synchronize] }
+  pull_request: { types: [opened, synchronize] }  # For fork PRs, see docs/GITHUB_CHECKS.md
   issues: { types: [opened] }
   issue_comment: { types: [created] }
 permissions:
@@ -50,6 +50,7 @@ jobs:
 
 ### Open a PR
 - Visor posts a PR summary, creates GitHub Check runs, and annotates lines.
+- **Note**: For external contributor PRs from forks, check runs may not be available due to GitHub security restrictions. Visor will gracefully fall back to PR comments. See [Fork PR Support](docs/GITHUB_CHECKS.md#fork-pr-support) for how to enable check runs for forks.
 
 ### Optional: Add `.visor.yaml`
 
