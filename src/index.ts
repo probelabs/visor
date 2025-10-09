@@ -1144,7 +1144,11 @@ async function createGitHubChecks(
           checkRunUrls.push(checkRun.url);
           console.log(`✅ Created check run for ${checkName}: ${checkRun.url}`);
         } catch (error) {
-          console.error(`❌ Failed to create check run for ${checkName}:`, error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          // Extract just the meaningful error message without stack trace
+          const cleanMessage = errorMessage.split('\n')[0].replace('Error: ', '');
+          console.error(`⚠️  Could not create check run for ${checkName}: ${cleanMessage}`);
+          console.log('💬 Review will continue using PR comments instead');
           // Continue with other checks even if one fails
         }
       }
@@ -1171,7 +1175,10 @@ async function createGitHubChecks(
         checkRunUrls.push(checkRun.url);
         console.log(`✅ Created combined check run: ${checkRun.url}`);
       } catch (error) {
-        console.error(`❌ Failed to create combined check run:`, error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const cleanMessage = errorMessage.split('\n')[0].replace('Error: ', '');
+        console.error(`⚠️  Could not create combined check run: ${cleanMessage}`);
+        console.log('💬 Review will continue using PR comments instead');
       }
     }
 
@@ -1200,7 +1207,10 @@ async function createGitHubChecks(
         checkRunUrls: [],
       };
     } else {
-      console.error('❌ Failed to create GitHub check runs:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const cleanMessage = errorMessage.split('\n')[0].replace('Error: ', '');
+      console.error(`⚠️  Could not create GitHub check runs: ${cleanMessage}`);
+      console.log('💬 Review will continue using PR comments instead');
       return {
         checkRunMap: null,
         checksApiAvailable: false,
