@@ -318,6 +318,15 @@ export class CommandCheckProvider extends CheckProvider {
             if (extracted) {
               issues = extracted.issues;
               outputForDependents = extracted.remainingOutput;
+              // If remainingOutput carries a content field, pick it up
+              if (
+                typeof extracted.remainingOutput === 'object' &&
+                extracted.remainingOutput !== null &&
+                typeof (extracted.remainingOutput as any).content === 'string'
+              ) {
+                const c = String((extracted.remainingOutput as any).content).trim();
+                if (c) content = c;
+              }
             }
           } catch {
             // Try to salvage JSON from anywhere within the string (stripped logs/ansi)
@@ -329,6 +338,14 @@ export class CommandCheckProvider extends CheckProvider {
                 if (extracted) {
                   issues = extracted.issues;
                   outputForDependents = extracted.remainingOutput;
+                  if (
+                    typeof extracted.remainingOutput === 'object' &&
+                    extracted.remainingOutput !== null &&
+                    typeof (extracted.remainingOutput as any).content === 'string'
+                  ) {
+                    const c = String((extracted.remainingOutput as any).content).trim();
+                    if (c) content = c;
+                  }
                 }
               }
             } catch {
@@ -338,6 +355,15 @@ export class CommandCheckProvider extends CheckProvider {
         } else if (extracted) {
           issues = extracted.issues;
           outputForDependents = extracted.remainingOutput;
+          // Also propagate embedded content when remainingOutput is an object { content, ... }
+          if (
+            typeof extracted.remainingOutput === 'object' &&
+            extracted.remainingOutput !== null &&
+            typeof (extracted.remainingOutput as any).content === 'string'
+          ) {
+            const c = String((extracted.remainingOutput as any).content).trim();
+            if (c) content = c;
+          }
         }
 
         if (!issues.length && this.shouldTreatAsTextOutput(trimmedRawOutput)) {
