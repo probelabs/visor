@@ -69,9 +69,14 @@ export class GitRepositoryAnalyzer {
       let author = lastCommit?.author_name;
       if (!author) {
         try {
+          // Read ONLY repository-local config to avoid leaking global user identity into tests
           const [userName, userEmail] = await Promise.all([
-            this.git.raw(['config', 'user.name']).catch(() => null),
-            this.git.raw(['config', 'user.email']).catch(() => null),
+            this.git
+              .raw(['config', '--local', 'user.name'])
+              .catch(() => null),
+            this.git
+              .raw(['config', '--local', 'user.email'])
+              .catch(() => null),
           ]);
           author = userName?.trim() || userEmail?.trim() || 'unknown';
         } catch {
