@@ -108,8 +108,14 @@ export async function run(): Promise<void> {
       const runTs = new Date().toISOString().replace(/[:.]/g, '-');
       process.env.VISOR_RUN_TS = runTs;
       process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
-      if (process.env.VISOR_TELEMETRY_ENABLED === 'true' && ((process.env.VISOR_TELEMETRY_SINK || 'file') === 'file')) {
-        emitNdjsonFallback('visor.run', { mode: 'github-actions', event: process.env.GITHUB_EVENT_NAME || 'unknown' });
+      if (
+        process.env.VISOR_TELEMETRY_ENABLED === 'true' &&
+        (process.env.VISOR_TELEMETRY_SINK || 'file') === 'file'
+      ) {
+        emitNdjsonFallback('visor.run', {
+          mode: 'github-actions',
+          event: process.env.GITHUB_EVENT_NAME || 'unknown',
+        });
       }
     } catch {}
     const { octokit, authType } = await createAuthenticatedOctokit();
