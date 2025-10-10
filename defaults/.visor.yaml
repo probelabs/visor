@@ -306,7 +306,8 @@ checks:
       set -eu
 
       sanitize_label() {
-        printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
+        # Keep allowed chars and squeeze repeated slashes
+        printf '%s' "$1" | tr -cd '[:alnum:]:/' | tr -s '/'
       }
 
       add_label() {
@@ -338,7 +339,7 @@ checks:
       set -eu
 
       sanitize_label() {
-        printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
+        printf '%s' "$1" | tr -cd '[:alnum:]:/' | tr -s '/'
       }
 
       add_label() {
