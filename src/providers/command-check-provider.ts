@@ -531,7 +531,28 @@ ${bodyWithReturn}
             }
           } catch {}
         }
-        extracted = this.extractIssuesFromOutput(snapshotForExtraction || finalOutput);
+        // Normalize extraction target: unwrap one-element arrays like ["{...}"] or [{...}]
+        let extractionTarget: unknown = snapshotForExtraction || finalOutput;
+        try {
+          if (Array.isArray(extractionTarget) && (extractionTarget as unknown[]).length === 1) {
+            const first = (extractionTarget as unknown[])[0];
+            if (typeof first === 'string') {
+              try {
+                extractionTarget = JSON.parse(first);
+              } catch {
+                extractionTarget = first;
+              }
+            } else if (first && typeof first === 'object') {
+              extractionTarget = first as unknown;
+            }
+          }
+        } catch {}
+        extracted = this.extractIssuesFromOutput(extractionTarget);
+        try {
+          if (extractionTarget !== (snapshotForExtraction || finalOutput)) {
+            finalOutput = extractionTarget;
+          }
+        } catch {}
         // no debug
         // Handle cross-realm Arrays from sandbox: issues may look like an array but fail Array.isArray
         if (!extracted && finalOutput && typeof finalOutput === 'object') {
@@ -660,7 +681,21 @@ ${bodyWithReturn}
                 const flat = this.normalizeIssueArray(merged);
                 if (flat) issues = flat;
               } else {
-                const flat = this.normalizeIssueArray(tryParsed as unknown[]);
+                // Try to parse string elements into JSON objects and extract
+                const converted: unknown[] = [];
+                for (const el of tryParsed as unknown[]) {
+                  if (typeof el === 'string') {
+                    try {
+                      const obj = JSON.parse(el);
+                      converted.push(obj);
+                    } catch {
+                      // keep as-is
+                    }
+                  } else {
+                    converted.push(el);
+                  }
+                }
+                const flat = this.normalizeIssueArray(converted as unknown[]);
                 if (flat) issues = flat;
               }
             }
@@ -1365,15 +1400,28 @@ ${bodyWithReturn}
       let tpl = template;
       if (tpl.includes('{{')) {
         tpl = tpl.replace(/\{\{([\s\S]*?)\}\}/g, (_m, inner) => {
-          const fixed = String(inner).replace(/\[\\"/g, "['").replace(/\\"\]/g, "']");
+          const fixed = String(inner).replace(/\[\"/g, "['").replace(/\"\]/g, "']");
           return `{{ ${fixed} }}`;
         });
       }
-      const rendered = await this.liquid.parseAndRender(tpl, context);
+      let rendered = await this.liquid.parseAndRender(tpl, context);
+      // If Liquid left unresolved tags (common when users write JS expressions inside {{ }}),
+      // fall back to a safe JS-expression renderer for the remaining tags.
+      if (/\{\{[\s\S]*?\}\}/.test(rendered)) {
+        try {
+          rendered = this.renderWithJsExpressions(rendered, context);
+        } catch {
+          // keep Liquid-rendered result as-is
+        }
+      }
       return rendered;
     } catch (error) {
-      logger.debug(`🔧 Debug: Liquid templating failed, returning original template: ${error}`);
-      return template;
+      logger.debug(`🔧 Debug: Liquid templating failed, trying JS-expression fallback: ${error}`);
+      try {
+        return this.renderWithJsExpressions(template, context);
+      } catch {
+        return template;
+      }
     }
   }
 
