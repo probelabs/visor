@@ -161,7 +161,7 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(stats?.skipped).toBe(false);
     });
 
-    it('should skip dependent checks when forEach partially fails', async () => {
+    it('should continue dependent checks for successful branches when forEach partially fails', async () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
         checks: {
@@ -178,7 +178,7 @@ describe('forEach Failure and Dependency Skip', () => {
           },
           'dependent-check': {
             type: 'command',
-            exec: 'echo "should be skipped due to partial failure"',
+            exec: 'echo "dependent ran for: {{ outputs["partial-fail-foreach"].item | default: outputs["partial-fail-foreach"] }}"',
             depends_on: ['partial-fail-foreach'],
           },
         },
@@ -197,10 +197,10 @@ describe('forEach Failure and Dependency Skip', () => {
       );
       expect(hasExecutionError).toBe(true);
 
-      // dependent-check should be skipped because forEach had failures
+      // dependent-check should NOT be skipped; it should execute for the successful items (item1 and item3)
       const stats = result.executionStatistics?.checks.find(c => c.checkName === 'dependent-check');
-      expect(stats?.skipped).toBe(true);
-      expect(stats?.skipReason).toBe('dependency_failed');
+      expect(stats?.skipped).toBe(false);
+      expect(stats?.totalRuns || 0).toBeGreaterThanOrEqual(2);
     });
   });
 

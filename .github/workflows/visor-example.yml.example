@@ -1,11 +1,16 @@
 # Example workflow showing different ways to use Visor
 # Copy this to your .github/workflows/ directory and customize as needed
+#
+# NOTE: For fork PR support with check runs, use pull_request_target instead of pull_request
+# See docs/GITHUB_CHECKS.md#fork-pr-support for details
 
 name: 🔍 Visor AI Code Review Examples
 
 on:
   # Uncomment to enable
-  # pull_request:
+  # pull_request:  # For same-repo PRs (default)
+  #   types: [opened, synchronize, reopened]
+  # pull_request_target:  # For fork PRs with check runs
   #   types: [opened, synchronize, reopened]
   # issue_comment:
   #   types: [created]

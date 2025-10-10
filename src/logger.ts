@@ -133,4 +133,15 @@ export function configureLoggerFromCli(options: {
     verbose: options.verbose,
     quiet: options.quiet,
   });
+
+  // Expose output format and debug to process env for modules that need to gate
+  // stdout emissions without plumbing the value through every call site.
+  try {
+    if (options.output) process.env.VISOR_OUTPUT_FORMAT = String(options.output);
+    if (typeof options.debug === 'boolean') {
+      process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
+    }
+  } catch {
+    // ignore
+  }
 }
