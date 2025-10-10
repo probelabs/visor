@@ -413,6 +413,21 @@ ${bodyWithReturn}
           logger.debug(`  provider: snapshot is null`);
         }
       } catch {}
+      // Some shells may wrap JSON output inside a one-element array due to quoting.
+      // If we see a single-element array containing a JSON string or object, unwrap it.
+      try {
+        if (Array.isArray(outputForDependents) && (outputForDependents as unknown[]).length === 1) {
+          const first = (outputForDependents as unknown[])[0];
+          if (typeof first === 'string') {
+            try {
+              outputForDependents = JSON.parse(first);
+            } catch {}
+          } else if (first && typeof first === 'object') {
+            outputForDependents = first as unknown;
+          }
+        }
+      } catch {}
+
       let content: string | undefined;
       let extracted: { issues: ReviewIssue[]; remainingOutput: unknown } | null = null;
 
@@ -1345,8 +1360,18 @@ ${bodyWithReturn}
     }
   ): Promise<string> {
     try {
-      // Keep it simple: render via Liquid only (no JS pre-pass)
-      const rendered = await this.liquid.parseAndRender(template, context);
+      // Best-effort compatibility: allow double-quoted bracket keys inside Liquid tags.
+      // e.g., {{ outputs["fetch-tickets"].key }} → {{ outputs['fetch-tickets'].key }}
+      let tpl = template;
+      if (tpl.includes('{{')) {
+        tpl = tpl.replace(/\{\{([\s\S]*?)\}\}/g, (_m, inner) => {
+          const fixed = String(inner)
+            .replace(/\[\\"/g, "['")
+            .replace(/\\"\]/g, "']");
+          return `{{ ${fixed} }}`;
+        });
+      }
+      const rendered = await this.liquid.parseAndRender(tpl, context);
       return rendered;
     } catch (error) {
       logger.debug(`🔧 Debug: Liquid templating failed, returning original template: ${error}`);
