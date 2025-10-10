@@ -92,6 +92,12 @@ checks:
           - Affected system components
           - Include one or more mermaid diagrams when useful to visualize component relationships or flow.
           
+        ## Scope Discovery & Context Expansion
+        - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
+        - Extract up to 3 key identifiers (e.g., classes, functions, config keys) that anchor the change; for each, show the file they live in and how it relates to the change.
+        - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
+        - List up to 5 file paths or glob patterns you would inspect next to validate your understanding (keep this in the markdown, not as separate JSON fields).
+
         - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
         - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
         - `tags.labels` (optional): additional labels as an array of strings.
