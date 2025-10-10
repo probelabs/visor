@@ -238,7 +238,8 @@ export class PRReviewer {
         const trimmed = result.content?.trim();
         if (trimmed) return trimmed;
         // Fallback: if provider returned structured output with a common text field
-        const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any }).output;
+        const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
+          .output;
         if (out) {
           if (typeof out === 'string' && out.trim()) return out.trim();
           if (typeof out === 'object') {

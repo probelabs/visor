@@ -1035,9 +1035,15 @@ async function handlePullRequestWithConfig(
     if (disabledFromComments.length > 0) {
       const mapped: Set<string> = new Set();
       for (const token of disabledFromComments) {
-        if (config.checks[token]) { mapped.add(token); continue; }
+        if (config.checks[token]) {
+          mapped.add(token);
+          continue;
+        }
         const withSuffix = `${token}-check`;
-        if (config.checks[withSuffix]) { mapped.add(withSuffix); continue; }
+        if (config.checks[withSuffix]) {
+          mapped.add(withSuffix);
+          continue;
+        }
         for (const name of Object.keys(config.checks)) {
           if (name.toLowerCase().includes(token)) mapped.add(name);
         }
@@ -1097,13 +1103,12 @@ async function handlePullRequestWithConfig(
     config: config,
     checks: checksToExecute,
     parallelExecution: true,
-    tagFilter:
-      inputTagFilter
-        ? {
-            include: inputTagFilter?.include,
-            exclude: mergedExcludeTags.length > 0 ? mergedExcludeTags : undefined,
-          }
-        : undefined,
+    tagFilter: inputTagFilter
+      ? {
+          include: inputTagFilter?.include,
+          exclude: mergedExcludeTags.length > 0 ? mergedExcludeTags : undefined,
+        }
+      : undefined,
   };
 
   // Create GitHub check runs if enabled

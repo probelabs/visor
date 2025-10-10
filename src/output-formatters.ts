@@ -272,7 +272,9 @@ export class OutputFormatters {
     return output;
   }
 
-  private static extractAssistantText(summary: ReviewSummary & { output?: unknown }): string | undefined {
+  private static extractAssistantText(
+    summary: ReviewSummary & { output?: unknown }
+  ): string | undefined {
     const anySummary = summary as ReviewSummary & { output?: any };
     const out = anySummary.output;
     if (!out) return undefined;

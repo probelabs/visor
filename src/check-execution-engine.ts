@@ -3949,7 +3949,10 @@ export class CheckExecutionEngine {
       }
     }
 
-    const summary: ReviewSummary & { __contents?: Record<string, string>; __outputs?: Record<string, unknown> } = {
+    const summary: ReviewSummary & {
+      __contents?: Record<string, string>;
+      __outputs?: Record<string, unknown>;
+    } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
     };
