@@ -116,9 +116,9 @@ export class SessionRegistry {
 
     try {
       // Access the conversation history from the source agent
-      // ProbeAgent stores history in a private field, we need to access it via 'any'
+      // ProbeAgent stores history in the 'history' property (not 'conversationHistory')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceHistory = (sourceAgent as any).conversationHistory || [];
+      const sourceHistory = (sourceAgent as any).history || [];
 
       // Create a new agent with the same configuration
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -139,7 +139,7 @@ export class SessionRegistry {
           // Deep clone the history array and all message objects within it
           const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).conversationHistory = deepClonedHistory;
+          (clonedAgent as any).history = deepClonedHistory;
           console.error(
             `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages, deep copy)`
           );
@@ -149,7 +149,7 @@ export class SessionRegistry {
             `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
           );
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).conversationHistory = [...sourceHistory];
+          (clonedAgent as any).history = [...sourceHistory];
         }
       } else {
         console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
