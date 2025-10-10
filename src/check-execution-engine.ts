@@ -1677,8 +1677,13 @@ export class CheckExecutionEngine {
     }
 
     // Prepare template data
+    // Filter out system-level issues (fail_if conditions, internal errors) which should not appear in output
+    const filteredIssues = (reviewSummary.issues || []).filter(
+      issue => !(issue.file === 'system' && issue.line === 0)
+    );
+
     const templateData = {
-      issues: reviewSummary.issues || [],
+      issues: filteredIssues,
       checkName: checkName,
     };
 
