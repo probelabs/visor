@@ -276,6 +276,7 @@ export async function run(): Promise<void> {
       setFailed(error instanceof Error ? error.message : 'Unknown error');
     }
   } finally {
+    try { await shutdownTelemetry(); } catch {}
     // Cleanup AI sessions before GitHub Action exits to prevent process hanging
     const { SessionRegistry } = await import('./session-registry');
     const sessionRegistry = SessionRegistry.getInstance();
