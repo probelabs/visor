@@ -115,10 +115,29 @@ export class SessionRegistry {
     }
 
     try {
+      // Debug: Log all available properties on the source agent
+      console.error(`🔍 Debug: Inspecting source agent properties...`);
+      const agentKeys = Object.keys(sourceAgent as any);
+      console.error(`🔑 Available properties: ${agentKeys.join(', ')}`);
+
       // Access the conversation history from the source agent
       // ProbeAgent stores history in a private field, we need to access it via 'any'
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sourceHistory = (sourceAgent as any).conversationHistory || [];
+
+      console.error(`📊 History length: ${sourceHistory.length}`);
+      console.error(`📊 History type: ${typeof sourceHistory}, isArray: ${Array.isArray(sourceHistory)}`);
+
+      // Check alternative property names that ProbeAgent might use
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const alternativeHistory = (sourceAgent as any).history ||
+                                  (sourceAgent as any).messages ||
+                                  (sourceAgent as any)._conversationHistory ||
+                                  (sourceAgent as any)._history;
+
+      if (alternativeHistory && alternativeHistory !== sourceHistory) {
+        console.error(`⚠️  Found alternative history property with length: ${alternativeHistory.length || 0}`);
+      }
 
       // Create a new agent with the same configuration
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
