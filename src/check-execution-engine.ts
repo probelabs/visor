@@ -3015,6 +3015,12 @@ export class CheckExecutionEngine {
                 const itemContent = resultWithOutput.content;
                 if (typeof itemContent === 'string' && itemContent.trim()) {
                   aggregatedContents.push(itemContent.trim());
+                } else {
+                  const outStr =
+                    typeof resultWithOutput.output === 'string'
+                      ? (resultWithOutput.output as string).trim()
+                      : '';
+                  if (outStr) aggregatedContents.push(outStr);
                 }
               }
 
