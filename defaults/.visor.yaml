@@ -155,7 +155,7 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview and security analysis, now review the code changes for performance issues.
+        Building on our overview analysis, now review the code changes for performance issues.
 
         Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
 
@@ -183,7 +183,7 @@ checks:
         - Race conditions and deadlocks
         - Inefficient parallel processing
 
-        Building on our overview and security analysis, identify performance issues and provide optimization recommendations that complement our previous findings.
+        Building on our overview analysis, identify performance issues and provide optimization recommendations.
 
         ## Severity Guidelines
         Use the following severity levels appropriately:
@@ -191,7 +191,7 @@ checks:
         - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
         - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
         - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
-    depends_on: [security]
+    depends_on: [overview]
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
@@ -201,7 +201,7 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview, security, and performance discussions, evaluate the code quality and maintainability.
+        Building on our overview discussion, evaluate the code quality and maintainability.
 
         Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
 
@@ -235,7 +235,7 @@ checks:
         - Framework/library best practices
         - Type safety (if applicable)
 
-        Focus on actionable improvements that enhance code maintainability while considering the overview, security, and performance findings we've already discussed.
+        Focus on actionable improvements that enhance code maintainability based on the overview analysis.
 
         ## Severity Guidelines
         Use the following severity levels appropriately:
@@ -243,7 +243,7 @@ checks:
         - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling)
         - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming)
         - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements)
-    depends_on: [performance]
+    depends_on: [overview]
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
@@ -253,7 +253,7 @@ checks:
     group: review
     schema: code-review
     prompt: |
-        Building on our overview, security, performance, and quality discussions, analyze the code style and formatting consistency.
+        Building on our overview discussion, analyze the code style and formatting consistency.
 
         Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
 
@@ -276,7 +276,7 @@ checks:
         - Documentation standards adherence
         - Code comment quality and completeness
 
-        Focus on style improvements that enhance code readability and maintainability while considering our previous analysis.
+        Focus on style improvements that enhance code readability and maintainability based on the overview analysis.
 
         ## Severity Guidelines
         Use the following severity levels appropriately:
@@ -284,7 +284,7 @@ checks:
         - **error**: Major style violations that significantly harm readability (completely inconsistent formatting, misleading names)
         - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
         - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
-    depends_on: [quality]
+    depends_on: [overview]
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
