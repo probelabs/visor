@@ -235,21 +235,6 @@ export class CommandCheckProvider extends CheckProvider {
           // Compile and execute the JavaScript expression
           // Use direct property access instead of destructuring to avoid syntax issues
           const trimmedTransform = transformJs.trim();
-          // Normalize multi-line transform_js bodies into a single expression using the comma operator,
-          // so last expression becomes the return value, matching GitHub Actions-like semantics in tests.
-          const normalizeTransform = (expr: string): string => {
-            const t = expr.trim();
-            if (!/[\n;]/.test(t)) return t;
-            const parts = t
-              .split(/[\n;]+/)
-              .map(s => s.trim())
-              .filter(s => s.length > 0 && !s.startsWith('//'));
-            if (parts.length === 0) return 'undefined';
-            const lastRaw = parts.pop() as string;
-            const last = lastRaw.replace(/^return\s+/i, '').trim();
-            if (parts.length === 0) return last;
-            return `(${parts.join(', ')}, ${last})`;
-          };
           // Build a safe function body that supports statements + implicit last-expression return.
           const buildBodyWithReturn = (raw: string): string => {
             const t = raw.trim();
@@ -1174,7 +1159,12 @@ ${bodyWithReturn}
       //  1) Array<ReviewIssue-like>
       //  2) Array<{ issues: Array<ReviewIssue-like> }>
       const first = output[0];
-      if (first && typeof first === 'object' && !Array.isArray((first as any).message) && Array.isArray((first as any).issues)) {
+      if (
+        first &&
+        typeof first === 'object' &&
+        !Array.isArray((first as any).message) &&
+        Array.isArray((first as any).issues)
+      ) {
         // flatten nested issues arrays
         const merged: unknown[] = [];
         for (const el of output as unknown[]) {
