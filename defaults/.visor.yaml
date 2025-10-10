@@ -303,22 +303,28 @@ checks:
     depends_on: [overview]
     on: [pr_opened, pr_updated]
     exec: |
-      # Build label list from overview output
-      LABELS="{{ outputs.overview.tags.label | default: '' }}{% if outputs.overview.tags['review-effort'] %}{% if outputs.overview.tags.label %},{% endif %}review-effort:{{ outputs.overview.tags['review-effort'] }}{% endif %}"
+      set -euo pipefail
 
-      if [ -n "$LABELS" ]; then
-        echo "Ensuring labels exist: $LABELS"
-        # Create labels if missing (idempotent)
-        IFS=',' read -r -a ARR <<< "$LABELS"
-        for L in "${ARR[@]}"; do
-          gh label create "$L" -c "#ededed" -f >/dev/null 2>&1 || true
-        done
+      sanitize_label() {
+        printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
+      }
 
-        echo "Applying labels to PR #{{ pr.number }}"
-        gh pr edit {{ pr.number }} --add-label "$LABELS"
-      else
-        echo "No labels to apply from overview output"
-      fi
+      add_label() {
+        local raw="$1"; local lbl
+        lbl="$(sanitize_label "$raw")"
+        if [ -z "$lbl" ]; then return 0; fi
+        echo "Ensuring label: $lbl"
+        gh label create "$lbl" -c "#ededed" -f >/dev/null 2>&1 || true
+        echo "Applying label to PR #{{ pr.number }}: $lbl"
+        gh pr edit {{ pr.number }} --add-label "$lbl"
+      }
+
+      PRIMARY_LABEL="{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      EFFORT="{{ outputs.overview.tags['review-effort'] | default: '' | safe_label }}"
+
+      if [ -n "$PRIMARY_LABEL" ]; then add_label "$PRIMARY_LABEL"; fi
+      if [ -n "$EFFORT" ]; then add_label "review/effort:$EFFORT"; fi
+      if [ -z "$PRIMARY_LABEL" ] && [ -z "$EFFORT" ]; then echo "No labels to apply from overview output"; fi
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
@@ -329,20 +335,24 @@ checks:
     on: [issue_opened, issue_comment]
     if: "outputs['issue-assistant'].tags.intent == 'issue'"
     exec: |
-      LABELS="{{ outputs['issue-assistant'].tags.label | default: '' }}"
+      set -euo pipefail
 
-      if [ -n "$LABELS" ]; then
-        echo "Ensuring labels exist: $LABELS"
-        IFS=',' read -r -a ARR <<< "$LABELS"
-        for L in "${ARR[@]}"; do
-          gh label create "$L" -c "#ededed" -f >/dev/null 2>&1 || true
-        done
+      sanitize_label() {
+        printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
+      }
 
-        echo "Applying labels to issue #{{ event.issue.number }}"
-        gh issue edit {{ event.issue.number }} --add-label "$LABELS"
-      else
-        echo "No labels to apply from issue-assistant output"
-      fi
+      add_label() {
+        local raw="$1"; local lbl
+        lbl="$(sanitize_label "$raw")"
+        if [ -z "$lbl" ]; then return 0; fi
+        echo "Ensuring label: $lbl"
+        gh label create "$lbl" -c "#ededed" -f >/dev/null 2>&1 || true
+        echo "Applying label to issue #{{ event.issue.number }}: $lbl"
+        gh issue edit {{ event.issue.number }} --add-label "$lbl"
+      }
+
+      PRIMARY_LABEL="{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
+      if [ -n "$PRIMARY_LABEL" ]; then add_label "$PRIMARY_LABEL"; else echo "No labels to apply from issue-assistant output"; fi
 
   # Handle issue assistant intents: disable checks and/or retrigger workflow
   handle-issue-intents:

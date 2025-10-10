@@ -77,6 +77,23 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
       return '[Error: Unable to serialize to JSON]';
     }
   });
+
+  // Sanitize a label to allowed characters only: [A-Za-z0-9:/]
+  liquid.registerFilter('safe_label', (value: unknown) => {
+    if (value == null) return '';
+    const s = String(value);
+    // Keep only alphanumerics, colon, slash; collapse repeated slashes
+    return s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/');
+  });
+
+  // Sanitize an array of labels
+  liquid.registerFilter('safe_label_list', (value: unknown) => {
+    if (!Array.isArray(value)) return [] as string[];
+    return (value as unknown[])
+      .map(v => (v == null ? '' : String(v)))
+      .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+      .filter(s => s.length > 0);
+  });
 }
 
 /**
