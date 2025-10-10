@@ -235,9 +235,39 @@ export class CommandCheckProvider extends CheckProvider {
           // Compile and execute the JavaScript expression
           // Use direct property access instead of destructuring to avoid syntax issues
           const trimmedTransform = transformJs.trim();
-          // Evaluate transform_js as-is; if it's an expression, parentheses are fine; if it's an IIFE, run it.
-          // Avoid wrapping to prevent double-IIFE swallowing returns.
-          const transformExpression = `(${trimmedTransform})`;
+          // Normalize multi-line transform_js bodies into a single expression using the comma operator,
+          // so last expression becomes the return value, matching GitHub Actions-like semantics in tests.
+          const normalizeTransform = (expr: string): string => {
+            const t = expr.trim();
+            if (!/[\n;]/.test(t)) return t;
+            const parts = t
+              .split(/[\n;]+/)
+              .map(s => s.trim())
+              .filter(s => s.length > 0 && !s.startsWith('//'));
+            if (parts.length === 0) return 'undefined';
+            const lastRaw = parts.pop() as string;
+            const last = lastRaw.replace(/^return\s+/i, '').trim();
+            if (parts.length === 0) return last;
+            return `(${parts.join(', ')}, ${last})`;
+          };
+          // Build a safe function body that supports statements + implicit last-expression return.
+          const buildBodyWithReturn = (raw: string): string => {
+            const t = raw.trim();
+            // Find last non-empty line
+            const lines = t.split(/\n/);
+            let i = lines.length - 1;
+            while (i >= 0 && lines[i].trim().length === 0) i--;
+            if (i < 0) return 'return undefined;';
+            const lastLine = lines[i].trim();
+            if (/^return\b/i.test(lastLine)) {
+              return t;
+            }
+            const idx = t.lastIndexOf(lastLine);
+            const head = idx >= 0 ? t.slice(0, idx) : '';
+            const lastExpr = lastLine.replace(/;\s*$/, '');
+            return `${head}\nreturn (${lastExpr});`;
+          };
+          const bodyWithReturn = buildBodyWithReturn(trimmedTransform);
 
           const code = `
             const output = scope.output;
@@ -246,7 +276,9 @@ export class CommandCheckProvider extends CheckProvider {
             const outputs = scope.outputs;
             const env = scope.env;
             const log = (...args) => { console.log('🔍 Debug:', ...args); };
-            const __result = ${transformExpression};
+            const __result = (function(){
+${bodyWithReturn}
+            })();
             return __result;
           `;
 
@@ -264,8 +296,10 @@ export class CommandCheckProvider extends CheckProvider {
               const outputs = scope.outputs;
               const env = scope.env;
               const log = (...args) => { console.log('🔍 Debug:', ...args); };
-              const __result = ${transformExpression};
-              return typeof __result === 'object' && __result !== null ? JSON.stringify(__result) : null;
+              const __ret = (function(){
+${bodyWithReturn}
+              })();
+              return typeof __ret === 'object' && __ret !== null ? JSON.stringify(__ret) : null;
             `;
             const stringifyExec = this.sandbox.compile(stringifyCode);
             const jsonStr = stringifyExec({ scope: jsContext }).run();
@@ -296,7 +330,7 @@ export class CommandCheckProvider extends CheckProvider {
               const vmCode = `
                 (function(){
                   const output = scope.output; const pr = scope.pr; const files = scope.files; const outputs = scope.outputs; const env = scope.env; const log = ()=>{};
-                  return ${transformExpression};
+${bodyWithReturn}
                 })()
               `;
               const vmResult = vm.runInContext(vmCode, vmContext, { timeout: 1000 });
@@ -600,6 +634,51 @@ export class CommandCheckProvider extends CheckProvider {
           const trimmed = extracted.remainingOutput.trim();
           if (trimmed) {
             content = trimmed;
+          }
+        }
+
+        // Generic fallback: if issues are still empty, try to parse raw stdout as JSON and extract issues.
+        if (!issues.length && typeof trimmedRawOutput === 'string') {
+          try {
+            const tryParsed = JSON.parse(trimmedRawOutput);
+            const reextract = this.extractIssuesFromOutput(tryParsed);
+            if (reextract && reextract.issues && reextract.issues.length) {
+              issues = reextract.issues;
+              if (!outputForDependents && reextract.remainingOutput) {
+                outputForDependents = reextract.remainingOutput;
+              }
+            } else if (Array.isArray(tryParsed)) {
+              // Treat parsed array as potential issues array or array of { issues: [...] }
+              const first = tryParsed[0];
+              if (first && typeof first === 'object' && Array.isArray((first as any).issues)) {
+                const merged: unknown[] = [];
+                for (const el of tryParsed as unknown[]) {
+                  if (el && typeof el === 'object' && Array.isArray((el as any).issues)) {
+                    merged.push(...((el as any).issues as unknown[]));
+                  }
+                }
+                const flat = this.normalizeIssueArray(merged);
+                if (flat) issues = flat;
+              } else {
+                const flat = this.normalizeIssueArray(tryParsed as unknown[]);
+                if (flat) issues = flat;
+              }
+            }
+          } catch {}
+          if (!issues.length) {
+            try {
+              const any = this.extractJsonAnywhere(trimmedRawOutput);
+              if (any) {
+                const tryParsed = JSON.parse(any);
+                const reextract = this.extractIssuesFromOutput(tryParsed);
+                if (reextract && reextract.issues && reextract.issues.length) {
+                  issues = reextract.issues;
+                  if (!outputForDependents && reextract.remainingOutput) {
+                    outputForDependents = reextract.remainingOutput;
+                  }
+                }
+              }
+            } catch {}
           }
         }
 
@@ -1091,9 +1170,25 @@ export class CommandCheckProvider extends CheckProvider {
     }
 
     if (Array.isArray(output)) {
-      const issues = this.normalizeIssueArray(output);
-      if (issues) {
-        return { issues, remainingOutput: undefined };
+      // Two supported shapes:
+      //  1) Array<ReviewIssue-like>
+      //  2) Array<{ issues: Array<ReviewIssue-like> }>
+      const first = output[0];
+      if (first && typeof first === 'object' && !Array.isArray((first as any).message) && Array.isArray((first as any).issues)) {
+        // flatten nested issues arrays
+        const merged: unknown[] = [];
+        for (const el of output as unknown[]) {
+          if (el && typeof el === 'object' && Array.isArray((el as any).issues)) {
+            merged.push(...((el as any).issues as unknown[]));
+          }
+        }
+        const flat = this.normalizeIssueArray(merged);
+        if (flat) return { issues: flat, remainingOutput: undefined };
+      } else {
+        const issues = this.normalizeIssueArray(output);
+        if (issues) {
+          return { issues, remainingOutput: undefined };
+        }
       }
       return null;
     }

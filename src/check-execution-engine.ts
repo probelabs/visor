@@ -2003,6 +2003,9 @@ export class CheckExecutionEngine {
                   id.endsWith('/command/transform_js_error') ||
                   id === 'command/transform_error' ||
                   id.endsWith('/command/transform_error') ||
+                  id === 'forEach/undefined_output' ||
+                  id.endsWith('/forEach/undefined_output') ||
+                  id.endsWith('/forEach/iteration_error') ||
                   id.endsWith('_fail_if') ||
                   id.endsWith('/global_fail_if')
                 );
