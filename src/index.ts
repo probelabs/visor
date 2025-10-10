@@ -11,6 +11,7 @@ import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -104,6 +105,14 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
 export async function run(): Promise<void> {
   try {
+    try {
+      await initTelemetry({
+        enabled: process.env.VISOR_TELEMETRY_ENABLED == 'true',
+        sink: (process.env.VISOR_TELEMETRY_SINK as 'file' | 'otlp' | 'console') || 'file',
+        file: { dir: process.env.VISOR_TRACE_DIR },
+        traceReport: process.env.VISOR_TRACE_REPORT == 'true',
+      });
+    } catch {}
     const { octokit, authType } = await createAuthenticatedOctokit();
     console.log(`✅ Authenticated successfully using ${authType}`);
 
