@@ -1,4 +1,4 @@
-{{ (output.text | default: output.response | default: output.message | default: '') | unescape_newlines }}
+{{ output.text | default: output.response | default: output.message | default: '' | unescape_newlines }}
 
 {%- if output.tags -%}
 
