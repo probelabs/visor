@@ -311,26 +311,24 @@ checks:
     exec: |
       set -eu
 
-      sanitize_label() {
-        # Keep allowed chars and squeeze repeated slashes
-        printf '%s' "$1" | tr -cd '[:alnum:]:/' | tr -s '/'
-      }
-
-      add_label() {
-        local raw="$1"; local lbl
-        lbl="$(sanitize_label "$raw")"
-        if [ -z "$lbl" ]; then return 0; fi
-        echo "Ensuring label: $lbl"
-        gh label create "$lbl" -c "#ededed" -f >/dev/null 2>&1 || true
-        echo "Applying label to PR #{{ pr.number }}: $lbl"
-        gh pr edit {{ pr.number }} --add-label "$lbl"
-      }
-
       PRIMARY_LABEL="{{ outputs.overview.tags.label | default: '' | safe_label }}"
       EFFORT="{{ outputs.overview.tags['review-effort'] | default: '' | safe_label }}"
 
-      if [ -n "$PRIMARY_LABEL" ]; then add_label "$PRIMARY_LABEL"; fi
-      if [ -n "$EFFORT" ]; then add_label "review/effort:$EFFORT"; fi
+      if [ -n "$PRIMARY_LABEL" ]; then
+        echo "Ensuring label: $PRIMARY_LABEL"
+        gh label create "$PRIMARY_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
+        echo "Applying label to PR #{{ pr.number }}: $PRIMARY_LABEL"
+        gh pr edit {{ pr.number }} --add-label "$PRIMARY_LABEL"
+      fi
+
+      if [ -n "$EFFORT" ]; then
+        EFFORT_LABEL="review/effort:$EFFORT"
+        echo "Ensuring label: $EFFORT_LABEL"
+        gh label create "$EFFORT_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
+        echo "Applying label to PR #{{ pr.number }}: $EFFORT_LABEL"
+        gh pr edit {{ pr.number }} --add-label "$EFFORT_LABEL"
+      fi
+
       if [ -z "$PRIMARY_LABEL" ] && [ -z "$EFFORT" ]; then echo "No labels to apply from overview output"; fi
 
   # Apply labels to new issues based on assistant output (GitHub-only)
@@ -344,22 +342,15 @@ checks:
     exec: |
       set -eu
 
-      sanitize_label() {
-        printf '%s' "$1" | tr -cd '[:alnum:]:/' | tr -s '/'
-      }
-
-      add_label() {
-        local raw="$1"; local lbl
-        lbl="$(sanitize_label "$raw")"
-        if [ -z "$lbl" ]; then return 0; fi
-        echo "Ensuring label: $lbl"
-        gh label create "$lbl" -c "#ededed" -f >/dev/null 2>&1 || true
-        echo "Applying label to issue #{{ event.issue.number }}: $lbl"
-        gh issue edit {{ event.issue.number }} --add-label "$lbl"
-      }
-
       PRIMARY_LABEL="{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
-      if [ -n "$PRIMARY_LABEL" ]; then add_label "$PRIMARY_LABEL"; else echo "No labels to apply from issue-assistant output"; fi
+      if [ -n "$PRIMARY_LABEL" ]; then
+        echo "Ensuring label: $PRIMARY_LABEL"
+        gh label create "$PRIMARY_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
+        echo "Applying label to issue #{{ event.issue.number }}: $PRIMARY_LABEL"
+        gh issue edit {{ event.issue.number }} --add-label "$PRIMARY_LABEL"
+      else
+        echo "No labels to apply from issue-assistant output"
+      fi
 
   # Handle issue assistant intents: disable checks and/or retrigger workflow
   handle-issue-intents:
