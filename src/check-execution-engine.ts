@@ -1505,8 +1505,27 @@ export class CheckExecutionEngine {
         checkSummary.output = outputMap[checkName];
       }
 
-      // Render content for this check
-      const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+      // Render content for this check (never let template errors abort the whole run)
+      let content: string = '';
+      let issuesForCheck = [...checkIssues];
+      try {
+        content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`❌ Failed to render content for check '${checkName}': ${msg}`);
+        // Add a synthetic issue so it appears in output and GitHub Checks
+        issuesForCheck = [
+          ...issuesForCheck,
+          {
+            file: 'system',
+            line: 0,
+            ruleId: `${checkName}/render-error`,
+            message: `Template rendering failed: ${msg}`,
+            severity: 'error' as const,
+            category: 'logic' as const,
+          },
+        ];
+      }
 
       const checkResult: CheckResult = {
         checkName,
@@ -1514,7 +1533,7 @@ export class CheckExecutionEngine {
         group: checkConfig.group || 'default',
         output: checkSummary.output,
         debug: reviewSummary.debug,
-        issues: checkIssues, // Include structured issues
+        issues: issuesForCheck, // Include structured issues + rendering error if any
       };
 
       // Add to appropriate group
