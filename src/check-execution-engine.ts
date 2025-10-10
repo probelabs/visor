@@ -2860,6 +2860,11 @@ export class CheckExecutionEngine {
                     Array.isArray(r.forEachItems))
                 );
               });
+              if (directForEachParents.length > 0) {
+                logger.debug(
+                  `  forEach: direct parents for "${checkName}": ${directForEachParents.join(', ')}`
+                );
+              }
 
               const isIndexFatalForParent = async (
                 parent: string,
@@ -3045,6 +3050,12 @@ export class CheckExecutionEngine {
                         const r = (finalResult as ExtendedReviewSummary).forEachItemResults![idx];
                         if (!r) return false; // no result (skipped) → not fatal for descendants
                         let hadFatal = this.hasFatal(r.issues || []);
+                        try {
+                          const ids = (r.issues || []).map(i => i.ruleId).join(',');
+                          logger.debug(
+                            `  forEach: item ${idx + 1}/${forEachItems.length} issues=${(r.issues || []).length} ids=[${ids}]`
+                          );
+                        } catch {}
                         if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
                           try {
                             const failures = await this.evaluateFailureConditions(
@@ -3060,6 +3071,9 @@ export class CheckExecutionEngine {
                     )
                   : [];
                 (finalResult as ExtendedReviewSummary).forEachFatalMask = mask;
+                logger.debug(
+                  `  forEach: mask for "${checkName}" → fatals=${mask.filter(Boolean).length}/${mask.length}`
+                );
               } catch {}
 
               if (aggregatedContents.length > 0) {

@@ -104,6 +104,16 @@ export class FailureConditionEvaluator {
     );
 
     try {
+      try {
+        const isObj = context.output && typeof context.output === 'object';
+        const keys = isObj ? Object.keys(context.output as any).join(',') : typeof context.output;
+        let errorVal: unknown = undefined;
+        if (isObj && (context.output as any).error !== undefined)
+          errorVal = (context.output as any).error;
+        require('./logger').logger.debug(
+          `  fail_if: evaluating '${expression}' with output keys=${keys} error=${String(errorVal)}`
+        );
+      } catch {}
       const res = this.evaluateExpression(expression, context);
       return res;
     } catch (error) {
@@ -514,7 +524,9 @@ export class FailureConditionEvaluator {
         exec = this.sandbox.compile(`return (${normalizedExpr});`);
       }
       const result = exec(scope).run();
-
+      try {
+        require('./logger').logger.debug(`  fail_if: result=${Boolean(result)}`);
+      } catch {}
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
@@ -604,6 +616,14 @@ export class FailureConditionEvaluator {
     } else if (extractedOutput && typeof extractedOutput === 'object') {
       Object.assign(aggregatedOutput, extractedOutput as Record<string, unknown>);
     }
+
+    // If provider attached a raw transform snapshot, merge its fields generically.
+    try {
+      const raw = (reviewSummaryWithOutput as any).__raw;
+      if (raw && typeof raw === 'object') {
+        Object.assign(aggregatedOutput, raw as Record<string, unknown>);
+      }
+    } catch {}
 
     // If output is a string, try to parse JSON (full or from end) to enrich context,
     // and also derive common boolean flags generically (e.g., key:true/false) for fail_if usage.

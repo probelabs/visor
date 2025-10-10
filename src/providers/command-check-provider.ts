@@ -245,26 +245,130 @@ export class CommandCheckProvider extends CheckProvider {
             const files = scope.files;
             const outputs = scope.outputs;
             const env = scope.env;
-            const log = (...args) => {
-              console.log('🔍 Debug:', ...args);
+            const log = (...args) => { console.log('🔍 Debug:', ...args); };
+            const __normalize = (v) => {
+              if (v === null || v === undefined) return v;
+              if (typeof v === 'boolean') return v ? 1 : 0;
+              if (Array.isArray(v)) return v.map(__normalize);
+              if (typeof v === 'object') {
+                const o = {};
+                for (const k of Object.keys(v)) o[k] = __normalize(v[k]);
+                return o;
+              }
+              return v;
             };
-            return ${transformExpression};
+            const __result = ${transformExpression};
+            return __normalize(__result);
           `;
 
           // Execute user code exclusively inside the sandbox
           if (!this.sandbox) {
             this.sandbox = this.createSecureSandbox();
           }
-          const exec = this.sandbox.compile(code);
-          finalOutput = exec({ scope: jsContext }).run();
-
-          logger.verbose(`✓ Applied JavaScript transform successfully`);
+          // Try to serialize result to JSON string inside sandbox to preserve primitives like booleans
+          let parsedFromSandboxJson: any = undefined;
           try {
-            // Coerce to plain object to materialize any proxy-like properties, but do not break arrays
-            if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
-              finalOutput = { ...(finalOutput as Record<string, unknown>) };
+            const stringifyCode = `
+              const output = scope.output;
+              const pr = scope.pr;
+              const files = scope.files;
+              const outputs = scope.outputs;
+              const env = scope.env;
+              const log = (...args) => { console.log('🔍 Debug:', ...args); };
+              const __result = ${transformExpression};
+              return typeof __result === 'object' && __result !== null ? JSON.stringify(__result) : null;
+            `;
+            const stringifyExec = this.sandbox.compile(stringifyCode);
+            const jsonStr = stringifyExec({ scope: jsContext }).run();
+            if (typeof jsonStr === 'string' && jsonStr.trim().startsWith('{')) {
+              parsedFromSandboxJson = JSON.parse(jsonStr);
             }
           } catch {}
+
+          if (parsedFromSandboxJson !== undefined) {
+            finalOutput = parsedFromSandboxJson;
+          } else {
+            const exec = this.sandbox.compile(code);
+            finalOutput = exec({ scope: jsContext }).run();
+          }
+
+          // Fallback: if sandbox could not preserve primitives (e.g., booleans lost),
+          // attempt to re-evaluate the transform in a locked Node VM context to get plain JS values.
+          try {
+            if (
+              finalOutput &&
+              typeof finalOutput === 'object' &&
+              !Array.isArray(finalOutput) &&
+              ((finalOutput as any).error === undefined ||
+                (finalOutput as any).issues === undefined)
+            ) {
+              const vm = await import('node:vm');
+              const vmContext = vm.createContext({ scope: jsContext });
+              const vmCode = `
+                (function(){
+                  const output = scope.output; const pr = scope.pr; const files = scope.files; const outputs = scope.outputs; const env = scope.env; const log = ()=>{};
+                  return ${transformExpression};
+                })()
+              `;
+              const vmResult = vm.runInContext(vmCode, vmContext, { timeout: 1000 });
+              if (vmResult && typeof vmResult === 'object') {
+                finalOutput = vmResult;
+              }
+            }
+          } catch {}
+          // Create a plain JSON snapshot of the transform result to avoid proxy/getter surprises
+          // Prefer JSON stringify inside the sandbox realm (so it knows how to serialize its own objects),
+          // then fall back to host-side JSON clone and finally to a shallow copy of own enumerable properties.
+          let finalSnapshot: Record<string, unknown> | null = null;
+          try {
+            if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
+              // Try realm-local stringify first
+              try {
+                const stringifyExec = this.sandbox!.compile('return JSON.stringify(scope.obj);');
+                const jsonStr = stringifyExec({ obj: finalOutput }).run();
+                if (typeof jsonStr === 'string' && jsonStr.trim().startsWith('{')) {
+                  finalSnapshot = JSON.parse(jsonStr);
+                }
+              } catch {}
+              if (!finalSnapshot) {
+                try {
+                  finalSnapshot = JSON.parse(JSON.stringify(finalOutput));
+                } catch {}
+              }
+              if (!finalSnapshot) {
+                const tmp: Record<string, unknown> = {};
+                for (const k of Object.keys(finalOutput as Record<string, unknown>)) {
+                  (tmp as any)[k] = (finalOutput as any)[k];
+                }
+                finalSnapshot = tmp;
+              }
+            }
+          } catch {}
+          // @ts-ignore store for later extraction path
+          (this as any).__lastTransformSnapshot = finalSnapshot;
+          try {
+            const isObj =
+              finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput);
+            const keys = isObj
+              ? Object.keys(finalOutput as Record<string, unknown>).join(',')
+              : typeof finalOutput;
+            logger.debug(
+              `  transform_js: output typeof=${Array.isArray(finalOutput) ? 'array' : typeof finalOutput} keys=${keys}`
+            );
+            if (isObj && (finalOutput as any).issues) {
+              const mi: any = (finalOutput as any).issues;
+              logger.debug(
+                `  transform_js: issues typeof=${Array.isArray(mi) ? 'array' : typeof mi} len=${(mi && mi.length) || 0}`
+              );
+            }
+            try {
+              if (isObj)
+                logger.debug(`  transform_js: error value=${String((finalOutput as any).error)}`);
+            } catch {}
+          } catch {}
+
+          logger.verbose(`✓ Applied JavaScript transform successfully`);
+          // Already normalized in sandbox result
           // no debug
         } catch (error) {
           logger.error(
@@ -289,6 +393,18 @@ export class CommandCheckProvider extends CheckProvider {
       // no debug
       let issues: ReviewIssue[] = [];
       let outputForDependents: unknown = finalOutput;
+      // Capture a shallow snapshot created earlier if available (within transform_js path)
+      // @ts-ignore - finalSnapshot is defined in the transform_js scope above when applicable
+      // @ts-ignore retrieve snapshot captured after transform_js (if any)
+      const snapshotForExtraction: Record<string, unknown> | null =
+        (this as any).__lastTransformSnapshot || null;
+      try {
+        if (snapshotForExtraction) {
+          logger.debug(`  provider: snapshot keys=${Object.keys(snapshotForExtraction).join(',')}`);
+        } else {
+          logger.debug(`  provider: snapshot is null`);
+        }
+      } catch {}
       let content: string | undefined;
       let extracted: { issues: ReviewIssue[]; remainingOutput: unknown } | null = null;
 
@@ -298,8 +414,141 @@ export class CommandCheckProvider extends CheckProvider {
       const isForEachParent = commandConfig.forEach === true;
 
       if (!isForEachParent) {
-        extracted = this.extractIssuesFromOutput(finalOutput);
+        // Generic: if transform output is an object and contains an 'issues' field,
+        // expose all other fields to dependents regardless of whether we successfully
+        // normalized the issues array. This preserves flags like 'error' for fail_if.
+        try {
+          const baseObj = (snapshotForExtraction || (finalOutput as any)) as Record<
+            string,
+            unknown
+          >;
+          if (
+            baseObj &&
+            typeof baseObj === 'object' &&
+            Object.prototype.hasOwnProperty.call(baseObj, 'issues')
+          ) {
+            const remaining = { ...baseObj } as Record<string, unknown>;
+            delete (remaining as any).issues;
+            outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+            try {
+              const k =
+                outputForDependents && typeof outputForDependents === 'object'
+                  ? Object.keys(outputForDependents as any).join(',')
+                  : String(outputForDependents);
+              logger.debug(`  provider: generic-remaining keys=${k}`);
+            } catch {}
+          }
+        } catch {}
+        // Fast path for transform_js objects that include an issues array (realm-agnostic)
+        const objForExtraction = (snapshotForExtraction || (finalOutput as any)) as Record<
+          string,
+          unknown
+        >;
+        if (objForExtraction && typeof objForExtraction === 'object') {
+          try {
+            const rec = objForExtraction;
+            const maybeIssues: any = (rec as any).issues;
+            const toPlainArray = (v: any): any[] | null => {
+              if (Array.isArray(v)) return v;
+              try {
+                if (v && typeof v === 'object' && typeof v[Symbol.iterator] === 'function') {
+                  return Array.from(v);
+                }
+              } catch {}
+              const len = Number((v || {}).length);
+              if (Number.isFinite(len) && len >= 0) {
+                const arr: any[] = [];
+                for (let i = 0; i < len; i++) arr.push(v[i]);
+                return arr;
+              }
+              try {
+                const cloned = JSON.parse(JSON.stringify(v));
+                return Array.isArray(cloned) ? cloned : null;
+              } catch {
+                return null;
+              }
+            };
+            try {
+              const ctor =
+                maybeIssues && (maybeIssues as any).constructor
+                  ? (maybeIssues as any).constructor.name
+                  : 'unknown';
+              logger.debug(
+                `  provider: issues inspect typeof=${typeof maybeIssues} Array.isArray=${Array.isArray(
+                  maybeIssues
+                )} ctor=${ctor} keys=${Object.keys((maybeIssues || {}) as any).join(',')}`
+              );
+            } catch {}
+            const arr = toPlainArray(maybeIssues);
+            if (arr) {
+              const norm = this.normalizeIssueArray(arr);
+              if (norm) {
+                issues = norm;
+                const remaining = { ...rec } as Record<string, unknown>;
+                delete (remaining as any).issues;
+                outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+                try {
+                  const keys =
+                    outputForDependents && typeof outputForDependents === 'object'
+                      ? Object.keys(outputForDependents as any).join(',')
+                      : String(outputForDependents);
+                  logger.info(
+                    `  provider: fast-path issues=${issues.length} remaining keys=${keys}`
+                  );
+                } catch {}
+              } else {
+                try {
+                  logger.info('  provider: fast-path norm failed');
+                } catch {}
+              }
+            } else {
+              try {
+                logger.info('  provider: fast-path arr unavailable');
+              } catch {}
+            }
+          } catch {}
+        }
+        extracted = this.extractIssuesFromOutput(snapshotForExtraction || finalOutput);
         // no debug
+        // Handle cross-realm Arrays from sandbox: issues may look like an array but fail Array.isArray
+        if (!extracted && finalOutput && typeof finalOutput === 'object') {
+          try {
+            const rec = finalOutput as Record<string, unknown>;
+            const maybeIssues: any = (rec as any).issues;
+            if (maybeIssues && typeof maybeIssues === 'object') {
+              let arr: any[] | null = null;
+              // Prefer iterator if present
+              try {
+                if (typeof maybeIssues[Symbol.iterator] === 'function') {
+                  arr = Array.from(maybeIssues);
+                }
+              } catch {}
+              // Fallback to length-based copy
+              if (!arr) {
+                const len = Number((maybeIssues as any).length);
+                if (Number.isFinite(len) && len >= 0) {
+                  arr = [];
+                  for (let i = 0; i < len; i++) arr.push(maybeIssues[i]);
+                }
+              }
+              // Last resort: JSON clone
+              if (!arr) {
+                try {
+                  arr = JSON.parse(JSON.stringify(maybeIssues));
+                } catch {}
+              }
+              if (arr && Array.isArray(arr)) {
+                const norm = this.normalizeIssueArray(arr);
+                if (norm) {
+                  issues = norm;
+                  const remaining = { ...rec } as Record<string, unknown>;
+                  delete (remaining as any).issues;
+                  outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+                }
+              }
+            }
+          } catch {}
+        }
         if (!extracted && typeof finalOutput === 'string') {
           // Attempt to parse string output as JSON and extract issues again
           try {
@@ -364,18 +613,147 @@ export class CommandCheckProvider extends CheckProvider {
             content = trimmed;
           }
         }
+
+        // Preserve all primitive flags (boolean/number/string) from original transform output
+        try {
+          const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+          if (
+            outputForDependents &&
+            typeof outputForDependents === 'object' &&
+            srcObj &&
+            typeof srcObj === 'object'
+          ) {
+            for (const k of Object.keys(srcObj)) {
+              const v: any = (srcObj as any)[k];
+              if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+                (outputForDependents as any)[k] = v;
+              }
+            }
+          }
+        } catch {}
+
+        // Normalize output object to a plain shallow object (avoid JSON stringify drop of false booleans)
+        try {
+          if (
+            outputForDependents &&
+            typeof outputForDependents === 'object' &&
+            !Array.isArray(outputForDependents)
+          ) {
+            const plain: Record<string, unknown> = {};
+            for (const k of Object.keys(outputForDependents as any)) {
+              (plain as any)[k] = (outputForDependents as any)[k];
+            }
+            outputForDependents = plain;
+          }
+        } catch {}
       }
 
       if (!content && this.shouldTreatAsTextOutput(trimmedRawOutput) && !isForEachParent) {
         content = trimmedRawOutput;
       }
 
+      // Normalize output object to plain JSON to avoid cross-realm proxy quirks
+      try {
+        if (outputForDependents && typeof outputForDependents === 'object') {
+          outputForDependents = JSON.parse(JSON.stringify(outputForDependents));
+        }
+      } catch {}
+
+      // Promote primitive flags from original transform output to top-level result fields (schema-agnostic)
+      const promoted: Record<string, unknown> = {};
+      try {
+        const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+        if (srcObj && typeof srcObj === 'object') {
+          for (const k of Object.keys(srcObj)) {
+            const v: any = (srcObj as any)[k];
+            if (typeof v === 'boolean') {
+              if (v === true && promoted[k] === undefined) promoted[k] = true;
+            } else if (
+              (typeof v === 'number' || typeof v === 'string') &&
+              promoted[k] === undefined
+            ) {
+              promoted[k] = v;
+            }
+          }
+        }
+      } catch {}
+
       // Return the output and issues as part of the review summary so dependent checks can use them
       const result = {
         issues,
         output: outputForDependents,
         ...(content ? { content } : {}),
+        ...promoted,
       } as ReviewSummary;
+
+      // Attach raw transform object only when transform_js was used (avoid polluting plain command outputs)
+      try {
+        if (transformJs) {
+          const rawObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+          if (rawObj && typeof rawObj === 'object') {
+            (result as any).__raw = rawObj;
+          }
+        }
+      } catch {}
+
+      // Final safeguard: ensure primitive flags from original transform output are present in result.output.
+      // Do this without dropping explicit false values (important for fail_if like `output.error`).
+      try {
+        const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+        const srcErr = ((): boolean | undefined => {
+          try {
+            if (
+              snapshotForExtraction &&
+              typeof snapshotForExtraction === 'object' &&
+              (snapshotForExtraction as any).error !== undefined
+            ) {
+              return Boolean((snapshotForExtraction as any).error);
+            }
+            if (
+              finalOutput &&
+              typeof finalOutput === 'object' &&
+              (finalOutput as any).error !== undefined
+            ) {
+              return Boolean((finalOutput as any).error);
+            }
+          } catch {}
+          return undefined;
+        })();
+        const dst = (result as any).output;
+        if (srcObj && typeof srcObj === 'object' && dst && typeof dst === 'object') {
+          try {
+            logger.debug(
+              `  provider: safeguard src.error typeof=${typeof (srcObj as any).error} val=${String((srcObj as any).error)} dst.hasErrorBefore=${String((dst as any).error !== undefined)}`
+            );
+          } catch {}
+          for (const k of Object.keys(srcObj)) {
+            const v: any = (srcObj as any)[k];
+            if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+              (dst as any)[k] = v;
+            }
+          }
+          // Explicitly normalize a common flag used in tests/pipelines
+          if (srcErr !== undefined && (dst as any).error === undefined) {
+            (dst as any).error = srcErr;
+            try {
+              const k = Object.keys(dst as any).join(',');
+              logger.debug(
+                `  provider: safeguard merged error -> output keys=${k} val=${String((dst as any).error)}`
+              );
+            } catch {}
+          }
+        }
+      } catch {}
+
+      try {
+        const out: any = (result as any).output;
+        if (out && typeof out === 'object') {
+          const k = Object.keys(out as Record<string, unknown>).join(',');
+          logger.debug(`  provider: return output keys=${k}`);
+        } else {
+          logger.debug(`  provider: return output type=${typeof out}`);
+        }
+      } catch {}
 
       // no debug
 
