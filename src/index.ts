@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // GitHub event objects have complex dynamic structures that are difficult to fully type
 // Using 'any' for these objects is acceptable as they come from external GitHub webhooks
-
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
@@ -12,7 +11,6 @@ import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
-
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
  */
@@ -21,17 +19,13 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
   const appId = getInput('app-id');
   const privateKey = getInput('private-key');
   const installationId = getInput('installation-id');
-
   // Prefer GitHub App authentication if app credentials are provided
   if (appId && privateKey) {
     console.log('🔐 Using GitHub App authentication');
-
     try {
       // Note: createAppAuth is used in the Octokit constructor below
-
       // If no installation ID provided, try to get it for the current repository
       let finalInstallationId: number | undefined;
-
       // Validate and parse the installation ID if provided
       if (installationId) {
         finalInstallationId = parseInt(installationId, 10);
@@ -39,11 +33,9 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
           throw new Error('Invalid installation-id provided. It must be a positive integer.');
         }
       }
-
       if (!finalInstallationId) {
         const owner = getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER;
         const repo = getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1];
-
         if (owner && repo) {
           // Create a temporary JWT-authenticated client to find the installation
           const appOctokit = new Octokit({
@@ -53,7 +45,6 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
               privateKey,
             },
           });
-
           try {
             const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
               owner,
@@ -71,7 +62,6 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
           }
         }
       }
-
       // Create the authenticated Octokit instance
       const octokit = new Octokit({
         authStrategy: createAppAuth,
@@ -81,7 +71,6 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
           installationId: finalInstallationId,
         },
       });
-
       return { octokit, authType: 'github-app' };
     } catch (error) {
       console.error(
@@ -90,7 +79,6 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
       throw new Error(`GitHub App authentication failed`, { cause: error });
     }
   }
-
   // Fall back to token authentication
   if (token) {
     console.log('🔑 Using GitHub token authentication');
@@ -99,10 +87,8 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
       authType: 'token',
     };
   }
-
   throw new Error('Either github-token or app-id/private-key must be provided for authentication');
 }
-
 export async function run(): Promise<void> {
   try {
     try {
@@ -113,9 +99,17 @@ export async function run(): Promise<void> {
         traceReport: process.env.VISOR_TRACE_REPORT == 'true',
       });
     } catch {}
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      process.env.VISOR_RUN_TS = runTs;
+      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
+    } catch {}
     const { octokit, authType } = await createAuthenticatedOctokit();
     console.log(`✅ Authenticated successfully using ${authType}`);
-
     // Collect all GitHub Action inputs
     const inputs: GitHubActionInputs = {
       'github-token': getInput('github-token') || '',
@@ -146,9 +140,7 @@ export async function run(): Promise<void> {
       'visor-config-path': getInput('visor-config-path') || undefined,
       'visor-checks': getInput('visor-checks') || undefined,
     };
-
     const eventName = process.env.GITHUB_EVENT_NAME;
-
     // Load GitHub event data from event file
     let eventData: any = {};
     if (process.env.GITHUB_EVENT_PATH) {
@@ -160,7 +152,6 @@ export async function run(): Promise<void> {
         console.error('Failed to load GitHub event data:', error);
       }
     }
-
     // Create GitHub context for CLI bridge
     const context: GitHubContext = {
       event_name: eventName || 'unknown',
@@ -173,14 +164,12 @@ export async function run(): Promise<void> {
       event: eventData,
       payload: eventData,
     };
-
     // Debug logging for inputs
     console.log('Debug: inputs.debug =', inputs.debug);
     console.log('Debug: inputs.checks =', inputs.checks);
     console.log('Debug: inputs.config-path =', inputs['config-path']);
     console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
     console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
-
     // Always use config-driven mode in GitHub Actions
     // The CLI mode is only for local development, not for GitHub Actions
     console.log('🤖 Using config-driven mode');
@@ -196,14 +185,11 @@ export async function run(): Promise<void> {
       }
       console.log(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
     } catch {}
-
     // Load config to determine which checks should run for this event
     const configManager = new ConfigManager();
     let config: import('./types/config').VisorConfig;
-
     // First try to load user config, then fall back to defaults/.visor.yaml
     const configPath = inputs['config-path'] || inputs['visor-config-path'];
-
     try {
       if (configPath) {
         // Load specified config
@@ -220,7 +206,6 @@ export async function run(): Promise<void> {
         '⚠️ Error loading config:',
         configError instanceof Error ? configError.message : String(configError)
       );
-
       // Fall back to bundled default config
       const bundledConfig = configManager.loadBundledDefaultConfig();
       if (bundledConfig) {
@@ -242,7 +227,6 @@ export async function run(): Promise<void> {
         console.log('⚠️ Could not load defaults/.visor.yaml, using minimal configuration');
       }
     }
-
     // Determine which event we're handling and run appropriate checks
     await handleEvent(octokit, inputs, eventName, context, config);
   } catch (error) {
@@ -250,7 +234,6 @@ export async function run(): Promise<void> {
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
       './providers/claude-code-check-provider'
     ).catch(() => ({ ClaudeCodeSDKNotInstalledError: null, ClaudeCodeAPIKeyMissingError: null }));
-
     // Provide user-friendly error messages for known errors
     if (ClaudeCodeSDKNotInstalledError && error instanceof ClaudeCodeSDKNotInstalledError) {
       const errorMessage = [
@@ -276,7 +259,9 @@ export async function run(): Promise<void> {
       setFailed(error instanceof Error ? error.message : 'Unknown error');
     }
   } finally {
-    try { await shutdownTelemetry(); } catch {}
+    try {
+      await shutdownTelemetry();
+    } catch {}
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
         const fs = await import('fs');
@@ -285,11 +270,54 @@ export async function run(): Promise<void> {
         if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
         const hasHtml = fs.readdirSync(outDir).some(f => f.endsWith('.report.html'));
         if (!hasHtml) {
-          const ts = new Date().toISOString().replace(/[:.]/g, '-');
-          const htmlPath = path.join(outDir, `${ts}.report.html`);
-          fs.writeFileSync(htmlPath, '<!doctype html><html><head><meta charset=\"utf-8\"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2><p>No spans recorded.</p></body></html>', 'utf8');
+          const runTs = process.env.VISOR_RUN_TS || new Date().toISOString().replace(/[:.]/g, '-');
+          const htmlPath = path.join(outDir, `run-${runTs}.report.html`);
+          fs.writeFileSync(
+            htmlPath,
+            '<!doctype html><html><head><meta charset=\"utf-8\"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2><p>No spans recorded.</p></body></html>',
+            'utf8'
+          );
         }
       }
+      try {
+        if (process.env.VISOR_TRACE_REPORT === 'true') {
+          const fs = await import('fs');
+          const path = await import('path');
+          const outDir =
+            process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+          const files = fs.existsSync(outDir) ? fs.readdirSync(outDir) : [];
+          const ndjson = files.filter(f => f.endsWith('.ndjson'));
+          if (ndjson.length) {
+            ndjson.sort();
+            const ndPath = path.join(outDir, ndjson[ndjson.length - 1]);
+            const lines = fs.readFileSync(ndPath, 'utf8').split(/\n/).filter(Boolean);
+            const entries = lines
+              .map(l => {
+                try {
+                  return JSON.parse(l);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean);
+            const rowHtml = entries
+              .map((e: any, idx: number) => {
+                const name = String(e.name || 'unknown');
+                const attrs = e.attributes ? JSON.stringify(e.attributes) : '{}';
+                const evs = Array.isArray(e.events)
+                  ? e.events.map((v: any) => v.name).join(', ')
+                  : '';
+                return `<tr><td>${idx + 1}</td><td>${name}</td><td><code>${attrs}</code></td><td>${evs}</td></tr>`;
+              })
+              .join('');
+            const runTs =
+              process.env.VISOR_RUN_TS || new Date().toISOString().replace(/[:.]/g, '-');
+            const htmlPath = path.join(outDir, `run-${runTs}.report.html`);
+            const html = `<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title><style>body{font-family:system-ui;padding:16px;background:#0b0f14;color:#e6edf3} table{width:100%;border-collapse:collapse} th,td{border:1px solid #30363d;padding:6px} th{background:#161b22}</style></head><body><h2>Visor Trace Report (NDJSON)</h2><table><thead><tr><th>#</th><th>Name</th><th>Attributes</th><th>Events</th></tr></thead><tbody>${rowHtml}</tbody></table></body></html>`;
+            fs.writeFileSync(htmlPath, html, 'utf8');
+          }
+        }
+      } catch {}
     } catch {}
     // Cleanup AI sessions before GitHub Action exits to prevent process hanging
     const { SessionRegistry } = await import('./session-registry');
@@ -302,13 +330,11 @@ export async function run(): Promise<void> {
     }
   }
 }
-
 function mapGitHubEventToTrigger(
   eventName?: string,
   action?: string
 ): import('./types/config').EventTrigger {
   if (!eventName) return 'pr_updated';
-
   switch (eventName) {
     case 'pull_request':
       if (action === 'opened') return 'pr_opened';
@@ -323,7 +349,6 @@ function mapGitHubEventToTrigger(
       return 'pr_updated';
   }
 }
-
 /**
  * Handle events based on config
  */
@@ -336,20 +361,16 @@ async function handleEvent(
 ): Promise<void> {
   const owner = inputs.owner;
   const repo = inputs.repo;
-
   if (!owner || !repo) {
     throw new Error('Owner and repo are required');
   }
-
   // Determine context type for better logging
   const isPullRequest = eventName === 'pull_request';
   const isIssue = eventName === 'issues';
   const isIssueComment = eventName === 'issue_comment';
   const isManualCLI = !eventName || eventName === 'unknown';
-
   // Map GitHub event to our event trigger format
   const eventType = mapGitHubEventToTrigger(eventName, context.event?.action);
-
   // Enhanced event logging with context
   if (isManualCLI) {
     console.log(`🖥️  Mode: Manual CLI`);
@@ -361,7 +382,6 @@ async function handleEvent(
       `📋 Event: ${eventName}${context.event?.action ? ` (action: ${context.event?.action})` : ''}`
     );
     console.log(`🎯 Trigger: ${eventType}`);
-
     // Show context-specific information
     if (isPullRequest) {
       const prNumber = context.event?.pull_request?.number;
@@ -376,7 +396,6 @@ async function handleEvent(
       console.log(`💬 Context: Comment on ${isPR ? 'Pull Request' : 'Issue'} #${number}`);
     }
   }
-
   // Debug: Log the checks that are available in the loaded config
   const allChecks = Object.keys(config.checks || {});
   console.log(`📚 Total checks in loaded config: ${allChecks.length}`);
@@ -384,10 +403,8 @@ async function handleEvent(
     // Only log check names if there aren't too many
     console.log(`📚 Available checks: ${allChecks.join(', ')}`);
   }
-
   // Find checks that should run for this event
   let checksToRun: string[] = [];
-
   // First, get all checks that are configured for this event type
   const eventChecks: string[] = [];
   for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
@@ -397,12 +414,10 @@ async function handleEvent(
       eventChecks.push(checkName);
     }
   }
-
   // Now apply the 'checks' input filter if provided
   const checksInput = inputs.checks || inputs['visor-checks'];
   if (checksInput && checksInput.trim() !== '') {
     const requestedChecks = checksInput.split(',').map(c => c.trim());
-
     if (requestedChecks.includes('all')) {
       // If 'all' is specified, run all event checks
       checksToRun = eventChecks;
@@ -434,14 +449,11 @@ async function handleEvent(
     // No checks input provided, run all event checks
     checksToRun = eventChecks;
   }
-
   if (checksToRun.length === 0) {
     console.log(`ℹ️ No checks configured to run for event: ${eventType}`);
     return;
   }
-
   console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
-
   // Handle different GitHub events
   switch (eventName) {
     case 'issue_comment':
@@ -466,7 +478,6 @@ async function handleEvent(
       break;
   }
 }
-
 /**
  * Recursively resolve dependencies for a set of check IDs
  */
@@ -477,41 +488,32 @@ function resolveDependencies(
   visiting: Set<string> = new Set()
 ): string[] {
   const result: string[] = [];
-
   for (const checkId of checkIds) {
     if (resolved.has(checkId)) {
       continue;
     }
-
     if (visiting.has(checkId)) {
       console.warn(`Circular dependency detected involving check: ${checkId}`);
       continue;
     }
-
     visiting.add(checkId);
-
     // Get dependencies for this check
     const checkConfig = config?.checks?.[checkId];
     const dependencies = checkConfig?.depends_on || [];
-
     // Recursively resolve dependencies first
     if (dependencies.length > 0) {
       const resolvedDeps = resolveDependencies(dependencies, config, resolved, visiting);
       result.push(...resolvedDeps.filter(dep => !result.includes(dep)));
     }
-
     // Add the current check if not already added
     if (!result.includes(checkId)) {
       result.push(checkId);
     }
-
     resolved.add(checkId);
     visiting.delete(checkId);
   }
-
   return result;
 }
-
 /**
  * Handle issue events (opened, edited, etc)
  */
@@ -526,22 +528,18 @@ async function handleIssueEvent(
 ): Promise<void> {
   const issue = context.event?.issue as any;
   const action = context.event?.action as string | undefined;
-
   if (!issue) {
     console.log('No issue found in context');
     return;
   }
-
   // Skip if this is a pull request (has pull_request property)
   if (issue.pull_request) {
     console.log('Skipping PR-related issue event');
     return;
   }
-
   console.log(
     `📋 Processing issue #${issue.number} event: ${action} with ${checksToRun.length} check(s): ${checksToRun.join(', ')}`
   );
-
   // For issue events, we need to create a PR-like structure for the checks to process
   // This allows us to reuse the existing check infrastructure
   const prInfo: any = {
@@ -560,7 +558,6 @@ async function handleIssueEvent(
     isIssue: true, // Flag to indicate this is an issue, not a PR
     eventContext: context.event, // Pass the full event context for templates
   };
-
   // Fetch comment history for issues
   try {
     console.log(`💬 Fetching comment history for issue #${issue.number}`);
@@ -574,11 +571,9 @@ async function handleIssueEvent(
     );
     prInfo.comments = [];
   }
-
   // Run the checks using CheckExecutionEngine
   const { CheckExecutionEngine } = await import('./check-execution-engine');
   const engine = new CheckExecutionEngine();
-
   try {
     const executionResult = await engine.executeGroupedChecks(
       prInfo,
@@ -588,9 +583,7 @@ async function handleIssueEvent(
       undefined, // outputFormat
       inputs.debug === 'true'
     );
-
     const { results } = executionResult;
-
     // Log execution results for debugging (only in debug mode)
     if (inputs.debug === 'true') {
       console.log(`📊 Check execution completed: ${Object.keys(results).length} group(s)`);
@@ -606,11 +599,9 @@ async function handleIssueEvent(
         }
       }
     }
-
     // Format and post results as a comment on the issue
     if (Object.keys(results).length > 0) {
       let commentBody = '';
-
       // Directly use check content without adding extra headers
       for (const checks of Object.values(results)) {
         for (const check of checks) {
@@ -619,11 +610,9 @@ async function handleIssueEvent(
           }
         }
       }
-
       // Only post if there's actual content (not just empty checks)
       if (commentBody.trim()) {
         commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
-
         // Post comment to the issue
         await octokit.rest.issues.createComment({
           owner,
@@ -631,7 +620,6 @@ async function handleIssueEvent(
           issue_number: issue.number,
           body: commentBody,
         });
-
         console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
       } else {
         console.log('ℹ️ No content to post - all checks returned empty results');
@@ -639,7 +627,6 @@ async function handleIssueEvent(
     } else {
       console.log('⚠️ No results from issue assistant checks');
     }
-
     // Set outputs for GitHub Actions
     setOutput('review-completed', 'true');
     setOutput('checks-executed', checksToRun.length.toString());
@@ -650,7 +637,6 @@ async function handleIssueEvent(
     throw error;
   }
 }
-
 async function handleIssueComment(
   octokit: Octokit,
   owner: string,
@@ -662,41 +648,34 @@ async function handleIssueComment(
 ): Promise<void> {
   const comment = context.event?.comment as any;
   const issue = context.event?.issue as any;
-
   if (!comment || !issue) {
     console.log('No comment or issue found in context');
     return;
   }
-
   // Prevent recursion: skip if comment is from visor itself
   // Check both comment author and content markers
   const isVisorBot =
     comment.user?.login === 'visor[bot]' ||
     comment.user?.login === 'github-actions[bot]' ||
     comment.user?.type === 'Bot';
-
   const hasVisorMarkers =
     comment.body &&
     (comment.body.includes('<!-- visor-comment-id:') ||
       comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
       comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
-
   if (isVisorBot || hasVisorMarkers) {
     console.log(
       `✓ Skipping bot's own comment to prevent recursion. Author: ${comment.user?.login}, Type: ${comment.user?.type}, Has markers: ${hasVisorMarkers}`
     );
     return;
   }
-
   // Process comments on both issues and PRs
   // (issue.pull_request exists for PR comments, doesn't exist for issue comments)
   const isPullRequest = !!issue.pull_request;
-
   // Load configuration to get available commands
   const configManager = new ConfigManager();
   let config: import('./types/config').VisorConfig | undefined;
   const commandRegistry: CommandRegistry = {};
-
   // Use provided config if available (from action), otherwise load it
   if (actionConfig) {
     config = actionConfig;
@@ -708,12 +687,10 @@ async function handleIssueComment(
       config = undefined;
     }
   }
-
   // Build command registry from config
   if (config?.checks) {
     // Add 'review' command that runs all checks
     commandRegistry['review'] = Object.keys(config.checks);
-
     // Also add individual check names as commands
     for (const [checkId, checkConfig] of Object.entries(config.checks)) {
       // Legacy: check if it has old 'command' property
@@ -730,7 +707,6 @@ async function handleIssueComment(
     // Default commands when no config is available
     commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
   }
-
   // Parse comment with available commands
   const availableCommands = Object.keys(commandRegistry);
   const command = parseComment(comment.body, availableCommands);
@@ -748,13 +724,10 @@ async function handleIssueComment(
     // For PRs without commands, or issues without checks to run, return early
     return;
   }
-
   console.log(`Processing command: ${command.type}`);
-
   const prNumber = issue.number;
   const analyzer = new PRAnalyzer(octokit);
   const reviewer = new PRReviewer(octokit);
-
   switch (command.type) {
     case 'status':
       if (isPullRequest) {
@@ -775,7 +748,6 @@ async function handleIssueComment(
           `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
           `\n---\n\n` +
           `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
-
         await octokit.rest.issues.createComment({
           owner,
           repo,
@@ -792,7 +764,6 @@ async function handleIssueComment(
           `**Created:** ${issue.created_at || 'unknown'}\n` +
           `\n---\n\n` +
           `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
-
         await octokit.rest.issues.createComment({
           owner,
           repo,
@@ -801,7 +772,6 @@ async function handleIssueComment(
         });
       }
       break;
-
     case 'help':
       await octokit.rest.issues.createComment({
         owner,
@@ -810,7 +780,6 @@ async function handleIssueComment(
         body: getHelpText(commandRegistry),
       });
       break;
-
     default:
       // Handle custom commands from config
       if (commandRegistry[command.type]) {
@@ -820,7 +789,6 @@ async function handleIssueComment(
         console.log(
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
         );
-
         // Different handling for PRs vs Issues
         let prInfo: PRInfo;
         if (isPullRequest) {
@@ -848,7 +816,6 @@ async function handleIssueComment(
             isIssue: true, // Flag to indicate this is an issue, not a PR
             eventContext: context.event, // Pass the full event context
           } as any;
-
           // Fetch comment history for the issue
           try {
             console.log(`💬 Fetching comment history for issue #${issue.number}`);
@@ -862,7 +829,6 @@ async function handleIssueComment(
             (prInfo as any).comments = [];
           }
         }
-
         // Extract common arguments
         const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
           | 'security'
@@ -876,7 +842,6 @@ async function handleIssueComment(
           | 'markdown'
           | 'sarif'
           | undefined;
-
         // If focus is specified, update the checks' focus
         if (focus && config?.checks) {
           for (const checkId of checkIds) {
@@ -885,7 +850,6 @@ async function handleIssueComment(
             }
           }
         }
-
         // Only run checks that are appropriate for the context
         const filteredCheckIds = checkIds.filter(checkId => {
           if (!config?.checks?.[checkId]) return false;
@@ -901,7 +865,6 @@ async function handleIssueComment(
           // For PR comments, run checks configured for PR events or issue_comment
           return checkConfig.on.includes('pr_updated') || checkConfig.on.includes('issue_comment');
         });
-
         if (filteredCheckIds.length === 0) {
           console.log(`No checks configured to run for ${isPullRequest ? 'PR' : 'issue'} comments`);
           await octokit.rest.issues.createComment({
@@ -912,7 +875,6 @@ async function handleIssueComment(
           });
           return;
         }
-
         const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
           focus,
           format,
@@ -920,7 +882,6 @@ async function handleIssueComment(
           checks: filteredCheckIds,
           parallelExecution: false,
         });
-
         // Check if commenting is enabled before posting
         const shouldComment = inputs['comment-on-pr'] !== 'false';
         if (shouldComment) {
@@ -931,7 +892,6 @@ async function handleIssueComment(
         } else {
           console.log('📝 Skipping comment (comment-on-pr is disabled)');
         }
-
         // Calculate total check results from grouped results
         const totalChecks = Object.values(groupedResults).flatMap(checks => checks).length;
         setOutput('checks-executed', totalChecks.toString());
@@ -939,7 +899,6 @@ async function handleIssueComment(
       break;
   }
 }
-
 async function handlePullRequestWithConfig(
   octokit: Octokit,
   owner: string,
@@ -951,24 +910,18 @@ async function handlePullRequestWithConfig(
 ): Promise<void> {
   const pullRequest = context.event?.pull_request as any;
   const action = context.event?.action as string | undefined;
-
   if (!pullRequest) {
     console.log('No pull request found in context');
     return;
   }
-
   console.log(`Reviewing PR #${pullRequest.number} with checks: ${checksToRun.join(', ')}`);
-
   const prNumber = pullRequest.number;
   const analyzer = new PRAnalyzer(octokit);
   const reviewer = new PRReviewer(octokit);
-
   // Generate comment ID for this PR
   const commentId = `pr-review-${prNumber}`;
-
   // Map the action to event type
   const eventType = mapGitHubEventToTrigger('pull_request', action);
-
   // Fetch PR diff (handle test scenarios gracefully)
   // In PR context, ALWAYS include full diffs for proper code review
   console.log('📝 Code context: ENABLED (PR context - always included)');
@@ -991,26 +944,21 @@ async function handlePullRequestWithConfig(
     }
     throw error;
   }
-
   if (prInfo.files.length === 0) {
     console.log('⚠️ No files changed in this PR - skipping review');
     setOutput('review-completed', 'true');
     setOutput('issues-found', '0');
     return;
   }
-
   // Filter checks based on conditions
   const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
-
   if (checksToExecute.length === 0) {
     console.log('⚠️ No checks meet execution conditions');
     setOutput('review-completed', 'true');
     setOutput('issues-found', '0');
     return;
   }
-
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
-
   // Create review options
   const reviewOptions = {
     debug: inputs?.debug === 'true',
@@ -1018,7 +966,6 @@ async function handlePullRequestWithConfig(
     checks: checksToExecute,
     parallelExecution: true,
   };
-
   // Create GitHub check runs if enabled
   let checkResults = null;
   if (inputs && inputs['create-check'] !== 'false') {
@@ -1031,15 +978,12 @@ async function handlePullRequestWithConfig(
       checksToExecute,
       config
     );
-
     if (checkResults?.checkRunMap) {
       await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
     }
   }
-
   // Perform the review
   const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
-
   // Complete GitHub check runs
   if (checkResults?.checkRunMap) {
     await completeGitHubChecks(
@@ -1051,7 +995,6 @@ async function handlePullRequestWithConfig(
       config
     );
   }
-
   // Post review comment (only if comment-on-pr is not disabled)
   const shouldComment = inputs['comment-on-pr'] !== 'false';
   if (shouldComment) {
@@ -1063,24 +1006,20 @@ async function handlePullRequestWithConfig(
   } else {
     console.log('📝 Skipping PR comment (comment-on-pr is disabled)');
   }
-
   // Set outputs
   setOutput('review-completed', 'true');
   setOutput('checks-executed', checksToExecute.length.toString());
   setOutput('pr-action', action);
 }
-
 async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Promise<void> {
   try {
     const { data: repoData } = await octokit.rest.repos.get({
       owner,
       repo,
     });
-
     setOutput('repo-name', repoData.name);
     setOutput('repo-description', repoData.description || '');
     setOutput('repo-stars', repoData.stargazers_count.toString());
-
     console.log(`Repository: ${repoData.full_name}`);
     console.log(`Description: ${repoData.description || 'No description'}`);
     console.log(`Stars: ${repoData.stargazers_count}`);
@@ -1092,7 +1031,6 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
     setOutput('repo-stars', '0');
   }
 }
-
 /**
  * Filter checks based on their if conditions and API requirements
  */
@@ -1102,7 +1040,6 @@ async function filterChecksToExecute(
   prInfo?: import('./pr-analyzer').PRInfo
 ): Promise<string[]> {
   const filteredChecks: string[] = [];
-
   // Create a basic context for condition evaluation
   const context = {
     files: prInfo?.files || [],
@@ -1115,7 +1052,6 @@ async function filterChecksToExecute(
       deletions: prInfo?.totalDeletions || 0,
     },
   };
-
   for (const checkName of checksToRun) {
     const checkConfig = config?.checks?.[checkName];
     if (!checkConfig) {
@@ -1123,16 +1059,13 @@ async function filterChecksToExecute(
       filteredChecks.push(checkName);
       continue;
     }
-
     // Check if the check has an if condition
     if (checkConfig.if) {
       try {
         // Import the failure condition evaluator
         const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
         const evaluator = new FailureConditionEvaluator();
-
         const shouldRun = await evaluator.evaluateIfCondition(checkName, checkConfig.if, context);
-
         if (shouldRun) {
           filteredChecks.push(checkName);
         } else {
@@ -1148,10 +1081,8 @@ async function filterChecksToExecute(
       filteredChecks.push(checkName);
     }
   }
-
   return filteredChecks;
 }
-
 /**
  * Create GitHub check runs for individual checks if enabled
  */
@@ -1171,10 +1102,8 @@ async function createGitHubChecks(
 }> {
   // Check if GitHub checks are enabled via input (default is true)
   const createCheckInput = inputs['create-check'] !== 'false';
-
   // Check if GitHub checks are enabled via config (default is true if not specified)
   const createCheckConfig = config?.output?.github_checks?.enabled !== false;
-
   if (!createCheckInput || !createCheckConfig) {
     const reason = !createCheckInput ? 'create-check input' : 'configuration';
     console.log(`🔧 GitHub check runs disabled via ${reason}`);
@@ -1185,21 +1114,16 @@ async function createGitHubChecks(
       checkRunUrls: [],
     };
   }
-
   // Check if per-check mode is enabled (default is true)
   const perCheckMode = config?.output?.github_checks?.per_check !== false;
-
   try {
     const checkService = new GitHubCheckService(octokit);
     const checkRunMap = new Map<string, { id: number; url: string }>();
     const checkRunUrls: string[] = [];
-
     // Get custom name prefix if specified
     const namePrefix = config?.output?.github_checks?.name_prefix || 'Visor';
-
     if (perCheckMode) {
       console.log(`🔍 Creating individual GitHub check runs for ${checksToRun.length} checks...`);
-
       // Create individual check runs for each configured check
       for (const checkName of checksToRun) {
         try {
@@ -1210,12 +1134,10 @@ async function createGitHubChecks(
             name: `${namePrefix}: ${checkName}`,
             external_id: `visor-${checkName}-${headSha.substring(0, 7)}`,
           };
-
           const checkRun = await checkService.createCheckRun(checkRunOptions, {
             title: `${checkName} Analysis`,
             summary: `Running ${checkName} check using AI-powered analysis...`,
           });
-
           checkRunMap.set(checkName, checkRun);
           checkRunUrls.push(checkRun.url);
           console.log(`✅ Created check run for ${checkName}: ${checkRun.url}`);
@@ -1231,7 +1153,6 @@ async function createGitHubChecks(
     } else {
       // Create a single check run for all checks
       console.log(`🔍 Creating single GitHub check run for ${checksToRun.length} checks...`);
-
       try {
         const checkRunOptions: CheckRunOptions = {
           owner,
@@ -1240,12 +1161,10 @@ async function createGitHubChecks(
           name: `${namePrefix}: Code Review`,
           external_id: `visor-combined-${headSha.substring(0, 7)}`,
         };
-
         const checkRun = await checkService.createCheckRun(checkRunOptions, {
           title: 'AI Code Review',
           summary: `Running ${checksToRun.join(', ')} checks using AI-powered analysis...`,
         });
-
         // Use 'combined' as the key for all checks
         checkRunMap.set('combined', checkRun);
         checkRunUrls.push(checkRun.url);
@@ -1257,7 +1176,6 @@ async function createGitHubChecks(
         console.log('💬 Review will continue using PR comments instead');
       }
     }
-
     return {
       checkRunMap,
       checksApiAvailable: true,
@@ -1296,7 +1214,6 @@ async function createGitHubChecks(
     }
   }
 }
-
 /**
  * Update GitHub check runs to in-progress status
  */
@@ -1307,9 +1224,7 @@ async function updateChecksInProgress(
   checkRunMap: Map<string, { id: number; url: string }> | null
 ): Promise<void> {
   if (!checkRunMap) return;
-
   const checkService = new GitHubCheckService(octokit);
-
   for (const [checkName, checkRun] of checkRunMap) {
     try {
       await checkService.updateCheckRunInProgress(owner, repo, checkRun.id, {
@@ -1322,7 +1237,6 @@ async function updateChecksInProgress(
     }
   }
 }
-
 /**
  * Complete GitHub check runs with results
  */
@@ -1335,12 +1249,9 @@ async function completeGitHubChecks(
   config: import('./types/config').VisorConfig
 ): Promise<void> {
   if (!checkRunMap) return;
-
   const checkService = new GitHubCheckService(octokit);
   const perCheckMode = config?.output?.github_checks?.per_check !== false;
-
   console.log(`🏁 Completing ${checkRunMap.size} GitHub check runs...`);
-
   if (perCheckMode && !checkRunMap.has('combined')) {
     // Per-check mode: complete individual check runs
     await completeIndividualChecks(checkService, owner, repo, checkRunMap, groupedResults, config);
@@ -1349,25 +1260,21 @@ async function completeGitHubChecks(
     await completeCombinedCheck(checkService, owner, repo, checkRunMap, groupedResults, config);
   }
 }
-
 /**
  * Extract ReviewIssue[] from GroupedCheckResults content by parsing the rendered text
  * This function parses the structured content created by CheckExecutionEngine.convertReviewSummaryToGroupedResults()
  */
 function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
-
   for (const checkResults of Object.values(groupedResults)) {
     for (const checkResult of checkResults) {
       const { checkName, content } = checkResult;
-
       // First, check if structured issues are available
       if (checkResult.issues && checkResult.issues.length > 0) {
         // Use structured issues directly - they're already properly formatted
         issues.push(...checkResult.issues);
         continue;
       }
-
       // Fall back to parsing issues from content (legacy support)
       // Parse issues from content - look for lines like:
       // - **CRITICAL**: message (file:line)
@@ -1376,12 +1283,10 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
       // - **INFO**: message (file:line)
       const issueRegex = /^- \*\*([A-Z]+)\*\*: (.+?) \(([^:]+):(\d+)\)$/gm;
       let match;
-
       while ((match = issueRegex.exec(content)) !== null) {
         const [, severityUpper, message, file, lineStr] = match;
         const severity = severityUpper.toLowerCase() as 'info' | 'warning' | 'error' | 'critical';
         const line = parseInt(lineStr, 10);
-
         // Create ReviewIssue with proper format for GitHub annotations
         const issue: ReviewIssue = {
           file,
@@ -1393,15 +1298,12 @@ function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): R
           group: checkResult.group,
           timestamp: Date.now(),
         };
-
         issues.push(issue);
       }
     }
   }
-
   return issues;
 }
-
 /**
  * Complete individual GitHub check runs
  */
@@ -1416,16 +1318,13 @@ async function completeIndividualChecks(
   // Create failure condition evaluator
   const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
   const failureEvaluator = new FailureConditionEvaluator();
-
   // Extract all issues once and group by check name for O(N) complexity
   const allIssues = extractIssuesFromGroupedResults(groupedResults);
   const issuesByCheck = new Map<string, import('./reviewer').ReviewIssue[]>();
-
   // Initialize empty arrays for all checks
   for (const checkName of checkRunMap.keys()) {
     issuesByCheck.set(checkName, []);
   }
-
   // Group issues by check name
   for (const issue of allIssues) {
     const checkName = issue.ruleId?.split('/')[0];
@@ -1433,27 +1332,21 @@ async function completeIndividualChecks(
       issuesByCheck.get(checkName)!.push(issue);
     }
   }
-
   for (const [checkName, checkRun] of checkRunMap) {
     try {
       // Get pre-grouped issues for this check - O(1) lookup
       const checkIssues = issuesByCheck.get(checkName) || [];
-
       // Evaluate failure conditions based on fail_if configuration
       const failureResults: import('./types/config').FailureConditionResult[] = [];
-
       // Get global and check-specific fail_if conditions
       const globalFailIf = config?.fail_if;
       const checkFailIf = config?.checks?.[checkName]?.fail_if;
-
       // Create a ReviewSummary for this check's issues
       const checkReviewSummary = {
         issues: checkIssues,
       };
-
       // Determine which fail_if to use: check-specific overrides global
       const effectiveFailIf = checkFailIf || globalFailIf;
-
       if (effectiveFailIf) {
         const failed = await failureEvaluator.evaluateSimpleCondition(
           checkName,
@@ -1464,7 +1357,6 @@ async function completeIndividualChecks(
           checkReviewSummary,
           effectiveFailIf
         );
-
         if (failed) {
           const isCheckSpecific = checkFailIf !== undefined;
           failureResults.push({
@@ -1479,7 +1371,6 @@ async function completeIndividualChecks(
           });
         }
       }
-
       await checkService.completeCheckRun(
         owner,
         repo,
@@ -1488,7 +1379,6 @@ async function completeIndividualChecks(
         failureResults,
         checkIssues // Pass extracted issues for GitHub annotations
       );
-
       console.log(
         `✅ Completed ${checkName} check with ${checkIssues.length} issues, ${failureResults.length} failure conditions evaluated`
       );
@@ -1498,7 +1388,6 @@ async function completeIndividualChecks(
     }
   }
 }
-
 /**
  * Complete combined GitHub check run
  */
@@ -1512,23 +1401,18 @@ async function completeCombinedCheck(
 ): Promise<void> {
   const combinedCheckRun = checkRunMap.get('combined');
   if (!combinedCheckRun) return;
-
   // Create failure condition evaluator
   const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
   const failureEvaluator = new FailureConditionEvaluator();
-
   try {
     // Extract all issues from the grouped results for the combined check
     const allIssues = extractIssuesFromGroupedResults(groupedResults);
-
     // Evaluate failure conditions for combined check
     const failureResults: import('./types/config').FailureConditionResult[] = [];
-
     // Create a combined ReviewSummary with all issues
     const combinedReviewSummary = {
       issues: allIssues,
     };
-
     // Evaluate global fail_if for the combined check
     const globalFailIf = config?.fail_if;
     if (globalFailIf) {
@@ -1539,7 +1423,6 @@ async function completeCombinedCheck(
         combinedReviewSummary,
         globalFailIf
       );
-
       if (failed) {
         failureResults.push({
           conditionName: 'global_fail_if',
@@ -1551,7 +1434,6 @@ async function completeCombinedCheck(
         });
       }
     }
-
     await checkService.completeCheckRun(
       owner,
       repo,
@@ -1560,7 +1442,6 @@ async function completeCombinedCheck(
       failureResults,
       allIssues // Pass all extracted issues for GitHub annotations
     );
-
     console.log(
       `✅ Completed combined check with ${allIssues.length} issues, ${failureResults.length} failure conditions evaluated`
     );
@@ -1569,7 +1450,6 @@ async function completeCombinedCheck(
     await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);
   }
 }
-
 /**
  * Mark a check as failed due to execution error
  */
@@ -1595,7 +1475,6 @@ async function markCheckAsFailed(
     console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
   }
 }
-
 // Entry point - execute immediately when the script is run
 // Note: require.main === module check doesn't work reliably with ncc bundling
 // Only execute if not in test environment
@@ -1605,7 +1484,6 @@ if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
     // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.
     const argv = process.argv;
     let modeFromArg: string | undefined;
-
     for (let i = 0; i < argv.length; i++) {
       const arg = argv[i];
       if (arg === '--mode' && i + 1 < argv.length) {
@@ -1616,13 +1494,10 @@ if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
         break;
       }
     }
-
     const mode = (modeFromArg || process.env.VISOR_MODE || process.env.INPUT_MODE || 'cli')
       .toString()
       .toLowerCase();
-
     const isGitHubMode = mode === 'github-actions' || mode === 'github';
-
     if (isGitHubMode) {
       // Run in GitHub Action mode explicitly
       run();
