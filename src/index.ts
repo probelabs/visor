@@ -1016,26 +1016,43 @@ async function handlePullRequestWithConfig(
     return;
   }
 
-  // Respect PR labels for disabling checks and excluding tags (e.g., from issue assistant intents)
-  const prLabels: string[] = Array.isArray((prInfo as any).labels)
-    ? ((prInfo as any).labels as string[])
-    : [];
-  const disabledChecksFromLabels = prLabels
-    .filter(l => typeof l === 'string' && l.startsWith('visor:disable:'))
-    .map(l => l.substring('visor:disable:'.length).trim().toLowerCase())
-    .filter(Boolean);
-  const excludeTagsFromLabels = prLabels
-    .filter(l => typeof l === 'string' && l.startsWith('visor:exclude-tag:'))
-    .map(l => l.substring('visor:exclude-tag:'.length).trim())
-    .filter(Boolean);
-
-  if (disabledChecksFromLabels.length > 0) {
-    console.log(`⏭️ Disabled by labels: ${disabledChecksFromLabels.join(', ')}`);
-    checksToRun = checksToRun.filter(
-      c =>
-        !disabledChecksFromLabels.includes(c.toLowerCase()) &&
-        !disabledChecksFromLabels.includes(`${c}-check`.toLowerCase())
-    );
+  // Respect user comment directives to disable specific checks (no labels required)
+  try {
+    const directiveRegex = /(\/visor\s+)?(disable|disable-check|skip)\s+([A-Za-z0-9_\- ,]+)/i;
+    const recentComments: Array<{ author: string; body: string }> = (prInfo as any).comments || [];
+    let disabledFromComments: string[] = [];
+    for (let i = recentComments.length - 1; i >= 0; i--) {
+      const body = (recentComments[i]?.body || '').trim();
+      const m = body.match(directiveRegex);
+      if (m && m[3]) {
+        disabledFromComments = m[3]
+          .split(/[ ,]+/)
+          .map(s => s.trim().toLowerCase())
+          .filter(Boolean);
+        if (disabledFromComments.length > 0) break;
+      }
+    }
+    if (disabledFromComments.length > 0) {
+      const mapped: Set<string> = new Set();
+      for (const token of disabledFromComments) {
+        if (config.checks[token]) { mapped.add(token); continue; }
+        const withSuffix = `${token}-check`;
+        if (config.checks[withSuffix]) { mapped.add(withSuffix); continue; }
+        for (const name of Object.keys(config.checks)) {
+          if (name.toLowerCase().includes(token)) mapped.add(name);
+        }
+      }
+      if (mapped.size > 0) {
+        console.log(`⏭️ Disabled by comment directive: ${Array.from(mapped).join(', ')}`);
+        checksToRun = checksToRun.filter(c => !mapped.has(c));
+        if (checksToRun.length === 0) {
+          console.log('ℹ️ All checks would be disabled; ignoring directive');
+          checksToRun = Object.keys(config.checks || {});
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Failed to parse comment disable directives:', e);
   }
 
   // Filter checks based on conditions
@@ -1071,7 +1088,7 @@ async function handlePullRequestWithConfig(
         }
       : undefined;
 
-  const mergedExcludeTags = [...(inputTagFilter?.exclude || []), ...excludeTagsFromLabels].filter(
+  const mergedExcludeTags = [...(inputTagFilter?.exclude || [])].filter(
     (v, i, a) => a.indexOf(v) === i
   );
 
@@ -1081,7 +1098,7 @@ async function handlePullRequestWithConfig(
     checks: checksToExecute,
     parallelExecution: true,
     tagFilter:
-      inputTagFilter || excludeTagsFromLabels.length > 0
+      inputTagFilter
         ? {
             include: inputTagFilter?.include,
             exclude: mergedExcludeTags.length > 0 ? mergedExcludeTags : undefined,

@@ -303,7 +303,7 @@ checks:
     depends_on: [overview]
     on: [pr_opened, pr_updated]
     exec: |
-      set -euo pipefail
+      set -eu
 
       sanitize_label() {
         printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
@@ -335,7 +335,7 @@ checks:
     on: [issue_opened, issue_comment]
     if: "outputs['issue-assistant'].tags.intent == 'issue'"
     exec: |
-      set -euo pipefail
+      set -eu
 
       sanitize_label() {
         printf '%s' "$1" | tr -cd '[:alnum:]:/' | sed -E 's#/{2,}#/#g'
@@ -368,19 +368,8 @@ checks:
         (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
       )
     exec: |
-      # Convert checks array to labels like visor:disable:<check>
-      DISABLE_LABELS="{% if outputs['issue-assistant'].tags.action == 'disable-check' and outputs['issue-assistant'].tags.checks %}{{ outputs['issue-assistant'].tags.checks | map: 'downcase' | uniq | join: ',' | split: ',' | map: 'prepend: "visor:disable:"' | join: ',' }}{% endif %}"
+      # Comment-driven disable only; no labels created
 
-      if [ -n "$DISABLE_LABELS" ]; then
-        echo "Ensuring disable labels exist: $DISABLE_LABELS"
-        IFS=',' read -r -a ARR <<< "$DISABLE_LABELS"
-        for L in "${ARR[@]}"; do
-          gh label create "$L" -c "#ffdddd" -f >/dev/null 2>&1 || true
-        done
-        echo "Applying disable labels to thread #{{ event.issue.number }}"
-        # Works for both PR threads and plain issues
-        gh issue edit {{ event.issue.number }} --add-label "$DISABLE_LABELS"
-      fi
 
       # Internally re-invoke Visor Action as a synthetic PR update (no full workflow rerun)
       ACTION="{{ outputs['issue-assistant'].tags.action | default: 'none' }}"
