@@ -19,6 +19,8 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    env:
+      VISOR_DEBUG: 'true'
 
     steps:
       - name: Checkout
@@ -48,6 +50,9 @@ jobs:
           fail-fast: 'true'
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
+          VISOR_TELEMETRY_ENABLED: 'true'
+          VISOR_TELEMETRY_SINK: 'file'
+          VISOR_TRACE_REPORT: 'true'
           # AI Provider API Keys (configure one of these in your repository secrets)
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -55,13 +60,14 @@ jobs:
           # Optional: Specify the AI model to use (use Google model with Google API key)
           MODEL_NAME: ${{ secrets.AI_MODEL_NAME || 'gemini-2.0-flash-exp' }}
 
-      - name: Upload Debug Artifacts
+      - name: Upload Trace Report (HTML)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: visor-debug-${{ github.run_number }}
-          path: debug-artifacts/
-          retention-days: 30
+          name: visor-trace-${{ github.run_number }}
+          path: |
+            output/traces/*.report.html
+          retention-days: 14
           if-no-files-found: ignore
           
       - name: Validate Review Results
