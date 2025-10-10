@@ -94,6 +94,13 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
       .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
       .filter(s => s.length > 0);
   });
+
+  // Convert literal escape sequences (e.g., "\n") into actual newlines
+  liquid.registerFilter('unescape_newlines', (value: unknown) => {
+    if (value == null) return '';
+    const s = String(value);
+    return s.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+  });
 }
 
 /**

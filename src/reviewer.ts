@@ -233,18 +233,19 @@ export class PRReviewer {
     comment += `## 🔍 Code Analysis Results\n\n`;
 
     // Concatenate all check outputs in this group; fall back to structured output fields
+    const normalize = (s: string) => s.replace(/\\n/g, '\n');
     const checkContents = checkResults
       .map(result => {
         const trimmed = result.content?.trim();
-        if (trimmed) return trimmed;
+        if (trimmed) return normalize(trimmed);
         // Fallback: if provider returned structured output with a common text field
         const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
           .output;
         if (out) {
-          if (typeof out === 'string' && out.trim()) return out.trim();
+          if (typeof out === 'string' && out.trim()) return normalize(out.trim());
           if (typeof out === 'object') {
             const txt = (out.text || out.response || out.message) as unknown;
-            if (typeof txt === 'string' && txt.trim()) return txt.trim();
+            if (typeof txt === 'string' && txt.trim()) return normalize(txt.trim());
           }
         }
         return '';

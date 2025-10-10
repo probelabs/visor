@@ -1,6 +1,4 @@
-## 📋 Pull Request Overview
-
-{{ output.text | default: output.response | default: output.message | default: '' }}
+{{ (output.text | default: output.response | default: output.message | default: '') | unescape_newlines }}
 
 {%- if output.tags -%}
 
