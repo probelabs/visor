@@ -1365,9 +1365,7 @@ ${bodyWithReturn}
       let tpl = template;
       if (tpl.includes('{{')) {
         tpl = tpl.replace(/\{\{([\s\S]*?)\}\}/g, (_m, inner) => {
-          const fixed = String(inner)
-            .replace(/\[\\"/g, "['")
-            .replace(/\\"\]/g, "']");
+          const fixed = String(inner).replace(/\[\\"/g, "['").replace(/\\"\]/g, "']");
           return `{{ ${fixed} }}`;
         });
       }
