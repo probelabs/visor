@@ -251,22 +251,12 @@ export class CommandCheckProvider extends CheckProvider {
             return ${transformExpression};
           `;
 
-          // no debug
-
-          try {
-            const fn = new Function(
-              'scope',
-              `"use strict"; const output=scope.output, pr=scope.pr, files=scope.files, outputs=scope.outputs, env=scope.env, log=(...a)=>console.log('🔍 Debug:',...a); return ${transformExpression};`
-            );
-            // Pass the scope object directly (not wrapped)
-            finalOutput = fn(jsContext);
-          } catch {
-            if (!this.sandbox) {
-              this.sandbox = this.createSecureSandbox();
-            }
-            const exec = this.sandbox.compile(code);
-            finalOutput = exec({ scope: jsContext }).run();
+          // Execute user code exclusively inside the sandbox
+          if (!this.sandbox) {
+            this.sandbox = this.createSecureSandbox();
           }
+          const exec = this.sandbox.compile(code);
+          finalOutput = exec({ scope: jsContext }).run();
 
           logger.verbose(`✓ Applied JavaScript transform successfully`);
           try {
