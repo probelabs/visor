@@ -277,6 +277,20 @@ export async function run(): Promise<void> {
     }
   } finally {
     try { await shutdownTelemetry(); } catch {}
+    try {
+      if (process.env.VISOR_TRACE_REPORT === 'true') {
+        const fs = await import('fs');
+        const path = await import('path');
+        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+        const hasHtml = fs.readdirSync(outDir).some(f => f.endsWith('.report.html'));
+        if (!hasHtml) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          const htmlPath = path.join(outDir, `${ts}.report.html`);
+          fs.writeFileSync(htmlPath, '<!doctype html><html><head><meta charset=\"utf-8\"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2><p>No spans recorded.</p></body></html>', 'utf8');
+        }
+      }
+    } catch {}
     // Cleanup AI sessions before GitHub Action exits to prevent process hanging
     const { SessionRegistry } = await import('./session-registry');
     const sessionRegistry = SessionRegistry.getInstance();
