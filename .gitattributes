@@ -1,0 +1,3 @@
+## Git attributes for generated artifacts
+## Keep our generated bundle when merging to avoid pointless conflicts
+dist/index.js merge=ours
