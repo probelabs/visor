@@ -1,6 +1,6 @@
 ## 📋 Pull Request Overview
 
-{{ output.text }}
+{{ output.text | default: output.response | default: output.message | default: '' }}
 
 {%- if output.tags -%}
 
@@ -16,4 +16,3 @@
 </details>
 
 {%- endif -%}
-

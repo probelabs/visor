@@ -180,7 +180,17 @@ export class PRReviewer {
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-      const comment = await this.formatGroupComment(checkResults, options, {
+      // Filter out command-type checks from PR comments (they should report via GitHub Checks only)
+      const filteredResults = options.config
+        ? checkResults.filter(r => options.config!.checks?.[r.checkName]?.type !== 'command')
+        : checkResults;
+
+      // If nothing to report after filtering, skip this group
+      if (!filteredResults || filteredResults.length === 0) {
+        continue;
+      }
+
+      const comment = await this.formatGroupComment(filteredResults, options, {
         owner,
         repo,
         prNumber,
@@ -199,6 +209,9 @@ export class PRReviewer {
           ? `${options.commentId}-${groupName}`
           : `visor-review-${groupName}`;
       }
+
+      // Do not post empty comments (possible if content is blank after fallbacks)
+      if (!comment || !comment.trim()) continue;
 
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId,

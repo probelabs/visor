@@ -4621,6 +4621,10 @@ export class CheckExecutionEngine {
           options.config
         );
 
+        // Detect command execution failure patterns to mark check as failed without requiring fail_if
+        // We treat issues with ruleId starting with 'command/' as execution errors
+        const execErrorIssue = checkIssues.find(i => i.ruleId?.startsWith('command/'));
+
         await this.githubCheckService.completeCheckRun(
           options.githubChecks.owner,
           options.githubChecks.repo,
@@ -4628,7 +4632,7 @@ export class CheckExecutionEngine {
           checkName,
           failureResults,
           checkIssues,
-          undefined, // executionError
+          execErrorIssue ? execErrorIssue.message : undefined, // executionError
           prInfo.files.map((f: import('./pr-analyzer').PRFile) => f.filename), // filesChangedInCommit
           options.githubChecks.prNumber, // prNumber
           options.githubChecks.headSha // currentCommitSha
