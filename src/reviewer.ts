@@ -42,6 +42,8 @@ export interface CheckResult {
   checkName: string;
   content: string; // Rendered output for this specific check
   group: string; // Which group this check belongs to
+  // Optional structured output for custom schemas (e.g., overview, issue-assistant)
+  output?: unknown;
   debug?: AIDebugInfo;
   issues?: ReviewIssue[]; // Structured issues alongside rendered content
 }

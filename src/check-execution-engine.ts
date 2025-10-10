@@ -1338,6 +1338,7 @@ export class CheckExecutionEngine {
       checkName,
       content,
       group: checkConfig.group || 'default',
+      output: (result as any).output,
       debug: result.debug,
       issues: result.issues, // Include structured issues
     };
@@ -1474,11 +1475,12 @@ export class CheckExecutionEngine {
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
     const groupedResults: GroupedCheckResults = {};
-    const contentMap = (
-      reviewSummary as ReviewSummary & {
-        __contents?: Record<string, string | undefined>;
-      }
-    ).__contents;
+    const agg = reviewSummary as ReviewSummary & {
+      __contents?: Record<string, string | undefined>;
+      __outputs?: Record<string, unknown>;
+    };
+    const contentMap = agg.__contents;
+    const outputMap = agg.__outputs;
 
     // Process each check individually
     for (const checkName of checks) {
@@ -1491,14 +1493,16 @@ export class CheckExecutionEngine {
       );
 
       // Create a mini ReviewSummary for this check
-      const checkSummary: ReviewSummary = {
+      const checkSummary: ReviewSummary & { output?: unknown } = {
         issues: checkIssues,
         debug: reviewSummary.debug,
       };
 
       if (contentMap?.[checkName]) {
-        const summaryWithContent = checkSummary as ReviewSummary & { content?: string };
-        summaryWithContent.content = contentMap[checkName];
+        (checkSummary as any).content = contentMap[checkName];
+      }
+      if (outputMap && Object.prototype.hasOwnProperty.call(outputMap, checkName)) {
+        checkSummary.output = outputMap[checkName];
       }
 
       // Render content for this check
@@ -1508,6 +1512,7 @@ export class CheckExecutionEngine {
         checkName,
         content,
         group: checkConfig.group || 'default',
+        output: checkSummary.output,
         debug: reviewSummary.debug,
         issues: checkIssues, // Include structured issues
       };
@@ -3825,6 +3830,7 @@ export class CheckExecutionEngine {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const debugInfo: string[] = [];
     const contentMap: Record<string, string> = {};
+    const outputsMap: Record<string, unknown> = {};
 
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
@@ -3872,10 +3878,13 @@ export class CheckExecutionEngine {
         );
         aggregatedIssues.push(...nonInternalIssues);
 
-        const resultSummary = result as ExtendedReviewSummary;
+        const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
         const resultContent = resultSummary.content;
         if (typeof resultContent === 'string' && resultContent.trim()) {
           contentMap[checkName] = resultContent.trim();
+        }
+        if (resultSummary.output !== undefined) {
+          outputsMap[checkName] = resultSummary.output;
         }
       }
     }
@@ -3940,13 +3949,16 @@ export class CheckExecutionEngine {
       }
     }
 
-    const summary: ReviewSummary & { __contents?: Record<string, string> } = {
+    const summary: ReviewSummary & { __contents?: Record<string, string>; __outputs?: Record<string, unknown> } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
     };
 
     if (Object.keys(contentMap).length > 0) {
       summary.__contents = contentMap;
+    }
+    if (Object.keys(outputsMap).length > 0) {
+      summary.__outputs = outputsMap;
     }
 
     return summary;
