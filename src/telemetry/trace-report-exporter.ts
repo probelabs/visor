@@ -69,15 +69,6 @@ export class TraceReportExporter implements SpanExporter {
       fs.writeFileSync(jsonPath, JSON.stringify({ spans: flat }, null, 2), 'utf8');
 
       // Build richer single-file HTML with a collapsible tree and a simple timeline
-      const rows = flat
-        .sort((a, b) => a.start - b.start)
-        .map(s => {
-          const left = ((s.start - minStart) / total) * 100;
-          const width = Math.max(0.5, ((s.end - s.start) / total) * 100);
-          const label = `${s.name} (${s.end - s.start}ms)`;
-          return `<div class="row"><div class="bar" style="left:${left}%;width:${width}%" title="${escapeHtml(label)}"></div><span class="label">${escapeHtml(label)}</span></div>`;
-        })
-        .join('\n');
 
       const html = `<!doctype html>
 <html>
