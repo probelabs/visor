@@ -115,29 +115,10 @@ export class SessionRegistry {
     }
 
     try {
-      // Debug: Log all available properties on the source agent
-      console.error(`🔍 Debug: Inspecting source agent properties...`);
-      const agentKeys = Object.keys(sourceAgent as any);
-      console.error(`🔑 Available properties: ${agentKeys.join(', ')}`);
-
       // Access the conversation history from the source agent
-      // ProbeAgent stores history in a private field, we need to access it via 'any'
+      // ProbeAgent stores history in the 'history' property (not 'conversationHistory')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceHistory = (sourceAgent as any).conversationHistory || [];
-
-      console.error(`📊 History length: ${sourceHistory.length}`);
-      console.error(`📊 History type: ${typeof sourceHistory}, isArray: ${Array.isArray(sourceHistory)}`);
-
-      // Check alternative property names that ProbeAgent might use
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const alternativeHistory = (sourceAgent as any).history ||
-                                  (sourceAgent as any).messages ||
-                                  (sourceAgent as any)._conversationHistory ||
-                                  (sourceAgent as any)._history;
-
-      if (alternativeHistory && alternativeHistory !== sourceHistory) {
-        console.error(`⚠️  Found alternative history property with length: ${alternativeHistory.length || 0}`);
-      }
+      const sourceHistory = (sourceAgent as any).history || [];
 
       // Create a new agent with the same configuration
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -158,7 +139,7 @@ export class SessionRegistry {
           // Deep clone the history array and all message objects within it
           const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).conversationHistory = deepClonedHistory;
+          (clonedAgent as any).history = deepClonedHistory;
           console.error(
             `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages, deep copy)`
           );
@@ -168,7 +149,7 @@ export class SessionRegistry {
             `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
           );
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).conversationHistory = [...sourceHistory];
+          (clonedAgent as any).history = [...sourceHistory];
         }
       } else {
         console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
