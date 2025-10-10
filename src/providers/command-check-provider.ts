@@ -246,19 +246,8 @@ export class CommandCheckProvider extends CheckProvider {
             const outputs = scope.outputs;
             const env = scope.env;
             const log = (...args) => { console.log('🔍 Debug:', ...args); };
-            const __normalize = (v) => {
-              if (v === null || v === undefined) return v;
-              if (typeof v === 'boolean') return v ? 1 : 0;
-              if (Array.isArray(v)) return v.map(__normalize);
-              if (typeof v === 'object') {
-                const o = {};
-                for (const k of Object.keys(v)) o[k] = __normalize(v[k]);
-                return o;
-              }
-              return v;
-            };
             const __result = ${transformExpression};
-            return __normalize(__result);
+            return __result;
           `;
 
           // Execute user code exclusively inside the sandbox
