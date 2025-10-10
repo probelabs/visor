@@ -1,5 +1,8 @@
 # GitHub Actions Workflow - Progressive Code Review with Tags
 # This workflow demonstrates different tag strategies for various scenarios
+#
+# NOTE: For fork PR support with check runs, change pull_request to pull_request_target
+# See docs/GITHUB_CHECKS.md#fork-pr-support for details
 
 name: Progressive Code Review
 on:

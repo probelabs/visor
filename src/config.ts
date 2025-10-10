@@ -674,6 +674,26 @@ export class ConfigManager {
       }
     }
 
+    // Validate session_mode configuration
+    if (checkConfig.session_mode !== undefined) {
+      if (checkConfig.session_mode !== 'clone' && checkConfig.session_mode !== 'append') {
+        errors.push({
+          field: `checks.${checkName}.session_mode`,
+          message: `Invalid session_mode value for "${checkName}": must be 'clone' or 'append'`,
+          value: checkConfig.session_mode,
+        });
+      }
+
+      // session_mode only makes sense with reuse_ai_session
+      if (!checkConfig.reuse_ai_session) {
+        errors.push({
+          field: `checks.${checkName}.session_mode`,
+          message: `Check "${checkName}" has session_mode but no reuse_ai_session. session_mode requires reuse_ai_session to be set.`,
+          value: checkConfig.session_mode,
+        });
+      }
+    }
+
     // Validate tags configuration
     if (checkConfig.tags !== undefined) {
       if (!Array.isArray(checkConfig.tags)) {

@@ -1,19 +1,36 @@
 ## 🧠 Advanced AI Features
 
 ### AI Session Reuse
-Use `reuse_ai_session: true` on dependent checks to continue the same conversation context with the AI across checks. This improves follow‑ups and consistency.
+Use `reuse_ai_session: true` on dependent checks to continue conversation context with the AI across checks. This improves follow‑ups and consistency.
+
+**Session Modes:**
+- **`clone` (default)**: Creates a copy of the conversation history. Each check gets an independent session with the same starting context. Changes made by one check don't affect others.
+- **`append`**: Shares the same conversation thread. All checks append to a single shared history, creating a true multi-turn conversation.
 
 ```yaml
 checks:
   security:
     type: ai
     prompt: "Analyze code for security vulnerabilities..."
+
   security-remediation:
     type: ai
     prompt: "Based on our security analysis, provide remediation guidance."
     depends_on: [security]
     reuse_ai_session: true
+    # session_mode: clone (default - independent copy of history)
+
+  security-verify:
+    type: ai
+    prompt: "Verify the remediation suggestions are complete."
+    depends_on: [security-remediation]
+    reuse_ai_session: true
+    session_mode: append  # Share history - sees full conversation
 ```
+
+**When to use each mode:**
+- Use **`clone`** (default) when you want parallel follow-ups that don't interfere with each other
+- Use **`append`** when you want sequential conversation where each check builds on previous responses
 
 ### XML-Formatted Analysis
 Visor uses structured XML formatting when sending data to AI providers, enabling precise and context-aware analysis for both pull requests and issues.

@@ -242,6 +242,12 @@ export const configSchema = {
           description:
             'Check name to reuse AI session from, or true to use first dependency (only works with depends_on)',
         },
+        session_mode: {
+          type: 'string',
+          enum: ['clone', 'append'],
+          description:
+            "How to reuse AI session: 'clone' (default, copy history) or 'append' (share history)",
+        },
         fail_if: {
           type: 'string',
           description: 'Simple fail condition - fails check if expression evaluates to true',

@@ -1,13 +1,14 @@
 name: PR Review Bot
 
 on:
+  # For fork PRs: Use pull_request_target instead (see docs/GITHUB_CHECKS.md for details)
   pull_request:
-    types: [opened, synchronize, edited]  # Include edited for complete PR lifecycle
+    types: [opened, synchronize, edited]
   issue_comment:
     types: [created]
   issues:
     types: [opened]
-    
+
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,7 +43,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}
-          auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          auto-review: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') && 'true' || 'false' }}
           debug: 'true'
           fail-fast: 'true'
         env:

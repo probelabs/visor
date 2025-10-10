@@ -153,11 +153,16 @@ export class GitHubCheckService {
         executionError
       );
 
+      // Filter out system-level issues (fail_if conditions, internal errors)
+      // These should not appear as annotations but affect the check conclusion
+      let filteredIssues = reviewIssues.filter(
+        issue => !(issue.file === 'system' && issue.line === 0)
+      );
+
       // Filter annotations to only include files changed in this commit
       // This prevents old annotations from previous commits showing up in the Files tab
-      let filteredIssues = reviewIssues;
       if (filesChangedInCommit && filesChangedInCommit.length > 0) {
-        filteredIssues = reviewIssues.filter(issue =>
+        filteredIssues = filteredIssues.filter(issue =>
           filesChangedInCommit.some(changedFile => issue.file === changedFile)
         );
       }
