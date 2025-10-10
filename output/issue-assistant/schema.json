@@ -33,11 +33,6 @@
           "type": "string",
           "description": "Primary classification label for the issue (only for new issues)",
           "enum": ["bug", "feature", "enhancement", "maintenance", "documentation", "question"]
-        },
-        "labels": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Additional labels to apply"
         }
       },
       "additionalProperties": true

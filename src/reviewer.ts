@@ -217,10 +217,23 @@ export class PRReviewer {
     let comment = '';
     comment += `## 🔍 Code Analysis Results\n\n`;
 
-    // Simple concatenation of all check outputs in this group
+    // Concatenate all check outputs in this group; fall back to structured output fields
     const checkContents = checkResults
-      .map(result => result.content)
-      .filter(content => content.trim());
+      .map(result => {
+        const trimmed = result.content?.trim();
+        if (trimmed) return trimmed;
+        // Fallback: if provider returned structured output with a common text field
+        const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any }).output;
+        if (out) {
+          if (typeof out === 'string' && out.trim()) return out.trim();
+          if (typeof out === 'object') {
+            const txt = (out.text || out.response || out.message) as unknown;
+            if (typeof txt === 'string' && txt.trim()) return txt.trim();
+          }
+        }
+        return '';
+      })
+      .filter(content => content && content.trim());
     comment += checkContents.join('\n\n');
 
     // Add debug info if any check has it

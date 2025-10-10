@@ -78,6 +78,9 @@ export class OutputFormatters {
     // Check if this is a code review context
     const isCodeReview = result.isCodeReview || issues.some(i => i.schema === 'code-review');
 
+    // If we have assistant-style text content (from custom schemas like overview/issue-assistant), capture it
+    const assistantText = this.extractAssistantText(result.reviewSummary);
+
     // Only show "Analysis Summary" table for code review contexts or when there are issues
     // For other contexts, the execution statistics table already provides summary
     if (isCodeReview || totalIssues > 0) {
@@ -116,6 +119,12 @@ export class OutputFormatters {
       output += summaryTable.toString() + '\n';
 
       output += '\n';
+    }
+
+    // Assistant response section (for custom schemas that expose a text/response string)
+    if (assistantText) {
+      output += 'Assistant Response\n';
+      output += this.safeWrapAndTruncate(assistantText, 80) + '\n\n';
     }
 
     // Issues by category table
@@ -261,6 +270,18 @@ export class OutputFormatters {
     }
 
     return output;
+  }
+
+  private static extractAssistantText(summary: ReviewSummary & { output?: unknown }): string | undefined {
+    const anySummary = summary as ReviewSummary & { output?: any };
+    const out = anySummary.output;
+    if (!out) return undefined;
+    if (typeof out === 'string') return out;
+    if (typeof out === 'object') {
+      const txt = out.text || out.response || out.message;
+      if (typeof txt === 'string') return txt;
+    }
+    return undefined;
   }
 
   /**

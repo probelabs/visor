@@ -304,7 +304,7 @@ checks:
     on: [pr_opened, pr_updated]
     exec: |
       # Build label list from overview output
-      LABELS="{{ outputs.overview.tags.label | default: '' }}{% if outputs.overview.tags.labels %}{% if outputs.overview.tags.label %},{% endif %}{{ outputs.overview.tags.labels | join: ',' }}{% endif %}{% if outputs.overview.tags['review-effort'] %}{% if outputs.overview.tags.label or outputs.overview.tags.labels %},{% endif %}review-effort:{{ outputs.overview.tags['review-effort'] }}{% endif %}"
+      LABELS="{{ outputs.overview.tags.label | default: '' }}{% if outputs.overview.tags['review-effort'] %}{% if outputs.overview.tags.label %},{% endif %}review-effort:{{ outputs.overview.tags['review-effort'] }}{% endif %}"
 
       if [ -n "$LABELS" ]; then
         echo "Ensuring labels exist: $LABELS"
@@ -329,7 +329,7 @@ checks:
     on: [issue_opened, issue_comment]
     if: "outputs['issue-assistant'].tags.intent == 'issue'"
     exec: |
-      LABELS="{{ outputs['issue-assistant'].tags.label | default: '' }}{% if outputs['issue-assistant'].tags.labels %}{% if outputs['issue-assistant'].tags.label %},{% endif %}{{ outputs['issue-assistant'].tags.labels | join: ',' }}{% endif %}"
+      LABELS="{{ outputs['issue-assistant'].tags.label | default: '' }}"
 
       if [ -n "$LABELS" ]; then
         echo "Ensuring labels exist: $LABELS"

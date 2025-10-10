@@ -24,11 +24,6 @@
           "type": "string",
           "description": "Primary PR category label",
           "enum": ["bug", "feature", "chore", "docs", "refactor", "test"]
-        },
-        "labels": {
-          "type": "array",
-          "description": "Additional labels to apply (optional)",
-          "items": { "type": "string" }
         }
       },
       "additionalProperties": true
@@ -36,4 +31,3 @@
   },
   "additionalProperties": true
 }
-
