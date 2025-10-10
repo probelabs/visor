@@ -152,3 +152,24 @@ checks:
 ```
 
 If `on` is not specified, the check can run on any event type.
+
+### Using goto_event to simulate a different trigger for a jump
+
+Sometimes you want to “re-run” an ancestor step as if a different event happened (e.g., from an `issue_comment` flow you want to re-execute a PR step under `pr_updated`). Use `goto_event` together with `goto`:
+
+```yaml
+checks:
+  overview:
+    type: ai
+    on: [pr_opened, pr_updated]
+
+  security:
+    type: ai
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+    on_success:
+      goto: overview
+      goto_event: pr_updated  # simulate PR update for the inline jump
+```
+
+During that inline execution, event filtering and `if:` expressions see the simulated event. The current step is then re-run once. For a full PR re-run from an issue comment, synthesize a PR event and re-invoke the action entrypoint (see failure-routing docs for details).

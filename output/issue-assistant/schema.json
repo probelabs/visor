@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "issue-assistant",
+  "title": "Issue Assistant",
+  "description": "Structured assistant output for issues and issue comments",
+  "type": "object",
+  "required": ["text", "tags"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "Markdown reply to post as an issue comment"
+    },
+    "tags": {
+      "type": "object",
+      "required": ["intent"],
+      "properties": {
+        "intent": {
+          "type": "string",
+          "description": "Interaction type derived from event context",
+          "enum": ["issue", "comment"]
+        },
+        "action": {
+          "type": "string",
+          "description": "Optional action requested by the user",
+          "enum": ["none", "retrigger", "disable-check"]
+        },
+        "checks": {
+          "type": "array",
+          "description": "List of check IDs to disable when action == 'disable-check'",
+          "items": { "type": "string" }
+        },
+        "label": {
+          "type": "string",
+          "description": "Primary classification label for the issue (only for new issues)",
+          "enum": ["bug", "feature", "enhancement", "maintenance", "documentation", "question"]
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional labels to apply"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

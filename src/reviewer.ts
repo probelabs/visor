@@ -126,6 +126,8 @@ export interface ReviewOptions {
   config?: import('./types/config').VisorConfig;
   checks?: string[];
   parallelExecution?: boolean;
+  // Optional tag filter to include/exclude checks by tags when running via GitHub Action path
+  tagFilter?: import('./types/config').TagFilter;
 }
 
 export class PRReviewer {
@@ -155,7 +157,10 @@ export class PRReviewer {
         undefined,
         config,
         undefined,
-        debug
+        debug,
+        undefined,
+        undefined,
+        options.tagFilter
       );
       return results;
     }

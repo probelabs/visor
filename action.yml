@@ -100,7 +100,7 @@ inputs:
   tags:
     description: 'Include checks with these tags (comma-separated)'
     required: false
-    default: ''
+    default: 'github'
 
   exclude-tags:
     description: 'Exclude checks with these tags (comma-separated)'

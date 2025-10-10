@@ -176,6 +176,8 @@ export class CheckExecutionEngine {
   private webhookContext?: { webhookData: Map<string, unknown> };
   private routingSandbox?: Sandbox;
   private executionStats: Map<string, CheckExecutionStats> = new Map();
+  // Event override to simulate alternate event (used during routing goto)
+  private routingEventOverride?: import('./types/config').EventTrigger;
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -384,7 +386,10 @@ export class CheckExecutionEngine {
       return Array.from(new Set(acc));
     };
 
-    const executeNamedCheckInline = async (target: string): Promise<ReviewSummary> => {
+    const executeNamedCheckInline = async (
+      target: string,
+      opts?: { eventOverride?: import('./types/config').EventTrigger }
+    ): Promise<ReviewSummary> => {
       const targetCfg = config?.checks?.[target];
       if (!targetCfg) {
         throw new Error(`on_* referenced unknown check '${target}'`);
@@ -457,7 +462,21 @@ export class CheckExecutionEngine {
         const execStr = (provCfg as any).exec;
         if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
       }
-      const r = await prov.execute(prInfo, provCfg, depResults, sessionInfo);
+      // If event override provided, clone prInfo with overridden eventType
+      let prInfoForInline = prInfo;
+      const prevEventOverride = this.routingEventOverride;
+      if (opts?.eventOverride) {
+        prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
+        this.routingEventOverride = opts.eventOverride;
+        if (debug) log(`🔧 Debug: inline '${target}' with goto_event=${opts.eventOverride}`);
+      }
+      let r: ReviewSummary;
+      try {
+        r = await prov.execute(prInfoForInline, provCfg, depResults, sessionInfo);
+      } finally {
+        // Restore previous override
+        this.routingEventOverride = prevEventOverride;
+      }
       // enrich with metadata similar to main flow
       const enrichedIssues = (r.issues || []).map(issue => ({
         ...issue,
@@ -526,7 +545,7 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
                 );
               }
-              await executeNamedCheckInline(target);
+              await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
             }
           }
 
@@ -551,6 +570,7 @@ export class CheckExecutionEngine {
           return res;
         }
         let needRerun = false;
+        let rerunEventOverride: import('./types/config').EventTrigger | undefined;
         if (onSuccess) {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
@@ -582,16 +602,25 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                 );
               }
-              await executeNamedCheckInline(target);
+              await executeNamedCheckInline(target, { eventOverride: onSuccess.goto_event });
               // After jumping back to an ancestor, re-run the current check to re-validate with new state
               needRerun = true;
+              rerunEventOverride = onSuccess.goto_event;
             }
           }
         }
         if (needRerun) {
           if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
+          // Apply same event override as goto (if any) for this re-run by setting routingEventOverride
+          const prev = this.routingEventOverride;
+          if (rerunEventOverride) this.routingEventOverride = rerunEventOverride;
           attempt++;
-          continue; // loop will execute the check again
+          // Loop will execute the check again with evaluateIfCondition seeing override
+          // Restore after loop iteration completes for safety
+          // We can't restore here; we'll restore at start of next iteration when override applied,
+          // but ensure no lingering by resetting immediately after attempt increment
+          this.routingEventOverride = prev;
+          continue;
         }
         return res;
       } catch (err) {
@@ -636,7 +665,7 @@ export class CheckExecutionEngine {
                 `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
               );
             }
-            await executeNamedCheckInline(target);
+            await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
           }
         }
 
@@ -1588,11 +1617,23 @@ export class CheckExecutionEngine {
     results: Map<string, ReviewSummary>,
     debug?: boolean
   ): Promise<boolean> {
+    // Determine event name for condition context, honoring any routing override
+    const override = this.routingEventOverride;
+    const eventName = override
+      ? override.startsWith('pr_')
+        ? 'pull_request'
+        : override === 'issue_comment'
+          ? 'issue_comment'
+          : override.startsWith('issue_')
+            ? 'issues'
+            : 'manual'
+      : 'issue_comment';
+
     const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
       branch: prInfo.head,
       baseBranch: prInfo.base,
       filesChanged: prInfo.files.map(f => f.filename),
-      event: 'issue_comment',
+      event: eventName,
       environment: getSafeEnvironmentVariables(),
       previousResults: results,
     });
@@ -1685,6 +1726,9 @@ export class CheckExecutionEngine {
     const templateData = {
       issues: filteredIssues,
       checkName: checkName,
+      // Expose structured output for custom schemas/templates (e.g., overview)
+      // This allows templates to render fields like output.text or output.tags
+      output: (reviewSummary as unknown as { output?: unknown }).output,
     };
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
@@ -3585,6 +3629,17 @@ export class CheckExecutionEngine {
 
         // Evaluate if condition to determine whether to run this check
         if (checkConfig.if) {
+          // Evaluate if condition using any routing override event (e.g., goto_event)
+          const override = this.routingEventOverride;
+          const eventName = override
+            ? override.startsWith('pr_')
+              ? 'pull_request'
+              : override === 'issue_comment'
+                ? 'issue_comment'
+                : override.startsWith('issue_')
+                  ? 'issues'
+                  : 'manual'
+            : 'issue_comment';
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
             checkName,
             checkConfig.if,
@@ -3592,7 +3647,7 @@ export class CheckExecutionEngine {
               branch: prInfo.head,
               baseBranch: prInfo.base,
               filesChanged: prInfo.files.map(f => f.filename),
-              event: 'issue_comment', // Command triggered from comment
+              event: eventName, // honor routing override if present
               environment: getSafeEnvironmentVariables(),
               previousResults: new Map(), // No previous results in parallel execution
             }

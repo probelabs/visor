@@ -43,6 +43,7 @@ export interface PRInfo {
   isIssue?: boolean; // Flag to indicate this is an issue, not a PR
   eventContext?: Record<string, unknown>; // GitHub event context for templates
   comments?: PRComment[]; // Comments added dynamically
+  labels?: string[]; // Labels applied to the PR (for behavior overrides)
 }
 
 interface NetworkError {
@@ -180,6 +181,11 @@ export class PRAnalyzer {
       totalDeletions: validFiles.reduce((sum, file) => sum + file.deletions, 0),
       fullDiff: this.generateFullDiff(validFiles),
       eventType,
+      labels: Array.isArray((pr as any).labels)
+        ? ((pr as any).labels
+            .map((l: any) => (typeof l === 'string' ? l : l?.name))
+            .filter((n: any) => typeof n === 'string' && n.length > 0) as string[])
+        : [],
     };
 
     // Fetch comment history for better context

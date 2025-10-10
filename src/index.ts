@@ -556,13 +556,36 @@ async function handleIssueEvent(
   const engine = new CheckExecutionEngine();
 
   try {
+    // Build tag filter from action inputs (if provided)
+    const tagFilter: import('./types/config').TagFilter | undefined =
+      (inputs.tags && inputs.tags.trim() !== '') ||
+      (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+        ? {
+            include: inputs.tags
+              ? inputs.tags
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean)
+              : undefined,
+            exclude: inputs['exclude-tags']
+              ? inputs['exclude-tags']
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean)
+              : undefined,
+          }
+        : undefined;
+
     const executionResult = await engine.executeGroupedChecks(
       prInfo,
       checksToRun,
       undefined, // timeout
       config,
       undefined, // outputFormat
-      inputs.debug === 'true'
+      inputs.debug === 'true',
+      undefined,
+      undefined,
+      tagFilter
     );
 
     const { results } = executionResult;
@@ -895,6 +918,24 @@ async function handleIssueComment(
           config: config as import('./types/config').VisorConfig,
           checks: filteredCheckIds,
           parallelExecution: false,
+          tagFilter:
+            (inputs.tags && inputs.tags.trim() !== '') ||
+            (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+              ? {
+                  include: inputs.tags
+                    ? inputs.tags
+                        .split(',')
+                        .map(t => t.trim())
+                        .filter(Boolean)
+                    : undefined,
+                  exclude: inputs['exclude-tags']
+                    ? inputs['exclude-tags']
+                        .split(',')
+                        .map(t => t.trim())
+                        .filter(Boolean)
+                    : undefined,
+                }
+              : undefined,
         });
 
         // Check if commenting is enabled before posting
@@ -975,6 +1016,28 @@ async function handlePullRequestWithConfig(
     return;
   }
 
+  // Respect PR labels for disabling checks and excluding tags (e.g., from issue assistant intents)
+  const prLabels: string[] = Array.isArray((prInfo as any).labels)
+    ? ((prInfo as any).labels as string[])
+    : [];
+  const disabledChecksFromLabels = prLabels
+    .filter(l => typeof l === 'string' && l.startsWith('visor:disable:'))
+    .map(l => l.substring('visor:disable:'.length).trim().toLowerCase())
+    .filter(Boolean);
+  const excludeTagsFromLabels = prLabels
+    .filter(l => typeof l === 'string' && l.startsWith('visor:exclude-tag:'))
+    .map(l => l.substring('visor:exclude-tag:'.length).trim())
+    .filter(Boolean);
+
+  if (disabledChecksFromLabels.length > 0) {
+    console.log(`⏭️ Disabled by labels: ${disabledChecksFromLabels.join(', ')}`);
+    checksToRun = checksToRun.filter(
+      c =>
+        !disabledChecksFromLabels.includes(c.toLowerCase()) &&
+        !disabledChecksFromLabels.includes(`${c}-check`.toLowerCase())
+    );
+  }
+
   // Filter checks based on conditions
   const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
 
@@ -988,11 +1051,42 @@ async function handlePullRequestWithConfig(
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
 
   // Create review options
+  // Build tag filter from inputs and labels
+  const inputTagFilter: import('./types/config').TagFilter | undefined =
+    (inputs.tags && inputs.tags.trim() !== '') ||
+    (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+      ? {
+          include: inputs.tags
+            ? inputs.tags
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean)
+            : undefined,
+          exclude: inputs['exclude-tags']
+            ? inputs['exclude-tags']
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean)
+            : undefined,
+        }
+      : undefined;
+
+  const mergedExcludeTags = [...(inputTagFilter?.exclude || []), ...excludeTagsFromLabels].filter(
+    (v, i, a) => a.indexOf(v) === i
+  );
+
   const reviewOptions = {
     debug: inputs?.debug === 'true',
     config: config,
     checks: checksToExecute,
     parallelExecution: true,
+    tagFilter:
+      inputTagFilter || excludeTagsFromLabels.length > 0
+        ? {
+            include: inputTagFilter?.include,
+            exclude: mergedExcludeTags.length > 0 ? mergedExcludeTags : undefined,
+          }
+        : undefined,
   };
 
   // Create GitHub check runs if enabled
