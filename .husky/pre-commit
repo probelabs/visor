@@ -2,7 +2,10 @@
 . "$(dirname -- "$0")/_/husky.sh"
 
 # Run lint-staged for linting and formatting
-npx lint-staged
+npx lint-staged || exit 1
+
+# Enforce repository-wide formatting (not only staged files)
+npm run -s format:check || exit 1
 
 # Run tests with sanitized Git environment so E2E repos
 # cannot accidentally write commits to this repository during hooks.

@@ -25,6 +25,10 @@ type ExtendedReviewSummary = ReviewSummary & {
   content?: string;
   isForEach?: boolean;
   forEachItems?: unknown[];
+  // Preserve per-item results for forEach-dependent checks so children can gate per item
+  forEachItemResults?: ReviewSummary[];
+  // Per-item fatal mask: true means this item is fatal/should gate descendants
+  forEachFatalMask?: boolean[];
 };
 
 /**
@@ -1366,6 +1370,8 @@ export class CheckExecutionEngine {
 
     if (Array.isArray(output)) {
       normalizedOutput = output;
+    } else if (output && typeof output === 'object' && Array.isArray((output as any).items)) {
+      normalizedOutput = (output as any).items as unknown[];
     } else if (typeof output === 'string') {
       try {
         const parsed = JSON.parse(output);
@@ -1810,6 +1816,15 @@ export class CheckExecutionEngine {
       };
     }
 
+    // Build children-by-parent mapping for inline branch-first execution
+    const childrenByParent = new Map<string, string[]>();
+    for (const [child, depsArr] of Object.entries(dependencies)) {
+      for (const p of depsArr || []) {
+        if (!childrenByParent.has(p)) childrenByParent.set(p, []);
+        childrenByParent.get(p)!.push(child);
+      }
+    }
+
     // Log execution plan
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
     if (debug) {
@@ -1862,8 +1877,14 @@ export class CheckExecutionEngine {
         );
       }
 
-      // Create task functions for checks in this level
-      const levelTaskFunctions = executionGroup.parallel.map(checkName => async () => {
+      // Create task functions for checks in this level, skip those already completed inline
+      const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
+      const levelTaskFunctions = levelChecks.map(checkName => async () => {
+        // Skip if this check was already completed by item-level branch scheduler
+        if (results.has(checkName)) {
+          if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
+          return { checkName, error: null, result: results.get(checkName)! };
+        }
         const checkConfig = config.checks[checkName];
         if (!checkConfig) {
           return {
@@ -1872,6 +1893,8 @@ export class CheckExecutionEngine {
             result: null,
           };
         }
+
+        // (no early gating; rely on per-item scheduler after parents run)
 
         const checkStartTime = Date.now();
         completedChecksCount++;
@@ -1956,33 +1979,43 @@ export class CheckExecutionEngine {
               return id.endsWith('/__skipped');
             });
 
-            // Treat these as fatal in direct dependencies:
+            // If dependency is a forEach parent, do NOT apply global fatal gating here.
+            // We'll gate per-item inside the forEach loop to avoid stopping other branches.
+            const depExtended = depRes as ExtendedReviewSummary;
+            const isDepForEachParent = !!depExtended.isForEach;
+
+            // Treat these as fatal in direct dependencies (non-forEach only):
             //  - command provider execution/transform failures
             //  - forEach validation/iteration errors
             //  - fail_if conditions (global or check-specific)
-            let hasFatalFailure = (depRes.issues || []).some(issue => {
-              const id = issue.ruleId || '';
-              return (
-                id === 'command/execution_error' ||
-                id.endsWith('/command/execution_error') ||
-                id === 'command/timeout' ||
-                id.endsWith('/command/timeout') ||
-                id === 'command/transform_js_error' ||
-                id.endsWith('/command/transform_js_error') ||
-                id === 'command/transform_error' ||
-                id.endsWith('/command/transform_error') ||
-                id.endsWith('/forEach/iteration_error') ||
-                id === 'forEach/undefined_output' ||
-                id.endsWith('/forEach/undefined_output') ||
-                id.endsWith('_fail_if') ||
-                id.endsWith('/global_fail_if')
-              );
-            });
-
-            // As a fallback, evaluate fail_if on the dependency result now (in case the provider path didn't add issues yet)
-            if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
-              const failIfResults = await this.evaluateFailureConditions(depId, depRes, config);
-              hasFatalFailure = failIfResults.some(r => r.failed);
+            // For non-forEach parents, only provider-fatal or fail_if/global_fail_if should gate.
+            let hasFatalFailure = false;
+            if (!isDepForEachParent) {
+              const issues = depRes.issues || [];
+              hasFatalFailure = issues.some(issue => {
+                const id = issue.ruleId || '';
+                return (
+                  id === 'command/execution_error' ||
+                  id.endsWith('/command/execution_error') ||
+                  id === 'command/timeout' ||
+                  id.endsWith('/command/timeout') ||
+                  id === 'command/transform_js_error' ||
+                  id.endsWith('/command/transform_js_error') ||
+                  id === 'command/transform_error' ||
+                  id.endsWith('/command/transform_error') ||
+                  id === 'forEach/undefined_output' ||
+                  id.endsWith('/forEach/undefined_output') ||
+                  id.endsWith('/forEach/iteration_error') ||
+                  id.endsWith('_fail_if') ||
+                  id.endsWith('/global_fail_if')
+                );
+              });
+              // As a fallback, evaluate fail_if on the dependency result now
+              if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                try {
+                  hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
+                } catch {}
+              }
             }
 
             if (debug) {
@@ -2011,16 +2044,23 @@ export class CheckExecutionEngine {
               const depResult = results.get(depId)!;
 
               // Check if this dependency has forEach enabled
-              const depForEachResult = depResult as ReviewSummary & {
-                isForEach?: boolean;
-                forEachItems?: unknown[];
-              };
+              const depForEachResult = depResult as ExtendedReviewSummary;
 
-              if (depForEachResult.isForEach && Array.isArray(depForEachResult.forEachItems)) {
+              if (
+                depForEachResult.isForEach ||
+                Array.isArray(depForEachResult.forEachItemResults) ||
+                Array.isArray(depForEachResult.forEachItems)
+              ) {
                 if (!isForEachDependent) {
                   // First forEach dependency found - use it as the primary
                   isForEachDependent = true;
-                  forEachItems = depForEachResult.forEachItems;
+                  forEachItems = Array.isArray(depForEachResult.forEachItems)
+                    ? depForEachResult.forEachItems!
+                    : new Array(
+                        Array.isArray(depForEachResult.forEachItemResults)
+                          ? depForEachResult.forEachItemResults!.length
+                          : 0
+                      ).fill(undefined);
                   forEachParentName = depId;
                 }
                 // Track all forEach parents for unwrapping
@@ -2074,6 +2114,18 @@ export class CheckExecutionEngine {
           let finalResult: ReviewSummary;
 
           if (isForEachDependent && forEachParentName) {
+            if (!Array.isArray(forEachItems)) {
+              forEachItems = [];
+            }
+            if (!Array.isArray(forEachItems)) {
+              this.recordSkip(checkName, 'dependency_failed');
+              return {
+                checkName,
+                error: null,
+                result: { issues: [] },
+                skipped: true,
+              };
+            }
             // Record forEach preview items
             this.recordForEachPreview(checkName, forEachItems);
 
@@ -2085,6 +2137,7 @@ export class CheckExecutionEngine {
                 );
               }
               logger.info(`  forEach: no items from "${forEachParentName}", skipping check...`);
+              this.recordSkip(checkName, 'dependency_failed');
 
               // Return a special marker result so that dependent checks can detect the skip
               finalResult = {
@@ -2098,20 +2151,244 @@ export class CheckExecutionEngine {
 
               // Skip to the end - don't execute this check
             } else {
+              // Emit explicit debug to stdout so CLI e2e can assert it
               if (debug) {
-                log(
+                console.log(
                   `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
                 );
               }
 
               // Log forEach processing start (non-debug)
+              const __itemCount = Array.isArray(forEachItems) ? forEachItems.length : 0;
               logger.info(
-                `  forEach: processing ${forEachItems.length} items from "${forEachParentName}"...`
+                `  forEach: processing ${__itemCount} items from "${forEachParentName}"...`
               );
 
               const allIssues: ReviewIssue[] = [];
-              const allOutputs: unknown[] = [];
+              const allOutputs: unknown[] = new Array(forEachItems.length);
               const aggregatedContents: string[] = [];
+              const perItemResults: Array<ReviewSummary | undefined> = new Array(
+                forEachItems.length
+              );
+
+              // Aggregators for inline descendant execution (branch-first mode for simple chains)
+              const inlineAgg = new Map<
+                string,
+                {
+                  issues: ReviewIssue[];
+                  outputs: unknown[];
+                  contents: string[];
+                  perItemResults: ReviewSummary[];
+                }
+              >();
+
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const execInlineDescendants = async (
+                parentName: string,
+                itemIndex: number,
+                baseDeps: Map<string, ReviewSummary>
+              ): Promise<void> => {
+                const children = (childrenByParent.get(parentName) || []).filter(child => {
+                  const deps = dependencies[child] || [];
+                  // Only handle simple chains inline: exactly one dependency which is the parent
+                  return deps.length === 1 && deps[0] === parentName;
+                });
+
+                for (const childName of children) {
+                  const childCfg = config.checks[childName];
+                  const childProviderType = childCfg.type || 'ai';
+                  const childProv = this.providerRegistry.getProviderOrThrow(childProviderType);
+                  this.setProviderWebhookContext(childProv);
+                  const childProviderConfig: CheckProviderConfig = {
+                    type: childProviderType,
+                    prompt: childCfg.prompt,
+                    exec: childCfg.exec,
+                    focus: childCfg.focus || this.mapCheckNameToFocus(childName),
+                    schema: childCfg.schema,
+                    group: childCfg.group,
+                    checkName: childName,
+                    eventContext: prInfo.eventContext,
+                    transform: childCfg.transform,
+                    transform_js: childCfg.transform_js,
+                    env: childCfg.env,
+                    forEach: childCfg.forEach,
+                    ai: {
+                      timeout: timeout || 600000,
+                      debug: debug,
+                      ...(childCfg.ai || {}),
+                    },
+                  };
+
+                  // Build per-item dependency results for child, including transitive ancestors
+                  const childDepResults = new Map<string, ReviewSummary>();
+                  const childAllDeps = DependencyResolver.getAllDependencies(
+                    childName,
+                    dependencyGraph.nodes
+                  );
+                  for (const dep of childAllDeps) {
+                    const baseRes = baseDeps.get(dep);
+                    if (baseRes) {
+                      childDepResults.set(dep, baseRes);
+                      continue;
+                    }
+                    const globalRes = results.get(dep) as ExtendedReviewSummary | undefined;
+                    if (!globalRes) continue;
+                    if (
+                      globalRes &&
+                      (globalRes.isForEach ||
+                        Array.isArray(globalRes.forEachItemResults) ||
+                        Array.isArray((globalRes as any).output))
+                    ) {
+                      // Prefer precise per-item result when available
+                      if (
+                        Array.isArray(globalRes.forEachItemResults) &&
+                        globalRes.forEachItemResults[itemIndex]
+                      ) {
+                        childDepResults.set(dep, globalRes.forEachItemResults[itemIndex]!);
+                      } else if (
+                        Array.isArray((globalRes as any).output) &&
+                        (globalRes as any).output[itemIndex] !== undefined
+                      ) {
+                        childDepResults.set(dep, {
+                          issues: [],
+                          output: (globalRes as any).output[itemIndex],
+                        } as ReviewSummary);
+                      } else {
+                        childDepResults.set(dep, globalRes);
+                      }
+                    } else {
+                      childDepResults.set(dep, globalRes);
+                    }
+                  }
+
+                  // If the parent item had a fatal failure, skip this child for this branch
+                  const parentItemRes = childDepResults.get(parentName);
+                  if (parentItemRes) {
+                    // Skip when parent explicitly signaled error in its output for this item
+                    try {
+                      const pout: any = (parentItemRes as any).output;
+                      if (pout && typeof pout === 'object' && pout.error === true) {
+                        continue;
+                      }
+                    } catch {}
+
+                    const fatal = (parentItemRes.issues || []).some(issue => {
+                      const id = issue.ruleId || '';
+                      const sev = issue.severity || 'error';
+                      return (
+                        sev === 'error' ||
+                        sev === 'critical' ||
+                        id === 'command/execution_error' ||
+                        id.endsWith('/command/execution_error') ||
+                        id === 'command/timeout' ||
+                        id.endsWith('/command/timeout') ||
+                        id === 'command/transform_js_error' ||
+                        id.endsWith('/command/transform_js_error') ||
+                        id === 'command/transform_error' ||
+                        id.endsWith('/command/transform_error') ||
+                        id.endsWith('/forEach/iteration_error') ||
+                        id === 'forEach/undefined_output' ||
+                        id.endsWith('/forEach/undefined_output') ||
+                        id.endsWith('_fail_if') ||
+                        id.endsWith('/global_fail_if')
+                      );
+                    });
+                    if (fatal) {
+                      continue;
+                    }
+                  }
+
+                  // Evaluate per-item if condition
+                  if (childCfg.if) {
+                    const condResults = new Map(results);
+                    for (const [k, v] of childDepResults) condResults.set(k, v);
+                    const shouldRunChild = await this.evaluateCheckCondition(
+                      childName,
+                      childCfg.if,
+                      prInfo,
+                      condResults,
+                      debug
+                    );
+                    if (!shouldRunChild) {
+                      continue;
+                    }
+                  }
+
+                  // Execute child for this item (record stats)
+                  const childIterStart = this.recordIterationStart(childName);
+                  const childItemRes = await this.executeWithRouting(
+                    childName,
+                    childCfg,
+                    childProv,
+                    childProviderConfig,
+                    prInfo,
+                    childDepResults,
+                    sessionInfo,
+                    config,
+                    dependencyGraph,
+                    debug,
+                    results,
+                    { index: itemIndex, total: forEachItems.length, parent: parentName }
+                  );
+
+                  // Per-item fail_if
+                  if (config && (config.fail_if || childCfg.fail_if)) {
+                    const fRes = await this.evaluateFailureConditions(
+                      childName,
+                      childItemRes,
+                      config
+                    );
+                    if (fRes.length > 0) {
+                      const fIssues = fRes
+                        .filter(f => f.failed)
+                        .map(f => ({
+                          file: 'system',
+                          line: 0,
+                          ruleId: f.conditionName,
+                          message: f.message || `Failure condition met: ${f.expression}`,
+                          severity: (f.severity || 'error') as
+                            | 'info'
+                            | 'warning'
+                            | 'error'
+                            | 'critical',
+                          category: 'logic' as const,
+                        }));
+                      childItemRes.issues = [...(childItemRes.issues || []), ...fIssues];
+                    }
+                  }
+
+                  if (!inlineAgg.has(childName)) {
+                    inlineAgg.set(childName, {
+                      issues: [],
+                      outputs: new Array(forEachItems.length),
+                      contents: [],
+                      perItemResults: new Array(forEachItems.length),
+                    });
+                  }
+                  const agg = inlineAgg.get(childName)!;
+                  if (childItemRes.issues) agg.issues.push(...childItemRes.issues);
+                  const out = (childItemRes as any).output;
+                  agg.outputs[itemIndex] = out;
+                  agg.perItemResults[itemIndex] = childItemRes;
+                  const c = (childItemRes as any).content;
+                  if (typeof c === 'string' && c.trim()) agg.contents.push(c.trim());
+
+                  // Record iteration completion for stats
+                  const childHadFatal = this.hasFatal(childItemRes.issues || []);
+                  this.recordIterationComplete(
+                    childName,
+                    childIterStart,
+                    !childHadFatal,
+                    childItemRes.issues || [],
+                    (childItemRes as any).output
+                  );
+
+                  // Recurse further for simple chains
+                  const nextBase = new Map(baseDeps);
+                  nextBase.set(childName, childItemRes);
+                  await execInlineDescendants(childName, itemIndex, nextBase);
+                }
+              };
 
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
@@ -2125,20 +2402,35 @@ export class CheckExecutionEngine {
                     const depForEachResult = depResult as ReviewSummary & {
                       output?: unknown;
                       forEachItems?: unknown[];
+                      forEachItemResults?: ReviewSummary[];
                     };
 
                     if (
-                      Array.isArray(depForEachResult.output) &&
-                      depForEachResult.output[itemIndex] !== undefined
+                      Array.isArray(depForEachResult.forEachItemResults) &&
+                      depForEachResult.forEachItemResults[itemIndex]
                     ) {
-                      // Unwrap to the item at the current index
+                      // Use precise per-item result (includes issues + output)
+                      forEachDependencyResults.set(
+                        depName,
+                        depForEachResult.forEachItemResults[itemIndex]!
+                      );
+                      // Also provide -raw access to the full array
+                      const rawResult: ReviewSummary & { output?: unknown } = {
+                        issues: [],
+                        output: depForEachResult.output,
+                      };
+                      forEachDependencyResults.set(`${depName}-raw`, rawResult);
+                    } else if (
+                      Array.isArray(depForEachResult.output) &&
+                      (depForEachResult as any).output[itemIndex] !== undefined
+                    ) {
+                      // Fallback to output-only unwrapping
                       const modifiedResult: ReviewSummary & { output?: unknown } = {
                         issues: [],
-                        output: depForEachResult.output[itemIndex],
+                        output: (depForEachResult as any).output[itemIndex],
                       };
-                      forEachDependencyResults.set(depName, modifiedResult);
 
-                      // Also provide -raw access to the full array
+                      forEachDependencyResults.set(depName, modifiedResult);
                       const rawResult: ReviewSummary & { output?: unknown } = {
                         issues: [],
                         output: depForEachResult.output,
@@ -2150,6 +2442,68 @@ export class CheckExecutionEngine {
                     }
                   } else {
                     forEachDependencyResults.set(depName, depResult);
+                  }
+                }
+
+                // Per-item dependency gating for forEach parents: if a dependency failed for this item, skip this iteration
+                if ((checkConfig.depends_on || []).length > 0) {
+                  const directDeps = checkConfig.depends_on || [];
+                  for (const depId of directDeps) {
+                    if (!forEachParents.includes(depId)) continue;
+                    const depItemRes = forEachDependencyResults.get(depId);
+                    if (!depItemRes) continue;
+                    const wasSkippedDep = (depItemRes.issues || []).some(i =>
+                      (i.ruleId || '').endsWith('/__skipped')
+                    );
+                    let hasFatalDepFailure = (depItemRes.issues || []).some(issue => {
+                      const id = issue.ruleId || '';
+                      return (
+                        id === 'command/execution_error' ||
+                        id.endsWith('/command/execution_error') ||
+                        id === 'command/timeout' ||
+                        id.endsWith('/command/timeout') ||
+                        id === 'command/transform_js_error' ||
+                        id.endsWith('/command/transform_js_error') ||
+                        id === 'command/transform_error' ||
+                        id.endsWith('/command/transform_error') ||
+                        id.endsWith('/forEach/iteration_error') ||
+                        id === 'forEach/undefined_output' ||
+                        id.endsWith('/forEach/undefined_output') ||
+                        id.endsWith('_fail_if') ||
+                        id.endsWith('/global_fail_if')
+                      );
+                    });
+                    if (
+                      !hasFatalDepFailure &&
+                      config &&
+                      (config.fail_if || config.checks[depId]?.fail_if)
+                    ) {
+                      try {
+                        const depFailures = await this.evaluateFailureConditions(
+                          depId,
+                          depItemRes,
+                          config
+                        );
+                        hasFatalDepFailure = depFailures.some(f => f.failed);
+                      } catch {}
+                    }
+                    const depAgg = dependencyResults.get(depId) as
+                      | ExtendedReviewSummary
+                      | undefined;
+                    const maskFatal =
+                      !!depAgg?.forEachFatalMask && depAgg!.forEachFatalMask![itemIndex] === true;
+                    if (wasSkippedDep || hasFatalDepFailure || maskFatal) {
+                      if (debug) {
+                        log(
+                          `🔄 Debug: Skipping item ${itemIndex + 1}/${forEachItems.length} for check "${checkName}" due to failed dependency '${depId}'`
+                        );
+                      }
+                      return {
+                        index: itemIndex,
+                        itemResult: { issues: [] } as ReviewSummary,
+                        skipped: true,
+                      };
+                    }
                   }
                 }
 
@@ -2212,6 +2566,33 @@ export class CheckExecutionEngine {
                     parent: forEachParentName,
                   }
                 );
+                // no-op
+
+                // Evaluate fail_if per item so a single failing branch does not stop others
+                if (config && (config.fail_if || checkConfig.fail_if)) {
+                  const itemFailures = await this.evaluateFailureConditions(
+                    checkName,
+                    itemResult,
+                    config
+                  );
+                  if (itemFailures.length > 0) {
+                    const failureIssues = itemFailures
+                      .filter(f => f.failed)
+                      .map(f => ({
+                        file: 'system',
+                        line: 0,
+                        ruleId: f.conditionName,
+                        message: f.message || `Failure condition met: ${f.expression}`,
+                        severity: (f.severity || 'error') as
+                          | 'info'
+                          | 'warning'
+                          | 'error'
+                          | 'critical',
+                        category: 'logic' as const,
+                      }));
+                    itemResult.issues = [...(itemResult.issues || []), ...failureIssues];
+                  }
+                }
 
                 // Record iteration completion
                 // Check if this iteration had fatal errors
@@ -2237,17 +2618,342 @@ export class CheckExecutionEngine {
                   (itemResult as any).output
                 );
 
+                // General branch-first scheduling for this item: execute all descendants (from current node only) when ready
+                const descendantSet = (() => {
+                  const visited = new Set<string>();
+                  const stack = [checkName];
+                  while (stack.length) {
+                    const p = stack.pop()!;
+                    const kids = childrenByParent.get(p) || [];
+                    for (const k of kids) {
+                      if (!visited.has(k)) {
+                        visited.add(k);
+                        stack.push(k);
+                      }
+                    }
+                  }
+                  return visited;
+                })();
+
+                const perItemDone = new Set<string>([...forEachParents, checkName]);
+                const perItemDepMap = new Map<string, ReviewSummary>();
+                for (const [k, v] of forEachDependencyResults) perItemDepMap.set(k, v);
+                perItemDepMap.set(checkName, itemResult);
+
+                const isFatal = (r: ReviewSummary | undefined): boolean => {
+                  if (!r) return true;
+                  return this.hasFatal(r.issues || []);
+                };
+
+                while (true) {
+                  let progressed = false;
+                  for (const node of descendantSet) {
+                    if (perItemDone.has(node)) continue;
+                    const nodeCfg = config.checks[node];
+                    if (!nodeCfg) continue;
+                    const deps = dependencies[node] || [];
+
+                    // Are all deps satisfied for this item?
+                    let ready = true;
+                    const childDepsMap = new Map<string, ReviewSummary>();
+                    for (const d of deps) {
+                      // Prefer per-item result if already computed in this branch
+                      const perItemRes = perItemDepMap.get(d);
+                      if (perItemRes) {
+                        if (isFatal(perItemRes)) {
+                          ready = false;
+                          break;
+                        }
+                        childDepsMap.set(d, perItemRes);
+                        continue;
+                      }
+
+                      const agg = results.get(d) as ExtendedReviewSummary | undefined;
+                      // If dependency is a forEach-capable result, require per-item unwrap
+                      if (agg && (agg.isForEach || Array.isArray(agg.forEachItemResults))) {
+                        const r =
+                          (agg.forEachItemResults && agg.forEachItemResults[itemIndex]) ||
+                          undefined;
+                        const maskFatal =
+                          !!agg.forEachFatalMask && agg.forEachFatalMask[itemIndex] === true;
+                        if (!r || maskFatal || isFatal(r)) {
+                          ready = false;
+                          break;
+                        }
+                        childDepsMap.set(d, r);
+                        continue;
+                      }
+
+                      // Fallback: use global dependency result (non-forEach)
+                      if (!agg || isFatal(agg)) {
+                        ready = false;
+                        break;
+                      }
+                      childDepsMap.set(d, agg);
+                    }
+                    if (!ready) continue;
+
+                    // if condition per item
+                    if (nodeCfg.if) {
+                      const condResults = new Map(results);
+                      for (const [k, v] of childDepsMap) condResults.set(k, v);
+                      const shouldRun = await this.evaluateCheckCondition(
+                        node,
+                        nodeCfg.if,
+                        prInfo,
+                        condResults,
+                        debug
+                      );
+                      if (!shouldRun) {
+                        perItemDone.add(node);
+                        progressed = true;
+                        continue;
+                      }
+                    }
+
+                    // Execute node for this item
+                    const nodeProvType = nodeCfg.type || 'ai';
+                    const nodeProv = this.providerRegistry.getProviderOrThrow(nodeProvType);
+                    this.setProviderWebhookContext(nodeProv);
+                    const nodeProviderConfig: CheckProviderConfig = {
+                      type: nodeProvType,
+                      prompt: nodeCfg.prompt,
+                      exec: nodeCfg.exec,
+                      focus: nodeCfg.focus || this.mapCheckNameToFocus(node),
+                      schema: nodeCfg.schema,
+                      group: nodeCfg.group,
+                      checkName: node,
+                      eventContext: prInfo.eventContext,
+                      transform: nodeCfg.transform,
+                      transform_js: nodeCfg.transform_js,
+                      env: nodeCfg.env,
+                      forEach: nodeCfg.forEach,
+                      ai: { timeout: timeout || 600000, debug: debug, ...(nodeCfg.ai || {}) },
+                    };
+
+                    const iterStart = this.recordIterationStart(node);
+                    // Expand dependency map for execution context to include transitive ancestors
+                    const execDepMap = new Map<string, ReviewSummary>(childDepsMap);
+                    const nodeAllDeps = DependencyResolver.getAllDependencies(
+                      node,
+                      dependencyGraph.nodes
+                    );
+                    for (const dep of nodeAllDeps) {
+                      if (execDepMap.has(dep)) continue;
+                      // Prefer per-item map first
+                      const perItemRes = perItemDepMap.get(dep);
+                      if (perItemRes) {
+                        execDepMap.set(dep, perItemRes);
+                        continue;
+                      }
+                      const agg = results.get(dep) as ExtendedReviewSummary | undefined;
+                      if (!agg) continue;
+                      if (
+                        agg &&
+                        (agg.isForEach ||
+                          Array.isArray(agg.forEachItemResults) ||
+                          Array.isArray((agg as any).output))
+                      ) {
+                        if (
+                          Array.isArray(agg.forEachItemResults) &&
+                          agg.forEachItemResults[itemIndex]
+                        ) {
+                          execDepMap.set(dep, agg.forEachItemResults[itemIndex]!);
+                        } else if (
+                          Array.isArray((agg as any).output) &&
+                          (agg as any).output[itemIndex] !== undefined
+                        ) {
+                          execDepMap.set(dep, {
+                            issues: [],
+                            output: (agg as any).output[itemIndex],
+                          } as ReviewSummary);
+                        } else {
+                          execDepMap.set(dep, agg);
+                        }
+                      } else {
+                        execDepMap.set(dep, agg);
+                      }
+                    }
+
+                    const nodeItemRes = await this.executeWithRouting(
+                      node,
+                      nodeCfg,
+                      nodeProv,
+                      nodeProviderConfig,
+                      prInfo,
+                      execDepMap,
+                      sessionInfo,
+                      config,
+                      dependencyGraph,
+                      debug,
+                      results,
+                      { index: itemIndex, total: forEachItems.length, parent: forEachParentName }
+                    );
+
+                    if (config && (config.fail_if || nodeCfg.fail_if)) {
+                      const fRes = await this.evaluateFailureConditions(node, nodeItemRes, config);
+                      if (fRes.length > 0) {
+                        const fIssues = fRes
+                          .filter(f => f.failed)
+                          .map(f => ({
+                            file: 'system',
+                            line: 0,
+                            ruleId: f.conditionName,
+                            message: f.message || `Failure condition met: ${f.expression}`,
+                            severity: (f.severity || 'error') as
+                              | 'info'
+                              | 'warning'
+                              | 'error'
+                              | 'critical',
+                            category: 'logic' as const,
+                          }));
+                        nodeItemRes.issues = [...(nodeItemRes.issues || []), ...fIssues];
+                      }
+                    }
+
+                    const hadFatal = isFatal(nodeItemRes);
+                    this.recordIterationComplete(
+                      node,
+                      iterStart,
+                      !hadFatal,
+                      nodeItemRes.issues || [],
+                      (nodeItemRes as any).output
+                    );
+
+                    // Aggregate results for this node across items
+                    if (!inlineAgg.has(node))
+                      inlineAgg.set(node, {
+                        issues: [],
+                        outputs: [],
+                        contents: [],
+                        perItemResults: [],
+                      });
+                    const agg = inlineAgg.get(node)!;
+                    if (nodeItemRes.issues) agg.issues.push(...nodeItemRes.issues);
+                    const nout = (nodeItemRes as any).output;
+                    if (nout !== undefined) agg.outputs.push(nout);
+                    agg.perItemResults.push(nodeItemRes);
+                    const ncontent = (nodeItemRes as any).content;
+                    if (typeof ncontent === 'string' && ncontent.trim())
+                      agg.contents.push(ncontent.trim());
+
+                    perItemDepMap.set(node, nodeItemRes);
+                    perItemDone.add(node);
+                    progressed = true;
+                  }
+                  if (!progressed) break;
+                }
+
                 // Log iteration progress
                 logger.info(
                   `  ✔ ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
                 );
 
+                perItemResults[itemIndex] = itemResult;
                 return { index: itemIndex, itemResult };
               });
 
+              // Determine runnable indices by intersecting masks across all direct forEach parents
+              const directForEachParents = (checkConfig.depends_on || []).filter(dep => {
+                const r = results.get(dep) as ExtendedReviewSummary | undefined;
+                return (
+                  !!r &&
+                  (r.isForEach ||
+                    Array.isArray(r.forEachItemResults) ||
+                    Array.isArray(r.forEachItems))
+                );
+              });
+              if (directForEachParents.length > 0) {
+                logger.debug(
+                  `  forEach: direct parents for "${checkName}": ${directForEachParents.join(', ')}`
+                );
+              }
+
+              const isIndexFatalForParent = async (
+                parent: string,
+                idx: number
+              ): Promise<boolean> => {
+                const agg = results.get(parent) as ExtendedReviewSummary | undefined;
+                if (!agg) return false; // if missing, do not gate
+                if (agg.forEachFatalMask && agg.forEachFatalMask[idx] === true) return true;
+                const r = (agg.forEachItemResults && agg.forEachItemResults[idx]) || undefined;
+                if (!r) return false;
+                // 1) Issues-based fatality (provider/transform/timeout/fail_if markers)
+                const hadFatalByIssues = this.hasFatal(r.issues || []);
+                if (hadFatalByIssues) return true;
+                // 2) Fail_if based fatality evaluated directly on the parent per-item result
+                try {
+                  if (config && (config.fail_if || config.checks[parent]?.fail_if)) {
+                    // If output is a string, try parsing JSON (full or tail) to honor fail_if semantics
+                    let rForEval: ReviewSummary = r;
+                    const rawOut = (r as any)?.output;
+                    if (typeof rawOut === 'string') {
+                      const parseTail = (text: string): unknown | null => {
+                        try {
+                          const lines = text.split('\n');
+                          for (let i = lines.length - 1; i >= 0; i--) {
+                            const t = lines[i].trim();
+                            if (t.startsWith('{') || t.startsWith('[')) {
+                              const candidate = lines.slice(i).join('\n').trim();
+                              if (
+                                (candidate.startsWith('{') && candidate.endsWith('}')) ||
+                                (candidate.startsWith('[') && candidate.endsWith(']'))
+                              ) {
+                                return JSON.parse(candidate);
+                              }
+                            }
+                          }
+                        } catch {}
+                        try {
+                          return JSON.parse(text);
+                        } catch {
+                          return null;
+                        }
+                      };
+                      const parsed = parseTail(rawOut);
+                      if (parsed && typeof parsed === 'object') {
+                        rForEval = { ...r, output: parsed } as ReviewSummary & { output?: unknown };
+                      }
+                    }
+                    const failures = await this.evaluateFailureConditions(parent, rForEval, config);
+                    if (failures.some(f => f.failed)) {
+                      // Temporary: surface why index is gated
+                    }
+                    if (failures.some(f => f.failed)) return true;
+                  }
+                } catch {}
+                return false;
+              };
+
+              const runnableIndices: number[] = [];
+              for (let idx = 0; idx < forEachItems.length; idx++) {
+                let ok = true;
+                for (const p of directForEachParents) {
+                  if (await isIndexFatalForParent(p, idx)) {
+                    ok = false;
+                    break;
+                  }
+                }
+                // Only schedule indices that have a corresponding task function
+                if (ok && typeof itemTasks[idx] === 'function') runnableIndices.push(idx);
+              }
+
+              // no-op
+              // Early skip if no runnable items after intersecting masks across all direct forEach parents
+              if (runnableIndices.length === 0) {
+                this.recordSkip(checkName, 'dependency_failed');
+                logger.info(`⏭  Skipped (dependency failed: no runnable items)`);
+                return {
+                  checkName,
+                  error: null,
+                  result: { issues: [] },
+                  skipped: true,
+                };
+              }
+
               const forEachConcurrency = Math.max(
                 1,
-                Math.min(forEachItems.length, effectiveMaxParallelism)
+                Math.min(runnableIndices.length, effectiveMaxParallelism)
               );
 
               if (debug && forEachConcurrency > 1) {
@@ -2256,12 +2962,16 @@ export class CheckExecutionEngine {
                 );
               }
 
+              const scheduledTasks = runnableIndices
+                .map(i => itemTasks[i])
+                .filter(fn => typeof fn === 'function');
               const forEachResults = await this.executeWithLimitedParallelism(
-                itemTasks,
+                scheduledTasks,
                 forEachConcurrency,
                 false
               );
 
+              let processedCount = 0;
               for (const result of forEachResults) {
                 if (result.status === 'rejected') {
                   // Instead of throwing, record the failure and continue with other iterations
@@ -2286,12 +2996,13 @@ export class CheckExecutionEngine {
                   continue;
                 }
 
-                // Skip results from skipped items (those that failed if condition)
+                // Skip results from skipped items (those gated by dependencies/if)
                 if ((result.value as any).skipped) {
                   continue;
                 }
 
-                const { itemResult } = result.value;
+                const { index: finishedIndex, itemResult } = result.value as any;
+                processedCount++;
 
                 if (itemResult.issues) {
                   allIssues.push(...itemResult.issues);
@@ -2302,14 +3013,30 @@ export class CheckExecutionEngine {
                   content?: string;
                 };
 
-                if (resultWithOutput.output !== undefined) {
-                  allOutputs.push(resultWithOutput.output);
-                }
+                allOutputs[finishedIndex] = resultWithOutput.output;
 
                 const itemContent = resultWithOutput.content;
                 if (typeof itemContent === 'string' && itemContent.trim()) {
                   aggregatedContents.push(itemContent.trim());
+                } else {
+                  const outStr =
+                    typeof resultWithOutput.output === 'string'
+                      ? (resultWithOutput.output as string).trim()
+                      : '';
+                  if (outStr) aggregatedContents.push(outStr);
                 }
+              }
+
+              // If no items were processed (all gated), mark this check as skipped for dependency_failed
+              if (processedCount === 0) {
+                this.recordSkip(checkName, 'dependency_failed');
+                logger.info(`⏭  Skipped (dependency failed for all items)`);
+                return {
+                  checkName,
+                  error: null,
+                  result: { issues: [] },
+                  skipped: true,
+                };
               }
 
               const finalOutput = allOutputs.length > 0 ? allOutputs : undefined;
@@ -2319,47 +3046,114 @@ export class CheckExecutionEngine {
                 ...(finalOutput !== undefined ? { output: finalOutput } : {}),
               } as ExtendedReviewSummary;
 
-              // Evaluate fail_if for aggregated forEach results (applies to the whole check)
-              if (config && (config.fail_if || checkConfig.fail_if)) {
-                const failureResults = await this.evaluateFailureConditions(
-                  checkName,
-                  finalResult,
-                  config
+              // Mark this result as forEach-capable and attach per-item results for precise downstream gating
+              (finalResult as ExtendedReviewSummary).isForEach = true;
+              (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
+              (finalResult as ExtendedReviewSummary).forEachItemResults =
+                perItemResults as ReviewSummary[];
+              // Compute fatal mask
+              try {
+                const mask: boolean[] = (finalResult as ExtendedReviewSummary).forEachItemResults
+                  ? await Promise.all(
+                      Array.from({ length: forEachItems.length }, async (_, idx) => {
+                        const r = (finalResult as ExtendedReviewSummary).forEachItemResults![idx];
+                        if (!r) return false; // no result (skipped) → not fatal for descendants
+                        let hadFatal = this.hasFatal(r.issues || []);
+                        try {
+                          const ids = (r.issues || []).map(i => i.ruleId).join(',');
+                          logger.debug(
+                            `  forEach: item ${idx + 1}/${forEachItems.length} issues=${(r.issues || []).length} ids=[${ids}]`
+                          );
+                        } catch {}
+                        if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
+                          try {
+                            const failures = await this.evaluateFailureConditions(
+                              checkName,
+                              r,
+                              config
+                            );
+                            hadFatal = failures.some(f => f.failed);
+                          } catch {}
+                        }
+                        return hadFatal;
+                      })
+                    )
+                  : [];
+                (finalResult as ExtendedReviewSummary).forEachFatalMask = mask;
+                logger.debug(
+                  `  forEach: mask for "${checkName}" → fatals=${mask.filter(Boolean).length}/${mask.length}`
                 );
-                if (failureResults.length > 0) {
-                  const failureIssues = failureResults
-                    .filter(f => f.failed)
-                    .map(f => ({
-                      file: 'system',
-                      line: 0,
-                      ruleId: f.conditionName,
-                      message: f.message || `Failure condition met: ${f.expression}`,
-                      severity: (f.severity || 'error') as
-                        | 'info'
-                        | 'warning'
-                        | 'error'
-                        | 'critical',
-                      category: 'logic' as const,
-                    }));
-                  finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
-                }
-              }
-
-              // IMPORTANT: Mark this result as forEach-capable so that checks depending on it
-              // will also iterate over the items (propagate forEach behavior down the chain)
-              if (allOutputs.length > 0) {
-                (finalResult as ExtendedReviewSummary).isForEach = true;
-                (finalResult as ExtendedReviewSummary).forEachItems = allOutputs;
-              }
+              } catch {}
 
               if (aggregatedContents.length > 0) {
                 (finalResult as ReviewSummary & { content?: string }).content =
                   aggregatedContents.join('\n');
               }
 
-              log(
-                `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
-              );
+              // Finalize inline descendant aggregations to full results, so later levels skip them
+              for (const [childName, agg] of inlineAgg.entries()) {
+                const childCfg = config.checks[childName];
+                const childEnrichedIssues = (agg.issues || []).map(issue => ({
+                  ...issue,
+                  checkName: childName,
+                  ruleId: `${childName}/${issue.ruleId}`,
+                  group: childCfg.group,
+                  schema: typeof childCfg.schema === 'object' ? 'custom' : childCfg.schema,
+                  template: childCfg.template,
+                  timestamp: Date.now(),
+                }));
+                const childFinal: ExtendedReviewSummary = {
+                  issues: childEnrichedIssues,
+                  ...(agg.outputs.length > 0 ? { output: agg.outputs } : {}),
+                  isForEach: true,
+                  forEachItems: agg.outputs,
+                  forEachItemResults: agg.perItemResults,
+                  ...(agg.contents.length > 0 ? { content: agg.contents.join('\n') } : {}),
+                };
+                // Compute fatal mask for child aggregate
+                try {
+                  const mask: boolean[] = Array.from(
+                    { length: agg.perItemResults.length },
+                    (_, idx) => {
+                      const r = agg.perItemResults[idx];
+                      if (!r) return false; // skipped item is not fatal for descendants
+                      const hadFatal = (r.issues || []).some(issue => {
+                        const id = issue.ruleId || '';
+                        return (
+                          issue.severity === 'error' ||
+                          issue.severity === 'critical' ||
+                          id === 'command/execution_error' ||
+                          id.endsWith('/command/execution_error') ||
+                          id === 'command/timeout' ||
+                          id.endsWith('/command/timeout') ||
+                          id === 'command/transform_js_error' ||
+                          id.endsWith('/command/transform_js_error') ||
+                          id === 'command/transform_error' ||
+                          id.endsWith('/command/transform_error') ||
+                          id.endsWith('/forEach/iteration_error') ||
+                          id === 'forEach/undefined_output' ||
+                          id.endsWith('/forEach/undefined_output') ||
+                          id.endsWith('_fail_if') ||
+                          id.endsWith('/global_fail_if')
+                        );
+                      });
+                      return hadFatal;
+                    }
+                  );
+                  childFinal.forEachFatalMask = mask;
+                } catch {}
+                results.set(childName, childFinal);
+              }
+
+              if (
+                debug &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'json' &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'sarif'
+              ) {
+                console.log(
+                  `🔄 Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+                );
+              }
             } // End of else block for forEachItems.length > 0
           } else {
             // Normal single execution
@@ -2525,7 +3319,8 @@ export class CheckExecutionEngine {
             result: enrichedResult,
           };
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage =
+            error instanceof Error ? `${error.message}\n${error.stack || ''}` : String(error);
           const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
 
           // Record error in stats
@@ -2554,8 +3349,9 @@ export class CheckExecutionEngine {
       );
 
       // Process results and store them for next level
+      const levelChecksList = executionGroup.parallel.filter(name => !results.has(name));
       for (let i = 0; i < levelResults.length; i++) {
-        const checkName = executionGroup.parallel[i];
+        const checkName = levelChecksList[i];
         const result = levelResults[i];
         const checkConfig = config.checks[checkName];
 
@@ -4030,13 +4826,26 @@ export class CheckExecutionEngine {
   /**
    * Record forEach preview items
    */
-  private recordForEachPreview(checkName: string, items: unknown[]): void {
+  private recordForEachPreview(checkName: string, items: unknown[] | undefined): void {
     const stats = this.executionStats.get(checkName);
-    if (!stats || !items.length) return;
+    if (!stats) return;
+    if (!Array.isArray(items) || items.length === 0) return;
 
     // Store preview of first 3 items
     const preview = items.slice(0, 3).map(item => {
-      const str = typeof item === 'string' ? item : JSON.stringify(item);
+      let str: string;
+      if (typeof item === 'string') {
+        str = item;
+      } else if (item === undefined || item === null) {
+        str = '(empty)';
+      } else {
+        try {
+          const j = JSON.stringify(item);
+          str = typeof j === 'string' ? j : String(item);
+        } catch {
+          str = String(item);
+        }
+      }
       return str.length > 50 ? str.substring(0, 47) + '...' : str;
     });
 
@@ -4077,6 +4886,43 @@ export class CheckExecutionEngine {
       totalDuration,
       checks,
     };
+  }
+
+  // Generic fatality helpers to avoid duplication
+  private isFatalRule(id: string, severity?: string): boolean {
+    const sev = (severity || '').toLowerCase();
+    return (
+      sev === 'error' ||
+      sev === 'critical' ||
+      id === 'command/execution_error' ||
+      id.endsWith('/command/execution_error') ||
+      id === 'command/timeout' ||
+      id.endsWith('/command/timeout') ||
+      id === 'command/transform_js_error' ||
+      id.endsWith('/command/transform_js_error') ||
+      id === 'command/transform_error' ||
+      id.endsWith('/command/transform_error') ||
+      id.endsWith('/forEach/iteration_error') ||
+      id === 'forEach/undefined_output' ||
+      id.endsWith('/forEach/undefined_output') ||
+      id.endsWith('_fail_if') ||
+      id.endsWith('/global_fail_if')
+    );
+  }
+
+  private hasFatal(issues: ReviewIssue[] | undefined): boolean {
+    if (!issues || issues.length === 0) return false;
+    return issues.some(i => this.isFatalRule(i.ruleId || '', i.severity));
+  }
+
+  private async failIfTriggered(
+    checkName: string,
+    result: ReviewSummary,
+    config?: import('./types/config').VisorConfig
+  ): Promise<boolean> {
+    if (!config) return false;
+    const failures = await this.evaluateFailureConditions(checkName, result, config);
+    return failures.some(f => f.failed);
   }
 
   /**

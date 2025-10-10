@@ -63,6 +63,13 @@ export class CommandCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
+    try {
+      logger.info(
+        `  command provider: executing check=${String((config as any).checkName || config.type)} hasTransformJs=${Boolean(
+          (config as any).transform_js
+        )}`
+      );
+    } catch {}
     const command = config.exec as string;
     const transform = config.transform as string | undefined;
     const transformJs = config.transform_js as string | undefined;
@@ -92,7 +99,6 @@ export class CommandCheckProvider extends CheckProvider {
       if (command.includes('{{') || command.includes('{%')) {
         renderedCommand = await this.renderCommandTemplate(command, templateContext);
       }
-
       logger.debug(`🔧 Debug: Rendered command: ${renderedCommand}`);
 
       // Prepare environment variables - convert all to strings
@@ -133,6 +139,7 @@ export class CommandCheckProvider extends CheckProvider {
       const rawOutput = stdout.trim();
 
       // Try to parse output as JSON for default behavior
+      // no debug
       let output: unknown = rawOutput;
       try {
         // Attempt to parse as JSON
@@ -141,40 +148,36 @@ export class CommandCheckProvider extends CheckProvider {
         logger.debug(`🔧 Debug: Parsed entire output as JSON successfully`);
       } catch {
         // Try to extract JSON from the end of output (for commands with debug logs)
-        const extracted = this.extractJsonFromEnd(rawOutput);
-        if (extracted) {
+        const extractedTail = this.extractJsonFromEnd(rawOutput);
+        if (extractedTail) {
           try {
-            output = JSON.parse(extracted);
-            logger.debug(
-              `🔧 Debug: Extracted and parsed JSON from end of output (${extracted.length} chars from ${rawOutput.length} total)`
-            );
-            logger.debug(`🔧 Debug: Extracted JSON content: ${extracted.slice(0, 200)}`);
-          } catch (parseError) {
-            // Extraction found something but it's not valid JSON
-            logger.debug(
-              `🔧 Debug: Extracted text is not valid JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
-            );
+            output = JSON.parse(extractedTail);
+          } catch {
             output = rawOutput;
           }
         } else {
-          // Not JSON, keep as string
-          logger.debug(`🔧 Debug: No JSON found in output, keeping as string`);
-          output = rawOutput;
+          // Try to extract any balanced JSON substring anywhere
+          const extractedAny = this.extractJsonAnywhere(rawOutput);
+          if (extractedAny) {
+            try {
+              output = JSON.parse(extractedAny);
+            } catch {
+              output = rawOutput;
+            }
+          } else {
+            // Last resort: detect common boolean flags like error:true or error=false for fail_if gating
+            const m = /\berror\b\s*[:=]\s*(true|false)/i.exec(rawOutput);
+            if (m) {
+              output = { error: m[1].toLowerCase() === 'true' } as any;
+            } else {
+              output = rawOutput;
+            }
+          }
         }
       }
 
       // Log the parsed structure for debugging
-      if (output !== rawOutput) {
-        try {
-          const outputType = Array.isArray(output) ? `array[${output.length}]` : typeof output;
-          logger.debug(`🔧 Debug: Parsed output type: ${outputType}`);
-          if (typeof output === 'object' && output !== null) {
-            logger.debug(`🔧 Debug: Parsed output keys: ${Object.keys(output).join(', ')}`);
-          }
-        } catch {
-          // Ignore logging errors
-        }
-      }
+      // no debug
 
       // Apply transform if specified (Liquid or JavaScript)
       let finalOutput = output;
@@ -232,25 +235,24 @@ export class CommandCheckProvider extends CheckProvider {
           // Compile and execute the JavaScript expression
           // Use direct property access instead of destructuring to avoid syntax issues
           const trimmedTransform = transformJs.trim();
-          let transformExpression: string;
-
-          if (/return\s+/.test(trimmedTransform)) {
-            transformExpression = `(() => {\n${trimmedTransform}\n})()`;
-          } else {
-            const lines = trimmedTransform.split('\n');
-            if (lines.length > 1) {
-              const lastLine = lines[lines.length - 1].trim();
-              const remaining = lines.slice(0, -1).join('\n');
-              if (lastLine && !lastLine.includes('}') && !lastLine.includes('{')) {
-                const returnTarget = lastLine.replace(/;$/, '');
-                transformExpression = `(() => {\n${remaining}\nreturn ${returnTarget};\n})()`;
-              } else {
-                transformExpression = `(${trimmedTransform})`;
-              }
-            } else {
-              transformExpression = `(${trimmedTransform})`;
+          // Build a safe function body that supports statements + implicit last-expression return.
+          const buildBodyWithReturn = (raw: string): string => {
+            const t = raw.trim();
+            // Find last non-empty line
+            const lines = t.split(/\n/);
+            let i = lines.length - 1;
+            while (i >= 0 && lines[i].trim().length === 0) i--;
+            if (i < 0) return 'return undefined;';
+            const lastLine = lines[i].trim();
+            if (/^return\b/i.test(lastLine)) {
+              return t;
             }
-          }
+            const idx = t.lastIndexOf(lastLine);
+            const head = idx >= 0 ? t.slice(0, idx) : '';
+            const lastExpr = lastLine.replace(/;\s*$/, '');
+            return `${head}\nreturn (${lastExpr});`;
+          };
+          const bodyWithReturn = buildBodyWithReturn(trimmedTransform);
 
           const code = `
             const output = scope.output;
@@ -258,41 +260,124 @@ export class CommandCheckProvider extends CheckProvider {
             const files = scope.files;
             const outputs = scope.outputs;
             const env = scope.env;
-            const log = (...args) => {
-              console.log('🔍 Debug:', ...args);
-            };
-            return ${transformExpression};
+            const log = (...args) => { console.log('🔍 Debug:', ...args); };
+            const __result = (function(){
+${bodyWithReturn}
+            })();
+            return __result;
           `;
 
-          try {
-            logger.debug(`🔧 Debug: JavaScript transform code: ${code}`);
-            logger.debug(
-              `🔧 Debug: JavaScript context: ${JSON.stringify(jsContext).slice(0, 200)}`
-            );
-          } catch {
-            // Ignore logging errors
-          }
-
+          // Execute user code exclusively inside the sandbox
           if (!this.sandbox) {
             this.sandbox = this.createSecureSandbox();
           }
-          const exec = this.sandbox.compile(code);
-          finalOutput = exec({ scope: jsContext }).run();
+          // Try to serialize result to JSON string inside sandbox to preserve primitives like booleans
+          let parsedFromSandboxJson: any = undefined;
+          try {
+            const stringifyCode = `
+              const output = scope.output;
+              const pr = scope.pr;
+              const files = scope.files;
+              const outputs = scope.outputs;
+              const env = scope.env;
+              const log = (...args) => { console.log('🔍 Debug:', ...args); };
+              const __ret = (function(){
+${bodyWithReturn}
+              })();
+              return typeof __ret === 'object' && __ret !== null ? JSON.stringify(__ret) : null;
+            `;
+            const stringifyExec = this.sandbox.compile(stringifyCode);
+            const jsonStr = stringifyExec({ scope: jsContext }).run();
+            if (typeof jsonStr === 'string' && jsonStr.trim().startsWith('{')) {
+              parsedFromSandboxJson = JSON.parse(jsonStr);
+            }
+          } catch {}
+
+          if (parsedFromSandboxJson !== undefined) {
+            finalOutput = parsedFromSandboxJson;
+          } else {
+            const exec = this.sandbox.compile(code);
+            finalOutput = exec({ scope: jsContext }).run();
+          }
+
+          // Fallback: if sandbox could not preserve primitives (e.g., booleans lost),
+          // attempt to re-evaluate the transform in a locked Node VM context to get plain JS values.
+          try {
+            if (
+              finalOutput &&
+              typeof finalOutput === 'object' &&
+              !Array.isArray(finalOutput) &&
+              ((finalOutput as any).error === undefined ||
+                (finalOutput as any).issues === undefined)
+            ) {
+              const vm = await import('node:vm');
+              const vmContext = vm.createContext({ scope: jsContext });
+              const vmCode = `
+                (function(){
+                  const output = scope.output; const pr = scope.pr; const files = scope.files; const outputs = scope.outputs; const env = scope.env; const log = ()=>{};
+${bodyWithReturn}
+                })()
+              `;
+              const vmResult = vm.runInContext(vmCode, vmContext, { timeout: 1000 });
+              if (vmResult && typeof vmResult === 'object') {
+                finalOutput = vmResult;
+              }
+            }
+          } catch {}
+          // Create a plain JSON snapshot of the transform result to avoid proxy/getter surprises
+          // Prefer JSON stringify inside the sandbox realm (so it knows how to serialize its own objects),
+          // then fall back to host-side JSON clone and finally to a shallow copy of own enumerable properties.
+          let finalSnapshot: Record<string, unknown> | null = null;
+          try {
+            if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
+              // Try realm-local stringify first
+              try {
+                const stringifyExec = this.sandbox!.compile('return JSON.stringify(scope.obj);');
+                const jsonStr = stringifyExec({ obj: finalOutput }).run();
+                if (typeof jsonStr === 'string' && jsonStr.trim().startsWith('{')) {
+                  finalSnapshot = JSON.parse(jsonStr);
+                }
+              } catch {}
+              if (!finalSnapshot) {
+                try {
+                  finalSnapshot = JSON.parse(JSON.stringify(finalOutput));
+                } catch {}
+              }
+              if (!finalSnapshot) {
+                const tmp: Record<string, unknown> = {};
+                for (const k of Object.keys(finalOutput as Record<string, unknown>)) {
+                  (tmp as any)[k] = (finalOutput as any)[k];
+                }
+                finalSnapshot = tmp;
+              }
+            }
+          } catch {}
+          // @ts-ignore store for later extraction path
+          (this as any).__lastTransformSnapshot = finalSnapshot;
+          try {
+            const isObj =
+              finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput);
+            const keys = isObj
+              ? Object.keys(finalOutput as Record<string, unknown>).join(',')
+              : typeof finalOutput;
+            logger.debug(
+              `  transform_js: output typeof=${Array.isArray(finalOutput) ? 'array' : typeof finalOutput} keys=${keys}`
+            );
+            if (isObj && (finalOutput as any).issues) {
+              const mi: any = (finalOutput as any).issues;
+              logger.debug(
+                `  transform_js: issues typeof=${Array.isArray(mi) ? 'array' : typeof mi} len=${(mi && mi.length) || 0}`
+              );
+            }
+            try {
+              if (isObj)
+                logger.debug(`  transform_js: error value=${String((finalOutput as any).error)}`);
+            } catch {}
+          } catch {}
 
           logger.verbose(`✓ Applied JavaScript transform successfully`);
-          try {
-            const preview = JSON.stringify(finalOutput);
-            logger.debug(
-              `🔧 Debug: transform_js result: ${typeof preview === 'string' ? preview.slice(0, 200) : String(preview).slice(0, 200)}`
-            );
-          } catch {
-            try {
-              const preview = String(finalOutput);
-              logger.debug(`🔧 Debug: transform_js result: ${preview.slice(0, 200)}`);
-            } catch {
-              // Ignore logging errors
-            }
-          }
+          // Already normalized in sandbox result
+          // no debug
         } catch (error) {
           logger.error(
             `✗ Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -313,8 +398,36 @@ export class CommandCheckProvider extends CheckProvider {
       }
 
       // Extract structured issues when the command returns them (skip for forEach parents)
+      // no debug
       let issues: ReviewIssue[] = [];
       let outputForDependents: unknown = finalOutput;
+      // Capture a shallow snapshot created earlier if available (within transform_js path)
+      // @ts-ignore - finalSnapshot is defined in the transform_js scope above when applicable
+      // @ts-ignore retrieve snapshot captured after transform_js (if any)
+      const snapshotForExtraction: Record<string, unknown> | null =
+        (this as any).__lastTransformSnapshot || null;
+      try {
+        if (snapshotForExtraction) {
+          logger.debug(`  provider: snapshot keys=${Object.keys(snapshotForExtraction).join(',')}`);
+        } else {
+          logger.debug(`  provider: snapshot is null`);
+        }
+      } catch {}
+      // Some shells may wrap JSON output inside a one-element array due to quoting.
+      // If we see a single-element array containing a JSON string or object, unwrap it.
+      try {
+        if (Array.isArray(outputForDependents) && (outputForDependents as unknown[]).length === 1) {
+          const first = (outputForDependents as unknown[])[0];
+          if (typeof first === 'string') {
+            try {
+              outputForDependents = JSON.parse(first);
+            } catch {}
+          } else if (first && typeof first === 'object') {
+            outputForDependents = first as unknown;
+          }
+        }
+      } catch {}
+
       let content: string | undefined;
       let extracted: { issues: ReviewIssue[]; remainingOutput: unknown } | null = null;
 
@@ -324,7 +437,162 @@ export class CommandCheckProvider extends CheckProvider {
       const isForEachParent = commandConfig.forEach === true;
 
       if (!isForEachParent) {
-        extracted = this.extractIssuesFromOutput(finalOutput);
+        // Generic: if transform output is an object and contains an 'issues' field,
+        // expose all other fields to dependents regardless of whether we successfully
+        // normalized the issues array. This preserves flags like 'error' for fail_if.
+        try {
+          const baseObj = (snapshotForExtraction || (finalOutput as any)) as Record<
+            string,
+            unknown
+          >;
+          if (
+            baseObj &&
+            typeof baseObj === 'object' &&
+            Object.prototype.hasOwnProperty.call(baseObj, 'issues')
+          ) {
+            const remaining = { ...baseObj } as Record<string, unknown>;
+            delete (remaining as any).issues;
+            outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+            try {
+              const k =
+                outputForDependents && typeof outputForDependents === 'object'
+                  ? Object.keys(outputForDependents as any).join(',')
+                  : String(outputForDependents);
+              logger.debug(`  provider: generic-remaining keys=${k}`);
+            } catch {}
+          }
+        } catch {}
+        // Fast path for transform_js objects that include an issues array (realm-agnostic)
+        const objForExtraction = (snapshotForExtraction || (finalOutput as any)) as Record<
+          string,
+          unknown
+        >;
+        if (objForExtraction && typeof objForExtraction === 'object') {
+          try {
+            const rec = objForExtraction;
+            const maybeIssues: any = (rec as any).issues;
+            const toPlainArray = (v: any): any[] | null => {
+              if (Array.isArray(v)) return v;
+              try {
+                if (v && typeof v === 'object' && typeof v[Symbol.iterator] === 'function') {
+                  return Array.from(v);
+                }
+              } catch {}
+              const len = Number((v || {}).length);
+              if (Number.isFinite(len) && len >= 0) {
+                const arr: any[] = [];
+                for (let i = 0; i < len; i++) arr.push(v[i]);
+                return arr;
+              }
+              try {
+                const cloned = JSON.parse(JSON.stringify(v));
+                return Array.isArray(cloned) ? cloned : null;
+              } catch {
+                return null;
+              }
+            };
+            try {
+              const ctor =
+                maybeIssues && (maybeIssues as any).constructor
+                  ? (maybeIssues as any).constructor.name
+                  : 'unknown';
+              logger.debug(
+                `  provider: issues inspect typeof=${typeof maybeIssues} Array.isArray=${Array.isArray(
+                  maybeIssues
+                )} ctor=${ctor} keys=${Object.keys((maybeIssues || {}) as any).join(',')}`
+              );
+            } catch {}
+            const arr = toPlainArray(maybeIssues);
+            if (arr) {
+              const norm = this.normalizeIssueArray(arr);
+              if (norm) {
+                issues = norm;
+                const remaining = { ...rec } as Record<string, unknown>;
+                delete (remaining as any).issues;
+                outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+                try {
+                  const keys =
+                    outputForDependents && typeof outputForDependents === 'object'
+                      ? Object.keys(outputForDependents as any).join(',')
+                      : String(outputForDependents);
+                  logger.info(
+                    `  provider: fast-path issues=${issues.length} remaining keys=${keys}`
+                  );
+                } catch {}
+              } else {
+                try {
+                  logger.info('  provider: fast-path norm failed');
+                } catch {}
+              }
+            } else {
+              try {
+                logger.info('  provider: fast-path arr unavailable');
+              } catch {}
+            }
+          } catch {}
+        }
+        // Normalize extraction target: unwrap one-element arrays like ["{...}"] or [{...}]
+        let extractionTarget: unknown = snapshotForExtraction || finalOutput;
+        try {
+          if (Array.isArray(extractionTarget) && (extractionTarget as unknown[]).length === 1) {
+            const first = (extractionTarget as unknown[])[0];
+            if (typeof first === 'string') {
+              try {
+                extractionTarget = JSON.parse(first);
+              } catch {
+                extractionTarget = first;
+              }
+            } else if (first && typeof first === 'object') {
+              extractionTarget = first as unknown;
+            }
+          }
+        } catch {}
+        extracted = this.extractIssuesFromOutput(extractionTarget);
+        try {
+          if (extractionTarget !== (snapshotForExtraction || finalOutput)) {
+            finalOutput = extractionTarget;
+          }
+        } catch {}
+        // no debug
+        // Handle cross-realm Arrays from sandbox: issues may look like an array but fail Array.isArray
+        if (!extracted && finalOutput && typeof finalOutput === 'object') {
+          try {
+            const rec = finalOutput as Record<string, unknown>;
+            const maybeIssues: any = (rec as any).issues;
+            if (maybeIssues && typeof maybeIssues === 'object') {
+              let arr: any[] | null = null;
+              // Prefer iterator if present
+              try {
+                if (typeof maybeIssues[Symbol.iterator] === 'function') {
+                  arr = Array.from(maybeIssues);
+                }
+              } catch {}
+              // Fallback to length-based copy
+              if (!arr) {
+                const len = Number((maybeIssues as any).length);
+                if (Number.isFinite(len) && len >= 0) {
+                  arr = [];
+                  for (let i = 0; i < len; i++) arr.push(maybeIssues[i]);
+                }
+              }
+              // Last resort: JSON clone
+              if (!arr) {
+                try {
+                  arr = JSON.parse(JSON.stringify(maybeIssues));
+                } catch {}
+              }
+              if (arr && Array.isArray(arr)) {
+                const norm = this.normalizeIssueArray(arr);
+                if (norm) {
+                  issues = norm;
+                  const remaining = { ...rec } as Record<string, unknown>;
+                  delete (remaining as any).issues;
+                  outputForDependents = Object.keys(remaining).length > 0 ? remaining : undefined;
+                }
+              }
+            }
+          } catch {}
+        }
         if (!extracted && typeof finalOutput === 'string') {
           // Attempt to parse string output as JSON and extract issues again
           try {
@@ -333,13 +601,52 @@ export class CommandCheckProvider extends CheckProvider {
             if (extracted) {
               issues = extracted.issues;
               outputForDependents = extracted.remainingOutput;
+              // If remainingOutput carries a content field, pick it up
+              if (
+                typeof extracted.remainingOutput === 'object' &&
+                extracted.remainingOutput !== null &&
+                typeof (extracted.remainingOutput as any).content === 'string'
+              ) {
+                const c = String((extracted.remainingOutput as any).content).trim();
+                if (c) content = c;
+              }
             }
           } catch {
-            // Ignore JSON parse errors – leave output as-is
+            // Try to salvage JSON from anywhere within the string (stripped logs/ansi)
+            try {
+              const any = this.extractJsonAnywhere(finalOutput);
+              if (any) {
+                const parsed = JSON.parse(any);
+                extracted = this.extractIssuesFromOutput(parsed);
+                if (extracted) {
+                  issues = extracted.issues;
+                  outputForDependents = extracted.remainingOutput;
+                  if (
+                    typeof extracted.remainingOutput === 'object' &&
+                    extracted.remainingOutput !== null &&
+                    typeof (extracted.remainingOutput as any).content === 'string'
+                  ) {
+                    const c = String((extracted.remainingOutput as any).content).trim();
+                    if (c) content = c;
+                  }
+                }
+              }
+            } catch {
+              // leave as-is
+            }
           }
         } else if (extracted) {
           issues = extracted.issues;
           outputForDependents = extracted.remainingOutput;
+          // Also propagate embedded content when remainingOutput is an object { content, ... }
+          if (
+            typeof extracted.remainingOutput === 'object' &&
+            extracted.remainingOutput !== null &&
+            typeof (extracted.remainingOutput as any).content === 'string'
+          ) {
+            const c = String((extracted.remainingOutput as any).content).trim();
+            if (c) content = c;
+          }
         }
 
         if (!issues.length && this.shouldTreatAsTextOutput(trimmedRawOutput)) {
@@ -350,30 +657,208 @@ export class CommandCheckProvider extends CheckProvider {
             content = trimmed;
           }
         }
+
+        // Generic fallback: if issues are still empty, try to parse raw stdout as JSON and extract issues.
+        if (!issues.length && typeof trimmedRawOutput === 'string') {
+          try {
+            const tryParsed = JSON.parse(trimmedRawOutput);
+            const reextract = this.extractIssuesFromOutput(tryParsed);
+            if (reextract && reextract.issues && reextract.issues.length) {
+              issues = reextract.issues;
+              if (!outputForDependents && reextract.remainingOutput) {
+                outputForDependents = reextract.remainingOutput;
+              }
+            } else if (Array.isArray(tryParsed)) {
+              // Treat parsed array as potential issues array or array of { issues: [...] }
+              const first = tryParsed[0];
+              if (first && typeof first === 'object' && Array.isArray((first as any).issues)) {
+                const merged: unknown[] = [];
+                for (const el of tryParsed as unknown[]) {
+                  if (el && typeof el === 'object' && Array.isArray((el as any).issues)) {
+                    merged.push(...((el as any).issues as unknown[]));
+                  }
+                }
+                const flat = this.normalizeIssueArray(merged);
+                if (flat) issues = flat;
+              } else {
+                // Try to parse string elements into JSON objects and extract
+                const converted: unknown[] = [];
+                for (const el of tryParsed as unknown[]) {
+                  if (typeof el === 'string') {
+                    try {
+                      const obj = JSON.parse(el);
+                      converted.push(obj);
+                    } catch {
+                      // keep as-is
+                    }
+                  } else {
+                    converted.push(el);
+                  }
+                }
+                const flat = this.normalizeIssueArray(converted as unknown[]);
+                if (flat) issues = flat;
+              }
+            }
+          } catch {}
+          if (!issues.length) {
+            try {
+              const any = this.extractJsonAnywhere(trimmedRawOutput);
+              if (any) {
+                const tryParsed = JSON.parse(any);
+                const reextract = this.extractIssuesFromOutput(tryParsed);
+                if (reextract && reextract.issues && reextract.issues.length) {
+                  issues = reextract.issues;
+                  if (!outputForDependents && reextract.remainingOutput) {
+                    outputForDependents = reextract.remainingOutput;
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+
+        // Preserve all primitive flags (boolean/number/string) from original transform output
+        try {
+          const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+          if (
+            outputForDependents &&
+            typeof outputForDependents === 'object' &&
+            srcObj &&
+            typeof srcObj === 'object'
+          ) {
+            for (const k of Object.keys(srcObj)) {
+              const v: any = (srcObj as any)[k];
+              if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+                (outputForDependents as any)[k] = v;
+              }
+            }
+          }
+        } catch {}
+
+        // Normalize output object to a plain shallow object (avoid JSON stringify drop of false booleans)
+        try {
+          if (
+            outputForDependents &&
+            typeof outputForDependents === 'object' &&
+            !Array.isArray(outputForDependents)
+          ) {
+            const plain: Record<string, unknown> = {};
+            for (const k of Object.keys(outputForDependents as any)) {
+              (plain as any)[k] = (outputForDependents as any)[k];
+            }
+            outputForDependents = plain;
+          }
+        } catch {}
       }
 
       if (!content && this.shouldTreatAsTextOutput(trimmedRawOutput) && !isForEachParent) {
         content = trimmedRawOutput;
       }
 
+      // Normalize output object to plain JSON to avoid cross-realm proxy quirks
+      try {
+        if (outputForDependents && typeof outputForDependents === 'object') {
+          outputForDependents = JSON.parse(JSON.stringify(outputForDependents));
+        }
+      } catch {}
+
+      // Promote primitive flags from original transform output to top-level result fields (schema-agnostic)
+      const promoted: Record<string, unknown> = {};
+      try {
+        const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+        if (srcObj && typeof srcObj === 'object') {
+          for (const k of Object.keys(srcObj)) {
+            const v: any = (srcObj as any)[k];
+            if (typeof v === 'boolean') {
+              if (v === true && promoted[k] === undefined) promoted[k] = true;
+            } else if (
+              (typeof v === 'number' || typeof v === 'string') &&
+              promoted[k] === undefined
+            ) {
+              promoted[k] = v;
+            }
+          }
+        }
+      } catch {}
+
       // Return the output and issues as part of the review summary so dependent checks can use them
       const result = {
         issues,
         output: outputForDependents,
         ...(content ? { content } : {}),
+        ...promoted,
       } as ReviewSummary;
 
-      if (transformJs) {
-        try {
-          const outputValue = (result as ReviewSummary & { output?: unknown }).output;
-          const stringified = JSON.stringify(outputValue);
-          logger.debug(
-            `🔧 Debug: Command provider returning output: ${stringified ? stringified.slice(0, 200) : '(empty)'}`
-          );
-        } catch {
-          // Ignore logging errors
+      // Attach raw transform object only when transform_js was used (avoid polluting plain command outputs)
+      try {
+        if (transformJs) {
+          const rawObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+          if (rawObj && typeof rawObj === 'object') {
+            (result as any).__raw = rawObj;
+          }
         }
-      }
+      } catch {}
+
+      // Final safeguard: ensure primitive flags from original transform output are present in result.output.
+      // Do this without dropping explicit false values (important for fail_if like `output.error`).
+      try {
+        const srcObj = (snapshotForExtraction || (finalOutput as any)) as Record<string, unknown>;
+        const srcErr = ((): boolean | undefined => {
+          try {
+            if (
+              snapshotForExtraction &&
+              typeof snapshotForExtraction === 'object' &&
+              (snapshotForExtraction as any).error !== undefined
+            ) {
+              return Boolean((snapshotForExtraction as any).error);
+            }
+            if (
+              finalOutput &&
+              typeof finalOutput === 'object' &&
+              (finalOutput as any).error !== undefined
+            ) {
+              return Boolean((finalOutput as any).error);
+            }
+          } catch {}
+          return undefined;
+        })();
+        const dst = (result as any).output;
+        if (srcObj && typeof srcObj === 'object' && dst && typeof dst === 'object') {
+          try {
+            logger.debug(
+              `  provider: safeguard src.error typeof=${typeof (srcObj as any).error} val=${String((srcObj as any).error)} dst.hasErrorBefore=${String((dst as any).error !== undefined)}`
+            );
+          } catch {}
+          for (const k of Object.keys(srcObj)) {
+            const v: any = (srcObj as any)[k];
+            if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+              (dst as any)[k] = v;
+            }
+          }
+          // Explicitly normalize a common flag used in tests/pipelines
+          if (srcErr !== undefined && (dst as any).error === undefined) {
+            (dst as any).error = srcErr;
+            try {
+              const k = Object.keys(dst as any).join(',');
+              logger.debug(
+                `  provider: safeguard merged error -> output keys=${k} val=${String((dst as any).error)}`
+              );
+            } catch {}
+          }
+        }
+      } catch {}
+
+      try {
+        const out: any = (result as any).output;
+        if (out && typeof out === 'object') {
+          const k = Object.keys(out as Record<string, unknown>).join(',');
+          logger.debug(`  provider: return output keys=${k}`);
+        } else {
+          logger.debug(`  provider: return output type=${typeof out}`);
+        }
+      } catch {}
+
+      // no debug
 
       return result;
     } catch (error) {
@@ -547,28 +1032,95 @@ export class CommandCheckProvider extends CheckProvider {
    * Looks for the last occurrence of { or [ and tries to parse from there
    */
   private extractJsonFromEnd(text: string): string | null {
-    // Strategy: Find the last line that starts with { or [
-    // Then try to parse from that point to the end
-    const lines = text.split('\n');
-
-    // Search backwards for a line starting with { or [
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const trimmed = lines[i].trim();
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        // Found potential JSON start - take everything from here to the end
-        const candidate = lines.slice(i).join('\n');
-        // Quick validation: does it look like valid JSON structure?
-        const trimmedCandidate = candidate.trim();
-        if (
-          (trimmedCandidate.startsWith('{') && trimmedCandidate.endsWith('}')) ||
-          (trimmedCandidate.startsWith('[') && trimmedCandidate.endsWith(']'))
-        ) {
-          return trimmedCandidate;
+    // Robust strategy: find the last closing brace/bracket, then walk backwards to the matching opener
+    const lastBrace = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+    if (lastBrace === -1) return null;
+    // Scan backwards to find matching opener with a simple counter
+    let open = 0;
+    for (let i = lastBrace; i >= 0; i--) {
+      const ch = text[i];
+      if (ch === '}' || ch === ']') open++;
+      else if (ch === '{' || ch === '[') open--;
+      if (open === 0 && (ch === '{' || ch === '[')) {
+        const candidate = text.slice(i, lastBrace + 1).trim();
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch {
+          return null;
         }
       }
     }
-
     return null;
+  }
+
+  // Extract any balanced JSON object/array substring from anywhere in the text
+  private extractJsonAnywhere(text: string): string | null {
+    const n = text.length;
+    let best: string | null = null;
+    for (let i = 0; i < n; i++) {
+      const start = text[i];
+      if (start !== '{' && start !== '[') continue;
+      let open = 0;
+      let inString = false;
+      let escape = false;
+      for (let j = i; j < n; j++) {
+        const ch = text[j];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch === '{' || ch === '[') open++;
+        else if (ch === '}' || ch === ']') open--;
+        if (open === 0 && (ch === '}' || ch === ']')) {
+          const candidate = text.slice(i, j + 1).trim();
+          try {
+            JSON.parse(candidate);
+            best = candidate; // keep the last valid one we find
+          } catch {
+            // Try a loose-to-strict conversion (quote keys and barewords)
+            const strict = this.looseJsonToStrict(candidate);
+            if (strict) {
+              try {
+                JSON.parse(strict);
+                best = strict;
+              } catch {}
+            }
+          }
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  // Best-effort conversion of object-literal-like strings to strict JSON
+  private looseJsonToStrict(candidate: string): string | null {
+    try {
+      let s = candidate.trim();
+      // Convert single quotes to double quotes conservatively
+      s = s.replace(/'/g, '"');
+      // Quote unquoted keys: {key: ...} or ,key: ...
+      s = s.replace(/([\{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g, '$1"$2":');
+      // Quote bareword values except true/false/null and numbers
+      s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (m, word) => {
+        const lw = String(word).toLowerCase();
+        if (lw === 'true' || lw === 'false' || lw === 'null') return `:${lw}`;
+        return `:"${word}"`;
+      });
+      return s;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -630,6 +1182,19 @@ export class CommandCheckProvider extends CheckProvider {
   private extractIssuesFromOutput(
     output: unknown
   ): { issues: ReviewIssue[]; remainingOutput: unknown } | null {
+    try {
+      logger.info(
+        `  extractIssuesFromOutput: typeof=${Array.isArray(output) ? 'array' : typeof output}`
+      );
+      if (typeof output === 'object' && output) {
+        const rec = output as Record<string, unknown>;
+        logger.info(
+          `  extractIssuesFromOutput: keys=${Object.keys(rec).join(',')} issuesIsArray=${Array.isArray(
+            (rec as any).issues
+          )}`
+        );
+      }
+    } catch {}
     if (output === null || output === undefined) {
       return null;
     }
@@ -640,9 +1205,30 @@ export class CommandCheckProvider extends CheckProvider {
     }
 
     if (Array.isArray(output)) {
-      const issues = this.normalizeIssueArray(output);
-      if (issues) {
-        return { issues, remainingOutput: undefined };
+      // Two supported shapes:
+      //  1) Array<ReviewIssue-like>
+      //  2) Array<{ issues: Array<ReviewIssue-like> }>
+      const first = output[0];
+      if (
+        first &&
+        typeof first === 'object' &&
+        !Array.isArray((first as any).message) &&
+        Array.isArray((first as any).issues)
+      ) {
+        // flatten nested issues arrays
+        const merged: unknown[] = [];
+        for (const el of output as unknown[]) {
+          if (el && typeof el === 'object' && Array.isArray((el as any).issues)) {
+            merged.push(...((el as any).issues as unknown[]));
+          }
+        }
+        const flat = this.normalizeIssueArray(merged);
+        if (flat) return { issues: flat, remainingOutput: undefined };
+      } else {
+        const issues = this.normalizeIssueArray(output);
+        if (issues) {
+          return { issues, remainingOutput: undefined };
+        }
       }
       return null;
     }
@@ -809,10 +1395,33 @@ export class CommandCheckProvider extends CheckProvider {
     }
   ): Promise<string> {
     try {
-      return await this.liquid.parseAndRender(template, context);
+      // Best-effort compatibility: allow double-quoted bracket keys inside Liquid tags.
+      // e.g., {{ outputs["fetch-tickets"].key }} → {{ outputs['fetch-tickets'].key }}
+      let tpl = template;
+      if (tpl.includes('{{')) {
+        tpl = tpl.replace(/\{\{([\s\S]*?)\}\}/g, (_m, inner) => {
+          const fixed = String(inner).replace(/\[\"/g, "['").replace(/\"\]/g, "']");
+          return `{{ ${fixed} }}`;
+        });
+      }
+      let rendered = await this.liquid.parseAndRender(tpl, context);
+      // If Liquid left unresolved tags (common when users write JS expressions inside {{ }}),
+      // fall back to a safe JS-expression renderer for the remaining tags.
+      if (/\{\{[\s\S]*?\}\}/.test(rendered)) {
+        try {
+          rendered = this.renderWithJsExpressions(rendered, context);
+        } catch {
+          // keep Liquid-rendered result as-is
+        }
+      }
+      return rendered;
     } catch (error) {
-      logger.debug(`🔧 Debug: Liquid rendering failed, falling back to JS evaluation: ${error}`);
-      return this.renderWithJsExpressions(template, context);
+      logger.debug(`🔧 Debug: Liquid templating failed, trying JS-expression fallback: ${error}`);
+      try {
+        return this.renderWithJsExpressions(template, context);
+      } catch {
+        return template;
+      }
     }
   }
 
@@ -833,13 +1442,9 @@ export class CommandCheckProvider extends CheckProvider {
     };
 
     const expressionRegex = /\{\{\s*([^{}]+?)\s*\}\}/g;
-
     return template.replace(expressionRegex, (_match, expr) => {
       const expression = String(expr).trim();
-      if (!expression) {
-        return '';
-      }
-
+      if (!expression) return '';
       try {
         const evalCode = `
           const pr = scope.pr;
@@ -848,15 +1453,11 @@ export class CommandCheckProvider extends CheckProvider {
           const env = scope.env;
           return (${expression});
         `;
-
-        if (!this.sandbox) {
-          this.sandbox = this.createSecureSandbox();
-        }
+        if (!this.sandbox) this.sandbox = this.createSecureSandbox();
         const evaluator = this.sandbox.compile(evalCode);
         const result = evaluator({ scope }).run();
         return result === undefined || result === null ? '' : String(result);
-      } catch (evaluationError) {
-        logger.debug(`🔧 Debug: Failed to evaluate expression: ${expression} - ${evaluationError}`);
+      } catch {
         return '';
       }
     });

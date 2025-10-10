@@ -1,0 +1,31 @@
+{
+  "default": [
+    {
+      "checkName": "analyze-ticket",
+      "content": "Issue in TT-101",
+      "group": "default",
+      "issues": [
+        {
+          "file": "TT-101.js",
+          "line": 1,
+          "ruleId": "analyze-ticket/ticket-check",
+          "message": "Issue in TT-101",
+          "severity": "error",
+          "category": "logic",
+          "checkName": "analyze-ticket",
+          "timestamp": 1760099276252
+        },
+        {
+          "file": "TT-102.js",
+          "line": 1,
+          "ruleId": "analyze-ticket/ticket-check",
+          "message": "Issue in TT-102",
+          "severity": "warning",
+          "category": "logic",
+          "checkName": "analyze-ticket",
+          "timestamp": 1760099276252
+        }
+      ]
+    }
+  ]
+}
