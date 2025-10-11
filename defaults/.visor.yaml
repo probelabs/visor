@@ -299,37 +299,57 @@ checks:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
 
-  # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
+  # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
     type: ai
-    group: dynamic  # Special group: creates new comment each time instead of updating
+    group: dynamic  # New issue triage posts a standalone comment
     schema: issue-assistant
-    command: "visor"
-    # The check runs for issue events; avoid giant runtime 'if' that depends on unknown event shape
     prompt: |
-        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository.
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
-        - `text`: a clear, well-structured markdown reply. Your primary job is to be a helpful assistant: answer the user’s question or follow up with clarifying questions. Keep it concise and actionable.
-        - `intent`: choose one: "issue_triage" (new issues), "comment_reply" (normal reply), or "comment_retrigger" (pick this when the user explicitly asks to rerun OR explicitly asks to disable some checks).
-        - `labels` (optional): array of labels to apply ONLY for new issues (when event.name == 'issues' and action == 'opened'). Do not include labels for comments.
+        - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
+        - `intent`: must be "issue_triage" for this flow.
+        - `labels` (optional): array of labels that would help organization for this new issue.
 
-        Permissions and behavior:
-        - Never suggest rerun/disable unless the user asked for it.
-        - If the user explicitly asks to disable any check(s), set `intent` to "comment_retrigger" and in `text` acknowledge the request and state that checks will be re-run; DO NOT offer or mention any slash/directive comments (e.g., "//visor-disable").
-        - Propose labels only for new issues; omit `labels` for comments.
+        Use this triage rubric (adopted from our main prompt):
+        1) Categorize the issue (bug/feature/documentation/question/enhancement/maintenance)
+        2) Assess priority (low/medium/high/urgent)
+        3) Estimate complexity (trivial/simple/moderate/complex)
+        4) Suggest timeline for resolution
+        5) Recommend labels
+        6) Identify stakeholders or potential assignees
+        7) Provide an initial response with clarifying questions if needed
 
-        Event context:
-        - name: {{ event.name | default: 'unknown' }}
-        - action: {{ event.action | default: 'unknown' }}
+        Response style:
+        - Professional and welcoming
+        - Actionable guidance and clear next steps
+        - Ask clarifying questions when information is missing
+        - Use markdown formatting; include code snippets where useful
+    on: [issue_opened]
 
-        Style:
-        - Be professional, direct, and specific.
-        - Include code snippets or links when useful.
-    on: [issue_opened, issue_comment]
+  # Comment Assistant (comments only) — intent detection and reply
+  comment-assistant:
+    type: ai
+    group: dynamic
+    schema: issue-assistant
+    command: "visor"
+    prompt: |
+        You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: a concise, helpful markdown reply to the latest comment.
+        - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
+        - `labels`: omit for comments (do not include).
+
+        Rules:
+        - Never suggest rerun/disable unless asked explicitly.
+        - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
+        - Stay technical, direct, and specific; add code snippets or links when helpful.
+    on: [issue_comment]
     on_success:
       run_js: |
-        const intent = outputs['issue-assistant'].intent;
+        const intent = outputs['comment-assistant']?.intent;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
         return (isComment && allowed && intent === 'comment_retrigger') ? ['overview'] : []
@@ -354,17 +374,7 @@ checks:
     values:
       - "external"
 
-  # Retrigger workflow based on assistant output (members only)
-  retrigger:
-    type: noop
-    group: github
-    tags: [github]
-    depends_on: [issue-assistant]
-    on: [issue_comment]
-    # Only run when a retrigger or disable request is detected in a comment context
-    if: |
-      hasMinPermission('MEMBER') && event.event_name == 'issue_comment' && outputs['issue-assistant'].intent == 'comment_retrigger'
-    # No routing needed here anymore; issue-assistant schedules 'overview' directly
+  # Retrigger noop removed — comment-assistant schedules overview directly
 
 output:
   pr_comment:
