@@ -12,6 +12,7 @@ export class ReactionManager {
 
   /**
    * Add eye emoji reaction to acknowledge event
+   * Returns the reaction ID for efficient later removal
    */
   async addAcknowledgementReaction(
     owner: string,
@@ -21,22 +22,23 @@ export class ReactionManager {
       issueNumber?: number;
       commentId?: number;
     }
-  ): Promise<void> {
+  ): Promise<number | null> {
     try {
       const { eventName, issueNumber, commentId } = context;
 
       if (commentId) {
         // React to comment
-        await this.octokit.rest.reactions.createForIssueComment({
+        const response = await this.octokit.rest.reactions.createForIssueComment({
           owner,
           repo,
           comment_id: commentId,
           content: 'eyes',
         });
         console.log(`👁️  Added acknowledgement reaction to comment ${commentId}`);
+        return response.data.id;
       } else if (issueNumber) {
         // React to issue or PR
-        await this.octokit.rest.reactions.createForIssue({
+        const response = await this.octokit.rest.reactions.createForIssue({
           owner,
           repo,
           issue_number: issueNumber,
@@ -45,17 +47,21 @@ export class ReactionManager {
         console.log(
           `👁️  Added acknowledgement reaction to ${eventName === 'issues' ? 'issue' : 'PR'} #${issueNumber}`
         );
+        return response.data.id;
       }
+      return null;
     } catch (error) {
       // Don't fail the action if reaction fails
       console.warn(
         `⚠️  Could not add acknowledgement reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+      return null;
     }
   }
 
   /**
    * Replace eye emoji with thumbs up emoji to indicate completion
+   * Uses the reaction ID from acknowledgement for efficient removal
    */
   async addCompletionReaction(
     owner: string,
@@ -64,14 +70,17 @@ export class ReactionManager {
       eventName: string;
       issueNumber?: number;
       commentId?: number;
+      acknowledgementReactionId?: number | null;
     }
   ): Promise<void> {
     try {
-      const { eventName, issueNumber, commentId } = context;
+      const { eventName, issueNumber, commentId, acknowledgementReactionId } = context;
 
       if (commentId) {
-        // Remove eye reaction first
-        await this.removeReaction(owner, repo, commentId, 'eyes', 'comment');
+        // Remove eye reaction using stored ID (efficient)
+        if (acknowledgementReactionId) {
+          await this.removeReactionById(owner, repo, commentId, acknowledgementReactionId, 'comment');
+        }
 
         // Add thumbs up reaction to comment
         await this.octokit.rest.reactions.createForIssueComment({
@@ -82,8 +91,10 @@ export class ReactionManager {
         });
         console.log(`👍 Added completion reaction to comment ${commentId}`);
       } else if (issueNumber) {
-        // Remove eye reaction first
-        await this.removeReaction(owner, repo, issueNumber, 'eyes', 'issue');
+        // Remove eye reaction using stored ID (efficient)
+        if (acknowledgementReactionId) {
+          await this.removeReactionById(owner, repo, issueNumber, acknowledgementReactionId, 'issue');
+        }
 
         // Add thumbs up reaction to issue or PR
         await this.octokit.rest.reactions.createForIssue({
@@ -105,86 +116,36 @@ export class ReactionManager {
   }
 
   /**
-   * Remove a specific reaction from an issue/PR or comment
+   * Remove a specific reaction by ID (efficient - no list API call needed)
    */
-  private async removeReaction(
+  private async removeReactionById(
     owner: string,
     repo: string,
-    id: number,
-    content: 'eyes' | '+1',
+    itemId: number,
+    reactionId: number,
     type: 'issue' | 'comment'
   ): Promise<void> {
     try {
-      // Get reactions to find the one to delete
-      const reactions =
-        type === 'comment'
-          ? await this.octokit.rest.reactions.listForIssueComment({
-              owner,
-              repo,
-              comment_id: id,
-            })
-          : await this.octokit.rest.reactions.listForIssue({
-              owner,
-              repo,
-              issue_number: id,
-            });
-
-      // Get the authenticated user to match reactions
-      let authenticatedUser: string | undefined;
-      try {
-        const { data: user } = await this.octokit.rest.users.getAuthenticated();
-        authenticatedUser = user.login;
-      } catch {
-        // If we can't get authenticated user, fall back to bot detection
-        authenticatedUser = undefined;
-      }
-
-      // Find our reaction with the specified content
-      // First try to match by authenticated user, then fall back to bot detection
-      const reactionToDelete = reactions.data.find(reaction => {
-        if (reaction.content !== content) return false;
-
-        // If we know our authenticated user, match by that
-        if (authenticatedUser && reaction.user?.login === authenticatedUser) {
-          return true;
-        }
-
-        // Fall back to bot detection
-        return (
-          reaction.user?.type === 'Bot' ||
-          reaction.user?.login === 'github-actions[bot]' ||
-          reaction.user?.login?.endsWith('[bot]')
-        );
-      });
-
-      if (reactionToDelete) {
-        if (type === 'comment') {
-          await this.octokit.rest.reactions.deleteForIssueComment({
-            owner,
-            repo,
-            comment_id: id,
-            reaction_id: reactionToDelete.id,
-          });
-        } else {
-          await this.octokit.rest.reactions.deleteForIssue({
-            owner,
-            repo,
-            issue_number: id,
-            reaction_id: reactionToDelete.id,
-          });
-        }
-        console.log(
-          `🗑️  Removed ${content} reaction from ${type} ${id} (user: ${reactionToDelete.user?.login})`
-        );
+      if (type === 'comment') {
+        await this.octokit.rest.reactions.deleteForIssueComment({
+          owner,
+          repo,
+          comment_id: itemId,
+          reaction_id: reactionId,
+        });
       } else {
-        console.log(
-          `ℹ️  No ${content} reaction found to remove from ${type} ${id} (looked for user: ${authenticatedUser || 'bot'})`
-        );
+        await this.octokit.rest.reactions.deleteForIssue({
+          owner,
+          repo,
+          issue_number: itemId,
+          reaction_id: reactionId,
+        });
       }
+      console.log(`🗑️  Removed reaction ${reactionId} from ${type} ${itemId}`);
     } catch (error) {
       // Log warning but don't fail
       console.warn(
-        `⚠️  Could not remove ${content} reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `⚠️  Could not remove reaction ${reactionId}: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

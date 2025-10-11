@@ -431,9 +431,14 @@ async function handleEvent(
     commentId: context.event?.comment?.id as number | undefined,
   };
 
-  // Add acknowledgement reaction (eye emoji) at the start
+  // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
+  let acknowledgementReactionId: number | null = null;
   if (reactionContext.issueNumber || reactionContext.commentId) {
-    await reactionManager.addAcknowledgementReaction(owner, repo, reactionContext);
+    acknowledgementReactionId = await reactionManager.addAcknowledgementReaction(
+      owner,
+      repo,
+      reactionContext
+    );
   }
 
   try {
@@ -471,12 +476,18 @@ async function handleEvent(
 
     // Add completion reaction (thumbs up emoji) after successful processing
     if (reactionContext.issueNumber || reactionContext.commentId) {
-      await reactionManager.addCompletionReaction(owner, repo, reactionContext);
+      await reactionManager.addCompletionReaction(owner, repo, {
+        ...reactionContext,
+        acknowledgementReactionId,
+      });
     }
   } catch (error) {
     // Add completion reaction even on failure (to show we finished processing)
     if (reactionContext.issueNumber || reactionContext.commentId) {
-      await reactionManager.addCompletionReaction(owner, repo, reactionContext);
+      await reactionManager.addCompletionReaction(owner, repo, {
+        ...reactionContext,
+        acknowledgementReactionId,
+      });
     }
     throw error; // Re-throw to be handled by outer try-catch
   }
