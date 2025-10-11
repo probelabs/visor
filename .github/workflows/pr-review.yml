@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # For issue_comment events on PRs, checkout the PR's HEAD
+          ref: ${{ github.event.pull_request.head.sha || github.event.issue.pull_request && github.event.issue.number && format('refs/pull/{0}/head', github.event.issue.number) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
