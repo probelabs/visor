@@ -170,6 +170,10 @@ export class CommentManager {
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
+---
+
+*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*
+
 *Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
 <!-- /visor-comment-id:${commentId} -->`;
   }
