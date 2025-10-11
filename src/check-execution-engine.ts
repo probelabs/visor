@@ -20,7 +20,11 @@ import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
-import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
+import {
+  createPermissionHelpers,
+  detectLocalMode,
+  resolveAssociationFromEvent,
+} from './utils/author-permissions';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -310,7 +314,10 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          permissions: createPermissionHelpers(
+            resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
+            detectLocalMode()
+          ),
           event: eventObj,
         };
         const code = `
@@ -360,7 +367,10 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          permissions: createPermissionHelpers(
+            resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
+            detectLocalMode()
+          ),
           event: eventObj,
         };
         const code = `
@@ -633,6 +643,23 @@ export class CheckExecutionEngine {
             for (const stepId of Array.from(new Set(runList))) {
               await executeNamedCheckInline(stepId);
             }
+          } else {
+            // Provide a lightweight reason when nothing is scheduled via on_success.run
+            try {
+              const assoc = resolveAssociationFromEvent(
+                (prInfo as any)?.eventContext,
+                prInfo.authorAssociation
+              );
+              const perms = createPermissionHelpers(assoc, detectLocalMode());
+              const allowedMember = perms.hasMinPermission('MEMBER');
+              let intent: string | undefined;
+              try {
+                intent = (res as any)?.output?.intent;
+              } catch {}
+              require('./logger').logger.info(
+                `⏭ on_success.run: none after '${checkName}' (event=${prInfo.eventType || 'manual'}, intent=${intent || 'n/a'}, assoc=${assoc || 'unknown'}, memberOrHigher=${allowedMember})`
+              );
+            } catch {}
           }
           // Optional goto
           let target = await evalGotoJs(onSuccess.goto_js);
@@ -1741,11 +1768,10 @@ export class CheckExecutionEngine {
             : 'manual'
       : 'issue_comment';
 
-    const commenterAssoc =
-      ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
-      ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
-      ((prInfo as any)?.eventContext as any)?.issue?.author_association ||
-      prInfo.authorAssociation;
+    const commenterAssoc = resolveAssociationFromEvent(
+      (prInfo as any)?.eventContext,
+      prInfo.authorAssociation
+    );
     const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
       branch: prInfo.head,
       baseBranch: prInfo.base,
@@ -1861,8 +1887,10 @@ export class CheckExecutionEngine {
       let eventAction: string | undefined;
       try {
         const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
-        authorAssociation =
-          anyInfo?.eventContext?.comment?.author_association || anyInfo?.authorAssociation;
+        authorAssociation = resolveAssociationFromEvent(
+          anyInfo?.eventContext,
+          anyInfo?.authorAssociation
+        );
         eventName = anyInfo?.eventContext?.event_name || (anyInfo as any)?.eventType || 'manual';
         eventAction = anyInfo?.eventContext?.action;
       } catch {}
@@ -1882,8 +1910,10 @@ export class CheckExecutionEngine {
     let authorAssociationForFilters: string | undefined;
     try {
       const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
-      authorAssociationForFilters =
-        anyInfo?.eventContext?.comment?.author_association || anyInfo?.authorAssociation;
+      authorAssociationForFilters = resolveAssociationFromEvent(
+        anyInfo?.eventContext,
+        anyInfo?.authorAssociation
+      );
     } catch {}
 
     let rendered: string;
@@ -3872,11 +3902,10 @@ export class CheckExecutionEngine {
                   ? 'issues'
                   : 'manual'
             : 'issue_comment';
-          const commenterAssoc =
-            ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
-            ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
-            ((prInfo as any)?.eventContext as any)?.issue?.author_association ||
-            prInfo.authorAssociation;
+          const commenterAssoc = resolveAssociationFromEvent(
+            (prInfo as any)?.eventContext,
+            prInfo.authorAssociation
+          );
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
             checkName,
             checkConfig.if,
