@@ -181,11 +181,6 @@ export class PRAnalyzer {
       totalDeletions: validFiles.reduce((sum, file) => sum + file.deletions, 0),
       fullDiff: this.generateFullDiff(validFiles),
       eventType,
-      labels: Array.isArray((pr as any).labels)
-        ? ((pr as any).labels
-            .map((l: any) => (typeof l === 'string' ? l : l?.name))
-            .filter((n: any) => typeof n === 'string' && n.length > 0) as string[])
-        : [],
     };
 
     // Fetch comment history for better context

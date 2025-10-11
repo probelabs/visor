@@ -71,22 +71,12 @@ checks:
     group: overview
     schema: overview
     prompt: |
-        You are generating a structured PR overview using the `overview` schema. Return a single JSON object that validates against that schema and NOTHING else (no prose outside JSON).
+        You are generating PR overview, to help others understand what this PR is above, and help reviewer to point to the right parts using attached schema.
 
-        JSON requirements:
-        - `text` (markdown) MUST contain the following sections in order:
+        ## Files Changed Analysis
+        Summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
           
-          # 📋 Pull Request Overview: {{ pr.title }}
-          
-          {% if pr.body %}
-          ## Description
-          {{ pr.body }}
-          {% endif %}
-          
-          ## Files Changed Analysis
-          Summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
-          
-          ## Architecture & Impact Assessment
+        ## Architecture & Impact Assessment
           - What this PR accomplishes
           - Key technical changes introduced
           - Affected system components
@@ -94,18 +84,13 @@ checks:
           
         ## Scope Discovery & Context Expansion
         - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
-        - Extract up to 3 key identifiers (e.g., classes, functions, config keys) that anchor the change; for each, show the file they live in and how it relates to the change.
         - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
-        - List up to 5 file paths or glob patterns you would inspect next to validate your understanding (keep this in the markdown, not as separate JSON fields).
 
+        You may also be asked to assign labels to PR; if so use this:
         - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
         - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
-        - `tags.labels` (optional): additional labels as an array of strings.
 
-        Context hints:
-        - Use `<files_summary>` for file stats and names.
-        - If diagrams help, include them inside the markdown in `text`.
-        - Be concise, specific, and actionable. Avoid praise or celebration.
+        Be concise, specific, and actionable. Avoid praise or celebration.
     on: [pr_opened, pr_updated]
 
   # Security analysis - Critical for all projects
