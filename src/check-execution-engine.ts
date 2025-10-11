@@ -9,6 +9,7 @@ import {
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
+import { PRAnalyzer } from './pr-analyzer';
 import { CheckProviderRegistry } from './providers/check-provider-registry';
 import { CheckProviderConfig } from './providers/check-provider.interface';
 import { DependencyResolver, DependencyGraph } from './dependency-resolver';
@@ -178,6 +179,12 @@ export class CheckExecutionEngine {
   private executionStats: Map<string, CheckExecutionStats> = new Map();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
+  // Cached GitHub context for context elevation when running in Actions
+  private actionContext?: {
+    owner: string;
+    repo: string;
+    octokit?: import('@octokit/rest').Octokit;
+  };
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -466,9 +473,25 @@ export class CheckExecutionEngine {
       let prInfoForInline = prInfo;
       const prevEventOverride = this.routingEventOverride;
       if (opts?.eventOverride) {
-        prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
+        // Try to elevate to PR context when routing to PR events from issue threads
+        const elevated = await this.elevateContextToPullRequest(
+          { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo,
+          opts.eventOverride,
+          log,
+          debug
+        );
+        if (elevated) {
+          prInfoForInline = elevated;
+        } else {
+          prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
+        }
         this.routingEventOverride = opts.eventOverride;
-        if (debug) log(`🔧 Debug: inline '${target}' with goto_event=${opts.eventOverride}`);
+        if (debug)
+          log(
+            `🔧 Debug: inline '${target}' with goto_event=${opts.eventOverride}${
+              elevated ? ' (elevated to PR context)' : ''
+            }`
+          );
       }
       let r: ReviewSummary;
       try {
@@ -1187,6 +1210,23 @@ export class CheckExecutionEngine {
     // Use filtered checks for execution
     checks = tagFilteredChecks;
 
+    // Capture GitHub Action context (owner/repo/octokit) if available from environment
+    // This is used for context elevation when routing via goto_event
+    try {
+      const repoEnv = process.env.GITHUB_REPOSITORY || '';
+      const [owner, repo] = repoEnv.split('/') as [string, string];
+      const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+      if (owner && repo) {
+        this.actionContext = { owner, repo };
+        if (token) {
+          const { Octokit } = await import('@octokit/rest');
+          this.actionContext.octokit = new Octokit({ auth: token });
+        }
+      }
+    } catch {
+      // Non-fatal: context elevation will be skipped if not available
+    }
+
     // Check if we have any checks left after filtering
     if (checks.length === 0) {
       logger.warn('⚠️ No checks remain after tag filtering');
@@ -1757,6 +1797,67 @@ export class CheckExecutionEngine {
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     return rendered.trim();
+  }
+
+  /**
+   * Attempt to elevate an issue/issue_comment context to full PR context when routing via goto_event.
+   * Returns a new PRInfo with files/diff when possible; otherwise returns null.
+   */
+  private async elevateContextToPullRequest(
+    prInfo: PRInfo,
+    targetEvent: import('./types/config').EventTrigger,
+    log?: (msg: string) => void,
+    debug?: boolean
+  ): Promise<PRInfo | null> {
+    try {
+      // Only elevate for PR-style events
+      if (targetEvent !== 'pr_opened' && targetEvent !== 'pr_updated') return null;
+
+      // Only meaningful to elevate from issue contexts
+      const isIssueContext = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
+      const ctx: any = (prInfo as any).eventContext || {};
+      const isPRThread = Boolean(ctx?.issue?.pull_request);
+      if (!isIssueContext || !isPRThread) return null;
+
+      // Resolve owner/repo from cached action context or environment
+      let owner = this.actionContext?.owner;
+      let repo = this.actionContext?.repo;
+      if (!owner || !repo) {
+        const repoEnv = process.env.GITHUB_REPOSITORY || '';
+        [owner, repo] = repoEnv.split('/') as [string, string];
+      }
+      if (!owner || !repo) return null;
+
+      // Determine PR number from event context or prInfo.number
+      const prNumber = (ctx?.issue?.number as number) || prInfo.number;
+      if (!prNumber) return null;
+
+      // Build Octokit; prefer cached instance
+      let octokit = this.actionContext?.octokit;
+      if (!octokit) {
+        const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+        if (!token) return null;
+        const { Octokit } = await import('@octokit/rest');
+        octokit = new Octokit({ auth: token });
+      }
+
+      // Fetch full PR diff
+      const analyzer = new PRAnalyzer(octokit);
+      const elevated = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, targetEvent);
+      // Preserve event context and helpful flags
+      (elevated as any).eventContext = (prInfo as any).eventContext || ctx;
+      (elevated as any).isPRContext = true;
+      (elevated as any).includeCodeContext = true;
+      if (debug)
+        log?.(`🔧 Debug: Elevated context to PR #${prNumber} for goto_event=${targetEvent}`);
+      return elevated;
+    } catch (e) {
+      if (debug) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log?.(`⚠️ Debug: Context elevation to PR failed: ${msg}`);
+      }
+      return null;
+    }
   }
 
   /**

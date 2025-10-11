@@ -75,9 +75,9 @@ checks:
 
         ## Files Changed Analysis
         After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
-	
-	Next ensure you cover all below:
-	          
+
+        Next ensure you cover all below:
+
         ## Architecture & Impact Assessment
           - What this PR accomplishes
           - Key technical changes introduced
@@ -300,65 +300,6 @@ checks:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
 
-  # Apply labels to new issues based on assistant output (GitHub-only)
-  apply-issue-labels:
-    type: github
-    group: github
-    tags: [github]
-    depends_on: [issue-assistant]
-    on: [issue_opened, issue_comment]
-    if: "outputs['issue-assistant'].tags.intent == 'issue'"
-    op: labels.add
-    values:
-      - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
-
-  # Handle issue assistant intents: disable checks and/or retrigger workflow
-  handle-issue-intents:
-    type: command
-    group: github
-    tags: [github]
-    depends_on: [issue-assistant]
-    on: [issue_opened, issue_comment]
-    # Only run when a retrigger or disable request is detected in a comment context
-    if: |
-      outputs['issue-assistant'].tags.intent == 'comment' && (
-        outputs['issue-assistant'].tags.action == 'retrigger' ||
-        (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
-      )
-    exec: |
-      # Comment-driven disable only; no labels created
-
-
-      # Internally re-invoke Visor Action as a synthetic PR update (no full workflow rerun)
-      ACTION="{{ outputs['issue-assistant'].tags.action | default: 'none' }}"
-      if [ "$ACTION" = "retrigger" ] || [ "$ACTION" = "disable-check" ]; then
-        # Only makes sense when the thread is a PR discussion (issue with pull_request)
-        if echo "{{ event.issue | json }}" | jq -e '.pull_request' >/dev/null 2>&1; then
-          PR_NUM={{ event.issue.number }}
-          EVENT_FILE="$(mktemp)"
-          echo '{"action":"synchronize","pull_request":{"number":'"$PR_NUM"'}}' > "$EVENT_FILE"
-          echo "Synthesizing PR event (synchronize) for PR #$PR_NUM"
-          # Prefer the packaged action path; fallback to local dist
-          ENTRY="${GITHUB_ACTION_PATH:-.}/dist/index.js"
-          if [ ! -f "$ENTRY" ]; then ENTRY="./dist/index.js"; fi
-          export GITHUB_EVENT_NAME=pull_request
-          export GITHUB_EVENT_PATH="$EVENT_FILE"
-          # Inherit INPUT_* (github-token, etc.) from the parent Action; do NOT set INPUT_TAGS
-          node "$ENTRY" --mode github-actions || true
-        else
-          echo "Not a PR thread; skipping internal PR retrigger"
-        fi
-      fi
-
-  # Command orchestrator - demonstrates noop type for triggering multiple checks
-  review-all:
-    type: noop
-    command: '/review'
-    depends_on: [overview, security, performance, quality, style]
-    on: [issue_comment]
-    if: "event.isPullRequest"  # Only trigger on PR comments, not issues
-    group: orchestrator
-
   # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
   issue-assistant:
     type: ai
@@ -392,6 +333,38 @@ checks:
         - For comments (intent = "comment"), answer the question or follow up concisely and helpfully.
         - Be professional and actionable; include code snippets or links when useful.
     on: [issue_opened, issue_comment]
+
+  # Apply labels to new issues based on assistant output (GitHub-only)
+  apply-issue-labels:
+    type: github
+    group: github
+    tags: [github]
+    depends_on: [issue-assistant]
+    on: [issue_opened, issue_comment]
+    if: "outputs['issue-assistant'].tags.intent == 'issue'"
+    op: labels.add
+    values:
+      - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
+
+  # Handle issue assistant intents: disable checks and/or retrigger workflow
+  handle-issue-intents:
+    type: noop
+    group: github
+    tags: [github]
+    depends_on: [issue-assistant]
+    on: [issue_opened, issue_comment]
+    # Only run when a retrigger or disable request is detected in a comment context
+    if: |
+      outputs['issue-assistant'].tags.intent == 'comment' && (
+        outputs['issue-assistant'].tags.action == 'retrigger' ||
+        (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
+      )
+    on_success:
+      goto_js: |
+        const t = outputs['issue-assistant'].tags;
+        const should = (attempt === 1) && (t.action === 'retrigger' || (t.action === 'disable-check' && t.checks && t.checks.length > 0));
+        return should ? 'overview' : null;
+      goto_event: pr_updated
 
 output:
   pr_comment:
