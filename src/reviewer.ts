@@ -266,7 +266,7 @@ export class PRReviewer {
       comment += '\n\n';
     }
 
-    comment += `\n\n---\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    // Footer will be added by formatCommentWithMetadata in github-comments.ts
     return comment;
   }
 
