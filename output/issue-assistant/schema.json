@@ -2,47 +2,27 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "issue-assistant",
   "title": "Issue Assistant",
-  "description": "Structured assistant output for issues and issue comments",
+  "description": "Plain assistant output for issues and comments",
   "type": "object",
-  "required": ["text", "tags"],
+  "required": ["text", "intent"],
   "properties": {
     "text": {
       "type": "string",
-      "description": "Markdown reply to post as an issue comment"
+      "description": "Markdown reply to post as a comment"
     },
-    "tags": {
-      "type": "object",
-      "required": ["intent"],
-      "properties": {
-        "intent": {
-          "type": "string",
-          "description": "Interaction type derived from event context (action-oriented). Backward compatible with 'issue'|'comment'.",
-          "enum": [
-            "issue",
-            "comment",
-            "issue_triage",
-            "comment_reply",
-            "comment_retrigger",
-            "comment_disable_checks"
-          ]
-        },
-        "action": {
-          "type": "string",
-          "description": "Optional action requested by the user",
-          "enum": ["none", "retrigger", "disable-check"]
-        },
-        "checks": {
-          "type": "array",
-          "description": "List of check IDs to disable when action == 'disable-check'",
-          "items": { "type": "string" }
-        },
-        "label": {
-          "type": "string",
-          "description": "Primary classification label for the issue (only for new issues)",
-          "enum": ["bug", "feature", "enhancement", "maintenance", "documentation", "question"]
-        }
-      },
-      "additionalProperties": true
+    "intent": {
+      "type": "string",
+      "description": "Action-oriented intent (use comment_retrigger for explicit rerun or disable requests)",
+      "enum": [
+        "issue_triage",
+        "comment_reply",
+        "comment_retrigger"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "description": "Optional labels to apply (only respected on issue_opened)",
+      "items": { "type": "string" }
     }
   },
   "additionalProperties": true

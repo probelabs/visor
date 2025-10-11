@@ -1,4 +1,5 @@
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
+import { AsyncLocalStorage } from 'async_hooks';
 import fs from 'fs/promises';
 import path from 'path';
 import {
@@ -58,6 +59,16 @@ export class ReadFileTag extends Tag {
   }
 }
 
+// Async-local permissions context for filters (per-render)
+const permissionsALS = new AsyncLocalStorage<{ authorAssociation?: string }>();
+
+export async function withPermissionsContext<T>(
+  ctx: { authorAssociation?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  return await permissionsALS.run(ctx, fn as any);
+}
+
 /**
  * Configure a Liquid instance with custom extensions
  */
@@ -115,28 +126,34 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
   // These filters check the author's permission level; detect local mode for tests
   const isLocal = detectLocalMode();
 
-  liquid.registerFilter('has_min_permission', (authorAssociation: string, level: string) => {
-    return hasMinPermission(authorAssociation, level as any, isLocal);
+  const resolveAssoc = (val: unknown): string | undefined => {
+    if (typeof val === 'string' && val.length > 0) return val;
+    const store = permissionsALS.getStore();
+    return store?.authorAssociation;
+  };
+
+  liquid.registerFilter('has_min_permission', (authorAssociation: unknown, level: string) => {
+    return hasMinPermission(resolveAssoc(authorAssociation), level as any, isLocal);
   });
 
-  liquid.registerFilter('is_owner', (authorAssociation: string) => {
-    return isOwner(authorAssociation, isLocal);
+  liquid.registerFilter('is_owner', (authorAssociation: unknown) => {
+    return isOwner(resolveAssoc(authorAssociation), isLocal);
   });
 
-  liquid.registerFilter('is_member', (authorAssociation: string) => {
-    return isMember(authorAssociation, isLocal);
+  liquid.registerFilter('is_member', (authorAssociation: unknown) => {
+    return isMember(resolveAssoc(authorAssociation), isLocal);
   });
 
-  liquid.registerFilter('is_collaborator', (authorAssociation: string) => {
-    return isCollaborator(authorAssociation, isLocal);
+  liquid.registerFilter('is_collaborator', (authorAssociation: unknown) => {
+    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
   });
 
-  liquid.registerFilter('is_contributor', (authorAssociation: string) => {
-    return isContributor(authorAssociation, isLocal);
+  liquid.registerFilter('is_contributor', (authorAssociation: unknown) => {
+    return isContributor(resolveAssoc(authorAssociation), isLocal);
   });
 
-  liquid.registerFilter('is_first_timer', (authorAssociation: string) => {
-    return isFirstTimer(authorAssociation, isLocal);
+  liquid.registerFilter('is_first_timer', (authorAssociation: unknown) => {
+    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
   });
 }
 

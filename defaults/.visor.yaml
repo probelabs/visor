@@ -294,11 +294,17 @@ checks:
     group: github
     tags: [github]
     depends_on: [overview]
-    on: [pr_opened]
+    on: [pr_opened, pr_updated]
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      const assoc = (pr && pr.authorAssociation) ? String(pr.authorAssociation).toUpperCase() : '';
+      const allowed = ['OWNER','MEMBER','COLLABORATOR','CONTRIBUTOR','FIRST_TIME_CONTRIBUTOR'];
+      const out = Array.isArray(values) ? values.filter(v => typeof v === 'string' && v.trim().length>0) : [];
+      if (!allowed.includes(assoc)) out.push('external');
+      return out;
 
   # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
   issue-assistant:
@@ -311,19 +317,13 @@ checks:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository.
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
-        - `text`: a clear, well-structured markdown reply to the user. Your primary job is to be a helpful assistant: answer the user’s question or follow up with clarifying questions. Keep it concise and actionable.
-        - `tags.intent`: choose an action-oriented value:
-          - "issue_triage" when this event is a newly opened issue. In this case, also propose a label and next steps.
-          - For comments: use "comment_retrigger" only when the user explicitly asks to re-run/retrigger; "comment_disable_checks" when they ask to disable checks; otherwise "comment_reply".
-        - `tags.action`: one of ["none", "retrigger", "disable-check"]. Set this only when the user clearly asks for it.
-        - `tags.label`: only set for new issues (event.name == 'issues' and action == 'opened').
-        - `tags.labels` (optional): additional labels for new issues only.
-        - `tags.checks` (optional): array of checks when `tags.action == 'disable-check'`.
+        - `text`: a clear, well-structured markdown reply. Your primary job is to be a helpful assistant: answer the user’s question or follow up with clarifying questions. Keep it concise and actionable.
+        - `intent`: choose one: "issue_triage" (new issues), "comment_reply" (normal reply), or "comment_retrigger" (pick this when the user explicitly asks to rerun OR to disable some checks).
+        - `labels` (optional): array of labels to apply ONLY for new issues (when event.name == 'issues' and action == 'opened'). Do not include labels for comments.
 
         Permissions and behavior:
-        - You have access to the user’s association via Liquid at render time. If the user asks for a rerun but is not at least a MEMBER, still be polite and explain they don’t have permission.
         - Never suggest rerun/disable unless the user asked for it.
-        - Do not propose labels on comments; only on new issues.
+        - Propose labels only for new issues; omit `labels` for comments.
 
         Event context:
         - name: {{ event.name | default: 'unknown' }}
@@ -333,17 +333,31 @@ checks:
         - Be professional, direct, and specific.
         - Include code snippets or links when useful.
     on: [issue_opened, issue_comment]
+    on_success:
+      goto_js: |
+        const intent = outputs['issue-assistant'].intent;
+        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        return (isComment && intent === 'comment_retrigger') ? 'retrigger' : null
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
     type: github
-    group: github
     tags: [github]
     depends_on: [issue-assistant]
     on: [issue_opened]
     op: labels.add
     values:
-      - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
+      - "{{ outputs['issue-assistant'].labels | safe_label_list }}"
+
+  # External origin labelling for PRs and Issues
+  external-label:
+    type: github
+    tags: [github]
+    on: [pr_opened, issue_opened]
+    if: "!isMember() && !isContributor()"
+    op: labels.add
+    values:
+      - "external"
 
   # Retrigger workflow based on assistant output (members only)
   retrigger:
@@ -354,15 +368,11 @@ checks:
     on: [issue_comment]
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
-      hasMinPermission('MEMBER') &&
-      event.event_name == 'issue_comment' && (
-        outputs['issue-assistant'].tags.action == 'retrigger' ||
-        (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
-      )
+      hasMinPermission('MEMBER') && event.event_name == 'issue_comment' && outputs['issue-assistant'].intent == 'comment_retrigger'
     on_success:
       goto_js: |
-        const t = outputs['issue-assistant'].tags;
-        const should = (attempt === 1) && (t.action === 'retrigger' || (t.action === 'disable-check' && t.checks && t.checks.length > 0));
+        const intent = outputs['issue-assistant'].intent;
+        const should = (attempt === 1) && (intent === 'comment_retrigger');
         return should ? 'overview' : null;
       goto_event: pr_updated
 

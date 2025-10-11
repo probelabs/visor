@@ -1706,6 +1706,7 @@ export class CheckExecutionEngine {
     const commenterAssoc =
       ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
       ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
+      ((prInfo as any)?.eventContext as any)?.issue?.author_association ||
       prInfo.authorAssociation;
     const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
       branch: prInfo.head,
@@ -1771,6 +1772,7 @@ export class CheckExecutionEngine {
     }
 
     let templateContent: string;
+    let enrichAssistantContext = false;
 
     if (checkConfig.template) {
       // Custom template
@@ -1794,6 +1796,10 @@ export class CheckExecutionEngine {
       }
       const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
       templateContent = await fs.readFile(templatePath, 'utf-8');
+      // Only enrich built-in issue-assistant with event/permission context
+      if (sanitizedSchema === 'issue-assistant') {
+        enrichAssistantContext = true;
+      }
     }
 
     // Prepare template data
@@ -1802,7 +1808,7 @@ export class CheckExecutionEngine {
       issue => !(issue.file === 'system' && issue.line === 0)
     );
 
-    const templateData = {
+    const templateData: Record<string, unknown> = {
       issues: filteredIssues,
       checkName: checkName,
       // Expose structured output for custom schemas/templates (e.g., overview)
@@ -1810,7 +1816,51 @@ export class CheckExecutionEngine {
       output: (reviewSummary as unknown as { output?: unknown }).output,
     };
 
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    if (enrichAssistantContext) {
+      // Provide minimal event and permission context for the assistant template only
+      let authorAssociation: string | undefined;
+      let eventName = 'manual';
+      let eventAction: string | undefined;
+      try {
+        const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
+        authorAssociation =
+          anyInfo?.eventContext?.comment?.author_association || anyInfo?.authorAssociation;
+        eventName = anyInfo?.eventContext?.event_name || (anyInfo as any)?.eventType || 'manual';
+        eventAction = anyInfo?.eventContext?.action;
+      } catch {}
+      templateData.authorAssociation = authorAssociation;
+      templateData.event = { name: eventName, action: eventAction };
+    }
+
+    // Establish permissions context for filters so templates can call permission filters
+    // without passing authorAssociation explicitly.
+    const { withPermissionsContext } = (await import('./liquid-extensions')) as unknown as {
+      withPermissionsContext?: (
+        ctx: { authorAssociation?: string },
+        fn: () => Promise<string>
+      ) => Promise<string>;
+    };
+    // Try to derive author association from PR info (commenter preferred)
+    let authorAssociationForFilters: string | undefined;
+    try {
+      const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
+      authorAssociationForFilters =
+        anyInfo?.eventContext?.comment?.author_association || anyInfo?.authorAssociation;
+    } catch {}
+
+    let rendered: string;
+    if (typeof withPermissionsContext === 'function') {
+      rendered = await withPermissionsContext(
+        { authorAssociation: authorAssociationForFilters },
+        async () => await liquid.parseAndRender(templateContent, templateData)
+      );
+      if (rendered === undefined || rendered === null) {
+        // Defensive: some test environments mock the helper without implementation
+        rendered = await liquid.parseAndRender(templateContent, templateData);
+      }
+    } else {
+      rendered = await liquid.parseAndRender(templateContent, templateData);
+    }
     return rendered.trim();
   }
 
@@ -3787,6 +3837,7 @@ export class CheckExecutionEngine {
           const commenterAssoc =
             ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
             ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
+            ((prInfo as any)?.eventContext as any)?.issue?.author_association ||
             prInfo.authorAssociation;
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
             checkName,
