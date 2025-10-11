@@ -353,6 +353,7 @@ checks:
     type: noop
     group: github
     tags: [github]
+    command: "visor"
     depends_on: [issue-assistant]
     on: [issue_opened, issue_comment]
     # Only run when a retrigger or disable request is detected in a comment context
