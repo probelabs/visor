@@ -16,6 +16,14 @@ describe('ReactionManager', () => {
           deleteForIssue: jest.fn(),
           deleteForIssueComment: jest.fn(),
         },
+        users: {
+          getAuthenticated: jest.fn().mockResolvedValue({
+            data: {
+              login: 'visor[bot]',
+              type: 'Bot',
+            },
+          }),
+        },
       },
     } as any;
 
@@ -66,7 +74,9 @@ describe('ReactionManager', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      octokit.rest.reactions.createForIssue.mockRejectedValue(new Error('API error'));
+      (octokit.rest.reactions.createForIssue as unknown as jest.Mock).mockRejectedValue(
+        new Error('API error')
+      );
 
       // Should not throw
       await expect(
@@ -80,12 +90,12 @@ describe('ReactionManager', () => {
 
   describe('addCompletionReaction', () => {
     it('should replace eye with thumbs up emoji on an issue', async () => {
-      octokit.rest.reactions.listForIssue.mockResolvedValue({
+      (octokit.rest.reactions.listForIssue as unknown as jest.Mock).mockResolvedValue({
         data: [
           {
             id: 1,
             content: 'eyes',
-            user: { type: 'Bot', login: 'github-actions[bot]' },
+            user: { type: 'Bot', login: 'visor[bot]' },
           },
         ],
       } as any);
@@ -117,12 +127,12 @@ describe('ReactionManager', () => {
     });
 
     it('should replace eye with thumbs up emoji on a comment', async () => {
-      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+      (octokit.rest.reactions.listForIssueComment as unknown as jest.Mock).mockResolvedValue({
         data: [
           {
             id: 2,
             content: 'eyes',
-            user: { type: 'Bot', login: 'github-actions[bot]' },
+            user: { type: 'Bot', login: 'visor[bot]' },
           },
         ],
       } as any);
@@ -154,7 +164,7 @@ describe('ReactionManager', () => {
     });
 
     it('should add thumbs up even if no eye reaction exists', async () => {
-      octokit.rest.reactions.listForIssue.mockResolvedValue({
+      (octokit.rest.reactions.listForIssue as unknown as jest.Mock).mockResolvedValue({
         data: [],
       } as any);
 
@@ -173,7 +183,9 @@ describe('ReactionManager', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      octokit.rest.reactions.listForIssue.mockRejectedValue(new Error('API error'));
+      (octokit.rest.reactions.listForIssue as unknown as jest.Mock).mockRejectedValue(
+        new Error('API error')
+      );
 
       // Should not throw
       await expect(
