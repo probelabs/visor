@@ -44,6 +44,7 @@ export interface PRInfo {
   isIssue?: boolean; // Flag to indicate this is an issue, not a PR
   eventContext?: Record<string, unknown>; // GitHub event context for templates
   comments?: PRComment[]; // Comments added dynamically
+  labels?: string[]; // Labels applied to the PR (for behavior overrides)
 }
 
 interface NetworkError {

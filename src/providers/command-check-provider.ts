@@ -5,7 +5,11 @@ import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
-import { createPermissionHelpers, detectLocalMode } from '../utils/author-permissions';
+import {
+  createPermissionHelpers,
+  detectLocalMode,
+  resolveAssociationFromEvent,
+} from '../utils/author-permissions';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -231,7 +235,10 @@ export class CommandCheckProvider extends CheckProvider {
             files: templateContext.files,
             outputs: this.makeOutputsJsonSmart(templateContext.outputs),
             env: templateContext.env,
-            permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+            permissions: createPermissionHelpers(
+              resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
+              detectLocalMode()
+            ),
           };
 
           // Compile and execute the JavaScript expression

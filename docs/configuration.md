@@ -220,3 +220,31 @@ checks:
     prompt: |
       Production security analysis with ${{ env.ANALYSIS_TIMEOUT }}ms timeout
 ```
+
+### Native GitHub Provider
+
+Use `type: github` to perform labels/comments via GitHub API (Octokit). This avoids shelling out to `gh` and supports safe label sanitization.
+
+Keys:
+- `op`: one of `labels.add`, `labels.remove`, `comment.create`.
+- `values`/`value`: string or array to pass to the op (e.g., label names or comment lines). Empty strings are ignored automatically.
+- `value_js` (optional): JavaScript snippet to compute values dynamically. Not required for filtering empties.
+
+Example:
+```yaml
+checks:
+  apply-overview-labels:
+    type: github
+    tags: [github]
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+```
+
+Notes:
+- Requires `GITHUB_TOKEN` (or `github-token` Action input) and `GITHUB_REPOSITORY` in environment.
+- Use Liquid `safe_label` / `safe_label_list` to constrain labels to `[A-Za-z0-9:/]`.
+- Provider errors surface as issues (e.g., `github/missing_token`, `github/op_failed`) and won’t abort the whole run.

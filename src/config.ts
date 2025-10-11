@@ -34,6 +34,7 @@ export class ConfigManager {
     'http_client',
     'noop',
     'log',
+    'github',
   ];
   private validEventTriggers: EventTrigger[] = [
     'pr_opened',

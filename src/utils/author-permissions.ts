@@ -157,3 +157,25 @@ export function createPermissionHelpers(
 export function detectLocalMode(): boolean {
   return !process.env.GITHUB_ACTIONS;
 }
+
+/**
+ * Resolve the most relevant GitHub author association from an event context.
+ * Prefers commenter association for issue_comment events, then issue/PR author,
+ * and finally falls back to the provided default association.
+ */
+export function resolveAssociationFromEvent(
+  eventContext: any | undefined,
+  fallback?: string
+): string | undefined {
+  try {
+    const ec = eventContext || {};
+    return (
+      ec?.comment?.author_association ||
+      ec?.issue?.author_association ||
+      ec?.pull_request?.author_association ||
+      fallback
+    );
+  } catch {
+    return fallback;
+  }
+}

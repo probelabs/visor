@@ -1,0 +1,16 @@
+{{ output.text | default: output.response | default: output.message | default: '' | unescape_newlines }}
+
+{%- if output.tags -%}
+
+<details>
+  <summary>Metadata</summary>
+
+  - Review Effort: {{ output.tags['review-effort'] | default: 'n/a' }} / 5
+  - Primary Label: {{ output.tags.label | default: 'n/a' }}
+  {%- if output.tags.labels and output.tags.labels.size > 0 %}
+  - Additional Labels: {{ output.tags.labels | join: ', ' }}
+  {%- endif %}
+
+</details>
+
+{%- endif -%}

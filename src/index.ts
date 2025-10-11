@@ -7,6 +7,7 @@ import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
+import { configureLoggerFromCli } from './logger';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
@@ -172,6 +173,12 @@ export async function run(): Promise<void> {
     console.log('Debug: inputs.config-path =', inputs['config-path']);
     console.log('Debug: inputs.visor-checks =', inputs['visor-checks']);
     console.log('Debug: inputs.visor-config-path =', inputs['visor-config-path']);
+
+    // Configure logger level early so engine/info/debug logs appear in Actions
+    try {
+      const debugEnabled = String(inputs.debug || '').toLowerCase() === 'true';
+      configureLoggerFromCli({ debug: debugEnabled, output: 'table' });
+    } catch {}
 
     // Always use config-driven mode in GitHub Actions
     // The CLI mode is only for local development, not for GitHub Actions
@@ -565,6 +572,12 @@ function resolveDependencies(
 }
 
 /**
+ * Resolve downstream dependents for a set of checks (reverse dependency closure).
+ * If A is in starts and B depends_on A, include B. Recurse transitively.
+ */
+// (Intentionally no reverse-dependent resolution here.)
+
+/**
  * Handle issue events (opened, edited, etc)
  */
 async function handleIssueEvent(
@@ -632,13 +645,36 @@ async function handleIssueEvent(
   const engine = new CheckExecutionEngine();
 
   try {
+    // Build tag filter from action inputs (if provided)
+    const tagFilter: import('./types/config').TagFilter | undefined =
+      (inputs.tags && inputs.tags.trim() !== '') ||
+      (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+        ? {
+            include: inputs.tags
+              ? inputs.tags
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean)
+              : undefined,
+            exclude: inputs['exclude-tags']
+              ? inputs['exclude-tags']
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean)
+              : undefined,
+          }
+        : undefined;
+
     const executionResult = await engine.executeGroupedChecks(
       prInfo,
       checksToRun,
       undefined, // timeout
       config,
       undefined, // outputFormat
-      inputs.debug === 'true'
+      inputs.debug === 'true',
+      undefined,
+      undefined,
+      tagFilter
     );
 
     const { results } = executionResult;
@@ -870,7 +906,7 @@ async function handleIssueComment(
       // Handle custom commands from config
       if (commandRegistry[command.type]) {
         const initialCheckIds = commandRegistry[command.type];
-        // Resolve all dependencies recursively
+        // Resolve only upstream dependencies. Downstream steps should be invoked via goto routing if needed.
         const checkIds = resolveDependencies(initialCheckIds, config);
         console.log(
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
@@ -971,9 +1007,28 @@ async function handleIssueComment(
         const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
           focus,
           format,
+          debug: String(inputs.debug || '').toLowerCase() === 'true',
           config: config as import('./types/config').VisorConfig,
           checks: filteredCheckIds,
           parallelExecution: false,
+          tagFilter:
+            (inputs.tags && inputs.tags.trim() !== '') ||
+            (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+              ? {
+                  include: inputs.tags
+                    ? inputs.tags
+                        .split(',')
+                        .map(t => t.trim())
+                        .filter(Boolean)
+                    : undefined,
+                  exclude: inputs['exclude-tags']
+                    ? inputs['exclude-tags']
+                        .split(',')
+                        .map(t => t.trim())
+                        .filter(Boolean)
+                    : undefined,
+                }
+              : undefined,
         });
 
         // Check if commenting is enabled before posting
@@ -1070,11 +1125,41 @@ async function handlePullRequestWithConfig(
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
 
   // Create review options
+  // Build tag filter from inputs and labels
+  const inputTagFilter: import('./types/config').TagFilter | undefined =
+    (inputs.tags && inputs.tags.trim() !== '') ||
+    (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
+      ? {
+          include: inputs.tags
+            ? inputs.tags
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean)
+            : undefined,
+          exclude: inputs['exclude-tags']
+            ? inputs['exclude-tags']
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean)
+            : undefined,
+        }
+      : undefined;
+
+  const mergedExcludeTags = [...(inputTagFilter?.exclude || [])].filter(
+    (v, i, a) => a.indexOf(v) === i
+  );
+
   const reviewOptions = {
     debug: inputs?.debug === 'true',
     config: config,
     checks: checksToExecute,
     parallelExecution: true,
+    tagFilter: inputTagFilter
+      ? {
+          include: inputTagFilter?.include,
+          exclude: mergedExcludeTags.length > 0 ? mergedExcludeTags : undefined,
+        }
+      : undefined,
   };
 
   // Create GitHub check runs if enabled

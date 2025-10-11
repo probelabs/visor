@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "overview",
+  "title": "Pull Request Overview",
+  "description": "Structured PR overview with human-readable text and machine-readable tags for automation",
+  "type": "object",
+  "required": ["text"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "Markdown-formatted overview/summary to display in PR comments"
+    },
+    "tags": {
+      "type": "object",
+      "description": "Metadata used for automation (labels, effort, etc.)",
+      "properties": {
+        "review-effort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Estimated review effort from 1 (trivial) to 5 (very high)"
+        },
+        "label": {
+          "type": "string",
+          "description": "Primary PR category label",
+          "enum": ["bug", "feature", "chore", "docs", "refactor", "test"]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -74,9 +74,9 @@ checks:
   overview:
     type: ai
     group: summary  # Different group = separate comment
-    schema: markdown # Uses markdown schema for free-form output
+    schema: overview # Uses built-in overview schema with text + tags
     prompt: |
-      Provide a high-level overview of this pull request in markdown format:
+      Provide a high-level overview of this pull request in markdown format and return JSON matching the `overview` schema (with `text` and `tags`).
       
       ## 📋 Pull Request Summary
       

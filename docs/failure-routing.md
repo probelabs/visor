@@ -88,6 +88,54 @@ Per-step actions:
 - Loop safety: `routing.max_loops` counts all routing transitions (runs, gotos, retries). Exceeding it aborts the current scope with a clear error.
 - forEach: each item is isolated with its own loop/attempt counters; `*_js` receives `{ foreach: { index, total, parent } }`.
 
+## Goto Event Override (goto_event)
+
+You can instruct a `goto` jump to simulate a different event so that the target step is filtered as if that event occurred. This is useful when you need to re-run an ancestor step under PR semantics from a different context (e.g., from an issue comment or internal assistant flow).
+
+Key points:
+- Add `goto_event: <event>` alongside `goto` or use it with `goto_js`.
+- Valid values are the same as `on:` triggers (e.g., `pr_updated`, `pr_opened`, `issue_comment`, `issue_opened`).
+- During the inline `goto` execution, Visor sets an internal event override:
+  - Event filtering uses the overridden event for the target step.
+  - `if:` expressions see `event.event_name` derived from the override (e.g., `pr_*` → `pull_request`, `issue_comment` → `issue_comment`, `issue_*` → `issues`).
+- After the jump, the current step is re-run once; the override applies only to the inline target and that immediate re-run.
+- `goto` remains ancestor-only.
+
+Example: After `security` succeeds, jump back to `overview` and re-run `security`, evaluating both as if a PR update happened:
+
+```yaml
+checks:
+  overview:
+    type: ai
+    on: [pr_opened, pr_updated]
+
+  security:
+    type: ai
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+    on_success:
+      goto: overview           # ancestor-only
+      goto_event: pr_updated   # simulate PR updated during the jump
+```
+
+Dynamic variant (only jump on first success):
+
+```yaml
+checks:
+  quality:
+    type: ai
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+    on_success:
+      goto_js: |
+        return attempt === 1 ? 'overview' : null
+      goto_event: pr_updated
+```
+
+When to use goto_event vs. full re-run:
+- Use `goto_event` for a targeted, in-process jump to a specific ancestor step with PR semantics.
+- Use a higher-level “internal re-invoke” (e.g., synthesize a `pull_request` `synchronize` event and call the action entrypoint) when you need to re-run the entire PR workflow chain from an issue comment trigger.
+
 ## Dynamic JS (safe, sync only)
 
 - `goto_js` / `run_js` are evaluated in a sandbox with:
@@ -113,4 +161,3 @@ See the repository examples:
 - `examples/routing-on-success.yaml`
 - `examples/routing-foreach.yaml`
 - `examples/routing-dynamic-js.yaml`
-
