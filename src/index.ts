@@ -418,9 +418,11 @@ async function handleEvent(
   }
 
   console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
+  console.log(`🐛 DEBUG: About to create ReactionManager - code version check`);
 
   // Create reaction manager for emoji reactions
   const reactionManager = new ReactionManager(octokit);
+  console.log(`🐛 DEBUG: ReactionManager created successfully`);
 
   // Check if this is a bot comment that we should skip
   const comment = context.event?.comment as any;
