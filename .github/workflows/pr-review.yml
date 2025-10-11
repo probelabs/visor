@@ -21,27 +21,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get PR branch
-        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
-        id: get_pr
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            return pr.data.head.ref;
-          result-encoding: string
-
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # For issue_comment on PR: use the PR's branch
-          # For pull_request events: use the PR's head SHA
-          # Otherwise: use default ref
-          ref: ${{ steps.get_pr.outputs.result || github.event.pull_request.head.sha || github.ref }}
+
+      - name: Checkout PR branch (for issue_comment events)
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        run: gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
