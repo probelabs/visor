@@ -349,7 +349,7 @@ checks:
     on: [issue_comment]
     on_success:
       run_js: |
-        const intent = outputs['comment-assistant']?.intent;
+        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
         return (isComment && allowed && intent === 'comment_retrigger') ? ['overview'] : []
