@@ -287,6 +287,7 @@ export class CheckExecutionEngine {
       if (!expr) return [];
       try {
         const sandbox = this.getRoutingSandbox();
+        const eventObj = { name: prInfo.eventType || 'manual' } as const;
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -310,9 +311,10 @@ export class CheckExecutionEngine {
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
           permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return Array.isArray(__res) ? __res : (__res ? [__res] : []);
@@ -335,6 +337,7 @@ export class CheckExecutionEngine {
       if (!expr) return null;
       try {
         const sandbox = this.getRoutingSandbox();
+        const eventObj = { name: prInfo.eventType || 'manual' } as const;
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -358,9 +361,10 @@ export class CheckExecutionEngine {
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
           permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
@@ -491,12 +495,13 @@ export class CheckExecutionEngine {
           prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
         }
         this.routingEventOverride = opts.eventOverride;
-        if (debug)
-          log(
-            `🔧 Debug: inline '${target}' with goto_event=${opts.eventOverride}${
-              elevated ? ' (elevated to PR context)' : ''
-            }`
-          );
+        const msg = `↪ goto_event: inline '${target}' with event=${opts.eventOverride}${
+          elevated ? ' (elevated to PR context)' : ''
+        }`;
+        if (debug) log(`🔧 Debug: ${msg}`);
+        try {
+          require('./logger').logger.info(msg);
+        } catch {}
       }
       let r: ReviewSummary;
       try {
@@ -546,6 +551,11 @@ export class CheckExecutionEngine {
           runList = Array.from(new Set(runList));
           if (debug) log(`🔧 Debug: on_fail.run (soft) list = [${runList.join(', ')}]`);
           if (runList.length > 0) {
+            try {
+              require('./logger').logger.info(
+                `▶ on_fail.run: scheduling [${runList.join(', ')}] after '${checkName}'`
+              );
+            } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -561,6 +571,11 @@ export class CheckExecutionEngine {
           if (!target && onFail.goto) target = onFail.goto;
           if (debug) log(`🔧 Debug: on_fail.goto (soft) target = ${target}`);
           if (target) {
+            try {
+              require('./logger').logger.info(
+                `↪ on_fail.goto: jumping to '${target}' from '${checkName}'`
+              );
+            } catch {}
             if (!allAncestors.includes(target)) {
               if (debug)
                 log(
@@ -604,6 +619,11 @@ export class CheckExecutionEngine {
           const dynamicRun = await evalRunJs(onSuccess.run_js);
           const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
           if (runList.length > 0) {
+            try {
+              require('./logger').logger.info(
+                `▶ on_success.run: scheduling [${Array.from(new Set(runList)).join(', ')}] after '${checkName}'`
+              );
+            } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -618,6 +638,11 @@ export class CheckExecutionEngine {
           let target = await evalGotoJs(onSuccess.goto_js);
           if (!target && onSuccess.goto) target = onSuccess.goto;
           if (target) {
+            try {
+              require('./logger').logger.info(
+                `↪ on_success.goto: jumping to '${target}' from '${checkName}'`
+              );
+            } catch {}
             if (!allAncestors.includes(target)) {
               if (debug)
                 log(
@@ -639,6 +664,9 @@ export class CheckExecutionEngine {
         }
         if (needRerun) {
           if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
+          try {
+            require('./logger').logger.info(`🔁 Re-running '${checkName}' after goto`);
+          } catch {}
           // Apply same event override as goto (if any) for this re-run by setting routingEventOverride
           const prev = this.routingEventOverride;
           if (rerunEventOverride) this.routingEventOverride = rerunEventOverride;
@@ -666,6 +694,11 @@ export class CheckExecutionEngine {
         runList = Array.from(new Set(runList));
 
         if (runList.length > 0) {
+          try {
+            require('./logger').logger.info(
+              `▶ on_fail.run: scheduling [${runList.join(', ')}] after '${checkName}'`
+            );
+          } catch {}
           loopCount++;
           if (loopCount > maxLoops) {
             throw new Error(
@@ -681,6 +714,11 @@ export class CheckExecutionEngine {
         let target = await evalGotoJs(onFail.goto_js, lastError);
         if (!target && onFail.goto) target = onFail.goto;
         if (target) {
+          try {
+            require('./logger').logger.info(
+              `↪ on_fail.goto: jumping to '${target}' from '${checkName}'`
+            );
+          } catch {}
           if (!allAncestors.includes(target)) {
             if (debug)
               log(

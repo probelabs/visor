@@ -312,11 +312,12 @@ checks:
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
         - `text`: a clear, well-structured markdown reply. Your primary job is to be a helpful assistant: answer the user’s question or follow up with clarifying questions. Keep it concise and actionable.
-        - `intent`: choose one: "issue_triage" (new issues), "comment_reply" (normal reply), or "comment_retrigger" (pick this when the user explicitly asks to rerun OR to disable some checks).
+        - `intent`: choose one: "issue_triage" (new issues), "comment_reply" (normal reply), or "comment_retrigger" (pick this when the user explicitly asks to rerun OR explicitly asks to disable some checks).
         - `labels` (optional): array of labels to apply ONLY for new issues (when event.name == 'issues' and action == 'opened'). Do not include labels for comments.
 
         Permissions and behavior:
         - Never suggest rerun/disable unless the user asked for it.
+        - If the user explicitly asks to disable any check(s), set `intent` to "comment_retrigger" and in `text` acknowledge the request and state that checks will be re-run; DO NOT offer or mention any slash/directive comments (e.g., "//visor-disable").
         - Propose labels only for new issues; omit `labels` for comments.
 
         Event context:
