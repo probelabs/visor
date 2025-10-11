@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import Sandbox from '@nyariv/sandboxjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 export class GitHubOpsProvider extends CheckProvider {
   private sandbox?: Sandbox;
@@ -38,7 +39,7 @@ export class GitHubOpsProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    _dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>
   ): Promise<ReviewSummary> {
     const cfg = config as CheckProviderConfig & {
       op: string;
@@ -85,11 +86,68 @@ export class GitHubOpsProvider extends CheckProvider {
       };
     }
 
-    // Build values list (allow string or array) and normalize
-    let values: string[] = [];
-    if (Array.isArray(cfg.values)) values = (cfg.values as unknown[]).map(v => String(v));
-    else if (typeof cfg.values === 'string') values = [cfg.values];
-    else if (typeof cfg.value === 'string') values = [cfg.value];
+    // Build values list (allow string or array), render Liquid templates if present, and normalize
+    let valuesRaw: string[] = [];
+    if (Array.isArray(cfg.values)) valuesRaw = (cfg.values as unknown[]).map(v => String(v));
+    else if (typeof cfg.values === 'string') valuesRaw = [cfg.values];
+    else if (typeof cfg.value === 'string') valuesRaw = [cfg.value];
+
+    // Liquid render helper for values
+    const renderValues = async (arr: string[]): Promise<string[]> => {
+      if (!arr || arr.length === 0) return [];
+      const liq = createExtendedLiquid({
+        cache: false,
+        strictFilters: false,
+        strictVariables: false,
+      });
+      const outputs: Record<string, unknown> = {};
+      if (dependencyResults) {
+        for (const [name, result] of dependencyResults.entries()) {
+          const summary = result as ReviewSummary & { output?: unknown };
+          outputs[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+      const ctx = {
+        pr: {
+          number: prInfo.number,
+          title: prInfo.title,
+          author: prInfo.author,
+          branch: prInfo.head,
+          base: prInfo.base,
+          authorAssociation: prInfo.authorAssociation,
+        },
+        outputs,
+      };
+      const out: string[] = [];
+      for (const item of arr) {
+        if (typeof item === 'string' && (item.includes('{{') || item.includes('{%'))) {
+          try {
+            const rendered = await liq.parseAndRender(item, ctx);
+            out.push(rendered);
+          } catch (e) {
+            // If Liquid fails, surface as a provider error
+            const msg = e instanceof Error ? e.message : String(e);
+            return Promise.reject({
+              issues: [
+                {
+                  file: 'system',
+                  line: 0,
+                  ruleId: 'github/liquid_render_error',
+                  message: `Failed to render template: ${msg}`,
+                  severity: 'error',
+                  category: 'logic',
+                },
+              ],
+            } as ReviewSummary);
+          }
+        } else {
+          out.push(String(item));
+        }
+      }
+      return out;
+    };
+
+    let values: string[] = await renderValues(valuesRaw);
 
     if (cfg.value_js && cfg.value_js.trim()) {
       try {

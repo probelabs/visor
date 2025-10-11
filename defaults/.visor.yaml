@@ -299,12 +299,6 @@ checks:
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
-    value_js: |
-      const assoc = (pr && pr.authorAssociation) ? String(pr.authorAssociation).toUpperCase() : '';
-      const allowed = ['OWNER','MEMBER','COLLABORATOR','CONTRIBUTOR','FIRST_TIME_CONTRIBUTOR'];
-      const out = Array.isArray(values) ? values.filter(v => typeof v === 'string' && v.trim().length>0) : [];
-      if (!allowed.includes(assoc)) out.push('external');
-      return out;
 
   # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
   issue-assistant:
