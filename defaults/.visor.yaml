@@ -312,12 +312,15 @@ checks:
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
         - `text`: a clear, well-structured markdown reply to post as a comment.
-        - `tags.intent`: MUST be:
-          - "issue" when this event is a newly opened issue.
-          - "comment" when this event is an issue comment.
-          Use the event context below to set this value deterministically.
+        - `tags.intent`: pick one action-oriented value:
+          - "issue_triage" when this event is a newly opened issue (perform triage and propose labels).
+          - For comments:
+            - "comment_retrigger" when the user asks to re-run/retrigger the job, workflow, or Visor.
+            - "comment_disable_checks" when the user asks to disable specific check(s).
+            - "comment_reply" for a normal reply when neither of the above applies.
+          Note: For backward compatibility, "issue" and "comment" are also accepted internally.
         - `tags.action`: one of ["none", "retrigger", "disable-check"].
-          - Set to "retrigger" when the user asks to re-run/retrigger the job, workflow, or Visor.
+          - Set to "retrigger" when the user asks to re-run/retrigger.
           - Set to "disable-check" when the user asks to disable specific check(s). Populate `tags.checks` with the check IDs to disable (e.g., security, performance, style, architecture, or exact config IDs).
           - Otherwise set to "none".
         - `tags.label` (for new issues only): choose one primary label from [bug, feature, enhancement, maintenance, documentation, question].
@@ -329,8 +332,8 @@ checks:
         - action: {{ event.action | default: 'unknown' }}
 
         Guidance:
-        - For new issues (intent = "issue"), perform triage: classify, suggest next steps, and ask targeted questions if needed.
-        - For comments (intent = "comment"), answer the question or follow up concisely and helpfully.
+        - For new issues (intent = "issue_triage"), perform triage: classify, suggest next steps, and ask targeted questions if needed.
+        - For comments, reply concisely and helpfully; select the correct intent variant above.
         - Be professional and actionable; include code snippets or links when useful.
     on: [issue_opened, issue_comment]
 
@@ -341,7 +344,7 @@ checks:
     tags: [github]
     depends_on: [issue-assistant]
     on: [issue_opened, issue_comment]
-    if: "outputs['issue-assistant'].tags.intent == 'issue'"
+    if: "outputs['issue-assistant'].tags.intent == 'issue' || outputs['issue-assistant'].tags.intent == 'issue_triage'"
     op: labels.add
     values:
       - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
@@ -356,7 +359,10 @@ checks:
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
       hasMinPermission('MEMBER') &&
-      outputs['issue-assistant'].tags.intent == 'comment' && (
+      (
+        outputs['issue-assistant'].tags.intent == 'comment' ||
+        (typeof outputs['issue-assistant'].tags.intent === 'string' && outputs['issue-assistant'].tags.intent.indexOf('comment_') === 0)
+      ) && (
         outputs['issue-assistant'].tags.action == 'retrigger' ||
         (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
       )

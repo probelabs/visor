@@ -16,8 +16,15 @@
       "properties": {
         "intent": {
           "type": "string",
-          "description": "Interaction type derived from event context",
-          "enum": ["issue", "comment"]
+          "description": "Interaction type derived from event context (action-oriented). Backward compatible with 'issue'|'comment'.",
+          "enum": [
+            "issue",
+            "comment",
+            "issue_triage",
+            "comment_reply",
+            "comment_retrigger",
+            "comment_disable_checks"
+          ]
         },
         "action": {
           "type": "string",
