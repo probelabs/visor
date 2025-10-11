@@ -129,14 +129,33 @@ export class ReactionManager {
               issue_number: id,
             });
 
-      // Find our bot's reaction with the specified content
-      const reactionToDelete = reactions.data.find(
-        reaction =>
-          reaction.content === content &&
-          (reaction.user?.type === 'Bot' ||
-            reaction.user?.login === 'github-actions[bot]' ||
-            reaction.user?.login?.endsWith('[bot]'))
-      );
+      // Get the authenticated user to match reactions
+      let authenticatedUser: string | undefined;
+      try {
+        const { data: user } = await this.octokit.rest.users.getAuthenticated();
+        authenticatedUser = user.login;
+      } catch {
+        // If we can't get authenticated user, fall back to bot detection
+        authenticatedUser = undefined;
+      }
+
+      // Find our reaction with the specified content
+      // First try to match by authenticated user, then fall back to bot detection
+      const reactionToDelete = reactions.data.find(reaction => {
+        if (reaction.content !== content) return false;
+
+        // If we know our authenticated user, match by that
+        if (authenticatedUser && reaction.user?.login === authenticatedUser) {
+          return true;
+        }
+
+        // Fall back to bot detection
+        return (
+          reaction.user?.type === 'Bot' ||
+          reaction.user?.login === 'github-actions[bot]' ||
+          reaction.user?.login?.endsWith('[bot]')
+        );
+      });
 
       if (reactionToDelete) {
         if (type === 'comment') {
@@ -154,11 +173,18 @@ export class ReactionManager {
             reaction_id: reactionToDelete.id,
           });
         }
+        console.log(
+          `🗑️  Removed ${content} reaction from ${type} ${id} (user: ${reactionToDelete.user?.login})`
+        );
+      } else {
+        console.log(
+          `ℹ️  No ${content} reaction found to remove from ${type} ${id} (looked for user: ${authenticatedUser || 'bot'})`
+        );
       }
     } catch (error) {
-      // Silently ignore errors when removing reactions
-      console.debug(
-        `Could not remove ${content} reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
+      // Log warning but don't fail
+      console.warn(
+        `⚠️  Could not remove ${content} reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
