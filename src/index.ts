@@ -982,7 +982,7 @@ async function handleIssueComment(
             focus,
             format,
             triggeredBy: comment?.user?.login
-              ? `comment_by_${comment.user.login}`
+              ? `comment by @${comment.user.login}`
               : 'issue_comment',
           });
         } else {
