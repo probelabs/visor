@@ -1016,51 +1016,6 @@ async function handlePullRequestWithConfig(
     return;
   }
 
-  // Respect user comment directives to disable specific checks (no labels required)
-  try {
-    const directiveRegex = /(\/visor\s+)?(disable|disable-check|skip)\s+([A-Za-z0-9_\- ,]+)/i;
-    const recentComments: Array<{ author: string; body: string }> = (prInfo as any).comments || [];
-    let disabledFromComments: string[] = [];
-    for (let i = recentComments.length - 1; i >= 0; i--) {
-      const body = (recentComments[i]?.body || '').trim();
-      const m = body.match(directiveRegex);
-      if (m && m[3]) {
-        disabledFromComments = m[3]
-          .split(/[ ,]+/)
-          .map(s => s.trim().toLowerCase())
-          .filter(Boolean);
-        if (disabledFromComments.length > 0) break;
-      }
-    }
-    if (disabledFromComments.length > 0) {
-      const mapped: Set<string> = new Set();
-      for (const token of disabledFromComments) {
-        if (config.checks[token]) {
-          mapped.add(token);
-          continue;
-        }
-        const withSuffix = `${token}-check`;
-        if (config.checks[withSuffix]) {
-          mapped.add(withSuffix);
-          continue;
-        }
-        for (const name of Object.keys(config.checks)) {
-          if (name.toLowerCase().includes(token)) mapped.add(name);
-        }
-      }
-      if (mapped.size > 0) {
-        console.log(`⏭️ Disabled by comment directive: ${Array.from(mapped).join(', ')}`);
-        checksToRun = checksToRun.filter(c => !mapped.has(c));
-        if (checksToRun.length === 0) {
-          console.log('ℹ️ All checks would be disabled; ignoring directive');
-          checksToRun = Object.keys(config.checks || {});
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('⚠️ Failed to parse comment disable directives:', e);
-  }
-
   // Filter checks based on conditions
   const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
 
