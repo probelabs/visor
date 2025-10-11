@@ -424,8 +424,15 @@ async function handleEvent(
   const reactionManager = new ReactionManager(octokit);
   console.log(`🐛 DEBUG: ReactionManager created successfully`);
 
+  // Define comment interface for type safety
+  interface CommentLike {
+    id?: number;
+    user?: { login?: string; type?: string };
+    body?: string;
+  }
+
   // Check if this is a bot comment that we should skip
-  const comment = context.event?.comment as any;
+  const comment: CommentLike | undefined = context.event?.comment;
   const shouldSkipBotComment =
     comment &&
     (comment.user?.login === 'visor[bot]' ||
@@ -437,7 +444,11 @@ async function handleEvent(
           comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'))));
 
   // Extract context for reactions
-  const reactionContext = {
+  const reactionContext: {
+    eventName: string;
+    issueNumber?: number;
+    commentId?: number;
+  } = {
     eventName: eventName || 'unknown',
     issueNumber: (context.event?.pull_request?.number || context.event?.issue?.number) as
       | number
@@ -498,23 +509,14 @@ async function handleEvent(
         await handleRepoInfo(octokit, owner, repo);
         break;
     }
-
-    // Add completion reaction (thumbs up emoji) after successful processing
+  } finally {
+    // Add completion reaction (thumbs up emoji) after processing
     if (reactionContext.issueNumber || reactionContext.commentId) {
       await reactionManager.addCompletionReaction(owner, repo, {
         ...reactionContext,
         acknowledgementReactionId,
       });
     }
-  } catch (error) {
-    // Add completion reaction even on failure (to show we finished processing)
-    if (reactionContext.issueNumber || reactionContext.commentId) {
-      await reactionManager.addCompletionReaction(owner, repo, {
-        ...reactionContext,
-        acknowledgementReactionId,
-      });
-    }
-    throw error; // Re-throw to be handled by outer try-catch
   }
 }
 

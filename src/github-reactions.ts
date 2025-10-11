@@ -46,7 +46,11 @@ export class ReactionManager {
       // Remove eye reaction using stored ID (efficient)
       if (acknowledgementReactionId) {
         const type = commentId ? 'comment' : 'issue';
-        const itemId = (commentId || issueNumber)!;
+        const itemId = commentId || issueNumber;
+        if (itemId === undefined) {
+          console.warn('⚠️  Could not determine item ID for reaction removal.');
+          return;
+        }
         await this.removeReactionById(owner, repo, itemId, acknowledgementReactionId, type);
       }
 
