@@ -60,13 +60,14 @@ jobs:
           # Optional: Specify the AI model to use (use Google model with Google API key)
           MODEL_NAME: ${{ secrets.AI_MODEL_NAME || 'gemini-2.0-flash-exp' }}
 
-      - name: Upload Trace Report (HTML)
+      - name: Upload Trace Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: visor-trace-${{ github.run_number }}
           path: |
             output/traces/*.report.html
+            output/traces/*.otlp.json
           retention-days: 14
           if-no-files-found: ignore
           

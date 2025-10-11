@@ -41,13 +41,13 @@ export class TraceReportExporter implements SpanExporter {
       const prefix = this.runId ? `run-${this.runId}-` : '';
       const jsonPath = path.join(this.outDir, `${prefix}${ts}.trace.json`);
       const htmlPath = path.join(this.outDir, `${prefix}${ts}.report.html`);
+      const otlpPath = path.join(this.outDir, `${prefix}${ts}.otlp.json`);
 
       // Compute time bounds
       const starts = this.spans.map(s => hrTimeToMillis(s.startTime));
       const ends = this.spans.map(s => hrTimeToMillis(s.endTime));
       const minStart = Math.min(...starts);
       const maxEnd = Math.max(...ends);
-      const total = Math.max(1, maxEnd - minStart);
 
       // Serialize rich JSON
       const flat = this.spans.map(s => ({
@@ -67,6 +67,14 @@ export class TraceReportExporter implements SpanExporter {
         parentSpanId: s.parentSpanId,
       }));
       fs.writeFileSync(jsonPath, JSON.stringify({ spans: flat }, null, 2), 'utf8');
+
+      // Also emit OTLP JSON (ExportTraceServiceRequest) for ingestion in standard tools
+      try {
+        const req = this.toOtlpJson();
+        fs.writeFileSync(otlpPath, JSON.stringify(req, null, 2), 'utf8');
+      } catch {
+        // ignore OTLP serialization errors
+      }
 
       // Build richer single-file HTML with a collapsible tree and a simple timeline
 
@@ -163,6 +171,81 @@ export class TraceReportExporter implements SpanExporter {
       fs.writeFileSync(htmlPath, html, 'utf8');
     } catch {
       // ignore
+    }
+  }
+
+  private toOtlpJson(): unknown {
+    // Build a minimal ExportTraceServiceRequest with ResourceSpans and ScopeSpans
+    const resourceGroups = new Map<string, { resource: any; spans: ReadableSpan[] }>();
+    for (const s of this.spans) {
+      const resAttrs = (s.resource as any)?.attributes || {};
+      const resKey = JSON.stringify(resAttrs);
+      let g = resourceGroups.get(resKey);
+      if (!g) {
+        g = { resource: resAttrs, spans: [] };
+        resourceGroups.set(resKey, g);
+      }
+      g.spans.push(s);
+    }
+
+    const resourceSpans = Array.from(resourceGroups.values()).map(g => ({
+      resource: {
+        attributes: toOtelAttributes(g.resource),
+      },
+      scopeSpans: [
+        {
+          scope: { name: 'visor', version: String(process.env.VISOR_VERSION || 'dev') },
+          spans: g.spans.map(s => toOtelSpan(s)),
+        },
+      ],
+    }));
+
+    return { resourceSpans };
+
+    function toOtelSpan(s: ReadableSpan): any {
+      const startMs = hrTimeToMillis(s.startTime);
+      const endMs = hrTimeToMillis(s.endTime);
+      const toNs = (ms: number) => String(Math.max(0, Math.floor(ms * 1_000_000)));
+      return {
+        traceId: s.spanContext().traceId, // hex; many tools accept hex in JSON
+        spanId: s.spanContext().spanId,
+        parentSpanId: s.parentSpanId || undefined,
+        name: s.name,
+        kind: s.kind ?? 0,
+        startTimeUnixNano: toNs(startMs),
+        endTimeUnixNano: toNs(endMs),
+        attributes: toOtelAttributes((s as any).attributes || {}),
+        events: (s.events || []).map(e => ({
+          timeUnixNano: toNs(hrTimeToMillis(e.time)),
+          name: e.name,
+          attributes: toOtelAttributes(e.attributes || {}),
+        })),
+        status: (s as any).status
+          ? {
+              code: (s as any).status.code ?? 0,
+              message: (s as any).status.message || undefined,
+            }
+          : undefined,
+      };
+    }
+
+    function toOtelAttributes(obj: Record<string, unknown>): any[] {
+      const out: any[] = [];
+      for (const [key, value] of Object.entries(obj || {})) {
+        out.push({ key, value: toAnyValue(value) });
+      }
+      return out;
+    }
+
+    function toAnyValue(v: unknown): any {
+      const t = typeof v;
+      if (v == null) return { stringValue: 'null' };
+      if (t === 'string') return { stringValue: v };
+      if (t === 'boolean') return { boolValue: v };
+      if (t === 'number') return Number.isInteger(v as number) ? { intValue: String(v) } : { doubleValue: v };
+      if (Array.isArray(v)) return { arrayValue: { values: v.map(toAnyValue) } };
+      if (t === 'object') return { kvlistValue: { values: toOtelAttributes(v as Record<string, unknown>) } };
+      return { stringValue: String(v) };
     }
   }
 

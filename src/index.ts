@@ -10,7 +10,7 @@ import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
-import { emitNdjsonFallback } from './telemetry/fallback-ndjson';
+import { emitNdjsonFallback, flushNdjson } from './telemetry/fallback-ndjson';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -273,6 +273,7 @@ export async function run(): Promise<void> {
       await shutdownTelemetry();
     } catch {}
     try {
+      try { await flushNdjson(); } catch {}
       if (process.env.VISOR_TRACE_REPORT === 'true') {
         const fs = await import('fs');
         const path = await import('path');
