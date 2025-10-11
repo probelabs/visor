@@ -71,11 +71,13 @@ checks:
     group: overview
     schema: overview
     prompt: |
-        You are generating PR overview, to help others understand what this PR is above, and help reviewer to point to the right parts using attached schema.
+        You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
 
         ## Files Changed Analysis
-        Summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
-          
+        After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
+	
+	Next ensure you cover all below:
+	          
         ## Architecture & Impact Assessment
           - What this PR accomplishes
           - Key technical changes introduced
