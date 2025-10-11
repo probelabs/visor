@@ -23,40 +23,7 @@ export class ReactionManager {
       commentId?: number;
     }
   ): Promise<number | null> {
-    try {
-      const { eventName, issueNumber, commentId } = context;
-
-      if (commentId) {
-        // React to comment
-        const response = await this.octokit.rest.reactions.createForIssueComment({
-          owner,
-          repo,
-          comment_id: commentId,
-          content: 'eyes',
-        });
-        console.log(`👁️  Added acknowledgement reaction to comment ${commentId}`);
-        return response.data.id;
-      } else if (issueNumber) {
-        // React to issue or PR
-        const response = await this.octokit.rest.reactions.createForIssue({
-          owner,
-          repo,
-          issue_number: issueNumber,
-          content: 'eyes',
-        });
-        console.log(
-          `👁️  Added acknowledgement reaction to ${eventName === 'issues' ? 'issue' : 'PR'} #${issueNumber}`
-        );
-        return response.data.id;
-      }
-      return null;
-    } catch (error) {
-      // Don't fail the action if reaction fails
-      console.warn(
-        `⚠️  Could not add acknowledgement reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-      return null;
-    }
+    return this.addReaction(owner, repo, context, 'eyes', '👁️  Added acknowledgement reaction');
   }
 
   /**
@@ -74,56 +41,72 @@ export class ReactionManager {
     }
   ): Promise<void> {
     try {
-      const { eventName, issueNumber, commentId, acknowledgementReactionId } = context;
+      const { issueNumber, commentId, acknowledgementReactionId } = context;
 
-      if (commentId) {
-        // Remove eye reaction using stored ID (efficient)
-        if (acknowledgementReactionId) {
-          await this.removeReactionById(
-            owner,
-            repo,
-            commentId,
-            acknowledgementReactionId,
-            'comment'
-          );
-        }
-
-        // Add thumbs up reaction to comment
-        await this.octokit.rest.reactions.createForIssueComment({
-          owner,
-          repo,
-          comment_id: commentId,
-          content: '+1',
-        });
-        console.log(`👍 Added completion reaction to comment ${commentId}`);
-      } else if (issueNumber) {
-        // Remove eye reaction using stored ID (efficient)
-        if (acknowledgementReactionId) {
-          await this.removeReactionById(
-            owner,
-            repo,
-            issueNumber,
-            acknowledgementReactionId,
-            'issue'
-          );
-        }
-
-        // Add thumbs up reaction to issue or PR
-        await this.octokit.rest.reactions.createForIssue({
-          owner,
-          repo,
-          issue_number: issueNumber,
-          content: '+1',
-        });
-        console.log(
-          `👍 Added completion reaction to ${eventName === 'issues' ? 'issue' : 'PR'} #${issueNumber}`
-        );
+      // Remove eye reaction using stored ID (efficient)
+      if (acknowledgementReactionId) {
+        const type = commentId ? 'comment' : 'issue';
+        const itemId = (commentId || issueNumber)!;
+        await this.removeReactionById(owner, repo, itemId, acknowledgementReactionId, type);
       }
+
+      // Add thumbs up reaction
+      await this.addReaction(owner, repo, context, '+1', '👍 Added completion reaction');
     } catch (error) {
       // Don't fail the action if reaction fails
       console.warn(
         `⚠️  Could not add completion reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  /**
+   * Add a reaction to an issue, PR, or comment
+   * Returns the reaction ID or null on error
+   */
+  private async addReaction(
+    owner: string,
+    repo: string,
+    context: {
+      eventName: string;
+      issueNumber?: number;
+      commentId?: number;
+    },
+    content: 'eyes' | '+1',
+    logPrefix: string
+  ): Promise<number | null> {
+    try {
+      const { eventName, issueNumber, commentId } = context;
+
+      if (commentId) {
+        // React to comment
+        const response = await this.octokit.rest.reactions.createForIssueComment({
+          owner,
+          repo,
+          comment_id: commentId,
+          content,
+        });
+        console.log(`${logPrefix} to comment ${commentId}`);
+        return response.data.id;
+      } else if (issueNumber) {
+        // React to issue or PR
+        const response = await this.octokit.rest.reactions.createForIssue({
+          owner,
+          repo,
+          issue_number: issueNumber,
+          content,
+        });
+        const itemType = eventName === 'issues' ? 'issue' : 'PR';
+        console.log(`${logPrefix} to ${itemType} #${issueNumber}`);
+        return response.data.id;
+      }
+      return null;
+    } catch (error) {
+      // Don't fail the action if reaction fails
+      console.warn(
+        `⚠️  Could not add ${content} reaction: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return null;
     }
   }
 
