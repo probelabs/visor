@@ -673,7 +673,10 @@ async function handleIssueEvent(
 
       // Only post if there's actual content (not just empty checks)
       if (commentBody.trim()) {
-        commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+        // Only add footer if not already present (to avoid duplicates)
+        if (!commentBody.includes('*Powered by [Visor](')) {
+          commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+        }
 
         // Post comment to the issue
         await octokit.rest.issues.createComment({
