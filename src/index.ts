@@ -446,6 +446,11 @@ async function handleEvent(
       : (context.event?.comment?.id as number | undefined),
   };
 
+  // Debug logging for reactions
+  console.log(
+    `🔍 Reaction context: issueNumber=${reactionContext.issueNumber}, commentId=${reactionContext.commentId}, shouldSkipBot=${shouldSkipBotComment}, commentUser=${comment?.user?.login}`
+  );
+
   // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
   // Skip reactions for bot comments to avoid recursion
   let acknowledgementReactionId: number | null = null;
@@ -455,6 +460,8 @@ async function handleEvent(
       repo,
       reactionContext
     );
+  } else {
+    console.log('⚠️  No reaction added - neither issueNumber nor commentId available');
   }
 
   try {
