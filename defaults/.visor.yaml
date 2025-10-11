@@ -311,30 +311,27 @@ checks:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository.
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
-        - `text`: a clear, well-structured markdown reply to post as a comment.
-        - `tags.intent`: pick one action-oriented value:
-          - "issue_triage" when this event is a newly opened issue (perform triage and propose labels).
-          - For comments:
-            - "comment_retrigger" when the user asks to re-run/retrigger the job, workflow, or Visor.
-            - "comment_disable_checks" when the user asks to disable specific check(s).
-            - "comment_reply" for a normal reply when neither of the above applies.
-          Note: For backward compatibility, "issue" and "comment" are also accepted internally.
-        - `tags.action`: one of ["none", "retrigger", "disable-check"].
-          - Set to "retrigger" when the user asks to re-run/retrigger.
-          - Set to "disable-check" when the user asks to disable specific check(s). Populate `tags.checks` with the check IDs to disable (e.g., security, performance, style, architecture, or exact config IDs).
-          - Otherwise set to "none".
-        - `tags.label` (for new issues only): choose one primary label from [bug, feature, enhancement, maintenance, documentation, question].
-        - `tags.labels` (optional): additional helpful labels as an array of strings.
-        - `tags.checks` (optional): array of checks referenced when `tags.action == 'disable-check'`.
+        - `text`: a clear, well-structured markdown reply to the user. Your primary job is to be a helpful assistant: answer the user’s question or follow up with clarifying questions. Keep it concise and actionable.
+        - `tags.intent`: choose an action-oriented value:
+          - "issue_triage" when this event is a newly opened issue. In this case, also propose a label and next steps.
+          - For comments: use "comment_retrigger" only when the user explicitly asks to re-run/retrigger; "comment_disable_checks" when they ask to disable checks; otherwise "comment_reply".
+        - `tags.action`: one of ["none", "retrigger", "disable-check"]. Set this only when the user clearly asks for it.
+        - `tags.label`: only set for new issues (event.name == 'issues' and action == 'opened').
+        - `tags.labels` (optional): additional labels for new issues only.
+        - `tags.checks` (optional): array of checks when `tags.action == 'disable-check'`.
 
-        Event context (use this to set intent):
+        Permissions and behavior:
+        - You have access to the user’s association via Liquid at render time. If the user asks for a rerun but is not at least a MEMBER, still be polite and explain they don’t have permission.
+        - Never suggest rerun/disable unless the user asked for it.
+        - Do not propose labels on comments; only on new issues.
+
+        Event context:
         - name: {{ event.name | default: 'unknown' }}
         - action: {{ event.action | default: 'unknown' }}
 
-        Guidance:
-        - For new issues (intent = "issue_triage"), perform triage: classify, suggest next steps, and ask targeted questions if needed.
-        - For comments, reply concisely and helpfully; select the correct intent variant above.
-        - Be professional and actionable; include code snippets or links when useful.
+        Style:
+        - Be professional, direct, and specific.
+        - Include code snippets or links when useful.
     on: [issue_opened, issue_comment]
 
   # Apply labels to new issues based on assistant output (GitHub-only)
@@ -348,14 +345,13 @@ checks:
     values:
       - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
 
-  # Handle issue assistant intents: disable checks and/or retrigger workflow
-  handle-issue-intents:
+  # Retrigger workflow based on assistant output (members only)
+  retrigger:
     type: noop
     group: github
     tags: [github]
-    command: "visor"
     depends_on: [issue-assistant]
-    on: [issue_opened, issue_comment]
+    on: [issue_comment]
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
       hasMinPermission('MEMBER') &&
