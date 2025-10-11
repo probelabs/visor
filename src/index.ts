@@ -422,16 +422,30 @@ async function handleEvent(
   // Create reaction manager for emoji reactions
   const reactionManager = new ReactionManager(octokit);
 
+  // Check if this is a bot comment that we should skip
+  const comment = context.event?.comment as any;
+  const shouldSkipBotComment =
+    comment &&
+    (comment.user?.login === 'visor[bot]' ||
+      comment.user?.login === 'github-actions[bot]' ||
+      comment.user?.type === 'Bot' ||
+      (comment.body &&
+        (comment.body.includes('<!-- visor-comment-id:') ||
+          comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
+          comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'))));
+
   // Extract context for reactions
   const reactionContext = {
     eventName: eventName || 'unknown',
     issueNumber: (context.event?.pull_request?.number || context.event?.issue?.number) as
       | number
       | undefined,
-    commentId: context.event?.comment?.id as number | undefined,
+    // Only set commentId if it's not a bot comment
+    commentId: shouldSkipBotComment ? undefined : (context.event?.comment?.id as number | undefined),
   };
 
   // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
+  // Skip reactions for bot comments to avoid recursion
   let acknowledgementReactionId: number | null = null;
   if (reactionContext.issueNumber || reactionContext.commentId) {
     acknowledgementReactionId = await reactionManager.addAcknowledgementReaction(
