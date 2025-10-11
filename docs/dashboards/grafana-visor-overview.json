@@ -1,0 +1,33 @@
+{
+  "__inputs": [],
+  "title": "Visor Overview",
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Check Duration (ms)",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PROM_DS" },
+          "expr": "histogram_quantile(0.95, sum(rate(visor_check_duration_ms_bucket[5m])) by (le))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Issues by Severity (rate)",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PROM_DS" },
+          "expr": "sum(rate(visor_check_issues_total[5m])) by (severity)"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    }
+  ],
+  "version": 1,
+  "editable": true
+}
+
