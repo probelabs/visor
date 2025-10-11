@@ -1315,11 +1315,15 @@ export class CheckExecutionEngine {
       const checkConfig = config.checks[checkName];
       return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
     });
+    const hasRouting = checks.some(checkName => {
+      const c = config.checks[checkName];
+      return Boolean(c?.on_success || c?.on_fail);
+    });
 
-    if (checks.length > 1 || hasDependencies) {
+    if (checks.length > 1 || hasDependencies || hasRouting) {
       if (debug) {
         logger.debug(
-          `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+          `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies}, has routing: ${hasRouting})`
         );
       }
       return await this.executeGroupedDependencyAwareChecks(
