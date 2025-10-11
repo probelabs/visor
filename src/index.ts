@@ -438,10 +438,7 @@ async function handleEvent(
     (comment.user?.login === 'visor[bot]' ||
       comment.user?.login === 'github-actions[bot]' ||
       comment.user?.type === 'Bot' ||
-      (comment.body &&
-        (comment.body.includes('<!-- visor-comment-id:') ||
-          comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
-          comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'))));
+      (comment.body && comment.body.includes('<!-- visor-comment-id:')));
 
   // Extract context for reactions
   const reactionContext: {
