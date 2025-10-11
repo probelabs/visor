@@ -93,7 +93,7 @@ checks:
         - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
 
         Be concise, specific, and actionable. Avoid praise or celebration.
-    on: [pr_opened, pr_updated]
+    on: [pr_opened]
 
   # Security analysis - Critical for all projects
   security:
@@ -352,7 +352,9 @@ checks:
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger') ? ['overview'] : []
+        return (isComment && allowed && intent === 'comment_retrigger')
+          ? ['overview','security','performance','quality','style']
+          : []
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
