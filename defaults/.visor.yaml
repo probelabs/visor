@@ -92,6 +92,10 @@ checks:
         - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
         - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
 
+        Important:
+        - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
+        - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
+
         Be concise, specific, and actionable. Avoid praise or celebration.
     on: [pr_opened]
 
