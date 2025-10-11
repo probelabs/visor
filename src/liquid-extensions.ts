@@ -1,6 +1,15 @@
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
+import {
+  hasMinPermission,
+  isOwner,
+  isMember,
+  isCollaborator,
+  isContributor,
+  isFirstTimer,
+  detectLocalMode,
+} from './utils/author-permissions';
 
 /**
  * Custom ReadFile tag for Liquid templates
@@ -76,6 +85,34 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     } catch {
       return '[Error: Unable to serialize to JSON]';
     }
+  });
+
+  // Register author permission filters
+  // These filters check PR author's permission level
+  const isLocal = detectLocalMode();
+
+  liquid.registerFilter('has_min_permission', (authorAssociation: string, level: string) => {
+    return hasMinPermission(authorAssociation, level as any, isLocal);
+  });
+
+  liquid.registerFilter('is_owner', (authorAssociation: string) => {
+    return isOwner(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_member', (authorAssociation: string) => {
+    return isMember(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_collaborator', (authorAssociation: string) => {
+    return isCollaborator(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_contributor', (authorAssociation: string) => {
+    return isContributor(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_first_timer', (authorAssociation: string) => {
+    return isFirstTimer(authorAssociation, isLocal);
   });
 }
 

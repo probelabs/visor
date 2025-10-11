@@ -8,6 +8,7 @@ This guide provides comprehensive debugging techniques and tools to help trouble
 - [Debugging Liquid Templates](#debugging-liquid-templates)
 - [Using the Logger Check](#using-the-logger-check)
 - [Common Debugging Patterns](#common-debugging-patterns)
+- [Author Permission Functions](#author-permission-functions)
 - [Troubleshooting Tips](#troubleshooting-tips)
 
 ## Debug Mode
@@ -473,6 +474,147 @@ if: |
 
   log("Final result:", isValid);
   return isValid;
+```
+
+## Author Permission Functions
+
+> **📖 For complete documentation, examples, and best practices, see [Author Permissions Guide](./author-permissions.md)**
+
+Visor provides helper functions to check the PR author's permission level in JavaScript expressions (`if`, `fail_if`, `transform_js`). These functions use GitHub's `author_association` field.
+
+### Permission Hierarchy
+
+From highest to lowest privilege:
+- **OWNER** - Repository owner
+- **MEMBER** - Organization member
+- **COLLABORATOR** - Invited collaborator
+- **CONTRIBUTOR** - Has contributed before
+- **FIRST_TIME_CONTRIBUTOR** - First PR to this repo
+- **FIRST_TIMER** - First GitHub contribution ever
+- **NONE** - No association
+
+### Available Functions
+
+#### `hasMinPermission(level)`
+
+Check if author has **at least** the specified permission level (>= logic):
+
+```yaml
+checks:
+  # Run security scan for external contributors only
+  security-scan:
+    type: command
+    exec: npm run security-scan
+    if: "!hasMinPermission('MEMBER')"  # Not owner or member
+
+  # Auto-approve for trusted contributors
+  auto-approve:
+    type: command
+    exec: gh pr review --approve
+    if: "hasMinPermission('COLLABORATOR')"  # Collaborators and above
+```
+
+#### `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`
+
+Boolean checks for specific or hierarchical permission levels:
+
+```yaml
+checks:
+  # Different workflows based on permission
+  code-review:
+    type: ai
+    prompt: "Review code"
+    if: |
+      log("Author is owner:", isOwner());
+      log("Author is member:", isMember());
+      log("Author is collaborator:", isCollaborator());
+
+      // Members can skip review
+      !isMember()
+
+  # Block sensitive file changes from non-members
+  sensitive-files-check:
+    type: command
+    exec: echo "Checking sensitive files..."
+    fail_if: |
+      !isMember() && files.some(f =>
+        f.filename.startsWith('secrets/') ||
+        f.filename === '.env' ||
+        f.filename.endsWith('.key')
+      )
+```
+
+#### `isFirstTimer()`
+
+Check if author is a first-time contributor:
+
+```yaml
+checks:
+  welcome-message:
+    type: command
+    exec: gh pr comment --body "Welcome to the project!"
+    if: "isFirstTimer()"
+
+  require-review:
+    type: command
+    exec: gh pr review --request-changes
+    fail_if: "isFirstTimer() && outputs.issues?.length > 5"
+```
+
+### Local Mode Behavior
+
+When running locally (not in GitHub Actions):
+- All permission checks return `true` (treated as owner)
+- `isFirstTimer()` returns `false`
+- This prevents blocking local development/testing
+
+### Examples
+
+#### Conditional Security Scanning
+
+```yaml
+checks:
+  # Run expensive security scan only for external contributors
+  deep-security-scan:
+    type: command
+    exec: npm run security-scan:deep
+    if: "!hasMinPermission('MEMBER')"
+
+  # Quick scan for trusted members
+  quick-security-scan:
+    type: command
+    exec: npm run security-scan:quick
+    if: "hasMinPermission('MEMBER')"
+```
+
+#### Require Reviews Based on Permission
+
+```yaml
+checks:
+  require-approval:
+    type: command
+    exec: gh pr review --request-changes
+    fail_if: |
+      // First-timers need clean PRs
+      (isFirstTimer() && totalIssues > 0) ||
+      // Non-collaborators need approval for large changes
+      (!hasMinPermission('COLLABORATOR') && pr.totalAdditions > 500)
+```
+
+#### Auto-merge for Trusted Contributors
+
+```yaml
+checks:
+  auto-merge:
+    type: command
+    depends_on: [tests, lint, security-scan]
+    exec: gh pr merge --auto --squash
+    if: |
+      // Only auto-merge for collaborators with passing checks
+      hasMinPermission('COLLABORATOR') &&
+      outputs.tests.error === false &&
+      outputs.lint.error === false &&
+      outputs["security-scan"].criticalIssues === 0
 ```
 
 ## Further Reading

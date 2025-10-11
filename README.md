@@ -174,6 +174,7 @@ Visor is a general SDLC automation framework:
 - Structured outputs: JSON Schema validation drives deterministic rendering, annotations, and SARIF.
 - Orchestrated pipelines: Dependencies, parallelism, and tag‑based profiles; run in Actions or any CI.
 - Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI, AWS Bedrock — plus MCP tools and Claude Code SDK.
+- Author permissions: Built-in functions to customize workflows based on contributor trust level (owner, member, collaborator, etc).
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
 - Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `claude-code` — or add your own.
@@ -231,6 +232,37 @@ Examples:
 ```
 
 Learn more: [docs/commands.md](docs/commands.md)
+
+## 🔐 Author Permissions
+
+Customize workflows based on PR author's permission level using built-in functions in JavaScript expressions:
+
+```yaml
+checks:
+  # Run security scan only for external contributors
+  security-scan:
+    type: command
+    exec: npm run security:full
+    if: "!hasMinPermission('MEMBER')"
+
+  # Auto-approve PRs from collaborators
+  auto-approve:
+    type: command
+    exec: gh pr review --approve
+    if: "hasMinPermission('COLLABORATOR') && totalIssues === 0"
+
+  # Block sensitive file changes from non-members
+  protect-secrets:
+    type: command
+    exec: echo "Checking permissions..."
+    fail_if: "!isMember() && files.some(f => f.filename.startsWith('secrets/'))"
+```
+
+**Available functions:**
+- `hasMinPermission(level)` - Check if author has >= permission level
+- `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`, `isFirstTimer()` - Boolean checks
+
+Learn more: [docs/author-permissions.md](docs/author-permissions.md)
 
 ## 🔇 Suppressing Warnings
 
