@@ -12,6 +12,7 @@ import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { emitNdjsonFallback, flushNdjson } from './telemetry/fallback-ndjson';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
+import { ReactionManager } from './github-reactions';
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
  */
@@ -547,28 +548,106 @@ async function handleEvent(
     return;
   }
   console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
-  // Handle different GitHub events
-  switch (eventName) {
-    case 'issue_comment':
-      await handleIssueComment(octokit, owner, repo, context, inputs, config, checksToRun);
-      break;
-    case 'pull_request':
-      // Run the checks that are configured for this event
-      await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun, context);
-      break;
-    case 'issues':
-      // Handle issue events (opened, closed, etc)
-      await handleIssueEvent(octokit, owner, repo, context, inputs, config, checksToRun);
-      break;
-    case 'push':
-      // Could handle push events that are associated with PRs
-      console.log('Push event detected - checking for associated PR');
-      break;
-    default:
-      // Fallback to repo info for unknown events
-      console.log(`Unknown event: ${eventName}`);
-      await handleRepoInfo(octokit, owner, repo);
-      break;
+
+  console.log(`🐛 DEBUG-VERSION-999: About to create ReactionManager`);
+
+  // Create reaction manager for emoji reactions
+  const reactionManager = new ReactionManager(octokit);
+  console.log(`🐛 DEBUG: ReactionManager created successfully`);
+
+  // Define comment interface for type safety
+  interface CommentLike {
+    id?: number;
+    user?: { login?: string; type?: string };
+    body?: string;
+  }
+
+  // Check if this is a bot comment that we should skip
+  const comment: CommentLike | undefined = context.event?.comment;
+  const shouldSkipBotComment =
+    comment &&
+    (comment.user?.login === 'visor[bot]' ||
+      comment.user?.login === 'github-actions[bot]' ||
+      comment.user?.type === 'Bot' ||
+      (comment.body && comment.body.includes('<!-- visor-comment-id:')));
+
+  // Extract context for reactions
+  // Note: Type assertions are necessary because GitHub context types are not well-defined
+  // and TypeScript infers these as 'unknown' without explicit casting
+  const reactionContext: {
+    eventName: string;
+    issueNumber?: number;
+    commentId?: number;
+  } = {
+    eventName: eventName || 'unknown',
+    issueNumber: (context.event?.pull_request?.number || context.event?.issue?.number) as
+      | number
+      | undefined,
+    // Only set commentId if it's not a bot comment
+    commentId: shouldSkipBotComment
+      ? undefined
+      : (context.event?.comment?.id as number | undefined),
+  };
+
+  // Debug logging for reactions
+  console.log(
+    `🔍 Reaction context: issueNumber=${reactionContext.issueNumber}, commentId=${reactionContext.commentId}, shouldSkipBot=${shouldSkipBotComment}, commentUser=${comment?.user?.login}`
+  );
+
+  // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
+  // Skip reactions for bot comments to avoid recursion
+  let acknowledgementReactionId: number | null = null;
+  if (reactionContext.issueNumber || reactionContext.commentId) {
+    acknowledgementReactionId = await reactionManager.addAcknowledgementReaction(
+      owner,
+      repo,
+      reactionContext
+    );
+  } else {
+    console.log('⚠️  No reaction added - neither issueNumber nor commentId available');
+  }
+
+  try {
+    // Handle different GitHub events
+    switch (eventName) {
+      case 'issue_comment':
+        await handleIssueComment(octokit, owner, repo, context, inputs, config, checksToRun);
+        break;
+      case 'pull_request':
+        // Run the checks that are configured for this event
+        await handlePullRequestWithConfig(
+          octokit,
+          owner,
+          repo,
+          inputs,
+          config,
+          checksToRun,
+          context
+        );
+        break;
+      case 'issues':
+        // Handle issue events (opened, closed, etc)
+        await handleIssueEvent(octokit, owner, repo, context, inputs, config, checksToRun);
+        break;
+      case 'push':
+        // Could handle push events that are associated with PRs
+        console.log('Push event detected - checking for associated PR');
+        break;
+      default:
+        // Fallback to repo info for unknown events
+        console.log(`Unknown event: ${eventName}`);
+        await handleRepoInfo(octokit, owner, repo);
+        break;
+    }
+  } finally {
+    // Add completion reaction (thumbs up emoji) after processing
+    if (reactionContext.issueNumber || reactionContext.commentId) {
+      await reactionManager.addCompletionReaction(owner, repo, {
+        ...reactionContext,
+        acknowledgementReactionId,
+      });
+    }
+
   }
 }
 /**
@@ -705,7 +784,7 @@ async function handleIssueEvent(
       }
       // Only post if there's actual content (not just empty checks)
       if (commentBody.trim()) {
-        commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+
         // Post comment to the issue
         await octokit.rest.issues.createComment({
           owner,
@@ -981,6 +1060,9 @@ async function handleIssueComment(
           await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             focus,
             format,
+            triggeredBy: comment?.user?.login
+              ? `comment by @${comment.user.login}`
+              : 'issue_comment',
           });
         } else {
           console.log('📝 Skipping comment (comment-on-pr is disabled)');

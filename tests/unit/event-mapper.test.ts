@@ -116,7 +116,7 @@ describe('EventMapper', () => {
       expect(result.checksToRun).toEqual(['security-check', 'performance-check', 'style-check']);
       expect(result.executionContext.eventType).toBe('pr_updated');
       expect(result.executionContext.prNumber).toBe(789);
-      expect(result.executionContext.triggeredBy).toBe('comment_by_reviewer');
+      expect(result.executionContext.triggeredBy).toBe('comment by @reviewer');
     });
 
     it('should return no execution for unsupported events', () => {
