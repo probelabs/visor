@@ -441,7 +441,9 @@ async function handleEvent(
       | number
       | undefined,
     // Only set commentId if it's not a bot comment
-    commentId: shouldSkipBotComment ? undefined : (context.event?.comment?.id as number | undefined),
+    commentId: shouldSkipBotComment
+      ? undefined
+      : (context.event?.comment?.id as number | undefined),
   };
 
   // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID

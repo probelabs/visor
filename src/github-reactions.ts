@@ -79,7 +79,13 @@ export class ReactionManager {
       if (commentId) {
         // Remove eye reaction using stored ID (efficient)
         if (acknowledgementReactionId) {
-          await this.removeReactionById(owner, repo, commentId, acknowledgementReactionId, 'comment');
+          await this.removeReactionById(
+            owner,
+            repo,
+            commentId,
+            acknowledgementReactionId,
+            'comment'
+          );
         }
 
         // Add thumbs up reaction to comment
@@ -93,7 +99,13 @@ export class ReactionManager {
       } else if (issueNumber) {
         // Remove eye reaction using stored ID (efficient)
         if (acknowledgementReactionId) {
-          await this.removeReactionById(owner, repo, issueNumber, acknowledgementReactionId, 'issue');
+          await this.removeReactionById(
+            owner,
+            repo,
+            issueNumber,
+            acknowledgementReactionId,
+            'issue'
+          );
         }
 
         // Add thumbs up reaction to issue or PR
