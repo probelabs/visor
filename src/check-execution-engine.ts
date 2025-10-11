@@ -441,10 +441,12 @@ export class CheckExecutionEngine {
         transform_js: targetCfg.transform_js,
         env: targetCfg.env,
         forEach: targetCfg.forEach,
+        // Include provider-specific keys (e.g., op/values for github)
+        ...targetCfg,
         ai: {
+          ...(targetCfg.ai || {}),
           timeout: providerConfig.ai?.timeout || 600000,
           debug: !!debug,
-          ...(targetCfg.ai || {}),
         },
       };
       // Build dependencyResults for target using already computed global results (after ensuring deps executed)
@@ -2124,10 +2126,12 @@ export class CheckExecutionEngine {
             message: extendedCheckConfig.message,
             env: checkConfig.env,
             forEach: checkConfig.forEach,
+            // Pass through any provider-specific keys (e.g., op/values for github provider)
+            ...checkConfig,
             ai: {
+              ...(checkConfig.ai || {}),
               timeout: timeout || 600000,
               debug: debug,
-              ...(checkConfig.ai || {}),
             },
           };
 
@@ -2399,10 +2403,12 @@ export class CheckExecutionEngine {
                     transform_js: childCfg.transform_js,
                     env: childCfg.env,
                     forEach: childCfg.forEach,
+                    // Include provider-specific keys like op/values for non-AI providers
+                    ...childCfg,
                     ai: {
+                      ...(childCfg.ai || {}),
                       timeout: timeout || 600000,
                       debug: debug,
-                      ...(childCfg.ai || {}),
                     },
                   };
 
