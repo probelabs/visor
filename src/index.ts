@@ -981,6 +981,9 @@ async function handleIssueComment(
           await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             focus,
             format,
+            triggeredBy: comment?.user?.login
+              ? `comment_by_${comment.user.login}`
+              : 'issue_comment',
           });
         } else {
           console.log('📝 Skipping comment (comment-on-pr is disabled)');
