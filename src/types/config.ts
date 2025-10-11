@@ -181,7 +181,7 @@ export type ConfigCheckType =
   | 'http_client'
   | 'noop'
   | 'log'
-  | 'github';
+  | 'github'
   | 'claude-code';
 
 /**
