@@ -288,54 +288,27 @@ checks:
 
   # Apply labels based on overview tags — runs only in GitHub environments
   apply-overview-labels:
-    type: command
+    type: github
     group: github
     tags: [github]
     depends_on: [overview]
     on: [pr_opened, pr_updated]
-    exec: |
-      set -eu
-
-      PRIMARY_LABEL="{{ outputs.overview.tags.label | default: '' | safe_label }}"
-      EFFORT="{{ outputs.overview.tags['review-effort'] | default: '' | safe_label }}"
-
-      if [ -n "$PRIMARY_LABEL" ]; then
-        echo "Ensuring label: $PRIMARY_LABEL"
-        gh label create "$PRIMARY_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
-        echo "Applying label to PR #{{ pr.number }}: $PRIMARY_LABEL"
-        gh pr edit {{ pr.number }} --add-label "$PRIMARY_LABEL"
-      fi
-
-      if [ -n "$EFFORT" ]; then
-        EFFORT_LABEL="review/effort:$EFFORT"
-        echo "Ensuring label: $EFFORT_LABEL"
-        gh label create "$EFFORT_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
-        echo "Applying label to PR #{{ pr.number }}: $EFFORT_LABEL"
-        gh pr edit {{ pr.number }} --add-label "$EFFORT_LABEL"
-      fi
-
-      if [ -z "$PRIMARY_LABEL" ] && [ -z "$EFFORT" ]; then echo "No labels to apply from overview output"; fi
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
-    type: command
+    type: github
     group: github
     tags: [github]
     depends_on: [issue-assistant]
     on: [issue_opened, issue_comment]
     if: "outputs['issue-assistant'].tags.intent == 'issue'"
-    exec: |
-      set -eu
-
-      PRIMARY_LABEL="{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
-      if [ -n "$PRIMARY_LABEL" ]; then
-        echo "Ensuring label: $PRIMARY_LABEL"
-        gh label create "$PRIMARY_LABEL" -c "#ededed" -f >/dev/null 2>&1 || true
-        echo "Applying label to issue #{{ event.issue.number }}: $PRIMARY_LABEL"
-        gh issue edit {{ event.issue.number }} --add-label "$PRIMARY_LABEL"
-      else
-        echo "No labels to apply from issue-assistant output"
-      fi
+    op: labels.add
+    values:
+      - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
 
   # Handle issue assistant intents: disable checks and/or retrigger workflow
   handle-issue-intents:

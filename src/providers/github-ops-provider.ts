@@ -82,11 +82,11 @@ export class GitHubOpsProvider extends CheckProvider {
       };
     }
 
-    // Build values list
+    // Build values list (allow string or array) and normalize
     let values: string[] = [];
-    if (Array.isArray(cfg.values)) values = cfg.values as string[];
-    else if (typeof cfg.values === 'string' && cfg.values.trim()) values = [cfg.values.trim()];
-    else if (typeof cfg.value === 'string' && cfg.value.trim()) values = [cfg.value.trim()];
+    if (Array.isArray(cfg.values)) values = (cfg.values as unknown[]).map(v => String(v));
+    else if (typeof cfg.values === 'string') values = [cfg.values];
+    else if (typeof cfg.value === 'string') values = [cfg.value];
 
     if (cfg.value_js && cfg.value_js.trim()) {
       try {
@@ -98,7 +98,7 @@ export class GitHubOpsProvider extends CheckProvider {
           `"use strict"; const res = (function(){ ${cfg.value_js} })(); return res;`
         );
         const res = fn(prInfo, process.env, values);
-        if (typeof res === 'string' && res.trim()) values = [res.trim()];
+        if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = res.map(v => String(v));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -117,10 +117,14 @@ export class GitHubOpsProvider extends CheckProvider {
       }
     }
 
+    // Trim, drop empty, and de-duplicate values regardless of source
+    values = values.map(v => v.trim()).filter(v => v.length > 0);
+    values = Array.from(new Set(values));
+
     try {
       switch (cfg.op) {
         case 'labels.add': {
-          if (values.length === 0) break;
+          if (values.length === 0) break; // no-op if nothing to add
           await octokit.rest.issues.addLabels({
             owner,
             repo,
