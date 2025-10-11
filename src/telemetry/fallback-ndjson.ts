@@ -13,22 +13,31 @@ function resolveTargetPath(outDir: string): string {
 }
 
 function isEnabled(): boolean {
-  return (process.env.VISOR_TELEMETRY_ENABLED === 'true' && ((process.env.VISOR_TELEMETRY_SINK || 'file') === 'file'));
+  return (
+    process.env.VISOR_TELEMETRY_ENABLED === 'true' &&
+    (process.env.VISOR_TELEMETRY_SINK || 'file') === 'file'
+  );
 }
 
 function appendAsync(outDir: string, line: string): void {
-  writeChain = writeChain.then(async () => {
-    if (!dirReady) {
-      try { await fs.promises.mkdir(outDir, { recursive: true }); } catch {}
-      dirReady = true;
-    }
-    const target = resolveTargetPath(outDir);
-    await fs.promises.appendFile(target, line, 'utf8');
-  }).catch(() => {});
+  writeChain = writeChain
+    .then(async () => {
+      if (!dirReady) {
+        try {
+          await fs.promises.mkdir(outDir, { recursive: true });
+        } catch {}
+        dirReady = true;
+      }
+      const target = resolveTargetPath(outDir);
+      await fs.promises.appendFile(target, line, 'utf8');
+    })
+    .catch(() => {});
 }
 
 export async function flushNdjson(): Promise<void> {
-  try { await writeChain; } catch {}
+  try {
+    await writeChain;
+  } catch {}
 }
 
 export function emitNdjsonFallback(name: string, attrs: Record<string, unknown>): void {

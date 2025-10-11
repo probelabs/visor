@@ -242,9 +242,11 @@ export class TraceReportExporter implements SpanExporter {
       if (v == null) return { stringValue: 'null' };
       if (t === 'string') return { stringValue: v };
       if (t === 'boolean') return { boolValue: v };
-      if (t === 'number') return Number.isInteger(v as number) ? { intValue: String(v) } : { doubleValue: v };
+      if (t === 'number')
+        return Number.isInteger(v as number) ? { intValue: String(v) } : { doubleValue: v };
       if (Array.isArray(v)) return { arrayValue: { values: v.map(toAnyValue) } };
-      if (t === 'object') return { kvlistValue: { values: toOtelAttributes(v as Record<string, unknown>) } };
+      if (t === 'object')
+        return { kvlistValue: { values: toOtelAttributes(v as Record<string, unknown>) } };
       return { stringValue: String(v) };
     }
   }
