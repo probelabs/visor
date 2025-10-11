@@ -184,7 +184,13 @@ export class PRReviewer {
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
       // Filter out command-type checks from PR comments (they should report via GitHub Checks only)
       const filteredResults = options.config
-        ? checkResults.filter(r => options.config!.checks?.[r.checkName]?.type !== 'command')
+        ? checkResults.filter(r => {
+            const cfg = options.config!.checks?.[r.checkName];
+            const t = cfg?.type || '';
+            const isGitHubOps =
+              t === 'github' || r.group === 'github' || t === 'noop' || t === 'command';
+            return !isGitHubOps;
+          })
         : checkResults;
 
       // If nothing to report after filtering, skip this group

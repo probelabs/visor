@@ -291,7 +291,6 @@ checks:
   # Apply labels based on overview tags — runs only in GitHub environments
   apply-overview-labels:
     type: github
-    group: github
     tags: [github]
     depends_on: [overview]
     on: [pr_opened, pr_updated]
@@ -329,10 +328,11 @@ checks:
         - Include code snippets or links when useful.
     on: [issue_opened, issue_comment]
     on_success:
-      goto_js: |
+      run_js: |
         const intent = outputs['issue-assistant'].intent;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
-        return (isComment && intent === 'comment_retrigger') ? 'retrigger' : null
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return (isComment && allowed && intent === 'comment_retrigger') ? ['overview'] : []
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
@@ -364,12 +364,7 @@ checks:
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
       hasMinPermission('MEMBER') && event.event_name == 'issue_comment' && outputs['issue-assistant'].intent == 'comment_retrigger'
-    on_success:
-      goto_js: |
-        const intent = outputs['issue-assistant'].intent;
-        const should = (attempt === 1) && (intent === 'comment_retrigger');
-        return should ? 'overview' : null;
-      goto_event: pr_updated
+    # No routing needed here anymore; issue-assistant schedules 'overview' directly
 
 output:
   pr_comment:
