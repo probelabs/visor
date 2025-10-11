@@ -441,6 +441,8 @@ async function handleEvent(
       (comment.body && comment.body.includes('<!-- visor-comment-id:')));
 
   // Extract context for reactions
+  // Note: Type assertions are necessary because GitHub context types are not well-defined
+  // and TypeScript infers these as 'unknown' without explicit casting
   const reactionContext: {
     eventName: string;
     issueNumber?: number;
