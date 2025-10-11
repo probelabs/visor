@@ -20,6 +20,7 @@ import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
+import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -308,9 +309,10 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
+          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return Array.isArray(__res) ? __res : (__res ? [__res] : []);
@@ -355,9 +357,10 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
+          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a);
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
@@ -1352,7 +1355,12 @@ export class CheckExecutionEngine {
 
     // Evaluate fail_if conditions
     if (config && (config.fail_if || checkConfig.fail_if)) {
-      const failureResults = await this.evaluateFailureConditions(checkName, result, config);
+      const failureResults = await this.evaluateFailureConditions(
+        checkName,
+        result,
+        config,
+        prInfo
+      );
 
       // Add failure condition issues to the result
       if (failureResults.length > 0) {
@@ -4499,7 +4507,8 @@ export class CheckExecutionEngine {
   async evaluateFailureConditions(
     checkName: string,
     reviewSummary: ReviewSummary,
-    config?: import('./types/config').VisorConfig
+    config?: import('./types/config').VisorConfig,
+    prInfo?: PRInfo
   ): Promise<FailureConditionResult[]> {
     if (!config) {
       return [];
@@ -4581,7 +4590,9 @@ export class CheckExecutionEngine {
       checkGroup,
       reviewSummary,
       globalConditions,
-      checkConditions
+      checkConditions,
+      undefined, // previousOutputs
+      prInfo?.authorAssociation
     );
   }
 

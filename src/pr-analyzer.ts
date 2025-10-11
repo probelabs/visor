@@ -31,6 +31,7 @@ export interface PRInfo {
   title: string;
   body: string;
   author: string;
+  authorAssociation?: string; // GitHub author_association: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc.
   base: string;
   head: string;
   files: PRDiff[];
@@ -136,6 +137,10 @@ export class PRAnalyzer {
           ? pr.user.login
           : String(pr.user.login)
         : 'unknown';
+    const authorAssociation =
+      pr.author_association && typeof pr.author_association === 'string'
+        ? pr.author_association
+        : undefined;
     const base =
       pr.base && typeof pr.base === 'object' && pr.base.ref
         ? typeof pr.base.ref === 'string'
@@ -174,6 +179,7 @@ export class PRAnalyzer {
       title,
       body,
       author,
+      authorAssociation,
       base,
       head,
       files: validFiles,

@@ -11,6 +11,7 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
+import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -93,14 +94,16 @@ export class FailureConditionEvaluator {
     checkGroup: string,
     reviewSummary: ReviewSummary,
     expression: string,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): Promise<boolean> {
     const context = this.buildEvaluationContext(
       checkName,
       checkSchema,
       checkGroup,
       reviewSummary,
-      previousOutputs
+      previousOutputs,
+      authorAssociation
     );
 
     try {
@@ -232,14 +235,16 @@ export class FailureConditionEvaluator {
     reviewSummary: ReviewSummary,
     globalConditions?: FailureConditions,
     checkConditions?: FailureConditions,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): Promise<FailureConditionResult[]> {
     const context = this.buildEvaluationContext(
       checkName,
       checkSchema,
       checkGroup,
       reviewSummary,
-      previousOutputs
+      previousOutputs,
+      authorAssociation
     );
 
     const results: FailureConditionResult[] = [];
@@ -427,6 +432,18 @@ export class FailureConditionEvaluator {
       const hasIssueWith = hasIssue;
       const hasFileWith = hasFileMatching;
 
+      // Permission helper functions
+      const permissionHelpers = createPermissionHelpers(
+        context.authorAssociation,
+        detectLocalMode()
+      );
+      const hasMinPermission = permissionHelpers.hasMinPermission;
+      const isOwner = permissionHelpers.isOwner;
+      const isMember = permissionHelpers.isMember;
+      const isCollaborator = permissionHelpers.isCollaborator;
+      const isContributor = permissionHelpers.isContributor;
+      const isFirstTimer = permissionHelpers.isFirstTimer;
+
       // Extract context variables
       const output = context.output || {};
       const issues = output.issues || [];
@@ -507,6 +524,13 @@ export class FailureConditionEvaluator {
         hasSuggestion,
         hasIssueWith,
         hasFileWith,
+        // Permission helpers
+        hasMinPermission,
+        isOwner,
+        isMember,
+        isCollaborator,
+        isContributor,
+        isFirstTimer,
       };
 
       // Compile and execute the expression in the sandbox
@@ -572,7 +596,8 @@ export class FailureConditionEvaluator {
     checkSchema: string,
     checkGroup: string,
     reviewSummary: ReviewSummary,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): FailureConditionContext {
     const { issues, debug } = reviewSummary;
     const reviewSummaryWithOutput = reviewSummary as ReviewSummary & { output?: unknown };
@@ -701,6 +726,7 @@ export class FailureConditionEvaluator {
       checkName: checkName,
       schema: checkSchema,
       group: checkGroup,
+      authorAssociation: authorAssociation,
     };
 
     // Add debug information if available

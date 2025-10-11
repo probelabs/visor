@@ -1,6 +1,15 @@
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
 import fs from 'fs/promises';
 import path from 'path';
+import {
+  hasMinPermission,
+  isOwner,
+  isMember,
+  isCollaborator,
+  isContributor,
+  isFirstTimer,
+  detectLocalMode,
+} from './utils/author-permissions';
 
 /**
  * Custom ReadFile tag for Liquid templates
@@ -100,6 +109,34 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     if (value == null) return '';
     const s = String(value);
     return s.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+  });
+
+  // Register author permission filters (from main)
+  // These filters check the author's permission level; detect local mode for tests
+  const isLocal = detectLocalMode();
+
+  liquid.registerFilter('has_min_permission', (authorAssociation: string, level: string) => {
+    return hasMinPermission(authorAssociation, level as any, isLocal);
+  });
+
+  liquid.registerFilter('is_owner', (authorAssociation: string) => {
+    return isOwner(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_member', (authorAssociation: string) => {
+    return isMember(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_collaborator', (authorAssociation: string) => {
+    return isCollaborator(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_contributor', (authorAssociation: string) => {
+    return isContributor(authorAssociation, isLocal);
+  });
+
+  liquid.registerFilter('is_first_timer', (authorAssociation: string) => {
+    return isFirstTimer(authorAssociation, isLocal);
   });
 }
 

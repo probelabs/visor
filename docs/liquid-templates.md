@@ -11,6 +11,7 @@ Visor uses [LiquidJS](https://liquidjs.com/) for templating in prompts, commands
   - `pr.title` - PR title
   - `pr.body` - PR description
   - `pr.author` - PR author username
+  - `pr.authorAssociation` - Author's association (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc.)
   - `pr.baseBranch` - Target branch
   - `pr.headBranch` - Source branch
   - `pr.totalAdditions` - Lines added
@@ -100,13 +101,63 @@ The `json` filter serializes objects to JSON strings, useful for debugging or pa
 # Debug output object
 {{ outputs | json }}
 
+### Author Permission Filters
+
+> **📖 For complete documentation, see [Author Permissions Guide](./author-permissions.md)**
+
+Check the PR author's permission level in Liquid templates using filters:
+
+```liquid
+# Check if author has at least MEMBER permission
+{% if pr.authorAssociation | has_min_permission: "MEMBER" %}
+  Running quick scan for trusted member...
+{% else %}
+  Running full security scan for external contributor...
+{% endif %}
+
+# Check specific permission levels
+{% if pr.authorAssociation | is_owner %}
+  🎖️ Repository owner
+{% elsif pr.authorAssociation | is_member %}
+  👥 Organization member
+{% elsif pr.authorAssociation | is_collaborator %}
+  🤝 Collaborator
+{% elsif pr.authorAssociation | is_first_timer %}
+  🎉 First-time contributor - Welcome!
+{% endif %}
+
+# Use in prompts
+{% if pr.authorAssociation | is_member %}
+  Review this PR from team member {{ pr.author }}.
+  Focus on logic and design patterns.
+{% else %}
+  Review this PR from external contributor {{ pr.author }}.
+  Pay extra attention to security and best practices.
+{% endif %}
+
+# Conditional commands
+{% if pr.authorAssociation | has_min_permission: "COLLABORATOR" %}
+gh pr review --approve
+{% else %}
+gh pr review --comment --body "Thanks! A maintainer will review soon."
+{% endif %}
+```
+
+**Available filters:**
+- `has_min_permission: "LEVEL"` - Check if >= permission level
+- `is_owner` - Repository owner
+- `is_member` - Organization member or owner
+- `is_collaborator` - Collaborator or higher
+- `is_contributor` - Has contributed before
+- `is_first_timer` - First-time contributor
+
 ### Auto‑JSON Access
 
-When a dependency’s output is a JSON string, Visor exposes it as an object automatically in templates:
+When a dependency's output is a JSON string, Visor exposes it as an object automatically in templates:
 
 ```liquid
 # If `fetch-tickets` printed '{"tickets":[{"key":"TT-101"}]}'
-Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}  
+Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}
 # No JSON.parse required
 ```
 

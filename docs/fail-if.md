@@ -24,13 +24,17 @@ fail_if: outputs["fetch-tickets"].error
 
 Inside the expression you can use:
 
-- `output`: the current check’s structured output.
+- `output`: the current check's structured output.
   - Includes `issues` and any other fields produced by the provider.
   - For custom schemas, all top‑level JSON fields are preserved and exposed here.
   - For command output that is JSON, fields are available directly; for plain text, treat `output` as a string.
-- `outputs`: a map of dependency outputs keyed by check name. Each value is that check’s `output` if present; otherwise the whole check result.
+- `outputs`: a map of dependency outputs keyed by check name. Each value is that check's `output` if present; otherwise the whole check result.
 
-Helpers available: `contains(haystack, needle)`, `startsWith(s,prefix)`, `endsWith(s,suffix)`, `length(x)`, `always()`, `success()`, `failure()`, and issue/file matching helpers (see source FailureConditionEvaluator for the full list).
+**Helper functions:**
+- String: `contains(haystack, needle)`, `startsWith(s,prefix)`, `endsWith(s,suffix)`, `length(x)`
+- Control: `always()`, `success()`, `failure()`
+- Author permissions: `hasMinPermission(level)`, `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`, `isFirstTimer()` - See [Author Permissions](./author-permissions.md)
+- Issue/file matching helpers (see source FailureConditionEvaluator for the full list)
 
 Truthiness rules follow JavaScript: non‑empty strings are truthy, `""` and `null`/`undefined` are falsy, `0` is falsy.
 
