@@ -1701,6 +1701,10 @@ export class CheckExecutionEngine {
             : 'manual'
       : 'issue_comment';
 
+    const commenterAssoc =
+      ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
+      ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
+      prInfo.authorAssociation;
     const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
       branch: prInfo.head,
       baseBranch: prInfo.base,
@@ -1708,6 +1712,7 @@ export class CheckExecutionEngine {
       event: eventName,
       environment: getSafeEnvironmentVariables(),
       previousResults: results,
+      authorAssociation: commenterAssoc,
     });
 
     if (!shouldRun && debug) {
@@ -3773,6 +3778,10 @@ export class CheckExecutionEngine {
                   ? 'issues'
                   : 'manual'
             : 'issue_comment';
+          const commenterAssoc =
+            ((prInfo as any)?.eventContext as any)?.comment?.author_association ||
+            ((prInfo as any)?.eventContext as any)?.comment?.authorAssociation ||
+            prInfo.authorAssociation;
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
             checkName,
             checkConfig.if,
@@ -3783,6 +3792,7 @@ export class CheckExecutionEngine {
               event: eventName, // honor routing override if present
               environment: getSafeEnvironmentVariables(),
               previousResults: new Map(), // No previous results in parallel execution
+              authorAssociation: commenterAssoc,
             }
           );
 

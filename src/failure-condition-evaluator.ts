@@ -158,6 +158,7 @@ export class FailureConditionEvaluator {
       event?: string;
       environment?: Record<string, string>;
       previousResults?: Map<string, ReviewSummary>;
+      authorAssociation?: string;
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -199,6 +200,8 @@ export class FailureConditionEvaluator {
       output: {
         issues: [],
       },
+      // Author association (used by permission helpers)
+      authorAssociation: contextData?.authorAssociation,
 
       // Utility metadata
       metadata: {

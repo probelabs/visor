@@ -355,6 +355,7 @@ checks:
     on: [issue_opened, issue_comment]
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
+      hasMinPermission('MEMBER') &&
       outputs['issue-assistant'].tags.intent == 'comment' && (
         outputs['issue-assistant'].tags.action == 'retrigger' ||
         (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
