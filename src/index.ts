@@ -11,6 +11,7 @@ import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
+import { ReactionManager } from './github-reactions';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -418,28 +419,66 @@ async function handleEvent(
 
   console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
 
-  // Handle different GitHub events
-  switch (eventName) {
-    case 'issue_comment':
-      await handleIssueComment(octokit, owner, repo, context, inputs, config, checksToRun);
-      break;
-    case 'pull_request':
-      // Run the checks that are configured for this event
-      await handlePullRequestWithConfig(octokit, owner, repo, inputs, config, checksToRun, context);
-      break;
-    case 'issues':
-      // Handle issue events (opened, closed, etc)
-      await handleIssueEvent(octokit, owner, repo, context, inputs, config, checksToRun);
-      break;
-    case 'push':
-      // Could handle push events that are associated with PRs
-      console.log('Push event detected - checking for associated PR');
-      break;
-    default:
-      // Fallback to repo info for unknown events
-      console.log(`Unknown event: ${eventName}`);
-      await handleRepoInfo(octokit, owner, repo);
-      break;
+  // Create reaction manager for emoji reactions
+  const reactionManager = new ReactionManager(octokit);
+
+  // Extract context for reactions
+  const reactionContext = {
+    eventName: eventName || 'unknown',
+    issueNumber: (context.event?.pull_request?.number || context.event?.issue?.number) as
+      | number
+      | undefined,
+    commentId: context.event?.comment?.id as number | undefined,
+  };
+
+  // Add acknowledgement reaction (eye emoji) at the start
+  if (reactionContext.issueNumber || reactionContext.commentId) {
+    await reactionManager.addAcknowledgementReaction(owner, repo, reactionContext);
+  }
+
+  try {
+    // Handle different GitHub events
+    switch (eventName) {
+      case 'issue_comment':
+        await handleIssueComment(octokit, owner, repo, context, inputs, config, checksToRun);
+        break;
+      case 'pull_request':
+        // Run the checks that are configured for this event
+        await handlePullRequestWithConfig(
+          octokit,
+          owner,
+          repo,
+          inputs,
+          config,
+          checksToRun,
+          context
+        );
+        break;
+      case 'issues':
+        // Handle issue events (opened, closed, etc)
+        await handleIssueEvent(octokit, owner, repo, context, inputs, config, checksToRun);
+        break;
+      case 'push':
+        // Could handle push events that are associated with PRs
+        console.log('Push event detected - checking for associated PR');
+        break;
+      default:
+        // Fallback to repo info for unknown events
+        console.log(`Unknown event: ${eventName}`);
+        await handleRepoInfo(octokit, owner, repo);
+        break;
+    }
+
+    // Add completion reaction (thumbs up emoji) after successful processing
+    if (reactionContext.issueNumber || reactionContext.commentId) {
+      await reactionManager.addCompletionReaction(owner, repo, reactionContext);
+    }
+  } catch (error) {
+    // Add completion reaction even on failure (to show we finished processing)
+    if (reactionContext.issueNumber || reactionContext.commentId) {
+      await reactionManager.addCompletionReaction(owner, repo, reactionContext);
+    }
+    throw error; // Re-throw to be handled by outer try-catch
   }
 }
 
