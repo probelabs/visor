@@ -489,6 +489,30 @@ function resolveDependencies(
 }
 
 /**
+ * Resolve downstream dependents for a set of checks (reverse dependency closure).
+ * If A is in starts and B depends_on A, include B. Recurse transitively.
+ */
+function resolveDependents(
+  startIds: string[],
+  config: import('./types/config').VisorConfig | undefined
+): string[] {
+  if (!config?.checks) return [];
+  const result = new Set<string>();
+  const queue = [...new Set(startIds)];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const [checkId, checkCfg] of Object.entries(config.checks)) {
+      const deps = checkCfg.depends_on || [];
+      if (deps.includes(cur) && !result.has(checkId) && !startIds.includes(checkId)) {
+        result.add(checkId);
+        queue.push(checkId);
+      }
+    }
+  }
+  return Array.from(result);
+}
+
+/**
  * Handle issue events (opened, edited, etc)
  */
 async function handleIssueEvent(
@@ -814,8 +838,11 @@ async function handleIssueComment(
       // Handle custom commands from config
       if (commandRegistry[command.type]) {
         const initialCheckIds = commandRegistry[command.type];
-        // Resolve all dependencies recursively
-        const checkIds = resolveDependencies(initialCheckIds, config);
+        // Resolve all dependencies recursively (upstream)
+        const upstream = resolveDependencies(initialCheckIds, config);
+        // Also include downstream dependents so steps depending on these results run too
+        const downstream = resolveDependents(upstream, config);
+        const checkIds = Array.from(new Set([...upstream, ...downstream]));
         console.log(
           `Running checks for command /${command.type} (initial: ${initialCheckIds.join(', ')}, resolved: ${checkIds.join(', ')})`
         );
