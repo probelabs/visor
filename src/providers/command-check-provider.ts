@@ -5,6 +5,7 @@ import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
+import { createPermissionHelpers, detectLocalMode } from '../utils/author-permissions';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -230,6 +231,7 @@ export class CommandCheckProvider extends CheckProvider {
             files: templateContext.files,
             outputs: this.makeOutputsJsonSmart(templateContext.outputs),
             env: templateContext.env,
+            permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
           };
 
           // Compile and execute the JavaScript expression
@@ -261,6 +263,12 @@ export class CommandCheckProvider extends CheckProvider {
             const outputs = scope.outputs;
             const env = scope.env;
             const log = (...args) => { console.log('🔍 Debug:', ...args); };
+            const hasMinPermission = scope.permissions.hasMinPermission;
+            const isOwner = scope.permissions.isOwner;
+            const isMember = scope.permissions.isMember;
+            const isCollaborator = scope.permissions.isCollaborator;
+            const isContributor = scope.permissions.isContributor;
+            const isFirstTimer = scope.permissions.isFirstTimer;
             const __result = (function(){
 ${bodyWithReturn}
             })();
@@ -281,6 +289,12 @@ ${bodyWithReturn}
               const outputs = scope.outputs;
               const env = scope.env;
               const log = (...args) => { console.log('🔍 Debug:', ...args); };
+              const hasMinPermission = scope.permissions.hasMinPermission;
+              const isOwner = scope.permissions.isOwner;
+              const isMember = scope.permissions.isMember;
+              const isCollaborator = scope.permissions.isCollaborator;
+              const isContributor = scope.permissions.isContributor;
+              const isFirstTimer = scope.permissions.isFirstTimer;
               const __ret = (function(){
 ${bodyWithReturn}
               })();

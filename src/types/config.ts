@@ -87,6 +87,9 @@ export interface FailureConditionContext {
   filesCount?: number;
   hasChanges?: boolean;
 
+  /** PR author information */
+  authorAssociation?: string;
+
   /** GitHub event context */
   event?: {
     /** GitHub event name (e.g., 'pull_request', 'issues', 'push') */
