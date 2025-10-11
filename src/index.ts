@@ -311,20 +311,81 @@ export async function run(): Promise<void> {
                 }
               })
               .filter(Boolean);
-            const rowHtml = entries
-              .map((e: any, idx: number) => {
-                const name = String(e.name || 'unknown');
-                const attrs = e.attributes ? JSON.stringify(e.attributes) : '{}';
-                const evs = Array.isArray(e.events)
-                  ? e.events.map((v: any) => v.name).join(', ')
-                  : '';
-                return `<tr><td>${idx + 1}</td><td>${name}</td><td><code>${attrs}</code></td><td>${evs}</td></tr>`;
-              })
-              .join('');
-            const runTs =
-              process.env.VISOR_RUN_TS || new Date().toISOString().replace(/[:.]/g, '-');
+            // Build a simple hierarchical view: checks -> foreach items -> entries
+            type Nd = { name: string; attributes: Record<string, unknown>; events?: Array<{ name: string; attrs?: Record<string, unknown> }> };
+            const norm: Nd[] = entries as any;
+            const byCheck = new Map<string, Nd[]>();
+            const root: Nd[] = [];
+            for (const e of norm) {
+              const cid = String(((e as any).attributes || {})["visor.check.id"] || '');
+              if (cid) {
+                const arr = byCheck.get(cid) || [];
+                arr.push(e); byCheck.set(cid, arr);
+              } else {
+                root.push(e);
+              }
+            }
+            const statusOf = (arr: Nd[]): 'passed'|'failed'|'unknown' => {
+              let passed = false
+              let failed = false
+              for (const e of arr) {
+                if (Array.isArray((e as any).events)) {
+                  for (const ev of (e as any).events) {
+                    if (ev.name === 'fail_if.triggered') failed = true;
+                    if (ev.name === 'fail_if.evaluated') {
+                      const a: any = (ev as any).attrs || {};
+                      if (a.passed === true || a.result === true) passed = true;
+                      if (a.passed === false || a.result === false) failed = true;
+                    }
+                  }
+                }
+              }
+              return failed ? 'failed' : (passed ? 'passed' : 'unknown');
+            };
+            const badge = (s: string) => s === 'failed' ? '<span style="color:#f85149">FAILED</span>' : s === 'passed' ? '<span style="color:#3fb950">PASSED</span>' : '<span style="color:#8b949e">UNKNOWN</span>';
+            let body = '<h2>Visor Trace Report (NDJSON Fallback)</h2>';
+            for (const [checkId, arr] of Array.from(byCheck.entries()).sort((a,b)=>a[0].localeCompare(b[0]))) {
+              const s = statusOf(arr);
+              body += `<details open><summary>Check: <b>${checkId}</b> — ${badge(s)}</summary>`;
+              const byItem = new Map<number, Nd[]>();
+              const general: Nd[] = [];
+              for (const e of arr) {
+                const idx = ((e as any).attributes || {})["visor.foreach.index"];
+                if (Number.isFinite(idx)) {
+                  const v = byItem.get(Number(idx)) || []; v.push(e); byItem.set(Number(idx), v);
+                } else {
+                  general.push(e);
+                }
+              }
+              if (byItem.size > 0) {
+                body += '<div style="margin:6px 0 4px 0;color:#8b949e">forEach items</div>';
+                body += '<ul style="margin-top:4px">';
+                for (const [idx, items] of Array.from(byItem.entries()).sort((a,b)=>a[0]-b[0])) {
+                  const si = statusOf(items);
+                  body += `<li><details><summary>Item ${idx} — ${badge(si)}</summary>`;
+                  const eventsList: string[] = [];
+                  for (const e of items) {
+                    if (Array.isArray((e as any).events)) {
+                      for (const ev of (e as any).events) {
+                        const a = (ev as any).attrs ? JSON.stringify((ev as any).attrs) : '';
+                        eventsList.push(`${ev.name}${a ? ' ' + a : ''}`);
+                      }
+                    }
+                  }
+                  body += eventsList.length ? `<pre>${eventsList.join('\n')}</pre>` : '<div style="color:#8b949e">(no events)</div>';
+                  body += '</details></li>';
+                }
+                body += '</ul>';
+              }
+              body += `<details><summary style="color:#8b949e">Raw entries</summary><pre>${JSON.stringify(arr, null, 2)}</pre></details>`;
+              body += '</details>';
+            }
+            if (root.length) {
+              body += `<details><summary>Other entries</summary><pre>${JSON.stringify(root, null, 2)}</pre></details>`;
+            }
+            const runTs = process.env.VISOR_RUN_TS || new Date().toISOString().replace(/[:.]/g, '-');
             const htmlPath = path.join(outDir, `run-${runTs}.report.html`);
-            const html = `<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title><style>body{font-family:system-ui;padding:16px;background:#0b0f14;color:#e6edf3} table{width:100%;border-collapse:collapse} th,td{border:1px solid #30363d;padding:6px} th{background:#161b22}</style></head><body><h2>Visor Trace Report (NDJSON)</h2><table><thead><tr><th>#</th><th>Name</th><th>Attributes</th><th>Events</th></tr></thead><tbody>${rowHtml}</tbody></table></body></html>`;
+            const html = `<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title><style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#e6edf3} .container{max-width:1200px;margin:0 auto;padding:16px} details{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px;margin:8px 0} summary{cursor:pointer} pre{white-space:pre-wrap;background:#0f141a;border:1px solid #30363d;border-radius:4px;padding:8px}</style></head><body><div class="container">${body}</div></body></html>`;
             fs.writeFileSync(htmlPath, html, 'utf8');
           }
         }
