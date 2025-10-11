@@ -294,7 +294,7 @@ checks:
     group: github
     tags: [github]
     depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    on: [pr_opened]
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
@@ -343,8 +343,7 @@ checks:
     group: github
     tags: [github]
     depends_on: [issue-assistant]
-    on: [issue_opened, issue_comment]
-    if: "outputs['issue-assistant'].tags.intent == 'issue' || outputs['issue-assistant'].tags.intent == 'issue_triage'"
+    on: [issue_opened]
     op: labels.add
     values:
       - "{{ outputs['issue-assistant'].tags.label | default: '' | safe_label }}"
@@ -359,10 +358,7 @@ checks:
     # Only run when a retrigger or disable request is detected in a comment context
     if: |
       hasMinPermission('MEMBER') &&
-      (
-        outputs['issue-assistant'].tags.intent == 'comment' ||
-        (typeof outputs['issue-assistant'].tags.intent === 'string' && outputs['issue-assistant'].tags.intent.indexOf('comment_') === 0)
-      ) && (
+      event.event_name == 'issue_comment' && (
         outputs['issue-assistant'].tags.action == 'retrigger' ||
         (outputs['issue-assistant'].tags.action == 'disable-check' && outputs['issue-assistant'].tags.checks && outputs['issue-assistant'].tags.checks.length > 0)
       )
