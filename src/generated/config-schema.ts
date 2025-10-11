@@ -307,7 +307,17 @@ export const configSchema = {
     },
     ConfigCheckType: {
       type: 'string',
-      enum: ['ai', 'command', 'http', 'http_input', 'http_client', 'noop', 'log', 'claude-code'],
+      enum: [
+        'ai',
+        'command',
+        'http',
+        'http_input',
+        'http_client',
+        'noop',
+        'log',
+        'github',
+        'claude-code',
+      ],
       description: 'Valid check types in configuration',
     },
     'Record<string,string>': {

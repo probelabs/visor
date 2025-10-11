@@ -17,6 +17,21 @@ export class GitHubOpsProvider extends CheckProvider {
     return typeof cfg.op === 'string' && cfg.op.length > 0;
   }
 
+  getSupportedConfigKeys(): string[] {
+    return ['op', 'values', 'value', 'value_js'];
+  }
+
+  async isAvailable(): Promise<boolean> {
+    // Available when running in GitHub context or when a token is provided
+    return Boolean(
+      process.env.GITHUB_TOKEN || process.env['INPUT_GITHUB-TOKEN'] || process.env.GITHUB_REPOSITORY
+    );
+  }
+
+  getRequirements(): string[] {
+    return ['GITHUB_TOKEN or INPUT_GITHUB-TOKEN', 'GITHUB_REPOSITORY'];
+  }
+
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
@@ -106,18 +121,34 @@ export class GitHubOpsProvider extends CheckProvider {
       switch (cfg.op) {
         case 'labels.add': {
           if (values.length === 0) break;
-          await octokit.rest.issues.addLabels({ owner, repo, issue_number: prInfo.number, labels: values });
+          await octokit.rest.issues.addLabels({
+            owner,
+            repo,
+            issue_number: prInfo.number,
+            labels: values,
+          });
           break;
         }
         case 'labels.remove': {
           for (const l of values) {
-            await octokit.rest.issues.removeLabel({ owner, repo, issue_number: prInfo.number, name: l });
+            await octokit.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: prInfo.number,
+              name: l,
+            });
           }
           break;
         }
         case 'comment.create': {
           const body = values.join('\n').trim();
-          if (body) await octokit.rest.issues.createComment({ owner, repo, issue_number: prInfo.number, body });
+          if (body)
+            await octokit.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prInfo.number,
+              body,
+            });
           break;
         }
         default:
@@ -153,4 +184,3 @@ export class GitHubOpsProvider extends CheckProvider {
     }
   }
 }
-
