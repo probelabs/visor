@@ -389,6 +389,67 @@ export class AIReviewService {
   }
 
   /**
+   * Clean validation/correction messages from ProbeAgent history
+   * Removes JSON schema correction prompts and their responses to prevent
+   * polluting the conversation history when cloning sessions
+   */
+  private cleanValidationMessagesFromHistory(agent: ProbeAgent): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const history = (agent as any).history || [];
+
+    if (!Array.isArray(history) || history.length === 0) {
+      return;
+    }
+
+    // Patterns that identify validation/correction messages from ProbeAgent
+    const validationPatterns = [
+      /CRITICAL JSON ERROR:/i,
+      /URGENT.*JSON PARSING FAILED:/i,
+      /FINAL ATTEMPT.*CRITICAL JSON ERROR:/i,
+      /Your previous response was not valid JSON/i,
+      /The JSON response you provided/i,
+      /must return.*valid JSON/i,
+      /You returned a JSON schema definition instead of data/i,
+    ];
+
+    const originalLength = history.length;
+    const cleanedHistory = [];
+
+    // Keep system message and filter out validation rounds
+    for (let i = 0; i < history.length; i++) {
+      const msg = history[i];
+
+      // Always keep system messages
+      if (msg.role === 'system') {
+        cleanedHistory.push(msg);
+        continue;
+      }
+
+      // Check if this is a validation correction prompt
+      const isValidationMessage = validationPatterns.some(pattern =>
+        typeof msg.content === 'string' && pattern.test(msg.content)
+      );
+
+      if (isValidationMessage) {
+        // Skip this message and the next assistant response (the correction)
+        log(`🧹 Removing validation message from history (index ${i})`);
+        i++; // Skip the assistant's corrected response too
+        continue;
+      }
+
+      cleanedHistory.push(msg);
+    }
+
+    // Update the agent's history
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).history = cleanedHistory;
+
+    if (cleanedHistory.length < originalLength) {
+      log(`🧹 Cleaned ${originalLength - cleanedHistory.length} validation messages from history (${originalLength} → ${cleanedHistory.length})`);
+    }
+  }
+
+  /**
    * Build a custom prompt for AI review with XML-formatted data
    */
   private async buildCustomPrompt(
@@ -1019,6 +1080,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Register the session for potential reuse by dependent checks
       if (_checkName) {
+        // Clean validation/correction messages from history before registering
+        this.cleanValidationMessagesFromHistory(agent);
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
