@@ -9,6 +9,7 @@ import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
+import { resolveHeadShaFromEvent } from './utils/head-sha';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
@@ -312,6 +313,12 @@ function mapGitHubEventToTrigger(
       return 'pr_updated';
   }
 }
+
+/**
+ * Resolve the PR head SHA for contexts like issue_comment where payload may not include head.sha.
+ * Falls back to a pulls.get API call when needed.
+ */
+// Head SHA helper moved to utils/head-sha to simplify testing/imports
 
 /**
  * Handle events based on config
@@ -1040,10 +1047,7 @@ async function handleIssueComment(
         try {
           if (inputs && inputs['create-check'] !== 'false') {
             const executed = deriveExecutedCheckNames(groupedResults);
-            const headSha =
-              (context.event as any)?.pull_request?.head?.sha ||
-              (context.event as any)?.issue?.pull_request?.head?.sha ||
-              'unknown';
+            const headSha = await resolveHeadShaFromEvent(octokit, owner, repo, context);
             const checkSetup = await createGitHubChecks(
               octokit,
               inputs,
