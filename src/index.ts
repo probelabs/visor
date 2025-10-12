@@ -8,6 +8,7 @@ import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { configureLoggerFromCli } from './logger';
+import { deriveExecutedCheckNames } from './utils/ui-helpers';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
@@ -286,6 +287,10 @@ export async function run(): Promise<void> {
     }
   }
 }
+
+// Helper: derive the list of executed checks from grouped results
+// Re-export for tests (avoid importing full index in unit tests)
+export { deriveExecutedCheckNames };
 
 function mapGitHubEventToTrigger(
   eventName?: string,
@@ -1030,6 +1035,42 @@ async function handleIssueComment(
                 }
               : undefined,
         });
+
+        // Create GitHub checks for all executed checks if enabled
+        try {
+          if (inputs && inputs['create-check'] !== 'false') {
+            const executed = deriveExecutedCheckNames(groupedResults);
+            const headSha =
+              (context.event as any)?.pull_request?.head?.sha ||
+              (context.event as any)?.issue?.pull_request?.head?.sha ||
+              'unknown';
+            const checkSetup = await createGitHubChecks(
+              octokit,
+              inputs,
+              owner,
+              repo,
+              headSha,
+              executed,
+              config as import('./types/config').VisorConfig
+            );
+            if (checkSetup?.checkRunMap) {
+              await updateChecksInProgress(octokit, owner, repo, checkSetup.checkRunMap);
+              await completeGitHubChecks(
+                octokit,
+                owner,
+                repo,
+                checkSetup.checkRunMap,
+                groupedResults,
+                config as import('./types/config').VisorConfig
+              );
+            }
+          }
+        } catch (e) {
+          console.warn(
+            '⚠️ Could not create/complete GitHub checks for command path:',
+            e instanceof Error ? e.message : String(e)
+          );
+        }
 
         // Check if commenting is enabled before posting
         const shouldComment = inputs['comment-on-pr'] !== 'false';
