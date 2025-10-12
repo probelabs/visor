@@ -299,7 +299,10 @@ export class AIReviewService {
     }
 
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
-    log(`Schema type: ${schema || 'none (no schema)'}`);
+    log(`📋 Schema for this check: ${schema || 'none (no schema)'}`);
+    if (sessionMode === 'clone') {
+      log(`✅ Cloned agent will use NEW schema (${schema}) - parent schema does not persist`);
+    }
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
