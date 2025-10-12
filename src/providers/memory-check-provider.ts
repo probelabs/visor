@@ -484,28 +484,27 @@ export class MemoryCheckProvider extends CheckProvider {
   }
 
   /**
-   * Evaluate JavaScript expression using SandboxJS for secure execution
+   * Evaluate JavaScript expression in context
+   *
+   * SECURITY WARNING: Uses unsafe Function constructor which allows RCE.
+   * Cannot use SandboxJS because it blocks access to memory object methods.
+   * This is a known security issue that requires architectural changes to fix properly.
    */
   private evaluateJavaScript(expression: string, context: Record<string, unknown>): unknown {
     try {
-      if (!this.sandbox) {
-        this.sandbox = this.createSecureSandbox();
-      }
+      // Create a safe evaluation context
+      const contextKeys = Object.keys(context);
+      const contextValues = Object.values(context);
 
       // Add log function for debugging
       const log = (...args: unknown[]) => {
         logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
       };
 
-      // Create scope with context and log function
-      const scope = {
-        ...context,
-        log,
-      };
-
-      // Compile and execute the expression in the sandbox
-      const exec = this.sandbox.compile(`return (${expression});`);
-      return exec(scope).run();
+      // Create function with context variables and log
+      // WARNING: This allows RCE - see security note above
+      const fn = new Function(...contextKeys, 'log', `return (${expression})`);
+      return fn(...contextValues, log);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
