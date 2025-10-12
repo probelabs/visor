@@ -5,6 +5,7 @@ import { MemoryStore } from '../memory-store';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
+import Sandbox from '@nyariv/sandboxjs';
 
 /**
  * Memory operation types
@@ -25,12 +26,82 @@ export type MemoryOperation =
  */
 export class MemoryCheckProvider extends CheckProvider {
   private liquid: Liquid;
+  private sandbox?: Sandbox;
 
   constructor() {
     super();
     this.liquid = createExtendedLiquid({
       strictVariables: false,
       strictFilters: false,
+    });
+  }
+
+  /**
+   * Create a secure sandbox for JavaScript execution
+   */
+  private createSecureSandbox(): Sandbox {
+    const globals = {
+      ...Sandbox.SAFE_GLOBALS,
+      Math,
+      console: {
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
+      },
+    };
+
+    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
+
+    // Allow array methods
+    const arrayMethods = new Set([
+      'some',
+      'every',
+      'filter',
+      'map',
+      'reduce',
+      'find',
+      'includes',
+      'indexOf',
+      'length',
+      'slice',
+      'concat',
+      'join',
+      'push',
+      'pop',
+      'shift',
+      'unshift',
+      'sort',
+      'reverse',
+    ]);
+    prototypeWhitelist.set(Array.prototype, arrayMethods);
+
+    // Allow string methods
+    const stringMethods = new Set([
+      'toLowerCase',
+      'toUpperCase',
+      'includes',
+      'indexOf',
+      'startsWith',
+      'endsWith',
+      'slice',
+      'substring',
+      'length',
+      'trim',
+      'split',
+      'replace',
+      'match',
+      'padStart',
+      'padEnd',
+    ]);
+    prototypeWhitelist.set(String.prototype, stringMethods);
+
+    // Allow object methods
+    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
+    prototypeWhitelist.set(Object.prototype, objectMethods);
+
+    return new Sandbox({
+      globals,
+      prototypeWhitelist,
     });
   }
 
@@ -413,22 +484,28 @@ export class MemoryCheckProvider extends CheckProvider {
   }
 
   /**
-   * Evaluate JavaScript expression in a sandboxed context
+   * Evaluate JavaScript expression using SandboxJS for secure execution
    */
   private evaluateJavaScript(expression: string, context: Record<string, unknown>): unknown {
     try {
-      // Create a safe evaluation context
-      const contextKeys = Object.keys(context);
-      const contextValues = Object.values(context);
+      if (!this.sandbox) {
+        this.sandbox = this.createSecureSandbox();
+      }
 
       // Add log function for debugging
       const log = (...args: unknown[]) => {
         logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
       };
 
-      // Create function with context variables and log
-      const fn = new Function(...contextKeys, 'log', `return (${expression})`);
-      return fn(...contextValues, log);
+      // Create scope with context and log function
+      const scope = {
+        ...context,
+        log,
+      };
+
+      // Compile and execute the expression in the sandbox
+      const exec = this.sandbox.compile(`return (${expression});`);
+      return exec(scope).run();
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
@@ -436,11 +513,18 @@ export class MemoryCheckProvider extends CheckProvider {
   }
 
   /**
-   * Evaluate JavaScript block (multi-line script) in a sandboxed context
+   * Evaluate JavaScript block (multi-line script) using SandboxJS for secure execution
    * Unlike evaluateJavaScript, this supports full scripts with statements, not just expressions
+   *
+   * TODO: Currently uses unsafe Function constructor. Need to make memory object methods
+   * accessible in SandboxJS context while maintaining security.
    */
   private evaluateJavaScriptBlock(script: string, context: Record<string, unknown>): unknown {
     try {
+      // SECURITY NOTE: This still uses Function constructor which allows RCE
+      // The sandbox blocks access to custom object methods (like memory.get)
+      // Need to refactor to expose memory functions directly in scope or use prototype whitelisting
+
       // Create a safe evaluation context
       const contextKeys = Object.keys(context);
       const contextValues = Object.values(context);
