@@ -1676,9 +1676,26 @@ export class CheckExecutionEngine {
     };
     const contentMap = agg.__contents;
     const outputMap = agg.__outputs;
+    // Build a unified list of all checks that produced results:
+    //  - originally requested checks
+    //  - any checks that produced content/output during routing (e.g., forward-run after goto)
+    //  - any checks that emitted issues with checkName set
+    const allCheckNames: string[] = [];
+    const seen = new Set<string>();
+    const pushUnique = (n?: string) => {
+      if (!n) return;
+      if (!seen.has(n)) {
+        seen.add(n);
+        allCheckNames.push(n);
+      }
+    };
+    for (const n of checks) pushUnique(n);
+    if (contentMap) for (const n of Object.keys(contentMap)) pushUnique(n);
+    if (outputMap) for (const n of Object.keys(outputMap)) pushUnique(n);
+    for (const issue of reviewSummary.issues || []) pushUnique(issue.checkName);
 
-    // Process each check individually
-    for (const checkName of checks) {
+    // Process each discovered check individually
+    for (const checkName of allCheckNames) {
       const checkConfig = config?.checks?.[checkName];
       if (!checkConfig) continue;
 
