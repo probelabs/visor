@@ -938,7 +938,7 @@ describe('MemoryCheckProvider', () => {
         memory_js: `
           const total = outputs['test1'].count + outputs['test2'].count;
           memory.set('total_count', total);
-          return { total };
+          return { total: total };
         `,
       };
 
@@ -970,7 +970,7 @@ describe('MemoryCheckProvider', () => {
           memory.set('sum', sum);
           memory.set('count', items.length);
 
-          return { items, sum, count: items.length };
+          return { items: items, sum: sum, count: items.length };
         `,
       };
 
@@ -1008,7 +1008,7 @@ describe('MemoryCheckProvider', () => {
           }
 
           memory.set('status', status);
-          return { errors, status };
+          return { errors: errors, status: status };
         `,
       };
 
@@ -1037,7 +1037,7 @@ describe('MemoryCheckProvider', () => {
           const stage = memory.get('counter', 'staging');
           const dev = memory.get('counter', 'development');
 
-          return { prod, stage, dev, total: prod + stage + dev };
+          return { prod: prod, stage: stage, dev: dev, total: prod + stage + dev };
         `,
       };
 
