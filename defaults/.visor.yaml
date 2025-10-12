@@ -97,7 +97,7 @@ checks:
         - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
 
         Be concise, specific, and actionable. Avoid praise or celebration.
-    on: [pr_opened]
+    on: [pr_opened, pr_updated]
 
   # Security analysis - Critical for all projects
   security:
@@ -356,9 +356,7 @@ checks:
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger')
-          ? ['overview','security','performance','quality','style']
-          : []
+        return (isComment && allowed && intent === 'comment_retrigger') ? ['overview'] : []
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
