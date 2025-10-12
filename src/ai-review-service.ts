@@ -1278,46 +1278,16 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       );
       log(`💬 Comments count: ${Array.isArray(reviewData.issues) ? reviewData.issues.length : 0}`);
 
-      // Check if AI returned wrong format with quality_issues, security_issues, etc.
-      // Cast to any to handle non-standard AI responses
-      const anyData = reviewData as any;
-      if (!reviewData.issues && (anyData.quality_issues || anyData.security_issues || anyData.style_issues)) {
-        console.warn('⚠️ AI returned non-standard format with quality_issues/security_issues/style_issues instead of issues array');
-        console.warn('🔧 Merging all issue arrays into standard issues array');
-
-        // Merge all the wrongly-named arrays into a single issues array
-        reviewData.issues = [
-          ...(Array.isArray(anyData.quality_issues) ? anyData.quality_issues : []),
-          ...(Array.isArray(anyData.security_issues) ? anyData.security_issues : []),
-          ...(Array.isArray(anyData.style_issues) ? anyData.style_issues : []),
-        ];
-      }
-
       // Process issues from the simplified format
       const processedIssues = Array.isArray(reviewData.issues)
         ? reviewData.issues.map((issue, index) => {
             log(`🔍 Processing issue ${index + 1}:`, issue);
-
-            // Cast to any to handle non-standard location format
-            const anyIssue = issue as any;
-
-            // Handle both direct file/line and nested location object
-            let file = issue.file || 'unknown';
-            let line = issue.line || 1;
-
-            // Check if AI used nested location object (non-standard format)
-            if (anyIssue.location && typeof anyIssue.location === 'object') {
-              console.warn(`⚠️ Issue ${index + 1} uses nested 'location' object instead of direct file/line fields (schema violation)`);
-              file = anyIssue.location.file || file;
-              line = anyIssue.location.line || line;
-            }
-
             return {
-              file,
-              line,
+              file: issue.file || 'unknown',
+              line: issue.line || 1,
               endLine: issue.endLine,
               ruleId: issue.ruleId || `${issue.category || 'general'}/unknown`,
-              message: issue.message || anyIssue.summary || anyIssue.description || '',
+              message: issue.message || '',
               severity: issue.severity,
               category: issue.category,
               suggestion: issue.suggestion,
