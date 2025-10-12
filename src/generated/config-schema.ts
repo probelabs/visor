@@ -343,8 +343,9 @@ export const configSchema = {
         'http_client',
         'noop',
         'log',
-        'claude-code',
         'memory',
+        'github',
+        'claude-code',
       ],
       description: 'Valid check types in configuration',
     },
@@ -591,6 +592,10 @@ export const configSchema = {
           type: 'string',
           description: 'Jump back to an ancestor step (by id)',
         },
+        goto_event: {
+          $ref: '#/definitions/EventTrigger',
+          description: "Simulate a different event when performing goto (e.g., 'pr_updated')",
+        },
         goto_js: {
           type: 'string',
           description: 'Dynamic goto: JS expression returning step id or null',
@@ -656,6 +661,10 @@ export const configSchema = {
         goto: {
           type: 'string',
           description: 'Optional jump back to ancestor step (by id)',
+        },
+        goto_event: {
+          $ref: '#/definitions/EventTrigger',
+          description: "Simulate a different event when performing goto (e.g., 'pr_updated')",
         },
         goto_js: {
           type: 'string',

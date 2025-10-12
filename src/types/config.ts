@@ -192,8 +192,9 @@ export type ConfigCheckType =
   | 'http_client'
   | 'noop'
   | 'log'
-  | 'claude-code'
-  | 'memory';
+  | 'memory'
+  | 'github'
+  | 'claude-code';
 
 /**
  * Valid event triggers for checks
@@ -429,6 +430,8 @@ export interface OnFailConfig {
   run?: string[];
   /** Jump back to an ancestor step (by id) */
   goto?: string;
+  /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+  goto_event?: EventTrigger;
   /** Dynamic goto: JS expression returning step id or null */
   goto_js?: string;
   /** Dynamic remediation list: JS expression returning string[] */
@@ -443,6 +446,8 @@ export interface OnSuccessConfig {
   run?: string[];
   /** Optional jump back to ancestor step (by id) */
   goto?: string;
+  /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+  goto_event?: EventTrigger;
   /** Dynamic goto: JS expression returning step id or null */
   goto_js?: string;
   /** Dynamic post-success steps: JS expression returning string[] */

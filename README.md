@@ -116,7 +116,7 @@ Additional guides:
 - Schema – JSON shape checks return (e.g., `code-review`).
 - Template – renders results (tables/markdown).
 - Group – which comment a check is posted into.
-- Provider – how a check runs (`ai`, `http`, `command`, `claude-code`).
+- Provider – how a check runs (`ai`, `http`, `http_client`, `command`, `log`, `github`, `claude-code`).
 - Dependencies – `depends_on` controls order; independents run in parallel.
 - Tags – label checks (`fast`, `local`, `comprehensive`) and filter with `--tags`.
 - Events – PRs, issues, `/review` comments, webhooks, or cron schedules.
@@ -153,6 +153,7 @@ Visor is a general SDLC automation framework:
  - [Step Dependencies & Intelligent Execution](#-step-dependencies--intelligent-execution)
  - [Failure Routing (Auto-fix Loops)](#-failure-routing-auto-fix-loops)
  - [Claude Code Provider](#-claude-code-provider)
+ - [GitHub Provider](#-github-provider)
  - [AI Session Reuse](#-ai-session-reuse)
  - [Schema-Template System](#-schema-template-system)
  - [Enhanced Prompts](#-enhanced-prompts)
@@ -177,7 +178,7 @@ Visor is a general SDLC automation framework:
 - Author permissions: Built-in functions to customize workflows based on contributor trust level (owner, member, collaborator, etc).
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
-- Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `claude-code` — or add your own.
+- Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `github`, `claude-code` — or add your own.
 - Security by default: GitHub App support, scoped tokens, remote‑extends allowlist, opt‑in network usage.
 - Observability & control: JSON/SARIF outputs, fail‑fast and timeouts, parallelism and cost control.
 
@@ -656,3 +657,22 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
   Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
 </div>
+## 🧰 GitHub Provider
+
+Use the native GitHub provider for safe labels and comments without invoking the `gh` CLI.
+
+Example — apply overview‑derived labels to a PR:
+
+```yaml
+checks:
+  apply-overview-labels:
+    type: github
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
+```
+
+See docs: docs/github-ops.md
