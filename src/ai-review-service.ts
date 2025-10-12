@@ -444,27 +444,70 @@ export class AIReviewService {
       cleanedHistory.push(msg);
     }
 
-    // IMPORTANT: Remove the last user-assistant exchange completely
-    // The last assistant response contains schema-formatted output (e.g., overview with tags)
+    // IMPORTANT: Strip the final JSON response from the last assistant message
+    // The JSON response contains schema-formatted output (e.g., overview with tags)
     // which will confuse the next check that uses a different schema (e.g., code-review with issues)
-    // We keep only the earlier conversation context (if any) before the final Q&A
+    // We keep the conversation (user prompt + assistant text) but remove the structured JSON
     if (cleanedHistory.length >= 2) {
-      // Find the last user message index
-      let lastUserIndex = -1;
+      // Find the last assistant message
+      let lastAssistantIndex = -1;
       for (let i = cleanedHistory.length - 1; i >= 0; i--) {
-        if (cleanedHistory[i].role === 'user') {
-          lastUserIndex = i;
+        if (cleanedHistory[i].role === 'assistant') {
+          lastAssistantIndex = i;
           break;
         }
       }
 
-      if (lastUserIndex >= 0) {
-        // Remove everything from the last user message onwards (user + assistant)
-        const removedCount = cleanedHistory.length - lastUserIndex;
-        cleanedHistory.splice(lastUserIndex);
-        log(
-          `🧹 Removed final user-assistant exchange (${removedCount} messages) to prevent schema format pollution`
-        );
+      if (lastAssistantIndex >= 0) {
+        const lastAssistantMsg = cleanedHistory[lastAssistantIndex];
+        if (typeof lastAssistantMsg.content === 'string') {
+          const originalLength = lastAssistantMsg.content.length;
+
+          // Try to extract and remove JSON block from the end
+          // ProbeAgent typically appends JSON in one of these formats:
+          // 1. ```json\n{...}\n```
+          // 2. Plain JSON starting with { or [
+          let cleanedContent = lastAssistantMsg.content;
+
+          // Pattern 1: Remove JSON code blocks at the end
+          const jsonBlockPattern = /```json\s*\n[\s\S]*?\n```\s*$/;
+          if (jsonBlockPattern.test(cleanedContent)) {
+            cleanedContent = cleanedContent.replace(jsonBlockPattern, '').trim();
+            log(`🧹 Removed JSON code block from assistant response`);
+          } else {
+            // Pattern 2: Try to find trailing JSON object/array
+            // Look for the last occurrence of { or [ that might be the start of JSON
+            const lines = cleanedContent.split('\n');
+            let jsonStartLine = -1;
+
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const line = lines[i].trim();
+              if (line.startsWith('{') || line.startsWith('[')) {
+                // Check if this looks like the start of a JSON response
+                const possibleJson = lines.slice(i).join('\n');
+                try {
+                  JSON.parse(possibleJson);
+                  jsonStartLine = i;
+                  break;
+                } catch {
+                  // Not valid JSON, keep looking
+                }
+              }
+            }
+
+            if (jsonStartLine >= 0) {
+              cleanedContent = lines.slice(0, jsonStartLine).join('\n').trim();
+              log(`🧹 Removed trailing JSON from assistant response`);
+            }
+          }
+
+          if (cleanedContent.length < originalLength) {
+            lastAssistantMsg.content = cleanedContent;
+            log(
+              `🧹 Cleaned assistant response: ${originalLength} → ${cleanedContent.length} chars (removed ${originalLength - cleanedContent.length} chars)`
+            );
+          }
+        }
       }
     }
 
