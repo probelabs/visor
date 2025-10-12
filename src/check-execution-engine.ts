@@ -716,12 +716,23 @@ export class CheckExecutionEngine {
                 const inSet = (n: string) => forwardSet.has(n);
                 const tempMarks = new Set<string>();
                 const permMarks = new Set<string>();
+                const stack: string[] = [];
                 const visit = (n: string) => {
                   if (permMarks.has(n)) return;
-                  if (tempMarks.has(n)) return; // avoid cycles silently
+                  if (tempMarks.has(n)) {
+                    // Cycle detected — build a readable cycle path
+                    const idx = stack.indexOf(n);
+                    const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
+                    throw new Error(
+                      `Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`
+                    );
+                  }
                   tempMarks.add(n);
+                  stack.push(n);
                   const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
                   for (const d of deps) visit(d);
+                  stack.pop();
+                  tempMarks.delete(n);
                   permMarks.add(n);
                   order.push(n);
                 };
