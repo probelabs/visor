@@ -596,8 +596,10 @@ export class MemoryCheckProvider extends CheckProvider {
       };
     }
 
-    // Add environment variables
-    context.env = process.env;
+    // SECURITY: Do NOT expose process.env to user-controlled scripts
+    // Removed: context.env = process.env;
+    // Environment variables, especially secrets like GITHUB_TOKEN, must not be
+    // accessible to scripts defined in .visor.yaml as this would allow credential theft
 
     return context;
   }
