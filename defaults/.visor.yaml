@@ -352,13 +352,12 @@ checks:
         - Stay technical, direct, and specific; add code snippets or links when helpful.
     on: [issue_comment]
     on_success:
-      run_js: |
+      goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger')
-          ? ['overview','security','performance','quality','style']
-          : []
+        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+      goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
