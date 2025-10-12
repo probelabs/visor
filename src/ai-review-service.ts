@@ -426,8 +426,8 @@ export class AIReviewService {
       }
 
       // Check if this is a validation correction prompt
-      const isValidationMessage = validationPatterns.some(pattern =>
-        typeof msg.content === 'string' && pattern.test(msg.content)
+      const isValidationMessage = validationPatterns.some(
+        pattern => typeof msg.content === 'string' && pattern.test(msg.content)
       );
 
       if (isValidationMessage) {
@@ -445,7 +445,9 @@ export class AIReviewService {
     (agent as any).history = cleanedHistory;
 
     if (cleanedHistory.length < originalLength) {
-      log(`🧹 Cleaned ${originalLength - cleanedHistory.length} validation messages from history (${originalLength} → ${cleanedHistory.length})`);
+      log(
+        `🧹 Cleaned ${originalLength - cleanedHistory.length} validation messages from history (${originalLength} → ${cleanedHistory.length})`
+      );
     }
   }
 
