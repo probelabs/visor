@@ -679,66 +679,10 @@ export class CheckExecutionEngine {
               );
             } catch {}
             if (!allAncestors.includes(target)) {
-              // Not an ancestor: treat as a fresh forward run starting from the target under the (possibly) overridden event
-              // 1) Prepare inline PR info honoring goto_event and attempt to elevate to PR context
-              let prInfoForInline = prInfo;
-              const prevEventOverride2 = this.routingEventOverride;
-              if (onSuccess.goto_event) {
-                const elevated = await this.elevateContextToPullRequest(
-                  { ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo,
-                  onSuccess.goto_event,
-                  log,
-                  debug
+              if (debug)
+                log(
+                  `⚠️ Debug: on_success.goto '${target}' is not an ancestor of '${checkName}' — skipping`
                 );
-                prInfoForInline =
-                  elevated || ({ ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo);
-                this.routingEventOverride = onSuccess.goto_event;
-              }
-              try {
-                // 2) Build forward-closure: target + all transitive dependents from full config
-                const forwardSet = new Set<string>();
-                forwardSet.add(target);
-                const cfgChecks = (config?.checks || {}) as Record<
-                  string,
-                  import('./types/config').CheckConfig
-                >;
-                const dependsOnTarget = (name: string): boolean => {
-                  const visited = new Set<string>();
-                  const dfs = (n: string): boolean => {
-                    if (visited.has(n)) return false;
-                    visited.add(n);
-                    const deps = cfgChecks[n]?.depends_on || [];
-                    if (deps.includes(target)) return true;
-                    return deps.some(d => dfs(d));
-                  };
-                  return dfs(name);
-                };
-                for (const name of Object.keys(cfgChecks)) {
-                  if (name === target) continue;
-                  // Only include checks configured for this (overridden) event
-                  const ev = onSuccess.goto_event || prInfo.eventType || 'issue_comment';
-                  const evName = ev.startsWith('pr_') ? 'pr_updated' : ev; // map to our triggers
-                  const onArr = cfgChecks[name]?.on as any;
-                  const eventMatches = !onArr || (Array.isArray(onArr) && onArr.includes(ev));
-                  if (!eventMatches) continue;
-                  if (dependsOnTarget(name)) forwardSet.add(name);
-                }
-                const forwardList = Array.from(forwardSet);
-                if (debug)
-                  log(`🔧 Debug: on_success.goto forward-run set = [${forwardList.join(', ')}]`);
-                await this.executeGroupedDependencyAwareChecks(
-                  prInfoForInline,
-                  forwardList,
-                  undefined,
-                  config,
-                  log,
-                  debug,
-                  undefined,
-                  false
-                );
-              } finally {
-                this.routingEventOverride = prevEventOverride2;
-              }
             } else {
               loopCount++;
               if (loopCount > maxLoops) {
