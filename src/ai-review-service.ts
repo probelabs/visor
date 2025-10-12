@@ -389,9 +389,10 @@ export class AIReviewService {
   }
 
   /**
-   * Clean validation/correction messages from ProbeAgent history
-   * Removes JSON schema correction prompts and their responses to prevent
-   * polluting the conversation history when cloning sessions
+   * Clean validation/correction messages and schema-formatted responses from ProbeAgent history
+   * This prevents:
+   * 1. Validation retry messages from polluting conversation
+   * 2. Previous schema format from influencing next check's output format
    */
   private cleanValidationMessagesFromHistory(agent: ProbeAgent): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -440,13 +441,37 @@ export class AIReviewService {
       cleanedHistory.push(msg);
     }
 
+    // IMPORTANT: Remove the last user-assistant exchange completely
+    // The last assistant response contains schema-formatted output (e.g., overview with tags)
+    // which will confuse the next check that uses a different schema (e.g., code-review with issues)
+    // We keep only the earlier conversation context (if any) before the final Q&A
+    if (cleanedHistory.length >= 2) {
+      // Find the last user message index
+      let lastUserIndex = -1;
+      for (let i = cleanedHistory.length - 1; i >= 0; i--) {
+        if (cleanedHistory[i].role === 'user') {
+          lastUserIndex = i;
+          break;
+        }
+      }
+
+      if (lastUserIndex >= 0) {
+        // Remove everything from the last user message onwards (user + assistant)
+        const removedCount = cleanedHistory.length - lastUserIndex;
+        cleanedHistory.splice(lastUserIndex);
+        log(
+          `🧹 Removed final user-assistant exchange (${removedCount} messages) to prevent schema format pollution`
+        );
+      }
+    }
+
     // Update the agent's history
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (agent as any).history = cleanedHistory;
 
     if (cleanedHistory.length < originalLength) {
       log(
-        `🧹 Cleaned ${originalLength - cleanedHistory.length} validation messages from history (${originalLength} → ${cleanedHistory.length})`
+        `🧹 Cleaned ${originalLength - cleanedHistory.length} messages from history (${originalLength} → ${cleanedHistory.length})`
       );
     }
   }
