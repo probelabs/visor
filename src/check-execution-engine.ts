@@ -4206,6 +4206,9 @@ export class CheckExecutionEngine {
 
     debugInfo.push(...executionInfo);
 
+    // Track which checks we've aggregated already
+    const processed = new Set<string>();
+
     // Process results in dependency order for better output organization
     for (const executionGroup of dependencyGraph.executionOrder) {
       for (const checkName of executionGroup.parallel) {
@@ -4229,6 +4232,9 @@ export class CheckExecutionEngine {
           );
         }
 
+        // Mark as processed
+        processed.add(checkName);
+
         // Issues are already prefixed and enriched with group/schema info
         // Filter out internal __skipped markers
         const nonInternalIssues = (result.issues || []).filter(
@@ -4245,6 +4251,32 @@ export class CheckExecutionEngine {
           outputsMap[checkName] = resultSummary.output;
         }
       }
+    }
+
+    // Include any additional results that were produced at runtime (e.g., forward-run via goto)
+    // but were not part of the original execution DAG for the selected checks.
+    for (const [checkName, result] of results.entries()) {
+      if (processed.has(checkName)) continue;
+      if (!result) continue;
+
+      // Issues (already enriched)
+      const nonInternalIssues = (result.issues || []).filter(
+        issue => !issue.ruleId?.endsWith('/__skipped')
+      );
+      aggregatedIssues.push(...nonInternalIssues);
+
+      const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
+      const resultContent = (resultSummary as any).content;
+      if (typeof resultContent === 'string' && resultContent.trim()) {
+        contentMap[checkName] = resultContent.trim();
+      }
+      if (resultSummary.output !== undefined) {
+        outputsMap[checkName] = resultSummary.output;
+      }
+
+      debugInfo.push(
+        `✅ (dynamic) Check "${checkName}" included: ${(result.issues || []).length} issues found`
+      );
     }
 
     if (debug) {
