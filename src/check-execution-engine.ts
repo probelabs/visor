@@ -679,10 +679,78 @@ export class CheckExecutionEngine {
               );
             } catch {}
             if (!allAncestors.includes(target)) {
-              if (debug)
-                log(
-                  `⚠️ Debug: on_success.goto '${target}' is not an ancestor of '${checkName}' — skipping`
+              // Forward-run from target under goto_event: execute target and all dependents matching event
+              let prInfoForInline = prInfo;
+              const prevEventOverride2 = this.routingEventOverride;
+              if (onSuccess.goto_event) {
+                const elevated = await this.elevateContextToPullRequest(
+                  { ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo,
+                  onSuccess.goto_event,
+                  log,
+                  debug
                 );
+                prInfoForInline =
+                  elevated || ({ ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo);
+                this.routingEventOverride = onSuccess.goto_event;
+              }
+              try {
+                // Build forward closure (target + transitive dependents)
+                const cfgChecks = (config?.checks || {}) as Record<
+                  string,
+                  import('./types/config').CheckConfig
+                >;
+                const forwardSet = new Set<string>();
+                if (cfgChecks[target]) forwardSet.add(target);
+                const dependsOn = (name: string, root: string): boolean => {
+                  const seen = new Set<string>();
+                  const dfs = (n: string): boolean => {
+                    if (seen.has(n)) return false;
+                    seen.add(n);
+                    const deps = cfgChecks[n]?.depends_on || [];
+                    if (deps.includes(root)) return true;
+                    return deps.some(d => dfs(d));
+                  };
+                  return dfs(name);
+                };
+                const ev = onSuccess.goto_event || prInfo.eventType || 'issue_comment';
+                for (const name of Object.keys(cfgChecks)) {
+                  if (name === target) continue;
+                  const onArr = cfgChecks[name]?.on as any;
+                  const eventMatches = !onArr || (Array.isArray(onArr) && onArr.includes(ev));
+                  if (!eventMatches) continue;
+                  if (dependsOn(name, target)) forwardSet.add(name);
+                }
+                // Topologically order forwardSet based on depends_on within this subset
+                const order: string[] = [];
+                const inSet = (n: string) => forwardSet.has(n);
+                const tempMarks = new Set<string>();
+                const permMarks = new Set<string>();
+                const visit = (n: string) => {
+                  if (permMarks.has(n)) return;
+                  if (tempMarks.has(n)) return; // avoid cycles silently
+                  tempMarks.add(n);
+                  const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
+                  for (const d of deps) visit(d);
+                  permMarks.add(n);
+                  order.push(n);
+                };
+                for (const n of forwardSet) visit(n);
+                // Execute in order with event override, capturing issues into current res
+                const forwardIssues: ReviewIssue[] = [];
+                for (const stepId of order) {
+                  const childRes = await executeNamedCheckInline(stepId, {
+                    eventOverride: onSuccess.goto_event,
+                  });
+                  const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                  forwardIssues.push(...childIssues);
+                }
+                // Append forward-run issues to current result so they appear in the final aggregation table
+                try {
+                  (res as any).issues = [...(res.issues || []), ...forwardIssues];
+                } catch {}
+              } finally {
+                this.routingEventOverride = prevEventOverride2;
+              }
             } else {
               loopCount++;
               if (loopCount > maxLoops) {
