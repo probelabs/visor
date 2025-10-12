@@ -1672,6 +1672,7 @@ export class CheckExecutionEngine {
     const agg = reviewSummary as ReviewSummary & {
       __contents?: Record<string, string | undefined>;
       __outputs?: Record<string, unknown>;
+      __executed?: string[];
     };
     const contentMap = agg.__contents;
     const outputMap = agg.__outputs;
@@ -1692,6 +1693,7 @@ export class CheckExecutionEngine {
     if (contentMap) for (const n of Object.keys(contentMap)) pushUnique(n);
     if (outputMap) for (const n of Object.keys(outputMap)) pushUnique(n);
     for (const issue of reviewSummary.issues || []) pushUnique(issue.checkName);
+    if (Array.isArray(agg.__executed)) for (const n of agg.__executed) pushUnique(n);
 
     // Process each discovered check individually
     for (const checkName of allCheckNames) {
@@ -4342,6 +4344,7 @@ export class CheckExecutionEngine {
     const summary: ReviewSummary & {
       __contents?: Record<string, string>;
       __outputs?: Record<string, unknown>;
+      __executed?: string[];
     } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
@@ -4353,6 +4356,11 @@ export class CheckExecutionEngine {
     if (Object.keys(outputsMap).length > 0) {
       summary.__outputs = outputsMap;
     }
+
+    // Preserve the list of executed checks (keys in results Map) so downstream
+    // grouping/formatting can include dynamically routed children even when they
+    // produced neither issues nor output content (e.g., log-only steps).
+    summary.__executed = Array.from(results.keys());
 
     return summary;
   }
