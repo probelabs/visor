@@ -9,6 +9,7 @@ import {
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from './git-repository-analyzer';
 import { AnalysisResult } from './output-formatters';
 import { PRInfo } from './pr-analyzer';
+import { PRAnalyzer } from './pr-analyzer';
 import { CheckProviderRegistry } from './providers/check-provider-registry';
 import { CheckProviderConfig } from './providers/check-provider.interface';
 import { DependencyResolver, DependencyGraph } from './dependency-resolver';
@@ -19,7 +20,11 @@ import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
-import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
+import {
+  createPermissionHelpers,
+  detectLocalMode,
+  resolveAssociationFromEvent,
+} from './utils/author-permissions';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -177,6 +182,14 @@ export class CheckExecutionEngine {
   private webhookContext?: { webhookData: Map<string, unknown> };
   private routingSandbox?: Sandbox;
   private executionStats: Map<string, CheckExecutionStats> = new Map();
+  // Event override to simulate alternate event (used during routing goto)
+  private routingEventOverride?: import('./types/config').EventTrigger;
+  // Cached GitHub context for context elevation when running in Actions
+  private actionContext?: {
+    owner: string;
+    repo: string;
+    octokit?: import('@octokit/rest').Octokit;
+  };
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -273,11 +286,15 @@ export class CheckExecutionEngine {
     const seed = `${checkName}-${prInfo.number || 'local'}`;
 
     const allAncestors = DependencyResolver.getAllDependencies(checkName, dependencyGraph.nodes);
+    // Expose current check's structured output to routing JS (run_js/goto_js)
+    // so templates can reference `output` similarly to `outputs` (deps).
+    let currentRouteOutput: unknown = undefined;
 
     const evalRunJs = async (expr?: string, error?: unknown): Promise<string[]> => {
       if (!expr) return [];
       try {
         const sandbox = this.getRoutingSandbox();
+        const eventObj = { name: prInfo.eventType || 'manual' } as const;
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -291,6 +308,7 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          output: currentRouteOutput,
           pr: {
             number: prInfo.number,
             title: prInfo.title,
@@ -300,10 +318,14 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          permissions: createPermissionHelpers(
+            resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
+            detectLocalMode()
+          ),
+          event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return Array.isArray(__res) ? __res : (__res ? [__res] : []);
@@ -326,6 +348,7 @@ export class CheckExecutionEngine {
       if (!expr) return null;
       try {
         const sandbox = this.getRoutingSandbox();
+        const eventObj = { name: prInfo.eventType || 'manual' } as const;
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -339,6 +362,7 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          output: currentRouteOutput,
           pr: {
             number: prInfo.number,
             title: prInfo.title,
@@ -348,10 +372,14 @@ export class CheckExecutionEngine {
           },
           files: prInfo.files,
           env: getSafeEnvironmentVariables(),
-          permissions: createPermissionHelpers(prInfo.authorAssociation, detectLocalMode()),
+          permissions: createPermissionHelpers(
+            resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
+            detectLocalMode()
+          ),
+          event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const pr = scope.pr; const files = scope.files; const env = scope.env; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
@@ -387,7 +415,10 @@ export class CheckExecutionEngine {
       return Array.from(new Set(acc));
     };
 
-    const executeNamedCheckInline = async (target: string): Promise<ReviewSummary> => {
+    const executeNamedCheckInline = async (
+      target: string,
+      opts?: { eventOverride?: import('./types/config').EventTrigger }
+    ): Promise<ReviewSummary> => {
       const targetCfg = config?.checks?.[target];
       if (!targetCfg) {
         throw new Error(`on_* referenced unknown check '${target}'`);
@@ -429,10 +460,12 @@ export class CheckExecutionEngine {
         transform_js: targetCfg.transform_js,
         env: targetCfg.env,
         forEach: targetCfg.forEach,
+        // Include provider-specific keys (e.g., op/values for github)
+        ...targetCfg,
         ai: {
+          ...(targetCfg.ai || {}),
           timeout: providerConfig.ai?.timeout || 600000,
           debug: !!debug,
-          ...(targetCfg.ai || {}),
         },
       };
       // Build dependencyResults for target using already computed global results (after ensuring deps executed)
@@ -460,7 +493,38 @@ export class CheckExecutionEngine {
         const execStr = (provCfg as any).exec;
         if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
       }
-      const r = await prov.execute(prInfo, provCfg, depResults, sessionInfo);
+      // If event override provided, clone prInfo with overridden eventType
+      let prInfoForInline = prInfo;
+      const prevEventOverride = this.routingEventOverride;
+      if (opts?.eventOverride) {
+        // Try to elevate to PR context when routing to PR events from issue threads
+        const elevated = await this.elevateContextToPullRequest(
+          { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo,
+          opts.eventOverride,
+          log,
+          debug
+        );
+        if (elevated) {
+          prInfoForInline = elevated;
+        } else {
+          prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
+        }
+        this.routingEventOverride = opts.eventOverride;
+        const msg = `↪ goto_event: inline '${target}' with event=${opts.eventOverride}${
+          elevated ? ' (elevated to PR context)' : ''
+        }`;
+        if (debug) log(`🔧 Debug: ${msg}`);
+        try {
+          require('./logger').logger.info(msg);
+        } catch {}
+      }
+      let r: ReviewSummary;
+      try {
+        r = await prov.execute(prInfoForInline, provCfg, depResults, sessionInfo);
+      } finally {
+        // Restore previous override
+        this.routingEventOverride = prevEventOverride;
+      }
       // enrich with metadata similar to main flow
       const enrichedIssues = (r.issues || []).map(issue => ({
         ...issue,
@@ -482,6 +546,9 @@ export class CheckExecutionEngine {
     while (true) {
       try {
         const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        try {
+          currentRouteOutput = (res as any)?.output;
+        } catch {}
         // Success path
         // Treat result issues with severity error/critical as a soft-failure eligible for on_fail routing
         const hasSoftFailure = (res.issues || []).some(
@@ -502,6 +569,11 @@ export class CheckExecutionEngine {
           runList = Array.from(new Set(runList));
           if (debug) log(`🔧 Debug: on_fail.run (soft) list = [${runList.join(', ')}]`);
           if (runList.length > 0) {
+            try {
+              require('./logger').logger.info(
+                `▶ on_fail.run: scheduling [${runList.join(', ')}] after '${checkName}'`
+              );
+            } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -517,6 +589,11 @@ export class CheckExecutionEngine {
           if (!target && onFail.goto) target = onFail.goto;
           if (debug) log(`🔧 Debug: on_fail.goto (soft) target = ${target}`);
           if (target) {
+            try {
+              require('./logger').logger.info(
+                `↪ on_fail.goto: jumping to '${target}' from '${checkName}'`
+              );
+            } catch {}
             if (!allAncestors.includes(target)) {
               if (debug)
                 log(
@@ -529,7 +606,7 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
                 );
               }
-              await executeNamedCheckInline(target);
+              await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
             }
           }
 
@@ -554,11 +631,17 @@ export class CheckExecutionEngine {
           return res;
         }
         let needRerun = false;
+        let rerunEventOverride: import('./types/config').EventTrigger | undefined;
         if (onSuccess) {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
           const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
           if (runList.length > 0) {
+            try {
+              require('./logger').logger.info(
+                `▶ on_success.run: scheduling [${Array.from(new Set(runList)).join(', ')}] after '${checkName}'`
+              );
+            } catch {}
             loopCount++;
             if (loopCount > maxLoops) {
               throw new Error(
@@ -568,16 +651,116 @@ export class CheckExecutionEngine {
             for (const stepId of Array.from(new Set(runList))) {
               await executeNamedCheckInline(stepId);
             }
+          } else {
+            // Provide a lightweight reason when nothing is scheduled via on_success.run
+            try {
+              const assoc = resolveAssociationFromEvent(
+                (prInfo as any)?.eventContext,
+                prInfo.authorAssociation
+              );
+              const perms = createPermissionHelpers(assoc, detectLocalMode());
+              const allowedMember = perms.hasMinPermission('MEMBER');
+              let intent: string | undefined;
+              try {
+                intent = (res as any)?.output?.intent;
+              } catch {}
+              require('./logger').logger.info(
+                `⏭ on_success.run: none after '${checkName}' (event=${prInfo.eventType || 'manual'}, intent=${intent || 'n/a'}, assoc=${assoc || 'unknown'}, memberOrHigher=${allowedMember})`
+              );
+            } catch {}
           }
           // Optional goto
           let target = await evalGotoJs(onSuccess.goto_js);
           if (!target && onSuccess.goto) target = onSuccess.goto;
           if (target) {
+            try {
+              require('./logger').logger.info(
+                `↪ on_success.goto: jumping to '${target}' from '${checkName}'`
+              );
+            } catch {}
             if (!allAncestors.includes(target)) {
-              if (debug)
-                log(
-                  `⚠️ Debug: on_success.goto '${target}' is not an ancestor of '${checkName}' — skipping`
-                );
+              // Forward-run from target under goto_event: execute target and all dependents matching event
+              const prevEventOverride2 = this.routingEventOverride;
+              if (onSuccess.goto_event) {
+                this.routingEventOverride = onSuccess.goto_event;
+              }
+              try {
+                // Build forward closure (target + transitive dependents)
+                const cfgChecks = (config?.checks || {}) as Record<
+                  string,
+                  import('./types/config').CheckConfig
+                >;
+                const forwardSet = new Set<string>();
+                if (cfgChecks[target]) forwardSet.add(target);
+                const dependsOn = (name: string, root: string): boolean => {
+                  const seen = new Set<string>();
+                  const dfs = (n: string): boolean => {
+                    if (seen.has(n)) return false;
+                    seen.add(n);
+                    const deps = cfgChecks[n]?.depends_on || [];
+                    if (deps.includes(root)) return true;
+                    return deps.some(d => dfs(d));
+                  };
+                  return dfs(name);
+                };
+                const ev = onSuccess.goto_event || prInfo.eventType || 'issue_comment';
+                for (const name of Object.keys(cfgChecks)) {
+                  if (name === target) continue;
+                  const onArr = cfgChecks[name]?.on as any;
+                  const eventMatches = !onArr || (Array.isArray(onArr) && onArr.includes(ev));
+                  if (!eventMatches) continue;
+                  if (dependsOn(name, target)) forwardSet.add(name);
+                }
+                // Topologically order forwardSet based on depends_on within this subset
+                const order: string[] = [];
+                const inSet = (n: string) => forwardSet.has(n);
+                const tempMarks = new Set<string>();
+                const permMarks = new Set<string>();
+                const stack: string[] = [];
+                const visit = (n: string) => {
+                  if (permMarks.has(n)) return;
+                  if (tempMarks.has(n)) {
+                    // Cycle detected — build a readable cycle path
+                    const idx = stack.indexOf(n);
+                    const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
+                    throw new Error(
+                      `Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`
+                    );
+                  }
+                  tempMarks.add(n);
+                  stack.push(n);
+                  const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
+                  for (const d of deps) visit(d);
+                  stack.pop();
+                  tempMarks.delete(n);
+                  permMarks.add(n);
+                  order.push(n);
+                };
+                for (const n of forwardSet) visit(n);
+                // Execute in order with event override, updating statistics per child
+                for (const stepId of order) {
+                  if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                  const childStart = this.recordIterationStart(stepId);
+                  const childRes = await executeNamedCheckInline(stepId, {
+                    eventOverride: onSuccess.goto_event,
+                  });
+                  const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                  const childSuccess = !this.hasFatal(childIssues);
+                  const childOutput: unknown = (childRes as any)?.output;
+                  this.recordIterationComplete(
+                    stepId,
+                    childStart,
+                    childSuccess,
+                    childIssues,
+                    childOutput
+                  );
+                }
+                // Do NOT append forward-run child issues to the current check result.
+                // Child results are recorded independently in resultsMap and statistics,
+                // and aggregators will include them without double-counting under the parent.
+              } finally {
+                this.routingEventOverride = prevEventOverride2;
+              }
             } else {
               loopCount++;
               if (loopCount > maxLoops) {
@@ -585,16 +768,28 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                 );
               }
-              await executeNamedCheckInline(target);
+              await executeNamedCheckInline(target, { eventOverride: onSuccess.goto_event });
               // After jumping back to an ancestor, re-run the current check to re-validate with new state
               needRerun = true;
+              rerunEventOverride = onSuccess.goto_event;
             }
           }
         }
         if (needRerun) {
           if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
+          try {
+            require('./logger').logger.info(`🔁 Re-running '${checkName}' after goto`);
+          } catch {}
+          // Apply same event override as goto (if any) for this re-run by setting routingEventOverride
+          const prev = this.routingEventOverride;
+          if (rerunEventOverride) this.routingEventOverride = rerunEventOverride;
           attempt++;
-          continue; // loop will execute the check again
+          // Loop will execute the check again with evaluateIfCondition seeing override
+          // Restore after loop iteration completes for safety
+          // We can't restore here; we'll restore at start of next iteration when override applied,
+          // but ensure no lingering by resetting immediately after attempt increment
+          this.routingEventOverride = prev;
+          continue;
         }
         return res;
       } catch (err) {
@@ -612,6 +807,11 @@ export class CheckExecutionEngine {
         runList = Array.from(new Set(runList));
 
         if (runList.length > 0) {
+          try {
+            require('./logger').logger.info(
+              `▶ on_fail.run: scheduling [${runList.join(', ')}] after '${checkName}'`
+            );
+          } catch {}
           loopCount++;
           if (loopCount > maxLoops) {
             throw new Error(
@@ -627,6 +827,11 @@ export class CheckExecutionEngine {
         let target = await evalGotoJs(onFail.goto_js, lastError);
         if (!target && onFail.goto) target = onFail.goto;
         if (target) {
+          try {
+            require('./logger').logger.info(
+              `↪ on_fail.goto: jumping to '${target}' from '${checkName}'`
+            );
+          } catch {}
           if (!allAncestors.includes(target)) {
             if (debug)
               log(
@@ -639,7 +844,7 @@ export class CheckExecutionEngine {
                 `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
               );
             }
-            await executeNamedCheckInline(target);
+            await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
           }
         }
 
@@ -1161,6 +1366,23 @@ export class CheckExecutionEngine {
     // Use filtered checks for execution
     checks = tagFilteredChecks;
 
+    // Capture GitHub Action context (owner/repo/octokit) if available from environment
+    // This is used for context elevation when routing via goto_event
+    try {
+      const repoEnv = process.env.GITHUB_REPOSITORY || '';
+      const [owner, repo] = repoEnv.split('/') as [string, string];
+      const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+      if (owner && repo) {
+        this.actionContext = { owner, repo };
+        if (token) {
+          const { Octokit } = await import('@octokit/rest');
+          this.actionContext.octokit = new Octokit({ auth: token });
+        }
+      }
+    } catch {
+      // Non-fatal: context elevation will be skipped if not available
+    }
+
     // Check if we have any checks left after filtering
     if (checks.length === 0) {
       logger.warn('⚠️ No checks remain after tag filtering');
@@ -1179,11 +1401,15 @@ export class CheckExecutionEngine {
       const checkConfig = config.checks[checkName];
       return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
     });
+    const hasRouting = checks.some(checkName => {
+      const c = config.checks[checkName];
+      return Boolean(c?.on_success || c?.on_fail);
+    });
 
-    if (checks.length > 1 || hasDependencies) {
+    if (checks.length > 1 || hasDependencies || hasRouting) {
       if (debug) {
         logger.debug(
-          `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies})`
+          `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies}, has routing: ${hasRouting})`
         );
       }
       return await this.executeGroupedDependencyAwareChecks(
@@ -1317,6 +1543,7 @@ export class CheckExecutionEngine {
       checkName,
       content,
       group: checkConfig.group || 'default',
+      output: (result as any).output,
       debug: result.debug,
       issues: result.issues, // Include structured issues
     };
@@ -1453,14 +1680,34 @@ export class CheckExecutionEngine {
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
     const groupedResults: GroupedCheckResults = {};
-    const contentMap = (
-      reviewSummary as ReviewSummary & {
-        __contents?: Record<string, string | undefined>;
+    const agg = reviewSummary as ReviewSummary & {
+      __contents?: Record<string, string | undefined>;
+      __outputs?: Record<string, unknown>;
+      __executed?: string[];
+    };
+    const contentMap = agg.__contents;
+    const outputMap = agg.__outputs;
+    // Build a unified list of all checks that produced results:
+    //  - originally requested checks
+    //  - any checks that produced content/output during routing (e.g., forward-run after goto)
+    //  - any checks that emitted issues with checkName set
+    const allCheckNames: string[] = [];
+    const seen = new Set<string>();
+    const pushUnique = (n?: string) => {
+      if (!n) return;
+      if (!seen.has(n)) {
+        seen.add(n);
+        allCheckNames.push(n);
       }
-    ).__contents;
+    };
+    for (const n of checks) pushUnique(n);
+    if (contentMap) for (const n of Object.keys(contentMap)) pushUnique(n);
+    if (outputMap) for (const n of Object.keys(outputMap)) pushUnique(n);
+    for (const issue of reviewSummary.issues || []) pushUnique(issue.checkName);
+    if (Array.isArray(agg.__executed)) for (const n of agg.__executed) pushUnique(n);
 
-    // Process each check individually
-    for (const checkName of checks) {
+    // Process each discovered check individually
+    for (const checkName of allCheckNames) {
       const checkConfig = config?.checks?.[checkName];
       if (!checkConfig) continue;
 
@@ -1470,25 +1717,47 @@ export class CheckExecutionEngine {
       );
 
       // Create a mini ReviewSummary for this check
-      const checkSummary: ReviewSummary = {
+      const checkSummary: ReviewSummary & { output?: unknown } = {
         issues: checkIssues,
         debug: reviewSummary.debug,
       };
 
       if (contentMap?.[checkName]) {
-        const summaryWithContent = checkSummary as ReviewSummary & { content?: string };
-        summaryWithContent.content = contentMap[checkName];
+        (checkSummary as any).content = contentMap[checkName];
+      }
+      if (outputMap && Object.prototype.hasOwnProperty.call(outputMap, checkName)) {
+        checkSummary.output = outputMap[checkName];
       }
 
-      // Render content for this check
-      const content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+      // Render content for this check (never let template errors abort the whole run)
+      let content: string = '';
+      let issuesForCheck = [...checkIssues];
+      try {
+        content = await this.renderCheckContent(checkName, checkSummary, checkConfig, prInfo);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`❌ Failed to render content for check '${checkName}': ${msg}`);
+        // Add a synthetic issue so it appears in output and GitHub Checks
+        issuesForCheck = [
+          ...issuesForCheck,
+          {
+            file: 'system',
+            line: 0,
+            ruleId: `${checkName}/render-error`,
+            message: `Template rendering failed: ${msg}`,
+            severity: 'error' as const,
+            category: 'logic' as const,
+          },
+        ];
+      }
 
       const checkResult: CheckResult = {
         checkName,
         content,
         group: checkConfig.group || 'default',
+        output: checkSummary.output,
         debug: reviewSummary.debug,
-        issues: checkIssues, // Include structured issues
+        issues: issuesForCheck, // Include structured issues + rendering error if any
       };
 
       // Add to appropriate group
@@ -1596,13 +1865,30 @@ export class CheckExecutionEngine {
     results: Map<string, ReviewSummary>,
     debug?: boolean
   ): Promise<boolean> {
+    // Determine event name for condition context, honoring any routing override
+    const override = this.routingEventOverride;
+    const eventName = override
+      ? override.startsWith('pr_')
+        ? 'pull_request'
+        : override === 'issue_comment'
+          ? 'issue_comment'
+          : override.startsWith('issue_')
+            ? 'issues'
+            : 'manual'
+      : 'issue_comment';
+
+    const commenterAssoc = resolveAssociationFromEvent(
+      (prInfo as any)?.eventContext,
+      prInfo.authorAssociation
+    );
     const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
       branch: prInfo.head,
       baseBranch: prInfo.base,
       filesChanged: prInfo.files.map(f => f.filename),
-      event: 'issue_comment',
+      event: eventName,
       environment: getSafeEnvironmentVariables(),
       previousResults: results,
+      authorAssociation: commenterAssoc,
     });
 
     if (!shouldRun && debug) {
@@ -1659,6 +1945,7 @@ export class CheckExecutionEngine {
     }
 
     let templateContent: string;
+    let enrichAssistantContext = false;
 
     if (checkConfig.template) {
       // Custom template
@@ -1682,6 +1969,10 @@ export class CheckExecutionEngine {
       }
       const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
       templateContent = await fs.readFile(templatePath, 'utf-8');
+      // Only enrich built-in issue-assistant with event/permission context
+      if (sanitizedSchema === 'issue-assistant') {
+        enrichAssistantContext = true;
+      }
     }
 
     // Prepare template data
@@ -1690,13 +1981,125 @@ export class CheckExecutionEngine {
       issue => !(issue.file === 'system' && issue.line === 0)
     );
 
-    const templateData = {
+    const templateData: Record<string, unknown> = {
       issues: filteredIssues,
       checkName: checkName,
+      // Expose structured output for custom schemas/templates (e.g., overview)
+      // This allows templates to render fields like output.text or output.tags
+      output: (reviewSummary as unknown as { output?: unknown }).output,
     };
 
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    if (enrichAssistantContext) {
+      // Provide minimal event and permission context for the assistant template only
+      let authorAssociation: string | undefined;
+      let eventName = 'manual';
+      let eventAction: string | undefined;
+      try {
+        const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
+        authorAssociation = resolveAssociationFromEvent(
+          anyInfo?.eventContext,
+          anyInfo?.authorAssociation
+        );
+        eventName = anyInfo?.eventContext?.event_name || (anyInfo as any)?.eventType || 'manual';
+        eventAction = anyInfo?.eventContext?.action;
+      } catch {}
+      templateData.authorAssociation = authorAssociation;
+      templateData.event = { name: eventName, action: eventAction };
+    }
+
+    // Establish permissions context for filters so templates can call permission filters
+    // without passing authorAssociation explicitly.
+    const { withPermissionsContext } = (await import('./liquid-extensions')) as unknown as {
+      withPermissionsContext?: (
+        ctx: { authorAssociation?: string },
+        fn: () => Promise<string>
+      ) => Promise<string>;
+    };
+    // Try to derive author association from PR info (commenter preferred)
+    let authorAssociationForFilters: string | undefined;
+    try {
+      const anyInfo = _prInfo as unknown as { eventContext?: any; authorAssociation?: string };
+      authorAssociationForFilters = resolveAssociationFromEvent(
+        anyInfo?.eventContext,
+        anyInfo?.authorAssociation
+      );
+    } catch {}
+
+    let rendered: string;
+    if (typeof withPermissionsContext === 'function') {
+      rendered = await withPermissionsContext(
+        { authorAssociation: authorAssociationForFilters },
+        async () => await liquid.parseAndRender(templateContent, templateData)
+      );
+      if (rendered === undefined || rendered === null) {
+        // Defensive: some test environments mock the helper without implementation
+        rendered = await liquid.parseAndRender(templateContent, templateData);
+      }
+    } else {
+      rendered = await liquid.parseAndRender(templateContent, templateData);
+    }
     return rendered.trim();
+  }
+
+  /**
+   * Attempt to elevate an issue/issue_comment context to full PR context when routing via goto_event.
+   * Returns a new PRInfo with files/diff when possible; otherwise returns null.
+   */
+  private async elevateContextToPullRequest(
+    prInfo: PRInfo,
+    targetEvent: import('./types/config').EventTrigger,
+    log?: (msg: string) => void,
+    debug?: boolean
+  ): Promise<PRInfo | null> {
+    try {
+      // Only elevate for PR-style events
+      if (targetEvent !== 'pr_opened' && targetEvent !== 'pr_updated') return null;
+
+      // Only meaningful to elevate from issue contexts
+      const isIssueContext = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
+      const ctx: any = (prInfo as any).eventContext || {};
+      const isPRThread = Boolean(ctx?.issue?.pull_request);
+      if (!isIssueContext || !isPRThread) return null;
+
+      // Resolve owner/repo from cached action context or environment
+      let owner = this.actionContext?.owner;
+      let repo = this.actionContext?.repo;
+      if (!owner || !repo) {
+        const repoEnv = process.env.GITHUB_REPOSITORY || '';
+        [owner, repo] = repoEnv.split('/') as [string, string];
+      }
+      if (!owner || !repo) return null;
+
+      // Determine PR number from event context or prInfo.number
+      const prNumber = (ctx?.issue?.number as number) || prInfo.number;
+      if (!prNumber) return null;
+
+      // Build Octokit; prefer cached instance
+      let octokit = this.actionContext?.octokit;
+      if (!octokit) {
+        const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+        if (!token) return null;
+        const { Octokit } = await import('@octokit/rest');
+        octokit = new Octokit({ auth: token });
+      }
+
+      // Fetch full PR diff
+      const analyzer = new PRAnalyzer(octokit);
+      const elevated = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, targetEvent);
+      // Preserve event context and helpful flags
+      (elevated as any).eventContext = (prInfo as any).eventContext || ctx;
+      (elevated as any).isPRContext = true;
+      (elevated as any).includeCodeContext = true;
+      if (debug)
+        log?.(`🔧 Debug: Elevated context to PR #${prNumber} for goto_event=${targetEvent}`);
+      return elevated;
+    } catch (e) {
+      if (debug) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log?.(`⚠️ Debug: Context elevation to PR failed: ${msg}`);
+      }
+      return null;
+    }
   }
 
   /**
@@ -1950,10 +2353,12 @@ export class CheckExecutionEngine {
             message: extendedCheckConfig.message,
             env: checkConfig.env,
             forEach: checkConfig.forEach,
+            // Pass through any provider-specific keys (e.g., op/values for github provider)
+            ...checkConfig,
             ai: {
+              ...(checkConfig.ai || {}),
               timeout: timeout || 600000,
               debug: debug,
-              ...(checkConfig.ai || {}),
             },
           };
 
@@ -2225,10 +2630,12 @@ export class CheckExecutionEngine {
                     transform_js: childCfg.transform_js,
                     env: childCfg.env,
                     forEach: childCfg.forEach,
+                    // Include provider-specific keys like op/values for non-AI providers
+                    ...childCfg,
                     ai: {
+                      ...(childCfg.ai || {}),
                       timeout: timeout || 600000,
                       debug: debug,
-                      ...(childCfg.ai || {}),
                     },
                   };
 
@@ -3593,6 +4000,21 @@ export class CheckExecutionEngine {
 
         // Evaluate if condition to determine whether to run this check
         if (checkConfig.if) {
+          // Evaluate if condition using any routing override event (e.g., goto_event)
+          const override = this.routingEventOverride;
+          const eventName = override
+            ? override.startsWith('pr_')
+              ? 'pull_request'
+              : override === 'issue_comment'
+                ? 'issue_comment'
+                : override.startsWith('issue_')
+                  ? 'issues'
+                  : 'manual'
+            : 'issue_comment';
+          const commenterAssoc = resolveAssociationFromEvent(
+            (prInfo as any)?.eventContext,
+            prInfo.authorAssociation
+          );
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
             checkName,
             checkConfig.if,
@@ -3600,9 +4022,10 @@ export class CheckExecutionEngine {
               branch: prInfo.head,
               baseBranch: prInfo.base,
               filesChanged: prInfo.files.map(f => f.filename),
-              event: 'issue_comment', // Command triggered from comment
+              event: eventName, // honor routing override if present
               environment: getSafeEnvironmentVariables(),
               previousResults: new Map(), // No previous results in parallel execution
+              authorAssociation: commenterAssoc,
             }
           );
 
@@ -3778,6 +4201,7 @@ export class CheckExecutionEngine {
     const aggregatedIssues: ReviewSummary['issues'] = [];
     const debugInfo: string[] = [];
     const contentMap: Record<string, string> = {};
+    const outputsMap: Record<string, unknown> = {};
 
     // Add execution plan info
     const stats = DependencyResolver.getExecutionStats(dependencyGraph);
@@ -3794,6 +4218,9 @@ export class CheckExecutionEngine {
     ].filter(Boolean);
 
     debugInfo.push(...executionInfo);
+
+    // Track which checks we've aggregated already
+    const processed = new Set<string>();
 
     // Process results in dependency order for better output organization
     for (const executionGroup of dependencyGraph.executionOrder) {
@@ -3818,6 +4245,9 @@ export class CheckExecutionEngine {
           );
         }
 
+        // Mark as processed
+        processed.add(checkName);
+
         // Issues are already prefixed and enriched with group/schema info
         // Filter out internal __skipped markers
         const nonInternalIssues = (result.issues || []).filter(
@@ -3825,12 +4255,41 @@ export class CheckExecutionEngine {
         );
         aggregatedIssues.push(...nonInternalIssues);
 
-        const resultSummary = result as ExtendedReviewSummary;
+        const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
         const resultContent = resultSummary.content;
         if (typeof resultContent === 'string' && resultContent.trim()) {
           contentMap[checkName] = resultContent.trim();
         }
+        if (resultSummary.output !== undefined) {
+          outputsMap[checkName] = resultSummary.output;
+        }
       }
+    }
+
+    // Include any additional results that were produced at runtime (e.g., forward-run via goto)
+    // but were not part of the original execution DAG for the selected checks.
+    for (const [checkName, result] of results.entries()) {
+      if (processed.has(checkName)) continue;
+      if (!result) continue;
+
+      // Issues (already enriched)
+      const nonInternalIssues = (result.issues || []).filter(
+        issue => !issue.ruleId?.endsWith('/__skipped')
+      );
+      aggregatedIssues.push(...nonInternalIssues);
+
+      const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
+      const resultContent = (resultSummary as any).content;
+      if (typeof resultContent === 'string' && resultContent.trim()) {
+        contentMap[checkName] = resultContent.trim();
+      }
+      if (resultSummary.output !== undefined) {
+        outputsMap[checkName] = resultSummary.output;
+      }
+
+      debugInfo.push(
+        `✅ (dynamic) Check "${checkName}" included: ${(result.issues || []).length} issues found`
+      );
     }
 
     if (debug) {
@@ -3893,7 +4352,11 @@ export class CheckExecutionEngine {
       }
     }
 
-    const summary: ReviewSummary & { __contents?: Record<string, string> } = {
+    const summary: ReviewSummary & {
+      __contents?: Record<string, string>;
+      __outputs?: Record<string, unknown>;
+      __executed?: string[];
+    } = {
       issues: filteredIssues,
       debug: aggregatedDebug,
     };
@@ -3901,6 +4364,14 @@ export class CheckExecutionEngine {
     if (Object.keys(contentMap).length > 0) {
       summary.__contents = contentMap;
     }
+    if (Object.keys(outputsMap).length > 0) {
+      summary.__outputs = outputsMap;
+    }
+
+    // Preserve the list of executed checks (keys in results Map) so downstream
+    // grouping/formatting can include dynamically routed children even when they
+    // produced neither issues nor output content (e.g., log-only steps).
+    summary.__executed = Array.from(results.keys());
 
     return summary;
   }
@@ -4577,6 +5048,10 @@ export class CheckExecutionEngine {
           options.config
         );
 
+        // Detect command execution failure patterns to mark check as failed without requiring fail_if
+        // We treat issues with ruleId starting with 'command/' as execution errors
+        const execErrorIssue = checkIssues.find(i => i.ruleId?.startsWith('command/'));
+
         await this.githubCheckService.completeCheckRun(
           options.githubChecks.owner,
           options.githubChecks.repo,
@@ -4584,7 +5059,7 @@ export class CheckExecutionEngine {
           checkName,
           failureResults,
           checkIssues,
-          undefined, // executionError
+          execErrorIssue ? execErrorIssue.message : undefined, // executionError
           prInfo.files.map((f: import('./pr-analyzer').PRFile) => f.filename), // filesChangedInCommit
           options.githubChecks.prNumber, // prNumber
           options.githubChecks.headSha // currentCommitSha
