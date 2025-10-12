@@ -488,12 +488,23 @@ export class FailureConditionEvaluator {
       const outputs = context.outputs || {};
       const debugData = context.debug || null;
 
+      // Get memory store and create accessor for fail_if expressions
+      const memoryStore = MemoryStore.getInstance();
+      const memoryAccessor = {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      };
+
       // Create scope with all context variables and helper functions
       const scope = {
         // Primary context variables
         output,
         outputs,
         debug: debugData,
+        // Memory accessor for fail_if expressions
+        memory: memoryAccessor,
         // Legacy compatibility variables
         issues,
         suggestions,

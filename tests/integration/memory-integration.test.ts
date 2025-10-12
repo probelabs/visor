@@ -142,6 +142,7 @@ describe('Memory Integration Tests', () => {
           },
           'increment-retry': {
             type: 'memory',
+            depends_on: ['init-retry'],
             operation: 'set',
             key: 'retry_count',
             value_js: 'memory.get("retry_count") + 1',
@@ -426,8 +427,9 @@ describe('Memory Integration Tests', () => {
       });
 
       // check-errors should fail because error_count (5) > 3
-      expect(result.failureConditions).toBeDefined();
-      expect(result.failureConditions?.some(fc => fc.failed === true)).toBe(true);
+      // Failure conditions are converted to issues with category 'logic'
+      expect(result.reviewSummary.issues).toBeDefined();
+      expect(result.reviewSummary.issues?.some(issue => issue.category === 'logic')).toBe(true);
     });
   });
 
@@ -514,7 +516,7 @@ describe('Memory Integration Tests', () => {
 
       // Should have stored the branch name
       const store = MemoryStore.getInstance();
-      expect(store.get('branch')).toBeDefined();
+      expect(store.get('current_branch')).toBeDefined();
     });
   });
 
@@ -588,7 +590,7 @@ describe('Memory Integration Tests', () => {
       });
 
       const store = MemoryStore.getInstance();
-      expect(store.get('state')).toBe('step2_complete');
+      expect(store.get('workflow_state')).toBe('step2_complete');
     });
 
     it('should collect errors from multiple checks', async () => {
