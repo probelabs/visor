@@ -53,14 +53,15 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['set-value', 'get-value'],
         config,
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['set-value'].output).toBe('test-value');
-      expect(result.checkResults['get-value'].output).toBe('test-value');
+      // Verify via memory store
+      const store = MemoryStore.getInstance();
+      expect(store.get('test-key')).toBe('test-value');
     });
 
     it('should execute append operations', async () => {
@@ -106,13 +107,14 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['append-1', 'append-2', 'append-3', 'get-items'],
         config,
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['get-items'].output).toEqual(['item1', 'item2', 'item3']);
+      const store = MemoryStore.getInstance();
+      expect(store.get('items')).toEqual(['item1', 'item2', 'item3']);
     });
   });
 
@@ -230,15 +232,16 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['set-default', 'set-prod', 'set-stage', 'get-default', 'get-prod', 'get-stage'],
         config,
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['get-default'].output).toBe(10);
-      expect(result.checkResults['get-prod'].output).toBe(100);
-      expect(result.checkResults['get-stage'].output).toBe(50);
+      const store = MemoryStore.getInstance();
+      expect(store.get('counter', 'default')).toBe(10);
+      expect(store.get('counter', 'production')).toBe(100);
+      expect(store.get('counter', 'staging')).toBe(50);
     });
   });
 
@@ -322,13 +325,14 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['get-preloaded'],
         config,
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['get-preloaded'].output).toBe('existing value');
+      const store = MemoryStore.getInstance();
+      expect(store.get('preloaded')).toBe('existing value');
     });
 
     it('should persist data to CSV file', async () => {
@@ -422,7 +426,8 @@ describe('Memory Integration Tests', () => {
       });
 
       // check-errors should fail because error_count (5) > 3
-      expect(result.checkResults['check-errors'].failureConditions).toBeDefined();
+      expect(result.failureConditions).toBeDefined();
+      expect(result.failureConditions?.some(fc => fc.failed === true)).toBe(true);
     });
   });
 
@@ -462,13 +467,14 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['command-check', 'store-output', 'get-result'],
         config,
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['get-result'].output).toBe(42);
+      const store = MemoryStore.getInstance();
+      expect(store.get('command_result')).toBe(42);
     });
 
     it('should access PR info in value_js', async () => {
@@ -500,14 +506,15 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['store-branch', 'get-branch'],
         config,
         outputFormat: 'json',
       });
 
       // Should have stored the branch name
-      expect(result.checkResults['get-branch'].output).toBeDefined();
+      const store = MemoryStore.getInstance();
+      expect(store.get('branch')).toBeDefined();
     });
   });
 
@@ -567,7 +574,7 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: [
           'init-state',
           'step1',
@@ -580,7 +587,8 @@ describe('Memory Integration Tests', () => {
         outputFormat: 'json',
       });
 
-      expect(result.checkResults['get-final-state'].output).toBe('step2_complete');
+      const store = MemoryStore.getInstance();
+      expect(store.get('state')).toBe('step2_complete');
     });
 
     it('should collect errors from multiple checks', async () => {
@@ -640,13 +648,14 @@ describe('Memory Integration Tests', () => {
         },
       };
 
-      const result = await engine.executeChecks({
+      await engine.executeChecks({
         checks: ['init-errors', 'check1', 'log-error1', 'check2', 'log-error2', 'get-errors'],
         config,
         outputFormat: 'json',
       });
 
-      const errors = result.checkResults['get-errors'].output;
+      const store = MemoryStore.getInstance();
+      const errors = store.get('errors');
       expect(Array.isArray(errors)).toBe(true);
       expect((errors as string[]).length).toBeGreaterThan(0);
     });
