@@ -7,6 +7,7 @@ import { NoopCheckProvider } from './noop-check-provider';
 import { LogCheckProvider } from './log-check-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 import { CommandCheckProvider } from './command-check-provider';
+import { MemoryCheckProvider } from './memory-check-provider';
 
 /**
  * Registry for managing check providers
@@ -42,6 +43,7 @@ export class CheckProviderRegistry {
     this.register(new HttpClientProvider());
     this.register(new NoopCheckProvider());
     this.register(new LogCheckProvider());
+    this.register(new MemoryCheckProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {

@@ -38,6 +38,10 @@ export const configSchema = {
           $ref: '#/definitions/HttpServerConfig',
           description: 'HTTP server configuration for receiving webhooks',
         },
+        memory: {
+          $ref: '#/definitions/MemoryConfig',
+          description: 'Memory storage configuration',
+        },
         env: {
           $ref: '#/definitions/EnvConfig',
           description: 'Global environment variables',
@@ -298,6 +302,30 @@ export const configSchema = {
           type: 'boolean',
           description: 'Include execution metadata in log output',
         },
+        operation: {
+          type: 'string',
+          enum: ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list', 'exec_js'],
+          description: 'Memory operation to perform',
+        },
+        key: {
+          type: 'string',
+          description: 'Key for memory operation',
+        },
+        value: {
+          description: 'Value for set/append operations',
+        },
+        value_js: {
+          type: 'string',
+          description: 'JavaScript expression to compute value dynamically',
+        },
+        memory_js: {
+          type: 'string',
+          description: 'JavaScript code for exec_js operation with full memory access',
+        },
+        namespace: {
+          type: 'string',
+          description: 'Override namespace for this check',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',
@@ -307,7 +335,17 @@ export const configSchema = {
     },
     ConfigCheckType: {
       type: 'string',
-      enum: ['ai', 'command', 'http', 'http_input', 'http_client', 'noop', 'log', 'claude-code'],
+      enum: [
+        'ai',
+        'command',
+        'http',
+        'http_input',
+        'http_client',
+        'noop',
+        'log',
+        'claude-code',
+        'memory',
+      ],
       description: 'Valid check types in configuration',
     },
     'Record<string,string>': {
@@ -894,6 +932,42 @@ export const configSchema = {
       required: ['path'],
       additionalProperties: false,
       description: 'HTTP server endpoint configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    MemoryConfig: {
+      type: 'object',
+      properties: {
+        storage: {
+          type: 'string',
+          enum: ['memory', 'file'],
+          description: 'Storage mode: "memory" (in-memory, default) or "file" (persistent)',
+        },
+        format: {
+          type: 'string',
+          enum: ['json', 'csv'],
+          description: 'Storage format (only for file storage, default: json)',
+        },
+        file: {
+          type: 'string',
+          description: 'File path (required if storage: file)',
+        },
+        namespace: {
+          type: 'string',
+          description: 'Default namespace (default: "default")',
+        },
+        auto_load: {
+          type: 'boolean',
+          description: 'Auto-load on startup (default: true if storage: file)',
+        },
+        auto_save: {
+          type: 'boolean',
+          description: 'Auto-save after operations (default: true if storage: file)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Memory storage configuration',
       patternProperties: {
         '^x-': {},
       },
