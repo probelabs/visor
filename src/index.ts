@@ -1115,20 +1115,7 @@ async function handlePullRequestWithConfig(
   }
 
   // Filter checks based on conditions
-  let checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
-
-  // Ensure transitive root 'overview' is present if dependents require it (native DAG start)
-  try {
-    const needsOverview = checksToExecute.some(
-      c =>
-        Array.isArray((config.checks as any)?.[c]?.depends_on) &&
-        ((config.checks as any)[c].depends_on as string[]).includes('overview')
-    );
-    const hasOverview = checksToExecute.includes('overview');
-    if (needsOverview && !hasOverview && (config.checks as any)?.overview) {
-      checksToExecute = ['overview', ...checksToExecute];
-    }
-  } catch {}
+  const checksToExecute = await filterChecksToExecute(checksToRun, config, prInfo);
 
   if (checksToExecute.length === 0) {
     console.log('⚠️ No checks meet execution conditions');
