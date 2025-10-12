@@ -26,6 +26,9 @@
 # export AI_PROVIDER=bedrock  # This gets mapped internally
 # export AI_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
 
+# Configuration version
+version: "1.0"
+
 # Global AI provider settings, via config
 # Set Bedrock as the default provider for all AI checks
 ai_provider: bedrock

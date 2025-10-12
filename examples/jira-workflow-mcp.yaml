@@ -124,7 +124,7 @@ checks:
 
       Use Jira MCP tools to query, analyze, and update issues accordingly.
     schedule: "0 9 * * MON"  # Run every Monday at 9 AM for weekly planning
-    on: ["scheduled"]
+    on: ["schedule"]
     tags: ["jira", "planning", "automation"]
 
   # Step 4: Issue health monitoring
@@ -162,7 +162,7 @@ checks:
 
       Use Jira MCP tools for all queries and updates.
     schedule: "0 10 * * MON,WED,FRI"  # Run 3 times per week
-    on: ["scheduled"]
+    on: ["schedule"]
     tags: ["jira", "monitoring", "health"]
 
 # Environment variables needed (set these in your environment):

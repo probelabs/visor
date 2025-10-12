@@ -218,7 +218,7 @@ export interface TagFilter {
 /**
  * Valid grouping options
  */
-export type GroupByOption = 'check' | 'file' | 'severity';
+export type GroupByOption = 'check' | 'file' | 'severity' | 'group';
 
 /**
  * Environment variable reference configuration
