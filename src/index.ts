@@ -1082,6 +1082,7 @@ async function handleIssueComment(
           await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             focus,
             format,
+            commentId: `pr-review-${prNumber}`,
             triggeredBy: comment?.user?.login
               ? `comment by @${comment.user.login}`
               : 'issue_comment',
