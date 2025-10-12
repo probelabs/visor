@@ -680,17 +680,8 @@ export class CheckExecutionEngine {
             } catch {}
             if (!allAncestors.includes(target)) {
               // Forward-run from target under goto_event: execute target and all dependents matching event
-              let prInfoForInline = prInfo;
               const prevEventOverride2 = this.routingEventOverride;
               if (onSuccess.goto_event) {
-                const elevated = await this.elevateContextToPullRequest(
-                  { ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo,
-                  onSuccess.goto_event,
-                  log,
-                  debug
-                );
-                prInfoForInline =
-                  elevated || ({ ...(prInfo as any), eventType: onSuccess.goto_event } as PRInfo);
                 this.routingEventOverride = onSuccess.goto_event;
               }
               try {
@@ -735,8 +726,7 @@ export class CheckExecutionEngine {
                   order.push(n);
                 };
                 for (const n of forwardSet) visit(n);
-                // Execute in order with event override, capturing issues into current res and updating stats
-                const forwardIssues: ReviewIssue[] = [];
+                // Execute in order with event override, updating statistics per child
                 for (const stepId of order) {
                   if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
                   const childStart = this.recordIterationStart(stepId);
@@ -744,7 +734,6 @@ export class CheckExecutionEngine {
                     eventOverride: onSuccess.goto_event,
                   });
                   const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                  forwardIssues.push(...childIssues);
                   const childSuccess = !this.hasFatal(childIssues);
                   const childOutput: unknown = (childRes as any)?.output;
                   this.recordIterationComplete(
@@ -755,10 +744,9 @@ export class CheckExecutionEngine {
                     childOutput
                   );
                 }
-                // Append forward-run issues to current result so they appear in the final aggregation table
-                try {
-                  (res as any).issues = [...(res.issues || []), ...forwardIssues];
-                } catch {}
+                // Do NOT append forward-run child issues to the current check result.
+                // Child results are recorded independently in resultsMap and statistics,
+                // and aggregators will include them without double-counting under the parent.
               } finally {
                 this.routingEventOverride = prevEventOverride2;
               }
