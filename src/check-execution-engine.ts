@@ -735,14 +735,25 @@ export class CheckExecutionEngine {
                   order.push(n);
                 };
                 for (const n of forwardSet) visit(n);
-                // Execute in order with event override, capturing issues into current res
+                // Execute in order with event override, capturing issues into current res and updating stats
                 const forwardIssues: ReviewIssue[] = [];
                 for (const stepId of order) {
+                  if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                  const childStart = this.recordIterationStart(stepId);
                   const childRes = await executeNamedCheckInline(stepId, {
                     eventOverride: onSuccess.goto_event,
                   });
                   const childIssues = (childRes.issues || []).map(i => ({ ...i }));
                   forwardIssues.push(...childIssues);
+                  const childSuccess = !this.hasFatal(childIssues);
+                  const childOutput: unknown = (childRes as any)?.output;
+                  this.recordIterationComplete(
+                    stepId,
+                    childStart,
+                    childSuccess,
+                    childIssues,
+                    childOutput
+                  );
                 }
                 // Append forward-run issues to current result so they appear in the final aggregation table
                 try {
