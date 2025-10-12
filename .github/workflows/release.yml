@@ -249,7 +249,7 @@ jobs:
       - name: Prepare MCP package
         run: |
           mkdir -p mcp-package
-          cp -r docs mcp-package/ 2>/dev/null || true
+          cp -r docs examples mcp-package/ 2>/dev/null || true
           cp README.md mcp-package/ 2>/dev/null || true
           cd mcp-package
           npm publish --provenance --access public --tag latest
