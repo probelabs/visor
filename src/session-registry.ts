@@ -136,43 +136,14 @@ export class SessionRegistry {
       // Set up tracing for cloned session if debug mode is enabled
       if (sourceAgentAny.debug && checkName) {
         try {
-          // Import telemetry modules dynamically
-          const probeModule = (await import('@probelabs/probe')) as any;
-
-          if (probeModule.SimpleTelemetry && probeModule.SimpleAppTracer) {
-            const SimpleTelemetry = probeModule.SimpleTelemetry;
-            const SimpleAppTracer = probeModule.SimpleAppTracer;
-
-            // Create trace file path in debug-artifacts directory
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const traceDir = process.env.GITHUB_WORKSPACE
-              ? `${process.env.GITHUB_WORKSPACE}/debug-artifacts`
-              : `${process.cwd()}/debug-artifacts`;
-
-            // Create traces directory if it doesn't exist
-            const fs = require('fs');
-            if (!fs.existsSync(traceDir)) {
-              fs.mkdirSync(traceDir, { recursive: true });
-            }
-
-            const traceFilePath = `${traceDir}/trace-${checkName}-${timestamp}.jsonl`;
-
-            // Initialize telemetry and tracer
-            const telemetry = new SimpleTelemetry({
-              serviceName: 'visor-ai-clone',
-              enableFile: true,
-              filePath: traceFilePath,
-              enableConsole: false,
-            });
-
-            const tracer = new SimpleAppTracer(telemetry, newSessionId);
+          const { initializeTracer } = await import('./utils/tracer-init');
+          const tracerResult = await initializeTracer(newSessionId, checkName);
+          if (tracerResult) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (clonedAgent as any).tracer = tracer;
+            (clonedAgent as any).tracer = tracerResult.tracer;
             // Store trace file path for later use
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (clonedAgent as any)._traceFilePath = traceFilePath;
-
-            console.error(`📊 Tracing enabled for cloned session, will save to: ${traceFilePath}`);
+            (clonedAgent as any)._traceFilePath = tracerResult.filePath;
           }
         } catch (traceError) {
           console.error(

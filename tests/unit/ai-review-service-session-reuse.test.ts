@@ -300,7 +300,8 @@ describe('AIReviewService Session Reuse', () => {
       // Should clone the session
       expect(mockSessionRegistry.cloneSession).toHaveBeenCalledWith(
         parentSessionId,
-        expect.stringContaining('clone')
+        expect.stringContaining('dependent-check-session-'),
+        'dependent-check'
       );
 
       // Should use the cloned agent, not the original
@@ -331,7 +332,8 @@ describe('AIReviewService Session Reuse', () => {
 
       expect(mockSessionRegistry.cloneSession).toHaveBeenCalledWith(
         parentSessionId,
-        expect.stringContaining('clone')
+        expect.stringContaining('dependent-check-session-'),
+        'dependent-check'
       );
       expect(clonedAgent.answer).toHaveBeenCalled();
       expect(existingAgent.answer).not.toHaveBeenCalled();

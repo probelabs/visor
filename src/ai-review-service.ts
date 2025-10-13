@@ -4,6 +4,7 @@ import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
+import { initializeTracer } from './utils/tracer-init';
 
 /**
  * Helper function to log debug messages using the centralized logger
@@ -952,54 +953,10 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Enable tracing in debug mode for better diagnostics
       let traceFilePath = '';
       if (this.config.debug) {
-        try {
-          // Import ProbeAgent module which includes telemetry classes
-          const probeModule = (await import('@probelabs/probe')) as any;
-
-          // Check if telemetry classes are available
-          if (!probeModule.SimpleTelemetry || !probeModule.SimpleAppTracer) {
-            log('⚠️ Telemetry classes not available in ProbeAgent, skipping tracing');
-          } else {
-            const SimpleTelemetry = probeModule.SimpleTelemetry;
-            const SimpleAppTracer = probeModule.SimpleAppTracer;
-
-            // Create trace file path in debug-artifacts directory (same as other debug outputs)
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const traceDir = process.env.GITHUB_WORKSPACE
-              ? `${process.env.GITHUB_WORKSPACE}/debug-artifacts`
-              : `${process.cwd()}/debug-artifacts`;
-
-            // Create traces directory if it doesn't exist
-            const fs = require('fs');
-            if (!fs.existsSync(traceDir)) {
-              fs.mkdirSync(traceDir, { recursive: true });
-            }
-
-            traceFilePath = `${traceDir}/trace-${_checkName || 'check'}-${timestamp}.jsonl`;
-
-            // Initialize telemetry and tracer
-            const telemetry = new SimpleTelemetry({
-              serviceName: 'visor-ai',
-              enableFile: true, // Enable file export
-              filePath: traceFilePath, // Use filePath instead of exportToFile
-              enableConsole: false, // Don't log to console to avoid noise
-            });
-
-            const tracer = new SimpleAppTracer(telemetry, sessionId);
-            (options as any).tracer = tracer;
-
-            log(`📊 Tracing enabled, will save to: ${traceFilePath}`);
-
-            // If in GitHub Actions, log the path for artifact upload
-            if (process.env.GITHUB_ACTIONS) {
-              console.log(`::notice title=AI Trace::Trace will be saved to ${traceFilePath}`);
-              // Also set output for workflow to pick up
-              console.log(`::set-output name=trace-path::${traceFilePath}`);
-            }
-          }
-        } catch (traceError) {
-          console.error('⚠️  Warning: Failed to initialize tracing:', traceError);
-          // Continue without tracing
+        const tracerResult = await initializeTracer(sessionId, _checkName);
+        if (tracerResult) {
+          (options as any).tracer = tracerResult.tracer;
+          traceFilePath = tracerResult.filePath;
         }
       }
 
