@@ -305,116 +305,38 @@ export class SessionRegistry {
 
   /**
    * Filter conversation history to remove schema-specific formatting messages
-   * Preserves core context (PR diff, tool results, main analysis)
-   * Removes schema formatting prompts, JSON validation attempts, and mermaid fixes
+   * Simple algorithm: Find the FIRST message where ProbeAgent asks to respond with schema,
+   * and truncate everything from that point onwards (including that message and all responses).
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private filterHistoryForClone(history: any[]): any[] {
-    // Patterns to identify schema/formatting-related messages to remove
-    // Based on exact patterns from ProbeAgent source code analysis
-    const schemaPatterns = [
-      // Initial schema formatting request (ProbeAgent.js line 1695-1713)
-      /^CRITICAL:\s*You MUST respond with ONLY valid JSON DATA that conforms to this schema structure/,
-      /Schema to follow \(this is just the structure - provide ACTUAL DATA\)/,
-      /^REQUIREMENTS:/,
-      /^Convert your previous response content into actual JSON data/,
-      /DO NOT return the schema definition itself/,
-      /Return ONLY the JSON object\/array with REAL DATA/,
-      /NO additional text, explanations, or markdown formatting/,
-      /The JSON must be parseable by JSON\.parse\(\)/,
-
-      // JSON validation error messages (schemaUtils.js lines 364-401)
-      /^CRITICAL JSON ERROR:\s*Your previous response is not valid JSON/,
-      /^URGENT - JSON PARSING FAILED:\s*Your previous response is not valid JSON/,
-      /^FINAL ATTEMPT - CRITICAL JSON ERROR:\s*Your previous response is not valid JSON/,
-      /You MUST fix this and return ONLY valid JSON/,
-      /This is your second chance\. Return ONLY valid JSON/,
-      /This is the final retry\. You MUST return ONLY raw JSON/,
-
-      // Schema definition confusion (schemaUtils.js lines 410-447)
-      /^CRITICAL MISUNDERSTANDING:\s*You returned a JSON schema definition/,
-      /^URGENT - WRONG RESPONSE TYPE:\s*You returned a JSON schema definition/,
-      /^FINAL ATTEMPT - SCHEMA VS DATA CONFUSION:\s*You returned a JSON schema definition/,
-      /What you returned \(WRONG - this is a schema definition\)/,
-      /What I need: ACTUAL DATA that conforms to this schema/,
-      /You are returning the SCHEMA DEFINITION itself/,
-      /STOP returning schema definitions! Return REAL DATA/,
-
-      // Mermaid validation and fixes (schemaUtils.js lines 657-689)
-      /^Your previous response contains invalid Mermaid diagrams/,
-      /^Analyze and fix the following Mermaid diagram/,
-      /^Validation Errors:/,
-      /Please correct your response to include valid Mermaid diagrams/,
-      /Ensure all Mermaid diagrams are properly formatted/,
-
-      // Schema reminders in error messages
-      /Please use proper XML format with BOTH opening and closing tags/i,
-      /Remember to format your response as JSON/i,
-      /Your response must match the provided schema/i,
-
-      // ProbeAgent's attempt_completion format instructions
-      /<attempt_completion>/i,
-      /attempt_completion.*tool.*provide.*final/i,
-      /Use attempt_completion.*response.*inside.*tags/i,
-    ];
-
-    // Additional patterns for system/reminder messages about formatting
-    const systemReminderPatterns = [
-      /⚠️ WARNING: You have reached the maximum tool iterations/i,
-      /This is your final message.*respond with the data you have/i,
-    ];
-
-    // Filter out messages that match schema/formatting patterns
     const originalCount = history.length;
-    const filtered = history.filter((message, index) => {
-      // Always keep the system message (usually first message)
-      if (index === 0 && message.role === 'system') {
-        return true;
+
+    // Find the first user message that contains schema formatting request
+    // This is added by ProbeAgent when it does recursive answer() call for schema formatting
+    const schemaRequestIndex = history.findIndex((message, index) => {
+      if (message.role !== 'user' || index === 0) {
+        return false; // Skip system message and non-user messages
       }
 
-      // Check message content for schema-related patterns
       const content =
         typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 
-      // Check if this is a schema/formatting message
-      const isSchemaMessage = schemaPatterns.some(pattern => pattern.test(content));
-      const isSystemReminder = systemReminderPatterns.some(pattern => pattern.test(content));
-
-      // Also check for messages that are purely JSON validation results
-      const isJsonValidationResult =
-        content.includes('"jsonParseSuccess"') ||
-        content.includes('"isValid"') ||
-        content.includes('"validationError"');
-
-      // Also filter out messages that contain actual JSON schema definitions
-      // These typically have "$schema", "properties", "required" fields
-      const containsSchemaDefinition =
-        content.includes('"$schema"') &&
-        content.includes('"properties"') &&
-        (content.includes('"type"') || content.includes('"required"'));
-
-      // Filter assistant responses that used attempt_completion (overview schema format)
-      // This is critical - the AI learns from its own previous responses
-      const isAttemptCompletionResponse =
-        message.role === 'assistant' &&
-        content.includes('<attempt_completion>') &&
-        (content.includes('"text"') || content.includes('"tags"'));
-
-      // Debug logging for filtered messages
-      const shouldFilter =
-        isSchemaMessage ||
-        isSystemReminder ||
-        isJsonValidationResult ||
-        containsSchemaDefinition ||
-        isAttemptCompletionResponse;
-      if (shouldFilter && console.error) {
-        const preview = content.substring(0, 100).replace(/\n/g, ' ');
-        console.error(`🔍 Filtering message [${message.role}]: ${preview}...`);
-      }
-
-      // Keep message if it's NOT a schema/formatting message or schema definition
-      return !shouldFilter;
+      // ProbeAgent's schema formatting request starts with this exact pattern
+      return content.includes('CRITICAL: You MUST respond with ONLY valid JSON DATA');
     });
+
+    let filtered: any[];
+    if (schemaRequestIndex !== -1) {
+      // Found schema request - truncate history at that point
+      filtered = history.slice(0, schemaRequestIndex);
+      console.error(
+        `🔍 Found schema formatting request at message ${schemaRequestIndex}, truncating history`
+      );
+    } else {
+      // No schema request found - keep all messages
+      filtered = [...history];
+    }
 
     // Log filtering results
     const filteredCount = originalCount - filtered.length;
@@ -424,27 +346,10 @@ export class SessionRegistry {
       );
     }
 
-    // Ensure we don't accidentally remove too much
-    // Keep at least system message and first user message
-    if (filtered.length < 2 && history.length >= 2) {
-      const minimalHistory = [
-        history[0], // System message
-        history[1], // First user message
-      ];
-
-      // Add any tool result messages from early in the conversation
-      for (let i = 2; i < Math.min(history.length, 10); i++) {
-        const content =
-          typeof history[i].content === 'string'
-            ? history[i].content
-            : JSON.stringify(history[i].content);
-
-        if (content.includes('<tool_result>') || content.includes('```diff')) {
-          minimalHistory.push(history[i]);
-        }
-      }
-
-      return minimalHistory;
+    // Ensure we keep at least the system message
+    if (filtered.length === 0 && history.length > 0 && history[0].role === 'system') {
+      filtered = [history[0]];
+      console.error('⚠️  Warning: Filtered all messages except system message');
     }
 
     return filtered;
