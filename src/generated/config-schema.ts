@@ -714,7 +714,7 @@ export const configSchema = {
     },
     GroupByOption: {
       type: 'string',
-      enum: ['check', 'file', 'severity'],
+      enum: ['check', 'file', 'severity', 'group'],
       description: 'Valid grouping options',
     },
     DebugConfig: {

@@ -36,7 +36,7 @@ checks:
 
   # Receive GitHub push events
   github-push-receiver:
-    type: webhook_input
+    type: http_input
     endpoint: "/github/push"
     on: [webhook_received]
 
@@ -61,7 +61,7 @@ checks:
 
   # Notify development team about push analysis
   notify-dev-team:
-    type: webhook
+    type: http
     depends_on: [push-code-analysis]
     url: "${DEV_TEAM_WEBHOOK}"  # Read from DEV_TEAM_WEBHOOK environment variable
     body: |
@@ -104,7 +104,7 @@ checks:
 
   # Create GitHub issue if critical problems found
   create-github-issue:
-    type: webhook
+    type: http
     depends_on: [push-code-analysis]
     if: "outputs['push-code-analysis'].criticalIssues > 0"
     url: "https://api.github.com/repos/{{ outputs['github-push-receiver'].repository }}/issues"
@@ -124,7 +124,7 @@ checks:
 
   # Receive JIRA webhook events
   jira-receiver:
-    type: webhook_input
+    type: http_input
     endpoint: "/jira/issue"
     on: [webhook_received]
 
@@ -147,7 +147,7 @@ checks:
 
   # Update team dashboard
   update-dashboard:
-    type: webhook
+    type: http
     depends_on: [jira-code-impact]
     url: "${DASHBOARD_WEBHOOK}"  # Read from DASHBOARD_WEBHOOK environment variable
     method: PUT
@@ -181,7 +181,7 @@ checks:
 
   # Send daily summary to multiple channels
   broadcast-summary:
-    type: webhook
+    type: http
     depends_on: [daily-summary]
     url: "${BROADCAST_WEBHOOK}"  # Read from BROADCAST_WEBHOOK environment variable
     body: |

@@ -88,6 +88,10 @@ Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
 Short cheatsheet for common tasks:
 
 ```bash
+# Validate configuration before running checks
+visor validate                    # Search for .visor.yaml in current directory
+visor validate --config .visor.yaml  # Validate specific config file
+
 # Run all checks with a table output
 visor --check all --output table
 
