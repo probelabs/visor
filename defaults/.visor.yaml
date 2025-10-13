@@ -90,7 +90,7 @@ checks:
 
         You may also be asked to assign labels to PR; if so use this:
         - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
-        - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
+        - `tags.label`: one of [bug, chore, documentation, enhancement, feature]. Choose the best fit.
 
         Important:
         - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
@@ -317,11 +317,11 @@ checks:
         - `labels` (optional): array of labels that would help organization for this new issue.
 
         Use this triage rubric (adopted from our main prompt):
-        1) Categorize the issue (bug/feature/documentation/question/enhancement/maintenance)
+        1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
         2) Assess priority (low/medium/high/urgent)
         3) Estimate complexity (trivial/simple/moderate/complex)
         4) Suggest timeline for resolution
-        5) Recommend labels
+        5) Recommend labels from the categories above
         6) Identify stakeholders or potential assignees
         7) Provide an initial response with clarifying questions if needed
 
