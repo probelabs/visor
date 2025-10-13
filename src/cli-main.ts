@@ -10,6 +10,7 @@ import { logger, configureLoggerFromCli } from './logger';
 import * as fs from 'fs';
 import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
+import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withActiveSpan } from './telemetry/trace-helpers';
 
 /**
@@ -556,6 +557,9 @@ export async function main(): Promise<void> {
           );
         }
       }
+    } catch {}
+    try {
+      await flushNdjson();
     } catch {}
     try {
       await shutdownTelemetry();

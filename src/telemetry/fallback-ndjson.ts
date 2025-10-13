@@ -5,7 +5,10 @@ let CURRENT_FILE: string | null = null;
 let dirReady = false;
 let writeChain: Promise<void> = Promise.resolve();
 function resolveTargetPath(outDir: string): string {
-  if (process.env.VISOR_FALLBACK_TRACE_FILE) return process.env.VISOR_FALLBACK_TRACE_FILE;
+  if (process.env.VISOR_FALLBACK_TRACE_FILE) {
+    CURRENT_FILE = process.env.VISOR_FALLBACK_TRACE_FILE;
+    return CURRENT_FILE;
+  }
   if (CURRENT_FILE) return CURRENT_FILE;
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   CURRENT_FILE = path.join(outDir, `${ts}.ndjson`);
@@ -13,6 +16,8 @@ function resolveTargetPath(outDir: string): string {
 }
 
 function isEnabled(): boolean {
+  // Enable when CLI set a fallback file (serverless mode), or when explicit file sink is enabled
+  if (process.env.VISOR_FALLBACK_TRACE_FILE) return true;
   return (
     process.env.VISOR_TELEMETRY_ENABLED === 'true' &&
     (process.env.VISOR_TELEMETRY_SINK || 'file') === 'file'

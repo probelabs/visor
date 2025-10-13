@@ -37,12 +37,24 @@ export async function withActiveSpan<T>(
 
 export function addEvent(name: string, attrs?: Record<string, unknown>): void {
   const span = trace.getSpan(otContext.active());
-  if (!span) return;
-  try {
-    span.addEvent(name, attrs as Attributes);
-  } catch {
-    // ignore
+  if (span) {
+    try {
+      span.addEvent(name, attrs as Attributes);
+    } catch {
+      // ignore
+    }
   }
+  // Fallback NDJSON emission for serverless/file sink when SDK may be inactive
+  try {
+    const { emitNdjsonSpanWithEvents } = require('./fallback-ndjson');
+    emitNdjsonSpanWithEvents('visor.event', {}, [{ name, attrs }]);
+    if (name === 'fail_if.triggered') {
+      emitNdjsonSpanWithEvents('visor.event', {}, [
+        { name: 'fail_if.evaluated', attrs },
+        { name: 'fail_if.triggered', attrs },
+      ]);
+    }
+  } catch {}
 }
 
 export function setSpanAttributes(attrs: Record<string, unknown>): void {

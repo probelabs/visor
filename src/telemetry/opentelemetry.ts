@@ -49,6 +49,21 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
 
     const processors: SpanProcessor[] = [];
 
+    // Prepare a single fallback NDJSON file per run when using file sink
+    if (!process.env.VISOR_FALLBACK_TRACE_FILE && sink === 'file') {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const outDir =
+          opts.file?.dir ||
+          process.env.VISOR_TRACE_DIR ||
+          path.join(process.cwd(), 'output', 'traces');
+        fs.mkdirSync(outDir, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        process.env.VISOR_FALLBACK_TRACE_FILE = path.join(outDir, `run-${ts}.ndjson`);
+      } catch {}
+    }
+
     if (sink === 'otlp') {
       const protocol = opts.otlp?.protocol || 'http';
       if (protocol === 'http') {
@@ -171,6 +186,10 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
 export async function shutdownTelemetry(): Promise<void> {
   if (!sdk) return;
   try {
+    try {
+      const { flushNdjson } = require('./fallback-ndjson');
+      await flushNdjson();
+    } catch {}
     await sdk.shutdown();
   } catch {
     // ignore
