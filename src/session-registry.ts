@@ -101,12 +101,17 @@ export class SessionRegistry {
   }
 
   /**
-   * Clone a session with a new session ID
-   * Creates a new ProbeAgent with a copy of the conversation history
+   * Clone a session with a new session ID using ProbeAgent's official clone() method
+   * This uses ProbeAgent's built-in cloning which automatically handles:
+   * - Intelligent filtering of internal messages (schema reminders, tool prompts, etc.)
+   * - Preserving system message for cache efficiency
+   * - Deep copying conversation history
+   * - Copying agent configuration
    */
   public async cloneSession(
     sourceSessionId: string,
-    newSessionId: string
+    newSessionId: string,
+    checkName?: string
   ): Promise<ProbeAgent | undefined> {
     const sourceAgent = this.sessions.get(sourceSessionId);
     if (!sourceAgent) {
@@ -115,66 +120,64 @@ export class SessionRegistry {
     }
 
     try {
-      // Access the conversation history from the source agent
-      // ProbeAgent stores history in the 'history' property (not 'conversationHistory')
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceHistory = (sourceAgent as any).history || [];
+      // Use ProbeAgent's official clone() method with options
+      // This handles intelligent message filtering automatically
+      const clonedAgent = sourceAgent.clone({
+        sessionId: newSessionId,
+        stripInternalMessages: true, // Remove schema reminders, tool prompts, etc.
+        keepSystemMessage: true, // Keep for cache efficiency
+        deepCopy: true, // Safe deep copy of history
+      });
 
-      // Extract all important configuration properties from the source agent
-      // ProbeAgent stores these as instance properties, not in an options object
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sourceAgentAny = sourceAgent as any;
-      const cloneOptions = {
-        sessionId: newSessionId,
-        debug: sourceAgentAny.debug || false,
-        allowEdit: sourceAgentAny.allowEdit || false,
-        path: sourceAgentAny.allowedFolders?.[0], // Use first allowed folder as path
-        provider: sourceAgentAny.clientApiProvider,
-        model: sourceAgentAny.model,
-        promptType: sourceAgentAny.promptType,
-        enableMcp: sourceAgentAny.enableMcp,
-        mcpConfig: sourceAgentAny.mcpConfig,
-        tracer: sourceAgentAny.tracer,
-      };
 
-      // Import ProbeAgent dynamically to create new instance
-      const { ProbeAgent: ProbeAgentClass } = await import('@probelabs/probe');
+      // Set up tracing for cloned session if debug mode is enabled
+      if (sourceAgentAny.debug && checkName) {
+        try {
+          const { initializeTracer } = await import('./utils/tracer-init');
+          const tracerResult = await initializeTracer(newSessionId, checkName);
+          if (tracerResult) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (clonedAgent as any).tracer = tracerResult.tracer;
+            // Store trace file path for later use
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (clonedAgent as any)._traceFilePath = tracerResult.filePath;
+          }
+        } catch (traceError) {
+          console.error(
+            '⚠️  Warning: Failed to initialize tracing for cloned session:',
+            traceError
+          );
+        }
+      }
 
-      const clonedAgent = new ProbeAgentClass(cloneOptions);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const clonedAgentAny = clonedAgent as any;
+
+      // Initialize MCP tools if the source agent had them initialized
+      if (sourceAgentAny._mcpInitialized && typeof clonedAgentAny.initialize === 'function') {
+        try {
+          await clonedAgentAny.initialize();
+          console.error(`🔧 Initialized MCP tools for cloned session`);
+        } catch (initError) {
+          console.error(`⚠️  Warning: Failed to initialize cloned agent: ${initError}`);
+        }
+      }
+
+      // Get history length for logging
+      const historyLength = clonedAgentAny.history?.length || 0;
 
       console.error(
-        `📋 Cloning session with config: debug=${cloneOptions.debug}, model=${cloneOptions.model}, provider=${cloneOptions.provider}`
+        `📋 Cloned session ${sourceSessionId} → ${newSessionId} using ProbeAgent.clone() (${historyLength} messages, internal messages filtered)`
       );
-
-      // Deep copy the conversation history to ensure complete isolation
-      // Use JSON serialization for deep cloning to prevent shared object references
-      if (sourceHistory.length > 0) {
-        try {
-          // Deep clone the history array and all message objects within it
-          const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).history = deepClonedHistory;
-          console.error(
-            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${sourceHistory.length} messages, deep copy)`
-          );
-        } catch (cloneError) {
-          // Fallback to shallow copy if deep clone fails (e.g., circular references)
-          console.error(
-            `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
-          );
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).history = [...sourceHistory];
-        }
-      } else {
-        console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
-      }
 
       // Register the cloned session
       this.registerSession(newSessionId, clonedAgent);
 
       return clonedAgent;
     } catch (error) {
-      console.error(`⚠️  Failed to clone session ${sourceSessionId}: ${error}`);
+      console.error(`⚠️  Failed to clone session ${sourceSessionId}:`, error);
       return undefined;
     }
   }
