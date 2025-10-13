@@ -302,6 +302,9 @@ export class AIReviewService {
     log(`📋 Schema for this check: ${schema || 'none (no schema)'}`);
     if (sessionMode === 'clone') {
       log(`✅ Cloned agent will use NEW schema (${schema}) - parent schema does not persist`);
+      log(`🔄 Clone operation ensures fresh agent with copied history but new configuration`);
+    } else {
+      log(`🔄 Append mode - using existing agent instance with shared history and configuration`);
     }
 
     let debugInfo: AIDebugInfo | undefined;
