@@ -255,7 +255,8 @@ describe('Session Cloning with History Filtering', () => {
       // Multiple correction attempts
       {
         role: 'user',
-        content: 'URGENT - JSON PARSING FAILED: Your previous response is not valid JSON and cannot be parsed.',
+        content:
+          'URGENT - JSON PARSING FAILED: Your previous response is not valid JSON and cannot be parsed.',
       },
       {
         role: 'assistant',
@@ -283,12 +284,8 @@ describe('Session Cloning with History Filtering', () => {
     const historyContents = clonedHistory.map((msg: any) => msg.content);
 
     // Error messages should be filtered
-    expect(historyContents).not.toContain(
-      expect.stringContaining('URGENT - JSON PARSING FAILED')
-    );
-    expect(historyContents).not.toContain(
-      expect.stringContaining('JSON PARSING FAILED')
-    );
+    expect(historyContents).not.toContain(expect.stringContaining('URGENT - JSON PARSING FAILED'));
+    expect(historyContents).not.toContain(expect.stringContaining('JSON PARSING FAILED'));
 
     // Core content should be preserved
     expect(historyContents).toContain('Generate a code review');

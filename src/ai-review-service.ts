@@ -1054,40 +1054,48 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       let traceFilePath = '';
       if (this.config.debug) {
         try {
-          // Import telemetry modules dynamically
-          const { SimpleTelemetry, SimpleAppTracer } = await import('@probelabs/probe');
+          // Import ProbeAgent module which includes telemetry classes
+          const probeModule = (await import('@probelabs/probe')) as any;
 
-          // Create trace file path
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const traceDir = process.env.GITHUB_WORKSPACE
-            ? `${process.env.GITHUB_WORKSPACE}/traces`
-            : `${process.cwd()}/traces`;
+          // Check if telemetry classes are available
+          if (!probeModule.SimpleTelemetry || !probeModule.SimpleAppTracer) {
+            log('⚠️ Telemetry classes not available in ProbeAgent, skipping tracing');
+          } else {
+            const SimpleTelemetry = probeModule.SimpleTelemetry;
+            const SimpleAppTracer = probeModule.SimpleAppTracer;
 
-          // Create traces directory if it doesn't exist
-          const fs = require('fs');
-          if (!fs.existsSync(traceDir)) {
-            fs.mkdirSync(traceDir, { recursive: true });
-          }
+            // Create trace file path
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const traceDir = process.env.GITHUB_WORKSPACE
+              ? `${process.env.GITHUB_WORKSPACE}/traces`
+              : `${process.cwd()}/traces`;
 
-          traceFilePath = `${traceDir}/trace-${checkName || 'check'}-${timestamp}.json`;
+            // Create traces directory if it doesn't exist
+            const fs = require('fs');
+            if (!fs.existsSync(traceDir)) {
+              fs.mkdirSync(traceDir, { recursive: true });
+            }
 
-          // Initialize telemetry and tracer
-          const telemetry = new SimpleTelemetry({
-            serviceName: 'visor-ai',
-            exportToFile: traceFilePath,
-            debug: true,
-          });
+            traceFilePath = `${traceDir}/trace-${_checkName || 'check'}-${timestamp}.json`;
 
-          const tracer = new SimpleAppTracer(telemetry, sessionId);
-          (options as any).tracer = tracer;
+            // Initialize telemetry and tracer
+            const telemetry = new SimpleTelemetry({
+              serviceName: 'visor-ai',
+              exportToFile: traceFilePath,
+              debug: true,
+            });
 
-          log(`📊 Tracing enabled, will save to: ${traceFilePath}`);
+            const tracer = new SimpleAppTracer(telemetry, sessionId);
+            (options as any).tracer = tracer;
 
-          // If in GitHub Actions, log the path for artifact upload
-          if (process.env.GITHUB_ACTIONS) {
-            console.log(`::notice title=AI Trace::Trace will be saved to ${traceFilePath}`);
-            // Also set output for workflow to pick up
-            console.log(`::set-output name=trace-path::${traceFilePath}`);
+            log(`📊 Tracing enabled, will save to: ${traceFilePath}`);
+
+            // If in GitHub Actions, log the path for artifact upload
+            if (process.env.GITHUB_ACTIONS) {
+              console.log(`::notice title=AI Trace::Trace will be saved to ${traceFilePath}`);
+              // Also set output for workflow to pick up
+              console.log(`::set-output name=trace-path::${traceFilePath}`);
+            }
           }
         } catch (traceError) {
           console.error('⚠️  Warning: Failed to initialize tracing:', traceError);
@@ -1341,14 +1349,17 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Return error issue instead of trying to parse
       return {
-        issues: [{
-          file: 'system',
-          line: 0,
-          ruleId: 'system/liquid-template-in-json',
-          message: 'AI returned Liquid template syntax instead of JSON. This indicates a prompt confusion error.',
-          severity: 'error',
-          category: 'logic',
-        }],
+        issues: [
+          {
+            file: 'system',
+            line: 0,
+            ruleId: 'system/liquid-template-in-json',
+            message:
+              'AI returned Liquid template syntax instead of JSON. This indicates a prompt confusion error.',
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
         debug: debugInfo,
       };
     }
