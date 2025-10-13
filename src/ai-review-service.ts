@@ -293,7 +293,7 @@ export class AIReviewService {
         checkName // Pass checkName for tracing
       );
       if (!clonedAgent) {
-        throw new Error(`Failed to clone session ${parentSessionId}. Falling back to append mode.`);
+        throw new Error(`Failed to clone session ${parentSessionId}`);
       }
       agentToUse = clonedAgent;
     } else {
