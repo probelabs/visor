@@ -370,7 +370,7 @@ export class GitHubCheckService {
     sections.push('');
     sections.push('---');
     sections.push('');
-    sections.push('*Powered by [Visor](https://github.com/probelabs/visor)*');
+    sections.push('*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*');
 
     return sections.join('\n');
   }
