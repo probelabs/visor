@@ -159,7 +159,7 @@ export class SessionRegistry {
       if (cloneOptions.debug && checkName) {
         try {
           // Import telemetry modules dynamically
-          const probeModule = await import('@probelabs/probe') as any;
+          const probeModule = (await import('@probelabs/probe')) as any;
 
           if (probeModule.SimpleTelemetry && probeModule.SimpleAppTracer) {
             const SimpleTelemetry = probeModule.SimpleTelemetry;
@@ -197,7 +197,10 @@ export class SessionRegistry {
             console.error(`📊 Tracing enabled for cloned session, will save to: ${traceFilePath}`);
           }
         } catch (traceError) {
-          console.error('⚠️  Warning: Failed to initialize tracing for cloned session:', traceError);
+          console.error(
+            '⚠️  Warning: Failed to initialize tracing for cloned session:',
+            traceError
+          );
         }
       }
 
@@ -381,7 +384,12 @@ export class SessionRegistry {
         (content.includes('"type"') || content.includes('"required"'));
 
       // Keep message if it's NOT a schema/formatting message or schema definition
-      return !isSchemaMessage && !isSystemReminder && !isJsonValidationResult && !containsSchemaDefinition;
+      return (
+        !isSchemaMessage &&
+        !isSystemReminder &&
+        !isJsonValidationResult &&
+        !containsSchemaDefinition
+      );
     });
 
     // Ensure we don't accidentally remove too much

@@ -282,12 +282,14 @@ export class AIReviewService {
       // Clone the session - creates a new agent with copied history
       // Include check name in the session ID for better tracing
       currentSessionId = `${checkName}-session-${Date.now()}`;
-      log(`📋 Cloning AI session ${parentSessionId} → ${currentSessionId} for ${checkName} check...`);
+      log(
+        `📋 Cloning AI session ${parentSessionId} → ${currentSessionId} for ${checkName} check...`
+      );
 
       const clonedAgent = await this.sessionRegistry.cloneSession(
         parentSessionId,
         currentSessionId,
-        checkName  // Pass checkName for tracing
+        checkName // Pass checkName for tracing
       );
       if (!clonedAgent) {
         throw new Error(`Failed to clone session ${parentSessionId}. Falling back to append mode.`);
@@ -995,7 +997,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
               const fs = require('fs');
               if (fs.existsSync(agentAny._traceFilePath)) {
                 const stats = fs.statSync(agentAny._traceFilePath);
-                console.log(`::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`);
+                console.log(
+                  `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
+                );
               }
             }
           }
@@ -1107,9 +1111,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             // Initialize telemetry and tracer
             const telemetry = new SimpleTelemetry({
               serviceName: 'visor-ai',
-              enableFile: true,  // Enable file export
-              filePath: traceFilePath,  // Use filePath instead of exportToFile
-              enableConsole: false,  // Don't log to console to avoid noise
+              enableFile: true, // Enable file export
+              filePath: traceFilePath, // Use filePath instead of exportToFile
+              enableConsole: false, // Don't log to console to avoid noise
             });
 
             const tracer = new SimpleAppTracer(telemetry, sessionId);
