@@ -1064,11 +1064,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
             const SimpleTelemetry = probeModule.SimpleTelemetry;
             const SimpleAppTracer = probeModule.SimpleAppTracer;
 
-            // Create trace file path
+            // Create trace file path in debug-artifacts directory (same as other debug outputs)
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const traceDir = process.env.GITHUB_WORKSPACE
-              ? `${process.env.GITHUB_WORKSPACE}/traces`
-              : `${process.cwd()}/traces`;
+              ? `${process.env.GITHUB_WORKSPACE}/debug-artifacts`
+              : `${process.cwd()}/debug-artifacts`;
 
             // Create traces directory if it doesn't exist
             const fs = require('fs');
