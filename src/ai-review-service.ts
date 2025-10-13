@@ -1076,13 +1076,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
               fs.mkdirSync(traceDir, { recursive: true });
             }
 
-            traceFilePath = `${traceDir}/trace-${_checkName || 'check'}-${timestamp}.json`;
+            traceFilePath = `${traceDir}/trace-${_checkName || 'check'}-${timestamp}.jsonl`;
 
             // Initialize telemetry and tracer
             const telemetry = new SimpleTelemetry({
               serviceName: 'visor-ai',
-              exportToFile: traceFilePath,
-              debug: true,
+              enableFile: true,  // Enable file export
+              filePath: traceFilePath,  // Use filePath instead of exportToFile
+              enableConsole: false,  // Don't log to console to avoid noise
             });
 
             const tracer = new SimpleAppTracer(telemetry, sessionId);
@@ -1211,8 +1212,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       if (traceFilePath && (options as any).tracer) {
         try {
           const tracer = (options as any).tracer;
-          if (tracer.telemetry && typeof tracer.telemetry.export === 'function') {
-            await tracer.telemetry.export();
+          // Call shutdown to properly close the file stream
+          if (tracer && typeof tracer.shutdown === 'function') {
+            await tracer.shutdown();
             log(`📊 Trace saved to: ${traceFilePath}`);
 
             // In GitHub Actions, also log file size for verification
