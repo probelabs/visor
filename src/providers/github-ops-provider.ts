@@ -49,8 +49,9 @@ export class GitHubOpsProvider extends CheckProvider {
     };
 
     // Use authenticated octokit from event context if available, otherwise create from env token
-    let octokit: import('@octokit/rest').Octokit | undefined =
-      config.eventContext?.octokit as import('@octokit/rest').Octokit | undefined;
+    let octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
+      | import('@octokit/rest').Octokit
+      | undefined;
 
     if (!octokit) {
       const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
