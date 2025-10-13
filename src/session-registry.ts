@@ -212,7 +212,6 @@ export class SessionRegistry {
     }
   }
 
-
   /**
    * Register process exit handlers to cleanup sessions on exit
    */
