@@ -976,8 +976,34 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(JSON.stringify(schemaOptions, null, 2));
       }
 
+      // When reusing a session with a different schema, add an explicit schema directive to the prompt
+      // This helps the AI understand that it should use the NEW schema format, not any previous format
+      let enhancedPrompt = prompt;
+      if (schemaString && effectiveSchema) {
+        // Parse the schema to extract the root object structure
+        try {
+          const schemaObj = JSON.parse(schemaString);
+          const schemaId = schemaObj.$id || effectiveSchema;
+
+          // Add a strong directive at the start of the prompt about the expected schema
+          const schemaDirective = `\n\n⚠️ IMPORTANT SCHEMA REQUIREMENT FOR THIS RESPONSE:
+This check requires a response in the "${schemaId}" format.
+${schemaId === 'code-review' ? 'You MUST return a JSON object with an "issues" array containing code review findings.' : ''}
+${schemaId === 'overview' ? 'You MUST return a JSON object with "text" (string) and "tags" (object with review-effort and label).' : ''}
+If you have previously responded in a different format, disregard that format for THIS response.
+Use the ${schemaId} schema structure exclusively.
+
+`;
+          enhancedPrompt = schemaDirective + prompt;
+          log(`🎯 Added schema directive to prompt for: ${schemaId}`);
+        } catch (parseError) {
+          log(`⚠️ Failed to parse schema for directive: ${parseError}`);
+          // Continue without the directive
+        }
+      }
+
       // Use existing agent's answer method - this reuses the conversation context
-      const response = await agent.answer(prompt, undefined, schemaOptions);
+      const response = await agent.answer(enhancedPrompt, undefined, schemaOptions);
 
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);

@@ -258,29 +258,20 @@ export class SessionRegistry {
         console.error(`  - Prompt Type: ${cloneOptions.promptType || 'default'}`);
       }
 
-      // Deep copy and filter the conversation history
-      // Remove schema-specific formatting messages while preserving core context
+      // Copy the conversation history from source agent
+      // Keep the full history to maximize AI provider cache hits
+      // Schema differences will be handled by explicit prompt directives
       if (sourceHistory.length > 0) {
         try {
           // Deep clone the history array and all message objects within it
-          const deepClonedHistory = JSON.parse(JSON.stringify(sourceHistory));
-
-          // Filter out schema-specific formatting messages
-          const filteredHistory = this.filterHistoryForClone(deepClonedHistory);
+          const clonedHistory = JSON.parse(JSON.stringify(sourceHistory));
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).history = filteredHistory;
+          (clonedAgent as any).history = clonedHistory;
 
-          const removedCount = deepClonedHistory.length - filteredHistory.length;
           console.error(
-            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${filteredHistory.length} messages kept, ${removedCount} schema-related removed)`
+            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${clonedHistory.length} messages copied)`
           );
-
-          if (cloneOptions.debug && removedCount > 0) {
-            console.error(
-              `🧹 Removed ${removedCount} schema/formatting messages from cloned history`
-            );
-          }
         } catch (cloneError) {
           // Fallback to shallow copy if deep clone fails (e.g., circular references)
           console.error(
@@ -303,70 +294,6 @@ export class SessionRegistry {
     }
   }
 
-  /**
-   * Filter conversation history to remove schema-specific formatting messages
-   * Simple algorithm: Find the FIRST message where ProbeAgent asks to respond with schema,
-   * and truncate everything from that point onwards (including that message and all responses).
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private filterHistoryForClone(history: any[]): any[] {
-    const originalCount = history.length;
-
-    // Add detailed logging to debug what's in the history
-    console.error(`🔍 Filtering history for clone: ${originalCount} total messages`);
-    history.forEach((msg, idx) => {
-      const contentPreview =
-        typeof msg.content === 'string'
-          ? msg.content.substring(0, 100)
-          : JSON.stringify(msg.content).substring(0, 100);
-      console.error(`  [${idx}] ${msg.role}: ${contentPreview}...`);
-    });
-
-    // Find the first user message that contains schema formatting request
-    // This is added by ProbeAgent when it does recursive answer() call for schema formatting
-    const schemaRequestIndex = history.findIndex((message, index) => {
-      if (message.role !== 'user' || index === 0) {
-        return false; // Skip system message and non-user messages
-      }
-
-      const content =
-        typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
-
-      // ProbeAgent's schema formatting request starts with this exact pattern
-      return content.includes('CRITICAL: You MUST respond with ONLY valid JSON DATA');
-    });
-
-    let filtered: any[];
-    if (schemaRequestIndex !== -1) {
-      // Found schema request - slice(0, index) excludes the message at 'index' and everything after
-      // This removes: the schema request itself + all subsequent messages (including AI responses with the old schema)
-      filtered = history.slice(0, schemaRequestIndex);
-      const removedCount = history.length - schemaRequestIndex;
-      console.error(
-        `🔍 Found schema formatting request at message ${schemaRequestIndex}, removing it + ${removedCount - 1} subsequent messages (total ${removedCount} removed)`
-      );
-    } else {
-      // No schema request found - keep all messages
-      filtered = [...history];
-      console.error(`🔍 No schema formatting request found in history - this might be the problem!`);
-    }
-
-    // Log filtering results
-    const filteredCount = originalCount - filtered.length;
-    if (filteredCount > 0) {
-      console.error(
-        `📋 Filtered ${filteredCount} schema/formatting messages from history (${originalCount} → ${filtered.length})`
-      );
-    }
-
-    // Ensure we keep at least the system message
-    if (filtered.length === 0 && history.length > 0 && history[0].role === 'system') {
-      filtered = [history[0]];
-      console.error('⚠️  Warning: Filtered all messages except system message');
-    }
-
-    return filtered;
-  }
 
   /**
    * Register process exit handlers to cleanup sessions on exit
