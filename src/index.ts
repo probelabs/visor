@@ -877,7 +877,7 @@ async function handleIssueComment(
           `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
           `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
           `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `*Powered by [Visor](https://github.com/probelabs/visor)*`;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -894,7 +894,7 @@ async function handleIssueComment(
           `**Comments:** ${issue.comments || 0}\n` +
           `**Created:** ${issue.created_at || 'unknown'}\n` +
           `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `*Powered by [Visor](https://github.com/probelabs/visor)*`;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -1011,7 +1011,7 @@ async function handleIssueComment(
             owner,
             repo,
             issue_number: prNumber,
-            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor)*`,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://github.com/probelabs/visor)*`,
           });
           return;
         }

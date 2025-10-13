@@ -181,7 +181,7 @@ ${content}
 
 ---
 
-*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*
+*Powered by [Visor](https://github.com/probelabs/visor)*
 
 *Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
 <!-- /visor-comment-id:${commentId} -->`;
