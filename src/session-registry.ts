@@ -270,11 +270,13 @@ export class SessionRegistry {
 
       // JSON validation and correction prompts
       /CRITICAL JSON ERROR/i,
+      /URGENT - JSON PARSING FAILED/i,
       /Your previous JSON response was invalid/i,
       /Your previous response is not valid JSON/i,
       /Please correct the following JSON errors/i,
       /Response is a JSON schema definition instead of data/i,
       /You returned the schema definition itself/i,
+      /JSON PARSING FAILED.*cannot be parsed/i,
 
       // Mermaid validation and fixes
       /The mermaid diagram in your response has syntax errors/i,

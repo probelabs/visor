@@ -232,6 +232,69 @@ describe('Session Cloning with History Filtering', () => {
     expect(hasToolResult).toBe(true);
   });
 
+  it('should filter Liquid template error messages', async () => {
+    // Test case for the bug where AI returns {% if %} instead of JSON
+    const sourceAgent = new ProbeAgent({
+      sessionId: 'source-liquid-bug',
+      debug: false,
+    });
+
+    const liquidBugHistory = [
+      {
+        role: 'system',
+        content: 'System prompt',
+      },
+      {
+        role: 'user',
+        content: 'Generate a code review',
+      },
+      {
+        role: 'assistant',
+        content: '{% if %}', // AI incorrectly returns Liquid template
+      },
+      // Multiple correction attempts
+      {
+        role: 'user',
+        content: 'URGENT - JSON PARSING FAILED: Your previous response is not valid JSON and cannot be parsed.',
+      },
+      {
+        role: 'assistant',
+        content: '{% for item in items %}', // Still returns Liquid
+      },
+      {
+        role: 'user',
+        content: 'JSON PARSING FAILED: Your previous response is not valid JSON',
+      },
+      {
+        role: 'assistant',
+        content: '{"issues": []}', // Finally returns correct JSON
+      },
+    ];
+
+    (sourceAgent as any).history = liquidBugHistory;
+    registry.registerSession('source-liquid-bug', sourceAgent);
+
+    const clonedAgent = await registry.cloneSession('source-liquid-bug', 'cloned-liquid');
+    const clonedHistory = (clonedAgent as any).history;
+
+    // Should filter out the JSON parsing error messages
+    expect(clonedHistory.length).toBeLessThan(liquidBugHistory.length);
+
+    const historyContents = clonedHistory.map((msg: any) => msg.content);
+
+    // Error messages should be filtered
+    expect(historyContents).not.toContain(
+      expect.stringContaining('URGENT - JSON PARSING FAILED')
+    );
+    expect(historyContents).not.toContain(
+      expect.stringContaining('JSON PARSING FAILED')
+    );
+
+    // Core content should be preserved
+    expect(historyContents).toContain('Generate a code review');
+    expect(historyContents).toContain('{"issues": []}'); // Final correct response
+  });
+
   it('should filter multiple schema-related messages in sequence', async () => {
     // Test case for when AI needs multiple attempts to get schema right
     const sourceAgent = new ProbeAgent({

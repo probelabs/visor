@@ -1267,6 +1267,25 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('📋 Full response preview:', response);
     }
 
+    // Check for Liquid template syntax in response (critical bug prevention)
+    if (_schema && _schema !== 'plain' && (response.includes('{%') || response.includes('{{'))) {
+      console.error('⚠️ CRITICAL: AI returned Liquid template syntax when JSON was expected!');
+      console.error(`Response that caused issue: "${response.substring(0, 100)}..."`);
+
+      // Return error issue instead of trying to parse
+      return {
+        issues: [{
+          file: 'system',
+          line: 0,
+          ruleId: 'system/liquid-template-in-json',
+          message: 'AI returned Liquid template syntax instead of JSON. This indicates a prompt confusion error.',
+          severity: 'error',
+          category: 'logic',
+        }],
+        debug: debugInfo,
+      };
+    }
+
     try {
       // Handle different schema types differently
       let reviewData: AIResponseFormat;
