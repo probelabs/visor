@@ -383,12 +383,21 @@ export class SessionRegistry {
         content.includes('"properties"') &&
         (content.includes('"type"') || content.includes('"required"'));
 
+      // Filter out assistant messages that used attempt_completion format
+      // This prevents schema bleed-through from parent session
+      const isAttemptCompletionResponse =
+        message.role === 'assistant' &&
+        (content.includes('<attempt_completion>') ||
+          content.includes('</attempt_completion>') ||
+          (content.includes('"text"') && content.includes('"tags"')));
+
       // Keep message if it's NOT a schema/formatting message or schema definition
       return (
         !isSchemaMessage &&
         !isSystemReminder &&
         !isJsonValidationResult &&
-        !containsSchemaDefinition
+        !containsSchemaDefinition &&
+        !isAttemptCompletionResponse
       );
     });
 
