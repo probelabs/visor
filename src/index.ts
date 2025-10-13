@@ -654,7 +654,7 @@ async function handleIssueEvent(
 
   // Run the checks using CheckExecutionEngine
   const { CheckExecutionEngine } = await import('./check-execution-engine');
-  const engine = new CheckExecutionEngine();
+  const engine = new CheckExecutionEngine(undefined, octokit);
 
   try {
     // Build tag filter from action inputs (if provided)

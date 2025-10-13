@@ -326,6 +326,25 @@ export const configSchema = {
           type: 'string',
           description: 'Override namespace for this check',
         },
+        op: {
+          type: 'string',
+          description:
+            "GitHub operation to perform (e.g., 'labels.add', 'labels.remove', 'comment.create')",
+        },
+        values: {
+          anyOf: [
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+            {
+              type: 'string',
+            },
+          ],
+          description: 'Values for GitHub operations (can be array or single value)',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',

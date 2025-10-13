@@ -235,9 +235,6 @@ export class PRReviewer {
     _options: ReviewOptions,
     _githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    let comment = '';
-    comment += `## 🔍 Code Analysis Results\n\n`;
-
     // Concatenate all check outputs in this group; fall back to structured output fields
     const normalize = (s: string) => s.replace(/\\n/g, '\n');
     const checkContents = checkResults
@@ -257,10 +254,19 @@ export class PRReviewer {
         return '';
       })
       .filter(content => content && content.trim());
-    comment += checkContents.join('\n\n');
 
     // Add debug info if any check has it
     const debugInfo = checkResults.find(result => result.debug)?.debug;
+
+    // Only generate comment if there's actual content or debug info
+    if (checkContents.length === 0 && !debugInfo) {
+      return '';
+    }
+
+    let comment = '';
+    comment += `## 🔍 Code Analysis Results\n\n`;
+    comment += checkContents.join('\n\n');
+
     if (debugInfo) {
       comment += '\n\n' + this.formatDebugSection(debugInfo);
       comment += '\n\n';
