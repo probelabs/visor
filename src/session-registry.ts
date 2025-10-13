@@ -338,15 +338,17 @@ export class SessionRegistry {
 
     let filtered: any[];
     if (schemaRequestIndex !== -1) {
-      // Found schema request - truncate history at that point
+      // Found schema request - slice(0, index) excludes the message at 'index' and everything after
+      // This removes: the schema request itself + all subsequent messages (including AI responses with the old schema)
       filtered = history.slice(0, schemaRequestIndex);
+      const removedCount = history.length - schemaRequestIndex;
       console.error(
-        `🔍 Found schema formatting request at message ${schemaRequestIndex}, truncating history`
+        `🔍 Found schema formatting request at message ${schemaRequestIndex}, removing it + ${removedCount - 1} subsequent messages (total ${removedCount} removed)`
       );
     } else {
       // No schema request found - keep all messages
       filtered = [...history];
-      console.error(`🔍 No schema formatting request found in history`);
+      console.error(`🔍 No schema formatting request found in history - this might be the problem!`);
     }
 
     // Log filtering results
