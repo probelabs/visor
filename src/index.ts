@@ -724,7 +724,7 @@ async function handleIssueEvent(
       if (commentBody.trim()) {
         // Only add footer if not already present (to avoid duplicates)
         if (!commentBody.includes('*Powered by [Visor](')) {
-          commentBody += `\n---\n*Powered by [Visor](https://github.com/probelabs/visor)*`;
+          commentBody += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
         }
 
         // Post comment to the issue
@@ -1011,7 +1011,7 @@ async function handleIssueComment(
             owner,
             repo,
             issue_number: prNumber,
-            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor)*`,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`,
           });
           return;
         }

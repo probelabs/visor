@@ -301,7 +301,9 @@ checks:
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
-      - "{% if outputs.overview.tags['review-effort'] %}Review effort {{ outputs.overview.tags['review-effort'] }}/5{% endif %}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -320,16 +322,18 @@ checks:
         1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
         2) Assess priority (low/medium/high/urgent)
         3) Estimate complexity (trivial/simple/moderate/complex)
-        4) Suggest timeline for resolution
-        5) Recommend labels from the categories above
-        6) Identify stakeholders or potential assignees
-        7) Provide an initial response with clarifying questions if needed
+        4) Recommend labels from the categories above
+        5) Identify potential areas affected or relevant documentation
+        6) Provide an initial response with clarifying questions if needed
 
         Response style:
         - Professional and welcoming
         - Actionable guidance and clear next steps
         - Ask clarifying questions when information is missing
         - Use markdown formatting; include code snippets where useful
+        - NEVER make promises about timelines, release dates, or team commitments
+        - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
+        - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
 
   # Comment Assistant (comments only) — intent detection and reply
