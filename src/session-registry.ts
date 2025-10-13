@@ -138,7 +138,7 @@ export class SessionRegistry {
         mcpConfig: sourceAgentAny.mcpConfig,
         mcpConfigPath: sourceAgentAny.mcpConfigPath, // Preserve MCP config path
         mcpServers: sourceAgentAny.mcpServers, // Preserve MCP servers
-        tracer: sourceAgentAny.tracer,
+        tracer: sourceAgentAny.tracer, // Preserve tracer for continued telemetry
         outline: sourceAgentAny.outline, // Preserve outline setting
         maxResponseTokens: sourceAgentAny.maxResponseTokens, // Preserve token limits
         maxIterations: sourceAgentAny.maxIterations, // Preserve iteration limits

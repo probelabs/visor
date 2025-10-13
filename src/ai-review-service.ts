@@ -1050,6 +1050,51 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         debug: this.config.debug || false,
       };
 
+      // Enable tracing in debug mode for better diagnostics
+      let traceFilePath = '';
+      if (this.config.debug) {
+        try {
+          // Import telemetry modules dynamically
+          const { SimpleTelemetry, SimpleAppTracer } = await import('@probelabs/probe');
+
+          // Create trace file path
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const traceDir = process.env.GITHUB_WORKSPACE
+            ? `${process.env.GITHUB_WORKSPACE}/traces`
+            : `${process.cwd()}/traces`;
+
+          // Create traces directory if it doesn't exist
+          const fs = require('fs');
+          if (!fs.existsSync(traceDir)) {
+            fs.mkdirSync(traceDir, { recursive: true });
+          }
+
+          traceFilePath = `${traceDir}/trace-${checkName || 'check'}-${timestamp}.json`;
+
+          // Initialize telemetry and tracer
+          const telemetry = new SimpleTelemetry({
+            serviceName: 'visor-ai',
+            exportToFile: traceFilePath,
+            debug: true,
+          });
+
+          const tracer = new SimpleAppTracer(telemetry, sessionId);
+          (options as any).tracer = tracer;
+
+          log(`📊 Tracing enabled, will save to: ${traceFilePath}`);
+
+          // If in GitHub Actions, log the path for artifact upload
+          if (process.env.GITHUB_ACTIONS) {
+            console.log(`::notice title=AI Trace::Trace will be saved to ${traceFilePath}`);
+            // Also set output for workflow to pick up
+            console.log(`::set-output name=trace-path::${traceFilePath}`);
+          }
+        } catch (traceError) {
+          console.error('⚠️  Warning: Failed to initialize tracing:', traceError);
+          // Continue without tracing
+        }
+      }
+
       // Wire MCP configuration when provided
       if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
         (options as any).enableMcp = true;
@@ -1153,6 +1198,28 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Finalize and save trace if enabled
+      if (traceFilePath && (options as any).tracer) {
+        try {
+          const tracer = (options as any).tracer;
+          if (tracer.telemetry && typeof tracer.telemetry.export === 'function') {
+            await tracer.telemetry.export();
+            log(`📊 Trace saved to: ${traceFilePath}`);
+
+            // In GitHub Actions, also log file size for verification
+            if (process.env.GITHUB_ACTIONS) {
+              const fs = require('fs');
+              if (fs.existsSync(traceFilePath)) {
+                const stats = fs.statSync(traceFilePath);
+                console.log(`::notice title=AI Trace Saved::Trace file size: ${stats.size} bytes`);
+              }
+            }
+          }
+        } catch (exportError) {
+          console.error('⚠️  Warning: Failed to export trace:', exportError);
+        }
+      }
 
       // Register the session for potential reuse by dependent checks
       if (_checkName) {
