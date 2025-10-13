@@ -43,17 +43,19 @@ describe('Telemetry E2E — fail_if events and metrics', () => {
     const snap = getTestMetricsSnapshot();
     expect(snap.fail_if_triggered).toBeGreaterThanOrEqual(1);
 
-    // Verify NDJSON includes events
+    // Verify NDJSON includes events — robust across multiple files and empty files
     const files = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
     expect(files.length).toBeGreaterThan(0);
-    const newest = files
-      .map(f => ({ f, t: fs.statSync(path.join(tracesDir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t)[0].f;
-    const lines = fs
-      .readFileSync(path.join(tracesDir, newest), 'utf8')
-      .trim()
-      .split(/\r?\n/)
-      .map(l => JSON.parse(l));
+    const lines = files
+      .filter(f => fs.statSync(path.join(tracesDir, f)).size > 0)
+      .flatMap(f =>
+        fs
+          .readFileSync(path.join(tracesDir, f), 'utf8')
+          .trim()
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map(l => JSON.parse(l))
+      );
     const hasEvaluated = lines.some((s: any) =>
       (s.events || []).some((e: any) => e.name === 'fail_if.evaluated')
     );
