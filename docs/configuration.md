@@ -1,6 +1,57 @@
 ## ⚙️ Configuration & Extends
 
-Use `.visor.yaml` to add/override checks in your repo and extend shared configurations. Visor’s merge logic makes it flexible for teams and orgs.
+Use `.visor.yaml` to add/override checks in your repo and extend shared configurations. Visor's merge logic makes it flexible for teams and orgs.
+
+### Validating Configuration
+
+Before running checks, validate your configuration file to catch errors early:
+
+```bash
+# Validate default config location (.visor.yaml)
+visor validate
+
+# Validate specific config file
+visor validate --config .visor.yaml
+
+# Validate example configs
+visor validate --config examples/enhanced-config.yaml
+```
+
+The `validate` command checks for:
+- **Missing required fields** (e.g., `version`)
+- **Invalid check types** (must be: `ai`, `claude-code`, `command`, `http`, `http_input`, `http_client`, `noop`, `log`, `github`)
+- **Invalid event triggers** (e.g., `scheduled` should be `schedule`)
+- **Incorrect field names** and typos
+- **Schema compliance** for all configuration options
+
+Example validation output:
+```
+🔍 Visor Configuration Validator
+
+📂 Validating configuration: .visor.yaml
+
+✅ Configuration is valid!
+
+📋 Summary:
+   Version: 1.0
+   Checks: 5
+
+📝 Configured checks:
+   • security (type: ai)
+   • performance (type: ai)
+   • style (type: command)
+   • notify (type: http)
+   • monitor (type: http_input)
+```
+
+If there are errors, you'll get detailed messages with hints:
+```
+❌ Configuration validation failed!
+
+Error: Invalid check type "webhook". Must be: ai, claude-code, command, http, http_input, http_client, noop, log, github
+
+💡 Hint: The 'webhook' type has been renamed to 'http' for output and 'http_input' for input.
+```
 
 ### Check-Level AI Configuration
 
