@@ -66,10 +66,10 @@ jobs:
           VISOR_TELEMETRY_SINK: 'file'
           VISOR_TRACE_REPORT: 'true'
           # AI Provider API Keys (configure one of these in your repository secrets)
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
           ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic'
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Optional: Specify the AI model to use (use Google model with Google API key)
           MODEL_NAME: 'glm-4.6'
 
