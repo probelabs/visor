@@ -393,8 +393,20 @@ export class SessionRegistry {
         content.includes('"properties"') &&
         (content.includes('"type"') || content.includes('"required"'));
 
+      // Filter assistant responses that used attempt_completion (overview schema format)
+      // This is critical - the AI learns from its own previous responses
+      const isAttemptCompletionResponse =
+        message.role === 'assistant' &&
+        content.includes('<attempt_completion>') &&
+        (content.includes('"text"') || content.includes('"tags"'));
+
       // Debug logging for filtered messages
-      const shouldFilter = isSchemaMessage || isSystemReminder || isJsonValidationResult || containsSchemaDefinition;
+      const shouldFilter =
+        isSchemaMessage ||
+        isSystemReminder ||
+        isJsonValidationResult ||
+        containsSchemaDefinition ||
+        isAttemptCompletionResponse;
       if (shouldFilter && console.error) {
         const preview = content.substring(0, 100).replace(/\n/g, ' ');
         console.error(`🔍 Filtering message [${message.role}]: ${preview}...`);
@@ -407,7 +419,9 @@ export class SessionRegistry {
     // Log filtering results
     const filteredCount = originalCount - filtered.length;
     if (filteredCount > 0) {
-      console.error(`📋 Filtered ${filteredCount} schema/formatting messages from history (${originalCount} → ${filtered.length})`);
+      console.error(
+        `📋 Filtered ${filteredCount} schema/formatting messages from history (${originalCount} → ${filtered.length})`
+      );
     }
 
     // Ensure we don't accidentally remove too much
