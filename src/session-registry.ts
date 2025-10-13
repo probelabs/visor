@@ -259,34 +259,26 @@ export class SessionRegistry {
       }
 
       // Copy the conversation history from source agent
-      // IMPORTANT: Remove system message from history because ProbeAgent adds a fresh one on each answer() call
-      // Having two system messages confuses the AI and can cause schema format issues
+      // Keep the system message in history for AI provider cache efficiency
+      // ProbeAgent (modified version) will detect existing system message and reuse it
       if (sourceHistory.length > 0) {
         try {
           // Deep clone the history array and all message objects within it
-          let clonedHistory = JSON.parse(JSON.stringify(sourceHistory));
-
-          // Remove system message(s) from the history
-          // ProbeAgent will add a new system message when answer() is called
-          const originalLength = clonedHistory.length;
-          clonedHistory = clonedHistory.filter((msg: any) => msg.role !== 'system');
-          const removedSystemMessages = originalLength - clonedHistory.length;
+          const clonedHistory = JSON.parse(JSON.stringify(sourceHistory));
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (clonedAgent as any).history = clonedHistory;
 
           console.error(
-            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${clonedHistory.length} messages copied, ${removedSystemMessages} system messages removed)`
+            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${clonedHistory.length} messages copied, keeping system message for cache)`
           );
         } catch (cloneError) {
           // Fallback to shallow copy if deep clone fails (e.g., circular references)
           console.error(
             `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
           );
-          // Remove system messages from shallow copy too
-          const filtered = sourceHistory.filter((msg: any) => msg.role !== 'system');
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).history = [...filtered];
+          (clonedAgent as any).history = [...sourceHistory];
         }
       } else {
         console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
