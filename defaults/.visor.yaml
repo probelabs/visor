@@ -301,7 +301,7 @@ checks:
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
-      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+      - "{% if outputs.overview.tags['review-effort'] %}Review effort {{ outputs.overview.tags['review-effort'] }}/5{% endif %}"
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
