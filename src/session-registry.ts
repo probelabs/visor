@@ -259,26 +259,34 @@ export class SessionRegistry {
       }
 
       // Copy the conversation history from source agent
-      // Keep the full history to maximize AI provider cache hits
-      // Schema differences will be handled by explicit prompt directives
+      // IMPORTANT: Remove system message from history because ProbeAgent adds a fresh one on each answer() call
+      // Having two system messages confuses the AI and can cause schema format issues
       if (sourceHistory.length > 0) {
         try {
           // Deep clone the history array and all message objects within it
-          const clonedHistory = JSON.parse(JSON.stringify(sourceHistory));
+          let clonedHistory = JSON.parse(JSON.stringify(sourceHistory));
+
+          // Remove system message(s) from the history
+          // ProbeAgent will add a new system message when answer() is called
+          const originalLength = clonedHistory.length;
+          clonedHistory = clonedHistory.filter((msg: any) => msg.role !== 'system');
+          const removedSystemMessages = originalLength - clonedHistory.length;
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (clonedAgent as any).history = clonedHistory;
 
           console.error(
-            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${clonedHistory.length} messages copied)`
+            `📋 Cloned session ${sourceSessionId} → ${newSessionId} (${clonedHistory.length} messages copied, ${removedSystemMessages} system messages removed)`
           );
         } catch (cloneError) {
           // Fallback to shallow copy if deep clone fails (e.g., circular references)
           console.error(
             `⚠️  Warning: Deep clone failed for session ${sourceSessionId}, using shallow copy: ${cloneError}`
           );
+          // Remove system messages from shallow copy too
+          const filtered = sourceHistory.filter((msg: any) => msg.role !== 'system');
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (clonedAgent as any).history = [...sourceHistory];
+          (clonedAgent as any).history = [...filtered];
         }
       } else {
         console.error(`📋 Cloned session ${sourceSessionId} → ${newSessionId} (no history)`);
