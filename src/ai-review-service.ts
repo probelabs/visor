@@ -285,7 +285,8 @@ export class AIReviewService {
 
       const clonedAgent = await this.sessionRegistry.cloneSession(
         parentSessionId,
-        currentSessionId
+        currentSessionId,
+        checkName  // Pass checkName for tracing
       );
       if (!clonedAgent) {
         throw new Error(`Failed to clone session ${parentSessionId}. Falling back to append mode.`);
@@ -977,6 +978,30 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Finalize and save trace if this is a cloned session with tracing enabled
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const agentAny = agent as any;
+      if (agentAny._traceFilePath && agentAny.tracer) {
+        try {
+          // Call shutdown to properly close the file stream
+          if (agentAny.tracer && typeof agentAny.tracer.shutdown === 'function') {
+            await agentAny.tracer.shutdown();
+            log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
+
+            // In GitHub Actions, also log file size for verification
+            if (process.env.GITHUB_ACTIONS) {
+              const fs = require('fs');
+              if (fs.existsSync(agentAny._traceFilePath)) {
+                const stats = fs.statSync(agentAny._traceFilePath);
+                console.log(`::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`);
+              }
+            }
+          }
+        } catch (exportError) {
+          console.error('⚠️  Warning: Failed to export trace for cloned session:', exportError);
+        }
+      }
 
       return { response, effectiveSchema };
     } catch (error) {

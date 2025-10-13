@@ -106,7 +106,8 @@ export class SessionRegistry {
    */
   public async cloneSession(
     sourceSessionId: string,
-    newSessionId: string
+    newSessionId: string,
+    checkName?: string
   ): Promise<ProbeAgent | undefined> {
     const sourceAgent = this.sessions.get(sourceSessionId);
     if (!sourceAgent) {
@@ -138,7 +139,8 @@ export class SessionRegistry {
         mcpConfig: sourceAgentAny.mcpConfig,
         mcpConfigPath: sourceAgentAny.mcpConfigPath, // Preserve MCP config path
         mcpServers: sourceAgentAny.mcpServers, // Preserve MCP servers
-        tracer: sourceAgentAny.tracer, // Preserve tracer for continued telemetry
+        // Don't preserve tracer - each clone needs its own trace file
+        // tracer: sourceAgentAny.tracer,
         outline: sourceAgentAny.outline, // Preserve outline setting
         maxResponseTokens: sourceAgentAny.maxResponseTokens, // Preserve token limits
         maxIterations: sourceAgentAny.maxIterations, // Preserve iteration limits
@@ -152,6 +154,52 @@ export class SessionRegistry {
       const { ProbeAgent: ProbeAgentClass } = await import('@probelabs/probe');
 
       const clonedAgent = new ProbeAgentClass(cloneOptions);
+
+      // Create a new tracer for the cloned session if debug mode is enabled
+      if (cloneOptions.debug && checkName) {
+        try {
+          // Import telemetry modules dynamically
+          const probeModule = await import('@probelabs/probe') as any;
+
+          if (probeModule.SimpleTelemetry && probeModule.SimpleAppTracer) {
+            const SimpleTelemetry = probeModule.SimpleTelemetry;
+            const SimpleAppTracer = probeModule.SimpleAppTracer;
+
+            // Create trace file path in debug-artifacts directory
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const traceDir = process.env.GITHUB_WORKSPACE
+              ? `${process.env.GITHUB_WORKSPACE}/debug-artifacts`
+              : `${process.cwd()}/debug-artifacts`;
+
+            // Create traces directory if it doesn't exist
+            const fs = require('fs');
+            if (!fs.existsSync(traceDir)) {
+              fs.mkdirSync(traceDir, { recursive: true });
+            }
+
+            const traceFilePath = `${traceDir}/trace-${checkName}-${timestamp}.jsonl`;
+
+            // Initialize telemetry and tracer
+            const telemetry = new SimpleTelemetry({
+              serviceName: 'visor-ai-clone',
+              enableFile: true,
+              filePath: traceFilePath,
+              enableConsole: false,
+            });
+
+            const tracer = new SimpleAppTracer(telemetry, newSessionId);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (clonedAgent as any).tracer = tracer;
+            // Store trace file path for later use
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (clonedAgent as any)._traceFilePath = traceFilePath;
+
+            console.error(`📊 Tracing enabled for cloned session, will save to: ${traceFilePath}`);
+          }
+        } catch (traceError) {
+          console.error('⚠️  Warning: Failed to initialize tracing for cloned session:', traceError);
+        }
+      }
 
       // Initialize the cloned agent if the source agent was initialized (MCP tools, etc.)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
