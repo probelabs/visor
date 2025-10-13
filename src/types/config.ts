@@ -398,6 +398,13 @@ export interface CheckConfig {
   memory_js?: string;
   /** Override namespace for this check */
   namespace?: string;
+  /**
+   * GitHub provider specific options (optional, only used when type === 'github').
+   */
+  /** GitHub operation to perform (e.g., 'labels.add', 'labels.remove', 'comment.create') */
+  op?: string;
+  /** Values for GitHub operations (can be array or single value) */
+  values?: string[] | string;
 }
 
 /**

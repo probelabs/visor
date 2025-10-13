@@ -48,26 +48,32 @@ export class GitHubOpsProvider extends CheckProvider {
       value_js?: string;
     };
 
-    // Create Octokit from env token
-    const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
-    if (!token) {
-      return {
-        issues: [
-          {
-            file: 'system',
-            line: 0,
-            ruleId: 'github/missing_token',
-            message:
-              'No GitHub token available; set GITHUB_TOKEN or pass github-token input for native GitHub operations',
-            severity: 'error',
-            category: 'logic',
-          },
-        ],
-      };
-    }
+    // Use authenticated octokit from event context if available, otherwise create from env token
+    let octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
+      | import('@octokit/rest').Octokit
+      | undefined;
 
-    const { Octokit } = await import('@octokit/rest');
-    const octokit = new Octokit({ auth: token });
+    if (!octokit) {
+      const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+      if (!token) {
+        return {
+          issues: [
+            {
+              file: 'system',
+              line: 0,
+              ruleId: 'github/missing_token',
+              message:
+                'No GitHub token available; set GITHUB_TOKEN or pass github-token input for native GitHub operations',
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+        };
+      }
+
+      const { Octokit } = await import('@octokit/rest');
+      octokit = new Octokit({ auth: token });
+    }
 
     const repoEnv = process.env.GITHUB_REPOSITORY || '';
     const [owner, repo] = repoEnv.split('/') as [string, string];

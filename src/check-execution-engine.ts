@@ -192,11 +192,20 @@ export class CheckExecutionEngine {
     octokit?: import('@octokit/rest').Octokit;
   };
 
-  constructor(workingDirectory?: string) {
+  constructor(workingDirectory?: string, octokit?: import('@octokit/rest').Octokit) {
     this.workingDirectory = workingDirectory || process.cwd();
     this.gitAnalyzer = new GitRepositoryAnalyzer(this.workingDirectory);
     this.providerRegistry = CheckProviderRegistry.getInstance();
     this.failureEvaluator = new FailureConditionEvaluator();
+
+    // If authenticated octokit is provided, cache it for provider use
+    if (octokit) {
+      const repoEnv = process.env.GITHUB_REPOSITORY || '';
+      const [owner, repo] = repoEnv.split('/') as [string, string];
+      if (owner && repo) {
+        this.actionContext = { owner, repo, octokit };
+      }
+    }
 
     // Create a mock Octokit instance for local analysis
     // This allows us to reuse the existing PRReviewer logic without network calls
@@ -448,6 +457,11 @@ export class CheckExecutionEngine {
       const providerType = targetCfg.type || 'ai';
       const prov = this.providerRegistry.getProviderOrThrow(providerType);
       this.setProviderWebhookContext(prov);
+      // Inject authenticated octokit into event context for providers
+      const enrichedEventContext = {
+        ...prInfo.eventContext,
+        ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+      };
       const provCfg: CheckProviderConfig = {
         type: providerType,
         prompt: targetCfg.prompt,
@@ -456,7 +470,7 @@ export class CheckExecutionEngine {
         schema: targetCfg.schema,
         group: targetCfg.group,
         checkName: target,
-        eventContext: prInfo.eventContext,
+        eventContext: enrichedEventContext,
         transform: targetCfg.transform,
         transform_js: targetCfg.transform_js,
         env: targetCfg.env,
@@ -1376,19 +1390,22 @@ export class CheckExecutionEngine {
 
     // Capture GitHub Action context (owner/repo/octokit) if available from environment
     // This is used for context elevation when routing via goto_event
-    try {
-      const repoEnv = process.env.GITHUB_REPOSITORY || '';
-      const [owner, repo] = repoEnv.split('/') as [string, string];
-      const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
-      if (owner && repo) {
-        this.actionContext = { owner, repo };
-        if (token) {
-          const { Octokit } = await import('@octokit/rest');
-          this.actionContext.octokit = new Octokit({ auth: token });
+    // Only initialize if not already set by constructor (which has the authenticated octokit)
+    if (!this.actionContext) {
+      try {
+        const repoEnv = process.env.GITHUB_REPOSITORY || '';
+        const [owner, repo] = repoEnv.split('/') as [string, string];
+        const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
+        if (owner && repo) {
+          this.actionContext = { owner, repo };
+          if (token) {
+            const { Octokit } = await import('@octokit/rest');
+            this.actionContext.octokit = new Octokit({ auth: token });
+          }
         }
+      } catch {
+        // Non-fatal: context elevation will be skipped if not available
       }
-    } catch {
-      // Non-fatal: context elevation will be skipped if not available
     }
 
     // Check if we have any checks left after filtering
