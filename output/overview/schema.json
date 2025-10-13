@@ -23,7 +23,7 @@
         "label": {
           "type": "string",
           "description": "Primary PR category label",
-          "enum": ["bug", "feature", "chore", "docs", "refactor", "test"]
+          "enum": ["bug", "chore", "documentation", "enhancement", "feature"]
         }
       },
       "additionalProperties": true

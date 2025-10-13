@@ -4,6 +4,7 @@ import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
+import { initializeTracer } from './utils/tracer-init';
 
 /**
  * Helper function to log debug messages using the centralized logger
@@ -280,15 +281,19 @@ export class AIReviewService {
 
     if (sessionMode === 'clone') {
       // Clone the session - creates a new agent with copied history
-      currentSessionId = `${parentSessionId}-clone-${Date.now()}`;
-      log(`📋 Cloning AI session ${parentSessionId} → ${currentSessionId}...`);
+      // Include check name in the session ID for better tracing
+      currentSessionId = `${checkName}-session-${Date.now()}`;
+      log(
+        `📋 Cloning AI session ${parentSessionId} → ${currentSessionId} for ${checkName} check...`
+      );
 
       const clonedAgent = await this.sessionRegistry.cloneSession(
         parentSessionId,
-        currentSessionId
+        currentSessionId,
+        checkName // Pass checkName for tracing
       );
       if (!clonedAgent) {
-        throw new Error(`Failed to clone session ${parentSessionId}. Falling back to append mode.`);
+        throw new Error(`Failed to clone session ${parentSessionId}`);
       }
       agentToUse = clonedAgent;
     } else {
@@ -302,6 +307,9 @@ export class AIReviewService {
     log(`📋 Schema for this check: ${schema || 'none (no schema)'}`);
     if (sessionMode === 'clone') {
       log(`✅ Cloned agent will use NEW schema (${schema}) - parent schema does not persist`);
+      log(`🔄 Clone operation ensures fresh agent with copied history but new configuration`);
+    } else {
+      log(`🔄 Append mode - using existing agent instance with shared history and configuration`);
     }
 
     let debugInfo: AIDebugInfo | undefined;
@@ -389,137 +397,6 @@ export class AIReviewService {
    */
   cleanupSession(sessionId: string): void {
     this.sessionRegistry.unregisterSession(sessionId);
-  }
-
-  /**
-   * Clean validation/correction messages and schema-formatted responses from ProbeAgent history
-   * This prevents:
-   * 1. Validation retry messages from polluting conversation
-   * 2. Previous schema format from influencing next check's output format
-   */
-  private cleanValidationMessagesFromHistory(agent: ProbeAgent): void {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const history = (agent as any).history || [];
-
-    if (!Array.isArray(history) || history.length === 0) {
-      return;
-    }
-
-    // Patterns that identify validation/correction messages from ProbeAgent
-    const validationPatterns = [
-      /CRITICAL JSON ERROR:/i,
-      /URGENT.*JSON PARSING FAILED:/i,
-      /FINAL ATTEMPT.*CRITICAL JSON ERROR:/i,
-      /Your previous response was not valid JSON/i,
-      /The JSON response you provided/i,
-      /must return.*valid JSON/i,
-      /You returned a JSON schema definition instead of data/i,
-    ];
-
-    const originalLength = history.length;
-    const cleanedHistory = [];
-
-    // Keep system message and filter out validation rounds
-    for (let i = 0; i < history.length; i++) {
-      const msg = history[i];
-
-      // Always keep system messages
-      if (msg.role === 'system') {
-        cleanedHistory.push(msg);
-        continue;
-      }
-
-      // Check if this is a validation correction prompt
-      const isValidationMessage = validationPatterns.some(
-        pattern => typeof msg.content === 'string' && pattern.test(msg.content)
-      );
-
-      if (isValidationMessage) {
-        // Skip this message and the next assistant response (the correction)
-        log(`🧹 Removing validation message from history (index ${i})`);
-        i++; // Skip the assistant's corrected response too
-        continue;
-      }
-
-      cleanedHistory.push(msg);
-    }
-
-    // IMPORTANT: Strip the final JSON response from the last assistant message
-    // The JSON response contains schema-formatted output (e.g., overview with tags)
-    // which will confuse the next check that uses a different schema (e.g., code-review with issues)
-    // We keep the conversation (user prompt + assistant text) but remove the structured JSON
-    if (cleanedHistory.length >= 2) {
-      // Find the last assistant message
-      let lastAssistantIndex = -1;
-      for (let i = cleanedHistory.length - 1; i >= 0; i--) {
-        if (cleanedHistory[i].role === 'assistant') {
-          lastAssistantIndex = i;
-          break;
-        }
-      }
-
-      if (lastAssistantIndex >= 0) {
-        const lastAssistantMsg = cleanedHistory[lastAssistantIndex];
-        if (typeof lastAssistantMsg.content === 'string') {
-          const originalLength = lastAssistantMsg.content.length;
-
-          // Try to extract and remove JSON block from the end
-          // ProbeAgent typically appends JSON in one of these formats:
-          // 1. ```json\n{...}\n```
-          // 2. Plain JSON starting with { or [
-          let cleanedContent = lastAssistantMsg.content;
-
-          // Pattern 1: Remove JSON code blocks at the end
-          const jsonBlockPattern = /```json\s*\n[\s\S]*?\n```\s*$/;
-          if (jsonBlockPattern.test(cleanedContent)) {
-            cleanedContent = cleanedContent.replace(jsonBlockPattern, '').trim();
-            log(`🧹 Removed JSON code block from assistant response`);
-          } else {
-            // Pattern 2: Try to find trailing JSON object/array
-            // Look for the last occurrence of { or [ that might be the start of JSON
-            const lines = cleanedContent.split('\n');
-            let jsonStartLine = -1;
-
-            for (let i = lines.length - 1; i >= 0; i--) {
-              const line = lines[i].trim();
-              if (line.startsWith('{') || line.startsWith('[')) {
-                // Check if this looks like the start of a JSON response
-                const possibleJson = lines.slice(i).join('\n');
-                try {
-                  JSON.parse(possibleJson);
-                  jsonStartLine = i;
-                  break;
-                } catch {
-                  // Not valid JSON, keep looking
-                }
-              }
-            }
-
-            if (jsonStartLine >= 0) {
-              cleanedContent = lines.slice(0, jsonStartLine).join('\n').trim();
-              log(`🧹 Removed trailing JSON from assistant response`);
-            }
-          }
-
-          if (cleanedContent.length < originalLength) {
-            lastAssistantMsg.content = cleanedContent;
-            log(
-              `🧹 Cleaned assistant response: ${originalLength} → ${cleanedContent.length} chars (removed ${originalLength - cleanedContent.length} chars)`
-            );
-          }
-        }
-      }
-    }
-
-    // Update the agent's history
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (agent as any).history = cleanedHistory;
-
-    if (cleanedHistory.length < originalLength) {
-      log(
-        `🧹 Cleaned ${originalLength - cleanedHistory.length} messages from history (${originalLength} → ${cleanedHistory.length})`
-      );
-    }
   }
 
   /**
@@ -975,6 +852,32 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
+      // Finalize and save trace if this is a cloned session with tracing enabled
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const agentAny = agent as any;
+      if (agentAny._traceFilePath && agentAny.tracer) {
+        try {
+          // Call shutdown to properly close the file stream
+          if (agentAny.tracer && typeof agentAny.tracer.shutdown === 'function') {
+            await agentAny.tracer.shutdown();
+            log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
+
+            // In GitHub Actions, also log file size for verification
+            if (process.env.GITHUB_ACTIONS) {
+              const fs = require('fs');
+              if (fs.existsSync(agentAny._traceFilePath)) {
+                const stats = fs.statSync(agentAny._traceFilePath);
+                console.log(
+                  `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
+                );
+              }
+            }
+          }
+        } catch (exportError) {
+          console.error('⚠️  Warning: Failed to export trace for cloned session:', exportError);
+        }
+      }
+
       return { response, effectiveSchema };
     } catch (error) {
       console.error('❌ ProbeAgent session reuse failed:', error);
@@ -1046,6 +949,16 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
+
+      // Enable tracing in debug mode for better diagnostics
+      let traceFilePath = '';
+      if (this.config.debug) {
+        const tracerResult = await initializeTracer(sessionId, _checkName);
+        if (tracerResult) {
+          (options as any).tracer = tracerResult.tracer;
+          traceFilePath = tracerResult.filePath;
+        }
+      }
 
       // Wire MCP configuration when provided
       if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
@@ -1151,10 +1064,32 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
+      // Finalize and save trace if enabled
+      if (traceFilePath && (options as any).tracer) {
+        try {
+          const tracer = (options as any).tracer;
+          // Call shutdown to properly close the file stream
+          if (tracer && typeof tracer.shutdown === 'function') {
+            await tracer.shutdown();
+            log(`📊 Trace saved to: ${traceFilePath}`);
+
+            // In GitHub Actions, also log file size for verification
+            if (process.env.GITHUB_ACTIONS) {
+              const fs = require('fs');
+              if (fs.existsSync(traceFilePath)) {
+                const stats = fs.statSync(traceFilePath);
+                console.log(`::notice title=AI Trace Saved::Trace file size: ${stats.size} bytes`);
+              }
+            }
+          }
+        } catch (exportError) {
+          console.error('⚠️  Warning: Failed to export trace:', exportError);
+        }
+      }
+
       // Register the session for potential reuse by dependent checks
       if (_checkName) {
-        // Clean validation/correction messages from history before registering
-        this.cleanValidationMessagesFromHistory(agent);
+        // ProbeAgent.clone() will handle history filtering when this session is cloned
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
@@ -1262,6 +1197,28 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('📋 Response preview (last 200 chars):', response.substring(response.length - 200));
     } else {
       log('📋 Full response preview:', response);
+    }
+
+    // Check for Liquid template syntax in response (critical bug prevention)
+    if (_schema && _schema !== 'plain' && (response.includes('{%') || response.includes('{{'))) {
+      console.error('⚠️ CRITICAL: AI returned Liquid template syntax when JSON was expected!');
+      console.error(`Response that caused issue: "${response.substring(0, 100)}..."`);
+
+      // Return error issue instead of trying to parse
+      return {
+        issues: [
+          {
+            file: 'system',
+            line: 0,
+            ruleId: 'system/liquid-template-in-json',
+            message:
+              'AI returned Liquid template syntax instead of JSON. This indicates a prompt confusion error.',
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
+        debug: debugInfo,
+      };
     }
 
     try {

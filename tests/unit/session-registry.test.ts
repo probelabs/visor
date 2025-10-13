@@ -135,10 +135,17 @@ describe('SessionRegistry', () => {
         { role: 'assistant', content: 'Hi there' },
       ];
 
+      const clonedHistory = JSON.parse(JSON.stringify(originalHistory));
+
       const sourceAgent = {
         answer: jest.fn(),
         history: originalHistory,
         options: { sessionId: 'source-session' },
+        clone: jest.fn().mockReturnValue({
+          answer: jest.fn(),
+          history: clonedHistory,
+          options: { sessionId: 'cloned-session' },
+        }),
       } as any;
 
       registry.registerSession('source-session', sourceAgent);
@@ -147,6 +154,12 @@ describe('SessionRegistry', () => {
       const clonedAgent = await registry.cloneSession('source-session', 'cloned-session');
 
       expect(clonedAgent).toBeDefined();
+      expect(sourceAgent.clone).toHaveBeenCalledWith({
+        sessionId: 'cloned-session',
+        stripInternalMessages: true,
+        keepSystemMessage: true,
+        deepCopy: true,
+      });
 
       // Verify the cloned agent has a copy of the history
       expect((clonedAgent as any).history).toEqual(originalHistory);
@@ -172,6 +185,11 @@ describe('SessionRegistry', () => {
         answer: jest.fn(),
         history: [{ role: 'user', content: 'Test' }],
         options: { sessionId: 'source-session' },
+        clone: jest.fn().mockReturnValue({
+          answer: jest.fn(),
+          history: [{ role: 'user', content: 'Test' }],
+          options: { sessionId: 'cloned-session' },
+        }),
       } as any;
 
       registry.registerSession('source-session', sourceAgent);

@@ -9,10 +9,17 @@ import os from 'os';
 // Mock ProbeAgent
 const mockProbeAgent = {
   answer: jest.fn(),
+  history: [],
+  options: {},
+  clone: jest.fn(),
 };
 
 jest.mock('@probelabs/probe', () => ({
-  ProbeAgent: jest.fn().mockImplementation(() => mockProbeAgent),
+  ProbeAgent: jest.fn().mockImplementation(options => ({
+    ...mockProbeAgent,
+    options,
+    history: [],
+  })),
 }));
 
 describe('Session Reuse Integration', () => {
@@ -52,6 +59,14 @@ describe('Session Reuse Integration', () => {
     configManager = new ConfigManager();
     sessionRegistry = SessionRegistry.getInstance();
     sessionRegistry.clearAllSessions();
+
+    // Setup mock clone() to return a cloned agent with the same answer behavior
+    mockProbeAgent.clone.mockImplementation(options => ({
+      answer: mockProbeAgent.answer,
+      history: [...mockProbeAgent.history],
+      options: options || {},
+      clone: mockProbeAgent.clone,
+    }));
 
     // Setup mock responses
     mockProbeAgent.answer

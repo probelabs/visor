@@ -4,6 +4,22 @@ import os from 'os';
 import { execSync } from 'child_process';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
 
+// Mock ProbeAgent
+const mockProbeAgent = {
+  answer: jest.fn(),
+  history: [],
+  options: {},
+  clone: jest.fn(),
+};
+
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn().mockImplementation(options => ({
+    ...mockProbeAgent,
+    options,
+    history: [],
+  })),
+}));
+
 /**
  * End-to-end test for AI session reuse functionality
  * Tests the complete workflow from configuration validation to execution
@@ -13,6 +29,35 @@ describe('Session Reuse End-to-End', () => {
   let configPath: string;
 
   beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Set mock API key for Google provider
+    process.env.GOOGLE_API_KEY = 'mock-api-key-for-testing';
+
+    // Setup mock clone() to return a cloned agent with the same answer behavior
+    mockProbeAgent.clone.mockImplementation(options => ({
+      answer: mockProbeAgent.answer,
+      history: [...mockProbeAgent.history],
+      options: options || {},
+      clone: mockProbeAgent.clone,
+    }));
+
+    // Setup mock responses - provide enough for all tests
+    mockProbeAgent.answer.mockResolvedValue(
+      JSON.stringify({
+        issues: [
+          {
+            file: 'test.js',
+            line: 1,
+            ruleId: 'test/mock-issue',
+            message: 'Mock issue from AI analysis',
+            severity: 'warning',
+            category: 'test',
+          },
+        ],
+      })
+    );
+
     // Create temporary directory for test
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-e2e-session-'));
     configPath = path.join(tempDir, '.visor.yaml');
@@ -69,6 +114,9 @@ app.get('/debug', (req, res) => {
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+
+    // Clean up environment
+    delete process.env.GOOGLE_API_KEY;
   });
 
   it('should execute session reuse workflow with mock provider', async () => {
@@ -90,7 +138,6 @@ checks:
       - pr_updated
     ai:
       provider: google
-      model: test-model
 
   security-remediation:
     type: ai
@@ -105,7 +152,6 @@ checks:
     reuse_ai_session: true
     ai:
       provider: google
-      model: test-model
 
   performance-analysis:
     type: ai
@@ -119,7 +165,6 @@ checks:
       - pr_updated
     ai:
       provider: google
-      model: test-model
 
 output:
   pr_comment:
@@ -210,7 +255,7 @@ checks:
     on:
       - pr_updated
     ai:
-      provider: mock
+      provider: google
 
   detailed-security:
     type: ai
@@ -236,7 +281,7 @@ checks:
     on:
       - pr_updated
     ai:
-      provider: mock
+      provider: google
 
 output:
   pr_comment:
@@ -283,7 +328,6 @@ checks:
       - pr_updated
     ai:
       provider: google
-      model: test-model
 
   context-aware-security:
     type: ai
@@ -296,6 +340,8 @@ checks:
     depends_on:
       - context-builder
     reuse_ai_session: true
+    ai:
+      provider: google
 
   context-aware-performance:
     type: ai
@@ -308,6 +354,8 @@ checks:
     depends_on:
       - context-aware-security
     reuse_ai_session: true
+    ai:
+      provider: google
 
 output:
   pr_comment:

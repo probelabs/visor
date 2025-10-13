@@ -90,7 +90,7 @@ checks:
 
         You may also be asked to assign labels to PR; if so use this:
         - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
-        - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
+        - `tags.label`: one of [bug, chore, documentation, enhancement, feature]. Choose the best fit.
 
         Important:
         - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
@@ -302,6 +302,8 @@ checks:
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -317,19 +319,21 @@ checks:
         - `labels` (optional): array of labels that would help organization for this new issue.
 
         Use this triage rubric (adopted from our main prompt):
-        1) Categorize the issue (bug/feature/documentation/question/enhancement/maintenance)
+        1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
         2) Assess priority (low/medium/high/urgent)
         3) Estimate complexity (trivial/simple/moderate/complex)
-        4) Suggest timeline for resolution
-        5) Recommend labels
-        6) Identify stakeholders or potential assignees
-        7) Provide an initial response with clarifying questions if needed
+        4) Recommend labels from the categories above
+        5) Identify potential areas affected or relevant documentation
+        6) Provide an initial response with clarifying questions if needed
 
         Response style:
         - Professional and welcoming
         - Actionable guidance and clear next steps
         - Ask clarifying questions when information is missing
         - Use markdown formatting; include code snippets where useful
+        - NEVER make promises about timelines, release dates, or team commitments
+        - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
+        - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
 
   # Comment Assistant (comments only) — intent detection and reply
