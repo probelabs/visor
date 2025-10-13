@@ -1,5 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import { v4 as uuidv4 } from 'uuid';
+import { logger } from './logger';
 
 export interface Comment {
   id: number;
@@ -145,6 +146,10 @@ export class CommentManager {
           body: formattedContent,
         });
 
+        logger.info(
+          `✅ Successfully updated comment (ID: ${commentId}, GitHub ID: ${existingComment.id}) on PR #${prNumber} in ${owner}/${repo}`
+        );
+
         return updatedComment.data as Comment;
       } else {
         const newComment = await this.octokit.rest.issues.createComment({
@@ -153,6 +158,10 @@ export class CommentManager {
           issue_number: prNumber,
           body: formattedContent,
         });
+
+        logger.info(
+          `✅ Successfully created comment (ID: ${commentId}, GitHub ID: ${newComment.data.id}) on PR #${prNumber} in ${owner}/${repo}`
+        );
 
         return newComment.data as Comment;
       }

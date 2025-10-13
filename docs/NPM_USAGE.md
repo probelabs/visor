@@ -43,6 +43,26 @@ Add to your package.json scripts:
 
 ## Usage Examples
 
+### Validate configuration
+```bash
+# Validate config in current directory (searches for .visor.yaml)
+npx -y @probelabs/visor validate
+
+# Validate specific config file
+npx -y @probelabs/visor validate --config .visor.yaml
+
+# Validate before committing
+npx -y @probelabs/visor validate --config examples/my-config.yaml
+```
+
+The `validate` command checks your configuration for:
+- Missing required fields (e.g., `version`)
+- Invalid check types or event triggers
+- Incorrect field names and values
+- Schema compliance
+
+It provides detailed error messages with helpful hints to fix issues.
+
 ### Run all checks
 ```bash
 npx -y @probelabs/visor --check all

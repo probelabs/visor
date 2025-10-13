@@ -299,7 +299,10 @@ export class AIReviewService {
     }
 
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
-    log(`Schema type: ${schema || 'none (no schema)'}`);
+    log(`📋 Schema for this check: ${schema || 'none (no schema)'}`);
+    if (sessionMode === 'clone') {
+      log(`✅ Cloned agent will use NEW schema (${schema}) - parent schema does not persist`);
+    }
 
     let debugInfo: AIDebugInfo | undefined;
     if (this.config.debug) {
@@ -386,6 +389,137 @@ export class AIReviewService {
    */
   cleanupSession(sessionId: string): void {
     this.sessionRegistry.unregisterSession(sessionId);
+  }
+
+  /**
+   * Clean validation/correction messages and schema-formatted responses from ProbeAgent history
+   * This prevents:
+   * 1. Validation retry messages from polluting conversation
+   * 2. Previous schema format from influencing next check's output format
+   */
+  private cleanValidationMessagesFromHistory(agent: ProbeAgent): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const history = (agent as any).history || [];
+
+    if (!Array.isArray(history) || history.length === 0) {
+      return;
+    }
+
+    // Patterns that identify validation/correction messages from ProbeAgent
+    const validationPatterns = [
+      /CRITICAL JSON ERROR:/i,
+      /URGENT.*JSON PARSING FAILED:/i,
+      /FINAL ATTEMPT.*CRITICAL JSON ERROR:/i,
+      /Your previous response was not valid JSON/i,
+      /The JSON response you provided/i,
+      /must return.*valid JSON/i,
+      /You returned a JSON schema definition instead of data/i,
+    ];
+
+    const originalLength = history.length;
+    const cleanedHistory = [];
+
+    // Keep system message and filter out validation rounds
+    for (let i = 0; i < history.length; i++) {
+      const msg = history[i];
+
+      // Always keep system messages
+      if (msg.role === 'system') {
+        cleanedHistory.push(msg);
+        continue;
+      }
+
+      // Check if this is a validation correction prompt
+      const isValidationMessage = validationPatterns.some(
+        pattern => typeof msg.content === 'string' && pattern.test(msg.content)
+      );
+
+      if (isValidationMessage) {
+        // Skip this message and the next assistant response (the correction)
+        log(`🧹 Removing validation message from history (index ${i})`);
+        i++; // Skip the assistant's corrected response too
+        continue;
+      }
+
+      cleanedHistory.push(msg);
+    }
+
+    // IMPORTANT: Strip the final JSON response from the last assistant message
+    // The JSON response contains schema-formatted output (e.g., overview with tags)
+    // which will confuse the next check that uses a different schema (e.g., code-review with issues)
+    // We keep the conversation (user prompt + assistant text) but remove the structured JSON
+    if (cleanedHistory.length >= 2) {
+      // Find the last assistant message
+      let lastAssistantIndex = -1;
+      for (let i = cleanedHistory.length - 1; i >= 0; i--) {
+        if (cleanedHistory[i].role === 'assistant') {
+          lastAssistantIndex = i;
+          break;
+        }
+      }
+
+      if (lastAssistantIndex >= 0) {
+        const lastAssistantMsg = cleanedHistory[lastAssistantIndex];
+        if (typeof lastAssistantMsg.content === 'string') {
+          const originalLength = lastAssistantMsg.content.length;
+
+          // Try to extract and remove JSON block from the end
+          // ProbeAgent typically appends JSON in one of these formats:
+          // 1. ```json\n{...}\n```
+          // 2. Plain JSON starting with { or [
+          let cleanedContent = lastAssistantMsg.content;
+
+          // Pattern 1: Remove JSON code blocks at the end
+          const jsonBlockPattern = /```json\s*\n[\s\S]*?\n```\s*$/;
+          if (jsonBlockPattern.test(cleanedContent)) {
+            cleanedContent = cleanedContent.replace(jsonBlockPattern, '').trim();
+            log(`🧹 Removed JSON code block from assistant response`);
+          } else {
+            // Pattern 2: Try to find trailing JSON object/array
+            // Look for the last occurrence of { or [ that might be the start of JSON
+            const lines = cleanedContent.split('\n');
+            let jsonStartLine = -1;
+
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const line = lines[i].trim();
+              if (line.startsWith('{') || line.startsWith('[')) {
+                // Check if this looks like the start of a JSON response
+                const possibleJson = lines.slice(i).join('\n');
+                try {
+                  JSON.parse(possibleJson);
+                  jsonStartLine = i;
+                  break;
+                } catch {
+                  // Not valid JSON, keep looking
+                }
+              }
+            }
+
+            if (jsonStartLine >= 0) {
+              cleanedContent = lines.slice(0, jsonStartLine).join('\n').trim();
+              log(`🧹 Removed trailing JSON from assistant response`);
+            }
+          }
+
+          if (cleanedContent.length < originalLength) {
+            lastAssistantMsg.content = cleanedContent;
+            log(
+              `🧹 Cleaned assistant response: ${originalLength} → ${cleanedContent.length} chars (removed ${originalLength - cleanedContent.length} chars)`
+            );
+          }
+        }
+      }
+    }
+
+    // Update the agent's history
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).history = cleanedHistory;
+
+    if (cleanedHistory.length < originalLength) {
+      log(
+        `🧹 Cleaned ${originalLength - cleanedHistory.length} messages from history (${originalLength} → ${cleanedHistory.length})`
+      );
+    }
   }
 
   /**
@@ -1019,6 +1153,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       // Register the session for potential reuse by dependent checks
       if (_checkName) {
+        // Clean validation/correction messages from history before registering
+        this.cleanValidationMessagesFromHistory(agent);
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }

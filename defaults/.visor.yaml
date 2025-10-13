@@ -69,36 +69,34 @@ checks:
   overview:
     type: ai
     group: overview
+    schema: overview
     prompt: |
-        # 📋 Pull Request Overview: {{ pr.title }}
-
-        {% if pr.body %}
-        ## Description
-        {{ pr.body }}
-        {% endif %}
+        You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
 
         ## Files Changed Analysis
+        After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
 
-        Analyze the files listed in the `<files_summary>` section, which provides a structured overview of all changes including filenames, status, additions, and deletions.
+        Next ensure you cover all below:
 
         ## Architecture & Impact Assessment
+          - What this PR accomplishes
+          - Key technical changes introduced
+          - Affected system components
+          - Include one or more mermaid diagrams when useful to visualize component relationships or flow.
+          
+        ## Scope Discovery & Context Expansion
+        - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
+        - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
 
-        Please generate a comprehensive overview and analysis of this pull request.
+        You may also be asked to assign labels to PR; if so use this:
+        - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
+        - `tags.label`: one of [bug, feature, chore, docs, refactor, test]. Choose the best fit.
 
-        Follow these instructions to create a thorough assessment:
+        Important:
+        - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
+        - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
 
-        1. **Change Impact Analysis**
-           - What this PR accomplishes
-           - Key technical changes introduced
-           - Affected system components
-
-        2. **Architecture Visualization**
-           - Create appropriate mermaid diagram(s) to visualize the changes
-           - Choose the best diagram type for the context
-           - Use multiple diagrams if needed to explain different aspects
-           - Focus on modified components and their relationships
-
-        Provide a balanced technical assessment suitable for both developers and stakeholders.
+        Be concise, specific, and actionable. Avoid praise or celebration.
     on: [pr_opened, pr_updated]
 
   # Security analysis - Critical for all projects
@@ -246,6 +244,12 @@ checks:
     depends_on: [overview]
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
+    # After the first successful pass, jump back to 'overview' once and
+    # re-run this step under simulated PR update semantics to refresh context.
+    on_success:
+      goto_js: |
+        return attempt === 1 ? 'overview' : null
+      goto_event: pr_updated
 
   # Code style and formatting analysis
   style:
@@ -288,131 +292,95 @@ checks:
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
-  # Command orchestrator - demonstrates noop type for triggering multiple checks
-  review-all:
-    type: noop
-    command: '/review'
-    depends_on: [overview, security, performance, quality, style]
-    on: [issue_comment]
-    if: "event.isPullRequest"  # Only trigger on PR comments, not issues
-    group: orchestrator
+  # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
+  apply-overview-labels:
+    type: github
+    tags: [github]
+    depends_on: [overview]
+    on: [pr_opened]
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
 
-  # Intelligent Issue Assistant - provides sophisticated issue triage and assistance
+  # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
     type: ai
-    group: dynamic  # Special group: creates new comment each time instead of updating
-    command: "visor"
-    if: "event.name === 'issues' && event.action === 'opened' || (event.name === 'issue_comment' && event.comment && event.comment.body && event.comment.body.trim().startsWith('/visor'))"
+    group: dynamic  # New issue triage posts a standalone comment
+    schema: issue-assistant
     prompt: |
-        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance based on the trigger event.
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
-        ## Event Context
-        **Event Type**: {{ event.name }} - {{ event.action }}
-        {% if event.issue -%}
-        **Issue #{{ event.issue.number }}**: {{ event.issue.title }}
-        **Author**: {{ event.issue.author }}
-        **State**: {{ event.issue.state }}
-        **Created**: {{ event.issue.createdAt }}
-        {%- if event.issue.labels.size > 0 %}
-        **Labels**: {% for label in event.issue.labels %}{{ label.name }}{% unless forloop.last %}, {% endunless %}{% endfor %}
-        {%- endif %}
-        {%- if event.issue.assignees.size > 0 %}
-        **Assignees**: {% for assignee in event.issue.assignees %}{{ assignee }}{% unless forloop.last %}, {% endunless %}{% endfor %}
-        {%- endif %}
-        {%- endif %}
-        {%- if event.comment %}
-        **Comment by**: {{ event.comment.author }}
-        {%- endif %}
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
+        - `intent`: must be "issue_triage" for this flow.
+        - `labels` (optional): array of labels that would help organization for this new issue.
 
-        ## Repository Analysis Context
-        {%- if event.isPullRequest and pr.title %}
-        **PR Context**: {{ pr.title }}
-        {%- endif %}
-        {%- if event.repository %}
-        **Repository**: {{ event.repository.fullName }}
-        {%- endif %}
+        Use this triage rubric (adopted from our main prompt):
+        1) Categorize the issue (bug/feature/documentation/question/enhancement/maintenance)
+        2) Assess priority (low/medium/high/urgent)
+        3) Estimate complexity (trivial/simple/moderate/complex)
+        4) Suggest timeline for resolution
+        5) Recommend labels
+        6) Identify stakeholders or potential assignees
+        7) Provide an initial response with clarifying questions if needed
 
-        ## Instructions
+        Response style:
+        - Professional and welcoming
+        - Actionable guidance and clear next steps
+        - Ask clarifying questions when information is missing
+        - Use markdown formatting; include code snippets where useful
+    on: [issue_opened]
 
-        {%- if event.name == 'issues' and event.action == 'opened' %}
+  # Comment Assistant (comments only) — intent detection and reply
+  comment-assistant:
+    type: ai
+    group: dynamic
+    schema: issue-assistant
+    command: "visor"
+    prompt: |
+        You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
-        **ISSUE TRIAGE MODE**
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: a concise, helpful markdown reply to the latest comment.
+        - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
+        - `labels`: omit for comments (do not include).
 
-        Analyze this new issue and provide intelligent triage:
+        Rules:
+        - Never suggest rerun/disable unless asked explicitly.
+        - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
+        - Stay technical, direct, and specific; add code snippets or links when helpful.
+    on: [issue_comment]
+    on_success:
+      goto_js: |
+        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
+        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+      goto_event: pr_updated
 
-        ### Issue Content
-        {{ event.issue.body }}
+  # Apply labels to new issues based on assistant output (GitHub-only)
+  apply-issue-labels:
+    type: github
+    tags: [github]
+    depends_on: [issue-assistant]
+    on: [issue_opened]
+    op: labels.add
+    values:
+      - "{{ outputs['issue-assistant'].labels | safe_label_list }}"
 
-        ### Analysis Tasks
-        1. **Categorize** the issue (bug/feature/documentation/question/enhancement/maintenance)
-        2. **Assess priority** (low/medium/high/urgent) based on:
-           - Impact on users/system
-           - Security implications
-           - Blocking nature
-           - Community interest
-        3. **Estimate complexity** (trivial/simple/moderate/complex)
-        4. **Suggest timeline** for resolution
-        5. **Recommend labels** that would help with organization
-        6. **Identify stakeholders** who should be involved or assignees
-        7. **Provide initial response** to the issue author
+  # External origin labelling for PRs and Issues
+  external-label:
+    type: github
+    tags: [github]
+    on: [pr_opened, issue_opened]
+    if: "!isMember() && !isContributor()"
+    op: labels.add
+    values:
+      - "external"
 
-        ### Response Requirements
-        - Be professional and welcoming
-        - Show you understand the request
-        - Provide clear next steps
-        - Ask clarifying questions if needed
-        - Include technical insights where appropriate
+  # Retrigger noop removed — comment-assistant schedules overview directly
 
-        {%- elsif event.name == 'issue_comment' %}
-
-        **ASSISTANCE MODE**
-
-        A user has asked a question or provided additional information. Provide helpful technical assistance:
-
-        ### Original Issue
-        {%- if event.issue.title %}
-        **Title**: {{ event.issue.title }}
-        {%- endif %}
-        {%- if event.issue.body %}
-        **Description**: {{ event.issue.body }}
-        {%- endif %}
-
-        ### Latest Comment
-        {{ event.comment.body }}
-
-        ### Analysis Tasks
-        1. **Understand the context** of their question/comment
-        2. **Provide technical guidance** based on project knowledge
-        3. **Reference relevant code/files** if applicable
-        4. **Suggest implementation approaches** for feature requests
-        5. **Provide debugging steps** for bug reports
-        6. **Link to documentation** or similar issues if helpful
-        7. **Offer code examples** when appropriate
-
-        ### Response Requirements
-        - Address their specific question directly
-        - Provide actionable guidance
-        - Be encouraging and supportive
-        - Use technical language appropriate to their level
-        - Include code examples where helpful
-        - Reference project conventions and patterns
-
-        {%- endif %}
-
-        ### Special Instructions
-        - Always be professional, helpful, and encouraging
-        - Focus on actionable advice and clear next steps
-        - Use markdown formatting for better readability
-        - Include relevant code examples when helpful
-        - Reference project context and patterns when applicable
-        - If dealing with `/visor` commands in comments, acknowledge and provide assistance
-        - Maintain consistency with project tone and contributor guidelines
-
-        ### Response Format
-        Provide a well-structured markdown response with clear sections and helpful guidance.
-    on: [issue_opened, issue_comment]
-
-# Output configuration
 output:
   pr_comment:
     format: markdown

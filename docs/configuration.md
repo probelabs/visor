@@ -1,6 +1,57 @@
 ## ⚙️ Configuration & Extends
 
-Use `.visor.yaml` to add/override checks in your repo and extend shared configurations. Visor’s merge logic makes it flexible for teams and orgs.
+Use `.visor.yaml` to add/override checks in your repo and extend shared configurations. Visor's merge logic makes it flexible for teams and orgs.
+
+### Validating Configuration
+
+Before running checks, validate your configuration file to catch errors early:
+
+```bash
+# Validate default config location (.visor.yaml)
+visor validate
+
+# Validate specific config file
+visor validate --config .visor.yaml
+
+# Validate example configs
+visor validate --config examples/enhanced-config.yaml
+```
+
+The `validate` command checks for:
+- **Missing required fields** (e.g., `version`)
+- **Invalid check types** (must be: `ai`, `claude-code`, `command`, `http`, `http_input`, `http_client`, `noop`, `log`, `github`)
+- **Invalid event triggers** (e.g., `scheduled` should be `schedule`)
+- **Incorrect field names** and typos
+- **Schema compliance** for all configuration options
+
+Example validation output:
+```
+🔍 Visor Configuration Validator
+
+📂 Validating configuration: .visor.yaml
+
+✅ Configuration is valid!
+
+📋 Summary:
+   Version: 1.0
+   Checks: 5
+
+📝 Configured checks:
+   • security (type: ai)
+   • performance (type: ai)
+   • style (type: command)
+   • notify (type: http)
+   • monitor (type: http_input)
+```
+
+If there are errors, you'll get detailed messages with hints:
+```
+❌ Configuration validation failed!
+
+Error: Invalid check type "webhook". Must be: ai, claude-code, command, http, http_input, http_client, noop, log, github
+
+💡 Hint: The 'webhook' type has been renamed to 'http' for output and 'http_input' for input.
+```
 
 ### Check-Level AI Configuration
 
@@ -220,3 +271,31 @@ checks:
     prompt: |
       Production security analysis with ${{ env.ANALYSIS_TIMEOUT }}ms timeout
 ```
+
+### Native GitHub Provider
+
+Use `type: github` to perform labels/comments via GitHub API (Octokit). This avoids shelling out to `gh` and supports safe label sanitization.
+
+Keys:
+- `op`: one of `labels.add`, `labels.remove`, `comment.create`.
+- `values`/`value`: string or array to pass to the op (e.g., label names or comment lines). Empty strings are ignored automatically.
+- `value_js` (optional): JavaScript snippet to compute values dynamically. Not required for filtering empties.
+
+Example:
+```yaml
+checks:
+  apply-overview-labels:
+    type: github
+    tags: [github]
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+```
+
+Notes:
+- Requires `GITHUB_TOKEN` (or `github-token` Action input) and `GITHUB_REPOSITORY` in environment.
+- Use Liquid `safe_label` / `safe_label_list` to constrain labels to `[A-Za-z0-9:/]`.
+- Provider errors surface as issues (e.g., `github/missing_token`, `github/op_failed`) and won’t abort the whole run.

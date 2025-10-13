@@ -11,10 +11,8 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
-import { addEvent } from './telemetry/trace-helpers';
-import { emitNdjsonSpanWithEvents } from './telemetry/fallback-ndjson';
-import { addFailIfTriggered } from './telemetry/metrics';
 import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
+import { MemoryStore } from './memory-store';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -110,52 +108,18 @@ export class FailureConditionEvaluator {
     );
 
     try {
-      // Telemetry: mark evaluated
       try {
-        addEvent('fail_if.evaluated', {
-          check: checkName,
-          scope: 'check',
-          name: 'fail_if',
-          expression,
-        });
+        const isObj = context.output && typeof context.output === 'object';
+        const keys = isObj ? Object.keys(context.output as any).join(',') : typeof context.output;
+        let errorVal: unknown = undefined;
+        if (isObj && (context.output as any).error !== undefined)
+          errorVal = (context.output as any).error;
+        require('./logger').logger.debug(
+          `  fail_if: evaluating '${expression}' with output keys=${keys} error=${String(errorVal)}`
+        );
       } catch {}
-      try {
-        emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
-          {
-            name: 'fail_if.evaluated',
-            attrs: { check: checkName, scope: 'check', name: 'fail_if', expression },
-          },
-        ]);
-      } catch {}
-
-      const failed = this.evaluateExpression(expression, context);
-
-      if (failed) {
-        try {
-          addEvent('fail_if.triggered', {
-            check: checkName,
-            scope: 'check',
-            name: 'fail_if',
-            expression,
-          });
-        } catch {}
-        try {
-          emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
-            {
-              name: 'fail_if.evaluated',
-              attrs: { check: checkName, scope: 'check', name: 'fail_if', expression },
-            },
-            {
-              name: 'fail_if.triggered',
-              attrs: { check: checkName, scope: 'check', name: 'fail_if', expression },
-            },
-          ]);
-        } catch {}
-        try {
-          addFailIfTriggered(checkName, 'check');
-        } catch {}
-      }
-      return failed;
+      const res = this.evaluateExpression(expression, context);
+      return res;
     } catch (error) {
       console.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
@@ -195,6 +159,7 @@ export class FailureConditionEvaluator {
       event?: string;
       environment?: Record<string, string>;
       previousResults?: Map<string, ReviewSummary>;
+      authorAssociation?: string;
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -236,6 +201,8 @@ export class FailureConditionEvaluator {
       output: {
         issues: [],
       },
+      // Author association (used by permission helpers)
+      authorAssociation: contextData?.authorAssociation,
 
       // Utility metadata
       metadata: {
@@ -306,6 +273,15 @@ export class FailureConditionEvaluator {
       results.push(...filteredResults, ...checkResults);
     }
 
+    try {
+      if (checkName === 'B') {
+        console.error(
+          `🔧 Debug: fail_if results for ${checkName}: ${JSON.stringify(results)} context.output=${JSON.stringify(
+            context.output
+          )}`
+        );
+      }
+    } catch {}
     return results;
   }
 
@@ -321,59 +297,8 @@ export class FailureConditionEvaluator {
 
     for (const [conditionName, condition] of Object.entries(conditions)) {
       try {
-        // Emit telemetry that this condition is being evaluated
-        try {
-          addEvent('fail_if.evaluated', {
-            check: context.checkName || 'unknown',
-            scope: source,
-            name: conditionName,
-            expression: this.extractExpression(condition),
-          });
-        } catch {}
-
         const result = await this.evaluateSingleCondition(conditionName, condition, context);
         results.push(result);
-
-        // Emit telemetry and metric if condition triggered
-        if (result.failed) {
-          try {
-            addEvent('fail_if.triggered', {
-              check: context.checkName || 'unknown',
-              scope: source,
-              name: conditionName,
-              expression: result.expression,
-            });
-          } catch {}
-          try {
-            emitNdjsonSpanWithEvents(
-              'visor.check',
-              { 'visor.check.id': (context.checkName as string) || 'unknown' },
-              [
-                {
-                  name: 'fail_if.evaluated',
-                  attrs: {
-                    check: context.checkName || 'unknown',
-                    scope: source,
-                    name: conditionName,
-                    expression: this.extractExpression(condition),
-                  },
-                },
-                {
-                  name: 'fail_if.triggered',
-                  attrs: {
-                    check: context.checkName || 'unknown',
-                    scope: source,
-                    name: conditionName,
-                    expression: result.expression,
-                  },
-                },
-              ]
-            );
-          } catch {}
-          try {
-            addFailIfTriggered((context.checkName as string) || 'unknown', source);
-          } catch {}
-        }
       } catch (error) {
         // If evaluation fails, create an error result
         results.push({
@@ -563,12 +488,23 @@ export class FailureConditionEvaluator {
       const outputs = context.outputs || {};
       const debugData = context.debug || null;
 
+      // Get memory store and create accessor for fail_if expressions
+      const memoryStore = MemoryStore.getInstance();
+      const memoryAccessor = {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      };
+
       // Create scope with all context variables and helper functions
       const scope = {
         // Primary context variables
         output,
         outputs,
         debug: debugData,
+        // Memory accessor for fail_if expressions
+        memory: memoryAccessor,
         // Legacy compatibility variables
         issues,
         suggestions,
@@ -627,7 +563,9 @@ export class FailureConditionEvaluator {
         exec = this.sandbox.compile(`return (${normalizedExpr});`);
       }
       const result = exec(scope).run();
-
+      try {
+        require('./logger').logger.debug(`  fail_if: result=${Boolean(result)}`);
+      } catch {}
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
@@ -719,6 +657,76 @@ export class FailureConditionEvaluator {
       Object.assign(aggregatedOutput, extractedOutput as Record<string, unknown>);
     }
 
+    // If provider attached a raw transform snapshot, merge its fields generically.
+    try {
+      const raw = (reviewSummaryWithOutput as any).__raw;
+      if (raw && typeof raw === 'object') {
+        Object.assign(aggregatedOutput, raw as Record<string, unknown>);
+      }
+    } catch {}
+
+    // If output is a string, try to parse JSON (full or from end) to enrich context,
+    // and also derive common boolean flags generically (e.g., key:true/false) for fail_if usage.
+    try {
+      if (typeof extractedOutput === 'string') {
+        const parsed =
+          this.tryExtractJsonFromEnd(extractedOutput) ??
+          (() => {
+            try {
+              return JSON.parse(extractedOutput);
+            } catch {
+              return null;
+            }
+          })();
+        if (parsed !== null) {
+          if (Array.isArray(parsed)) {
+            (aggregatedOutput as any).items = parsed;
+          } else if (typeof parsed === 'object') {
+            Object.assign(aggregatedOutput, parsed as Record<string, unknown>);
+          }
+        }
+        // Generic boolean key extraction for simple text outputs (no special provider cases)
+        const lower = extractedOutput.toLowerCase();
+        const boolFrom = (key: string): boolean | null => {
+          const reTrue = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*true(?:[^a-z0-9_]|$)`
+          );
+          const reFalse = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*false(?:[^a-z0-9_]|$)`
+          );
+          if (reTrue.test(lower)) return true;
+          if (reFalse.test(lower)) return false;
+          return null;
+        };
+        const keys = ['error'];
+        for (const k of keys) {
+          const v = boolFrom(k);
+          if (v !== null && (aggregatedOutput as any)[k] === undefined) {
+            (aggregatedOutput as any)[k] = v;
+          }
+        }
+      }
+    } catch {}
+
+    // Try to parse JSON from content as a last resort when no structured output is present
+    try {
+      const rsAny = reviewSummaryWithOutput as any;
+      const hasStructuredOutput = extractedOutput !== undefined && extractedOutput !== null;
+      if (!hasStructuredOutput && typeof rsAny?.content === 'string') {
+        const parsedFromContent = this.tryExtractJsonFromEnd(rsAny.content);
+        if (parsedFromContent !== null && parsedFromContent !== undefined) {
+          if (Array.isArray(parsedFromContent)) {
+            (aggregatedOutput as any).items = parsedFromContent;
+          } else if (typeof parsedFromContent === 'object') {
+            Object.assign(aggregatedOutput, parsedFromContent as Record<string, unknown>);
+          }
+        }
+      }
+    } catch {}
+
+    // Get memory store instance
+    const memoryStore = MemoryStore.getInstance();
+
     const context: FailureConditionContext = {
       output: aggregatedOutput,
       outputs: (() => {
@@ -732,6 +740,13 @@ export class FailureConditionEvaluator {
         }
         return outputs;
       })(),
+      // Add memory accessor for fail_if expressions
+      memory: {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      } as any,
       // Add basic context info for failure conditions
       checkName: checkName,
       schema: checkSchema,
@@ -750,6 +765,26 @@ export class FailureConditionEvaluator {
     }
 
     return context;
+  }
+
+  // Minimal JSON-from-end extractor for fail_if context fallback
+  private tryExtractJsonFromEnd(text: string): unknown | null {
+    try {
+      const lines = text.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const t = lines[i].trim();
+        if (t.startsWith('{') || t.startsWith('[')) {
+          const candidate = lines.slice(i).join('\n').trim();
+          if (
+            (candidate.startsWith('{') && candidate.endsWith('}')) ||
+            (candidate.startsWith('[') && candidate.endsWith(']'))
+          ) {
+            return JSON.parse(candidate);
+          }
+        }
+      }
+    } catch {}
+    return null;
   }
 
   /**

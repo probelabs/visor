@@ -42,6 +42,8 @@ export interface CheckResult {
   checkName: string;
   content: string; // Rendered output for this specific check
   group: string; // Which group this check belongs to
+  // Optional structured output for custom schemas (e.g., overview, issue-assistant)
+  output?: unknown;
   debug?: AIDebugInfo;
   issues?: ReviewIssue[]; // Structured issues alongside rendered content
 }
@@ -126,6 +128,8 @@ export interface ReviewOptions {
   config?: import('./types/config').VisorConfig;
   checks?: string[];
   parallelExecution?: boolean;
+  // Optional tag filter to include/exclude checks by tags when running via GitHub Action path
+  tagFilter?: import('./types/config').TagFilter;
 }
 
 export class PRReviewer {
@@ -155,7 +159,10 @@ export class PRReviewer {
         undefined,
         config,
         undefined,
-        debug
+        debug,
+        undefined,
+        undefined,
+        options.tagFilter
       );
       return results;
     }
@@ -175,7 +182,23 @@ export class PRReviewer {
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-      const comment = await this.formatGroupComment(checkResults, options, {
+      // Filter out command-type checks from PR comments (they should report via GitHub Checks only)
+      const filteredResults = options.config
+        ? checkResults.filter(r => {
+            const cfg = options.config!.checks?.[r.checkName];
+            const t = cfg?.type || '';
+            const isGitHubOps =
+              t === 'github' || r.group === 'github' || t === 'noop' || t === 'command';
+            return !isGitHubOps;
+          })
+        : checkResults;
+
+      // If nothing to report after filtering, skip this group
+      if (!filteredResults || filteredResults.length === 0) {
+        continue;
+      }
+
+      const comment = await this.formatGroupComment(filteredResults, options, {
         owner,
         repo,
         prNumber,
@@ -195,6 +218,9 @@ export class PRReviewer {
           : `visor-review-${groupName}`;
       }
 
+      // Do not post empty comments (possible if content is blank after fallbacks)
+      if (!comment || !comment.trim()) continue;
+
       await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId,
         triggeredBy: options.triggeredBy || 'unknown',
@@ -212,10 +238,25 @@ export class PRReviewer {
     let comment = '';
     comment += `## 🔍 Code Analysis Results\n\n`;
 
-    // Simple concatenation of all check outputs in this group
+    // Concatenate all check outputs in this group; fall back to structured output fields
+    const normalize = (s: string) => s.replace(/\\n/g, '\n');
     const checkContents = checkResults
-      .map(result => result.content)
-      .filter(content => content.trim());
+      .map(result => {
+        const trimmed = result.content?.trim();
+        if (trimmed) return normalize(trimmed);
+        // Fallback: if provider returned structured output with a common text field
+        const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
+          .output;
+        if (out) {
+          if (typeof out === 'string' && out.trim()) return normalize(out.trim());
+          if (typeof out === 'object') {
+            const txt = (out.text || out.response || out.message) as unknown;
+            if (typeof txt === 'string' && txt.trim()) return normalize(txt.trim());
+          }
+        }
+        return '';
+      })
+      .filter(content => content && content.trim());
     comment += checkContents.join('\n\n');
 
     // Add debug info if any check has it

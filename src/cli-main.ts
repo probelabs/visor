@@ -13,6 +13,77 @@ import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { withActiveSpan } from './telemetry/trace-helpers';
 
 /**
+ * Handle the validate subcommand
+ */
+async function handleValidateCommand(argv: string[], configManager: ConfigManager): Promise<void> {
+  // Parse config path from arguments
+  const configPathIndex = argv.indexOf('--config');
+  let configPath: string | undefined;
+
+  if (configPathIndex !== -1 && argv[configPathIndex + 1]) {
+    configPath = argv[configPathIndex + 1];
+  }
+
+  // Configure logger for validation output
+  configureLoggerFromCli({
+    output: 'table',
+    debug: false,
+    verbose: false,
+    quiet: false,
+  });
+
+  console.log('🔍 Visor Configuration Validator\n');
+
+  try {
+    let config;
+    if (configPath) {
+      console.log(`📂 Validating configuration: ${configPath}`);
+      config = await configManager.loadConfig(configPath);
+    } else {
+      console.log('📂 Searching for configuration file...');
+      config = await configManager.findAndLoadConfig();
+    }
+
+    // If we got here, validation passed
+    console.log('\n✅ Configuration is valid!');
+    console.log(`\n📋 Summary:`);
+    console.log(`   Version: ${config.version}`);
+    console.log(`   Checks: ${Object.keys(config.checks || {}).length}`);
+
+    // List checks
+    if (config.checks && Object.keys(config.checks).length > 0) {
+      console.log(`\n📝 Configured checks:`);
+      for (const [name, check] of Object.entries(config.checks)) {
+        const checkType = check.type || 'ai';
+        console.log(`   • ${name} (type: ${checkType})`);
+      }
+    }
+
+    process.exit(0);
+  } catch (error) {
+    console.error('\n❌ Configuration validation failed!\n');
+
+    if (error instanceof Error) {
+      console.error(`Error: ${error.message}\n`);
+
+      // Provide helpful hints
+      if (error.message.includes('not found')) {
+        console.error('💡 Hint: Make sure the configuration file exists at the specified path.');
+        console.error('   Default locations: .visor.yaml or .visor.yml in project root\n');
+      } else if (error.message.includes('Invalid YAML')) {
+        console.error('💡 Hint: Check your YAML syntax at https://www.yamllint.com/\n');
+      } else if (error.message.includes('Missing required field')) {
+        console.error('💡 Hint: Ensure all required fields are present in your configuration.\n');
+      }
+    } else {
+      console.error(`Error: ${error}\n`);
+    }
+
+    process.exit(1);
+  }
+}
+
+/**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
@@ -22,6 +93,12 @@ export async function main(): Promise<void> {
 
     // Filter out the --cli flag if it exists (used to force CLI mode in GitHub Actions)
     const filteredArgv = process.argv.filter(arg => arg !== '--cli');
+
+    // Check for validate subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'validate') {
+      await handleValidateCommand(filteredArgv, configManager);
+      return;
+    }
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);

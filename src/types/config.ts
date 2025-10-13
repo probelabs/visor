@@ -125,6 +125,14 @@ export interface FailureConditionContext {
   /** Environment variables */
   env?: Record<string, string>;
 
+  /** Memory accessor for accessing memory store in expressions */
+  memory?: {
+    get: (key: string, namespace?: string) => unknown;
+    has: (key: string, namespace?: string) => boolean;
+    list: (namespace?: string) => string[];
+    getAll: (namespace?: string) => Record<string, unknown>;
+  };
+
   /** Utility metadata for backward compatibility */
   metadata?: {
     checkName: string;
@@ -184,6 +192,8 @@ export type ConfigCheckType =
   | 'http_client'
   | 'noop'
   | 'log'
+  | 'memory'
+  | 'github'
   | 'claude-code';
 
 /**
@@ -217,7 +227,7 @@ export interface TagFilter {
 /**
  * Valid grouping options
  */
-export type GroupByOption = 'check' | 'file' | 'severity';
+export type GroupByOption = 'check' | 'file' | 'severity' | 'group';
 
 /**
  * Environment variable reference configuration
@@ -373,6 +383,21 @@ export interface CheckConfig {
   include_dependencies?: boolean;
   /** Include execution metadata in log output */
   include_metadata?: boolean;
+  /**
+   * Memory provider specific options (optional, only used when type === 'memory').
+   */
+  /** Memory operation to perform */
+  operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list' | 'exec_js';
+  /** Key for memory operation */
+  key?: string;
+  /** Value for set/append operations */
+  value?: unknown;
+  /** JavaScript expression to compute value dynamically */
+  value_js?: string;
+  /** JavaScript code for exec_js operation with full memory access */
+  memory_js?: string;
+  /** Override namespace for this check */
+  namespace?: string;
 }
 
 /**
@@ -405,6 +430,8 @@ export interface OnFailConfig {
   run?: string[];
   /** Jump back to an ancestor step (by id) */
   goto?: string;
+  /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+  goto_event?: EventTrigger;
   /** Dynamic goto: JS expression returning step id or null */
   goto_js?: string;
   /** Dynamic remediation list: JS expression returning string[] */
@@ -419,6 +446,8 @@ export interface OnSuccessConfig {
   run?: string[];
   /** Optional jump back to ancestor step (by id) */
   goto?: string;
+  /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+  goto_event?: EventTrigger;
   /** Dynamic goto: JS expression returning step id or null */
   goto_js?: string;
   /** Dynamic post-success steps: JS expression returning string[] */
@@ -584,6 +613,24 @@ export interface HttpServerConfig {
 }
 
 /**
+ * Memory storage configuration
+ */
+export interface MemoryConfig {
+  /** Storage mode: "memory" (in-memory, default) or "file" (persistent) */
+  storage?: 'memory' | 'file';
+  /** Storage format (only for file storage, default: json) */
+  format?: 'json' | 'csv';
+  /** File path (required if storage: file) */
+  file?: string;
+  /** Default namespace (default: "default") */
+  namespace?: string;
+  /** Auto-load on startup (default: true if storage: file) */
+  auto_load?: boolean;
+  /** Auto-save after operations (default: true if storage: file) */
+  auto_save?: boolean;
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -597,6 +644,8 @@ export interface VisorConfig {
   output: OutputConfig;
   /** HTTP server configuration for receiving webhooks */
   http_server?: HttpServerConfig;
+  /** Memory storage configuration */
+  memory?: MemoryConfig;
   /** Global environment variables */
   env?: EnvConfig;
   /** Global AI model setting */

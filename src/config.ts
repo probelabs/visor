@@ -34,6 +34,7 @@ export class ConfigManager {
     'http_client',
     'noop',
     'log',
+    'github',
   ];
   private validEventTriggers: EventTrigger[] = [
     'pr_opened',
@@ -46,7 +47,7 @@ export class ConfigManager {
     'webhook_received',
   ];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
-  private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
+  private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity', 'group'];
 
   /**
    * Load configuration from a file

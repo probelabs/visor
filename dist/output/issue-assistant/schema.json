@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "issue-assistant",
+  "title": "Issue Assistant",
+  "description": "Plain assistant output for issues and comments",
+  "type": "object",
+  "required": ["text", "intent"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "Markdown reply to post as a comment"
+    },
+    "intent": {
+      "type": "string",
+      "description": "Action-oriented intent (use comment_retrigger for explicit rerun or disable requests)",
+      "enum": [
+        "issue_triage",
+        "comment_reply",
+        "comment_retrigger"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "description": "Optional labels to apply (only respected on issue_opened)",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

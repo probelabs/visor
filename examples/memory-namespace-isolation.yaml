@@ -1,0 +1,184 @@
+# Memory Example: Namespace Isolation
+#
+# This example shows how to use namespaces to isolate data
+# for different environments (production, staging, development).
+
+version: "1.0"
+
+memory:
+  storage: file
+  file: ./multi-env-memory.json
+  format: json
+  namespace: production  # Default namespace
+
+checks:
+  # Production environment metrics
+  prod-init-counter:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "(memory.get('deploy_count', 'production') || 0)"
+    namespace: production
+
+  prod-increment:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "memory.get('deploy_count', 'production') + 1"
+    namespace: production
+    depends_on: [prod-init-counter]
+
+  prod-track-time:
+    type: memory
+    operation: set
+    key: last_deploy_time
+    value_js: "new Date().toISOString()"
+    namespace: production
+    depends_on: [prod-increment]
+
+  # Staging environment metrics
+  stage-init-counter:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "(memory.get('deploy_count', 'staging') || 0)"
+    namespace: staging
+
+  stage-increment:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "memory.get('deploy_count', 'staging') + 1"
+    namespace: staging
+    depends_on: [stage-init-counter]
+
+  stage-track-time:
+    type: memory
+    operation: set
+    key: last_deploy_time
+    value_js: "new Date().toISOString()"
+    namespace: staging
+    depends_on: [stage-increment]
+
+  # Development environment metrics
+  dev-init-counter:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "(memory.get('deploy_count', 'development') || 0)"
+    namespace: development
+
+  dev-increment:
+    type: memory
+    operation: set
+    key: deploy_count
+    value_js: "memory.get('deploy_count', 'development') + 1"
+    namespace: development
+    depends_on: [dev-init-counter]
+
+  dev-track-time:
+    type: memory
+    operation: set
+    key: last_deploy_time
+    value_js: "new Date().toISOString()"
+    namespace: development
+    depends_on: [dev-increment]
+
+  # Collect environment-specific errors
+  prod-check:
+    type: command
+    exec: ./scripts/check-production.sh
+    depends_on: [prod-track-time]
+    on_fail:
+      run: [prod-log-error]
+
+  prod-log-error:
+    type: memory
+    operation: append
+    key: errors
+    value: "Production check failed"
+    namespace: production
+
+  stage-check:
+    type: command
+    exec: ./scripts/check-staging.sh
+    depends_on: [stage-track-time]
+    on_fail:
+      run: [stage-log-error]
+
+  stage-log-error:
+    type: memory
+    operation: append
+    key: errors
+    value: "Staging check failed"
+    namespace: staging
+
+  # Report metrics for all environments
+  report-metrics:
+    type: log
+    depends_on: [prod-track-time, stage-track-time, dev-track-time]
+    message: |
+      ## Deployment Metrics
+
+      ### Production
+      - Deploys: {{ "deploy_count" | memory_get: "production" }}
+      - Last Deploy: {{ "last_deploy_time" | memory_get: "production" }}
+      {% assign prod_errors = "errors" | memory_get: "production" %}
+      - Errors: {{ prod_errors.size | default: 0 }}
+
+      ### Staging
+      - Deploys: {{ "deploy_count" | memory_get: "staging" }}
+      - Last Deploy: {{ "last_deploy_time" | memory_get: "staging" }}
+      {% assign stage_errors = "errors" | memory_get: "staging" %}
+      - Errors: {{ stage_errors.size | default: 0 }}
+
+      ### Development
+      - Deploys: {{ "deploy_count" | memory_get: "development" }}
+      - Last Deploy: {{ "last_deploy_time" | memory_get: "development" }}
+
+  # List all namespaces
+  list-namespaces:
+    type: log
+    depends_on: [report-metrics]
+    message: |
+      Active namespaces:
+      {% for ns in memory.listNamespaces() %}
+      - {{ ns }}
+      {% endfor %}
+
+  # Compare environments
+  compare-envs:
+    type: memory
+    operation: set
+    key: comparison
+    value_js: |
+      return {
+        production: memory.get('deploy_count', 'production'),
+        staging: memory.get('deploy_count', 'staging'),
+        development: memory.get('deploy_count', 'development'),
+        total: (memory.get('deploy_count', 'production') || 0) +
+               (memory.get('deploy_count', 'staging') || 0) +
+               (memory.get('deploy_count', 'development') || 0)
+      };
+    depends_on: [list-namespaces]
+
+  # Report comparison
+  report-comparison:
+    type: log
+    depends_on: [compare-envs]
+    message: |
+      {% assign comp = "comparison" | memory_get %}
+      ## Environment Comparison
+
+      | Environment | Deploys |
+      |-------------|---------|
+      | Production  | {{ comp.production }} |
+      | Staging     | {{ comp.staging }} |
+      | Development | {{ comp.development }} |
+      | **Total**   | **{{ comp.total }}** |
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
