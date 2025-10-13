@@ -311,32 +311,41 @@ export class SessionRegistry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private filterHistoryForClone(history: any[]): any[] {
     // Patterns to identify schema/formatting-related messages to remove
+    // Based on exact patterns from ProbeAgent source code analysis
     const schemaPatterns = [
-      // Schema formatting prompts
-      /CRITICAL:\s*You MUST respond with ONLY valid JSON DATA/i,
-      /Schema to follow.*provide ACTUAL DATA/i,
-      /Convert your previous response.*into actual JSON data/i,
-      /Please reformat your previous response to match this schema/i,
-      /Now you need to respond according to this schema/i,
-      /DO NOT return the schema definition itself/i,
-      /this is just the structure - provide ACTUAL DATA/i,
-      /You must provide your response as.*JSON/i,
-      /respond with.*valid JSON/i,
+      // Initial schema formatting request (ProbeAgent.js line 1695-1713)
+      /^CRITICAL:\s*You MUST respond with ONLY valid JSON DATA that conforms to this schema structure/,
+      /Schema to follow \(this is just the structure - provide ACTUAL DATA\)/,
+      /^REQUIREMENTS:/,
+      /^Convert your previous response content into actual JSON data/,
+      /DO NOT return the schema definition itself/,
+      /Return ONLY the JSON object\/array with REAL DATA/,
+      /NO additional text, explanations, or markdown formatting/,
+      /The JSON must be parseable by JSON\.parse\(\)/,
 
-      // JSON validation and correction prompts
-      /CRITICAL JSON ERROR/i,
-      /URGENT - JSON PARSING FAILED/i,
-      /Your previous JSON response was invalid/i,
-      /Your previous response is not valid JSON/i,
-      /Please correct the following JSON errors/i,
-      /Response is a JSON schema definition instead of data/i,
-      /You returned the schema definition itself/i,
-      /JSON PARSING FAILED.*cannot be parsed/i,
+      // JSON validation error messages (schemaUtils.js lines 364-401)
+      /^CRITICAL JSON ERROR:\s*Your previous response is not valid JSON/,
+      /^URGENT - JSON PARSING FAILED:\s*Your previous response is not valid JSON/,
+      /^FINAL ATTEMPT - CRITICAL JSON ERROR:\s*Your previous response is not valid JSON/,
+      /You MUST fix this and return ONLY valid JSON/,
+      /This is your second chance\. Return ONLY valid JSON/,
+      /This is the final retry\. You MUST return ONLY raw JSON/,
 
-      // Mermaid validation and fixes
-      /The mermaid diagram in your response has syntax errors/i,
-      /Please fix the following mermaid diagram/i,
-      /Mermaid validation failed/i,
+      // Schema definition confusion (schemaUtils.js lines 410-447)
+      /^CRITICAL MISUNDERSTANDING:\s*You returned a JSON schema definition/,
+      /^URGENT - WRONG RESPONSE TYPE:\s*You returned a JSON schema definition/,
+      /^FINAL ATTEMPT - SCHEMA VS DATA CONFUSION:\s*You returned a JSON schema definition/,
+      /What you returned \(WRONG - this is a schema definition\)/,
+      /What I need: ACTUAL DATA that conforms to this schema/,
+      /You are returning the SCHEMA DEFINITION itself/,
+      /STOP returning schema definitions! Return REAL DATA/,
+
+      // Mermaid validation and fixes (schemaUtils.js lines 657-689)
+      /^Your previous response contains invalid Mermaid diagrams/,
+      /^Analyze and fix the following Mermaid diagram/,
+      /^Validation Errors:/,
+      /Please correct your response to include valid Mermaid diagrams/,
+      /Ensure all Mermaid diagrams are properly formatted/,
 
       // Schema reminders in error messages
       /Please use proper XML format with BOTH opening and closing tags/i,
@@ -356,6 +365,7 @@ export class SessionRegistry {
     ];
 
     // Filter out messages that match schema/formatting patterns
+    const originalCount = history.length;
     const filtered = history.filter((message, index) => {
       // Always keep the system message (usually first message)
       if (index === 0 && message.role === 'system') {
@@ -383,23 +393,22 @@ export class SessionRegistry {
         content.includes('"properties"') &&
         (content.includes('"type"') || content.includes('"required"'));
 
-      // Filter out assistant messages that used attempt_completion format
-      // This prevents schema bleed-through from parent session
-      const isAttemptCompletionResponse =
-        message.role === 'assistant' &&
-        (content.includes('<attempt_completion>') ||
-          content.includes('</attempt_completion>') ||
-          (content.includes('"text"') && content.includes('"tags"')));
+      // Debug logging for filtered messages
+      const shouldFilter = isSchemaMessage || isSystemReminder || isJsonValidationResult || containsSchemaDefinition;
+      if (shouldFilter && console.error) {
+        const preview = content.substring(0, 100).replace(/\n/g, ' ');
+        console.error(`🔍 Filtering message [${message.role}]: ${preview}...`);
+      }
 
       // Keep message if it's NOT a schema/formatting message or schema definition
-      return (
-        !isSchemaMessage &&
-        !isSystemReminder &&
-        !isJsonValidationResult &&
-        !containsSchemaDefinition &&
-        !isAttemptCompletionResponse
-      );
+      return !shouldFilter;
     });
+
+    // Log filtering results
+    const filteredCount = originalCount - filtered.length;
+    if (filteredCount > 0) {
+      console.error(`📋 Filtered ${filteredCount} schema/formatting messages from history (${originalCount} → ${filtered.length})`);
+    }
 
     // Ensure we don't accidentally remove too much
     // Keep at least system message and first user message
