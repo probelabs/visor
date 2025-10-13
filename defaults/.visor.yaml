@@ -292,12 +292,12 @@ checks:
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
-  # Apply labels based on overview tags — runs only in GitHub environments
+  # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
   apply-overview-labels:
     type: github
     tags: [github]
     depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    on: [pr_opened]
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"

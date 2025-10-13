@@ -11,6 +11,7 @@ import {
   isFirstTimer,
   detectLocalMode,
 } from './utils/author-permissions';
+import { MemoryStore } from './memory-store';
 
 /**
  * Custom ReadFile tag for Liquid templates
@@ -154,6 +155,27 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
 
   liquid.registerFilter('is_first_timer', (authorAssociation: unknown) => {
     return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
+  });
+
+  // Register memory filters for accessing memory store
+  const memoryStore = MemoryStore.getInstance();
+
+  liquid.registerFilter('memory_get', (key: string, namespace?: string) => {
+    if (typeof key !== 'string') {
+      return undefined;
+    }
+    return memoryStore.get(key, namespace);
+  });
+
+  liquid.registerFilter('memory_has', (key: string, namespace?: string) => {
+    if (typeof key !== 'string') {
+      return false;
+    }
+    return memoryStore.has(key, namespace);
+  });
+
+  liquid.registerFilter('memory_list', (namespace?: string) => {
+    return memoryStore.list(namespace);
   });
 }
 

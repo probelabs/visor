@@ -120,17 +120,31 @@ export class SessionRegistry {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sourceHistory = (sourceAgent as any).history || [];
 
-      // Create a new agent with the same configuration
+      // Extract all important configuration properties from the source agent
+      // ProbeAgent stores these as instance properties, not in an options object
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceOptions = (sourceAgent as any).options || {};
+      const sourceAgentAny = sourceAgent as any;
+      const cloneOptions = {
+        sessionId: newSessionId,
+        debug: sourceAgentAny.debug || false,
+        allowEdit: sourceAgentAny.allowEdit || false,
+        path: sourceAgentAny.allowedFolders?.[0], // Use first allowed folder as path
+        provider: sourceAgentAny.clientApiProvider,
+        model: sourceAgentAny.model,
+        promptType: sourceAgentAny.promptType,
+        enableMcp: sourceAgentAny.enableMcp,
+        mcpConfig: sourceAgentAny.mcpConfig,
+        tracer: sourceAgentAny.tracer,
+      };
 
       // Import ProbeAgent dynamically to create new instance
       const { ProbeAgent: ProbeAgentClass } = await import('@probelabs/probe');
 
-      const clonedAgent = new ProbeAgentClass({
-        ...sourceOptions,
-        sessionId: newSessionId,
-      });
+      const clonedAgent = new ProbeAgentClass(cloneOptions);
+
+      console.error(
+        `📋 Cloning session with config: debug=${cloneOptions.debug}, model=${cloneOptions.model}, provider=${cloneOptions.provider}`
+      );
 
       // Deep copy the conversation history to ensure complete isolation
       // Use JSON serialization for deep cloning to prevent shared object references

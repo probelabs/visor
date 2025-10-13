@@ -12,6 +12,7 @@ import {
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
 import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
+import { MemoryStore } from './memory-store';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
@@ -487,12 +488,23 @@ export class FailureConditionEvaluator {
       const outputs = context.outputs || {};
       const debugData = context.debug || null;
 
+      // Get memory store and create accessor for fail_if expressions
+      const memoryStore = MemoryStore.getInstance();
+      const memoryAccessor = {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      };
+
       // Create scope with all context variables and helper functions
       const scope = {
         // Primary context variables
         output,
         outputs,
         debug: debugData,
+        // Memory accessor for fail_if expressions
+        memory: memoryAccessor,
         // Legacy compatibility variables
         issues,
         suggestions,
@@ -712,6 +724,9 @@ export class FailureConditionEvaluator {
       }
     } catch {}
 
+    // Get memory store instance
+    const memoryStore = MemoryStore.getInstance();
+
     const context: FailureConditionContext = {
       output: aggregatedOutput,
       outputs: (() => {
@@ -725,6 +740,13 @@ export class FailureConditionEvaluator {
         }
         return outputs;
       })(),
+      // Add memory accessor for fail_if expressions
+      memory: {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      } as any,
       // Add basic context info for failure conditions
       checkName: checkName,
       schema: checkSchema,

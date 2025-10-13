@@ -25,6 +25,7 @@ import {
   detectLocalMode,
   resolveAssociationFromEvent,
 } from './utils/author-permissions';
+import { MemoryStore } from './memory-store';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -949,6 +950,13 @@ export class CheckExecutionEngine {
     const timestamp = new Date().toISOString();
 
     try {
+      // Initialize memory store if configured
+      if (options.config?.memory) {
+        const memoryStore = MemoryStore.getInstance(options.config.memory);
+        await memoryStore.initialize();
+        logger.debug('Memory store initialized');
+      }
+
       // Store webhook context if provided
       this.webhookContext = options.webhookContext;
 

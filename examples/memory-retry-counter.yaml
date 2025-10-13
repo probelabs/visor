@@ -1,0 +1,65 @@
+# Memory Example: Retry Counter with goto
+#
+# This example demonstrates using memory to track retry attempts
+# and implement retry logic with goto routing.
+
+version: "1.0"
+
+memory:
+  storage: memory  # In-memory storage (not persistent)
+  namespace: default
+
+checks:
+  # Initialize retry counter
+  init-retry:
+    type: memory
+    operation: set
+    key: retry_count
+    value: 0
+
+  # Run a test that might fail
+  run-flaky-test:
+    type: command
+    exec: |
+      # Simulate a flaky test (fails 50% of the time)
+      if [ $((RANDOM % 2)) -eq 0 ]; then
+        echo "Test passed!"
+        exit 0
+      else
+        echo "Test failed!"
+        exit 1
+      fi
+    depends_on: [init-retry]
+    on_fail:
+      run: [increment-retry, check-retry-limit]
+
+  # Increment retry counter
+  increment-retry:
+    type: memory
+    operation: set
+    key: retry_count
+    value_js: "memory.get('retry_count') + 1"
+
+  # Check if we should retry
+  check-retry-limit:
+    type: noop
+    depends_on: [increment-retry]
+    # Use goto_js to conditionally jump back to run-flaky-test
+    on_success:
+      goto_js: |
+        const retries = memory.get('retry_count');
+        log('Retry attempt:', retries);
+        return retries < 3 ? 'run-flaky-test' : null;
+
+  # Report final result
+  report-result:
+    type: log
+    depends_on: [run-flaky-test]
+    message: |
+      Test completed after {{ "retry_count" | memory_get }} retries
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
