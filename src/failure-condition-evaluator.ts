@@ -3,6 +3,8 @@
  */
 
 import { ReviewSummary } from './reviewer';
+import { addEvent } from './telemetry/trace-helpers';
+import { addFailIfTriggered } from './telemetry/metrics';
 import {
   FailureConditions,
   FailureCondition,
@@ -119,6 +121,36 @@ export class FailureConditionEvaluator {
         );
       } catch {}
       const res = this.evaluateExpression(expression, context);
+      if (res === true) {
+        try {
+          addEvent('fail_if.triggered', {
+            check: checkName,
+            scope: 'check',
+            name: `${checkName}_fail_if`,
+            expression,
+            severity: 'error',
+          });
+        } catch {}
+        try {
+          const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+          emitNdjsonSpanWithEvents(
+            'visor.fail_if',
+            { check: checkName, scope: 'check', name: `${checkName}_fail_if` },
+            [
+              {
+                name: 'fail_if.triggered',
+                attrs: {
+                  check: checkName,
+                  scope: 'check',
+                  name: `${checkName}_fail_if`,
+                  expression,
+                  severity: 'error',
+                },
+              },
+            ]
+          );
+        } catch {}
+      }
       return res;
     } catch (error) {
       console.warn(`Failed to evaluate fail_if expression: ${error}`);
@@ -297,8 +329,53 @@ export class FailureConditionEvaluator {
 
     for (const [conditionName, condition] of Object.entries(conditions)) {
       try {
+        addEvent('fail_if.evaluated', {
+          check: context.checkName,
+          scope: source,
+          name: conditionName,
+          expression: this.extractExpression(condition),
+        });
+      } catch {}
+
+      // File fallback: append an NDJSON span with the evaluation event
+      try {
+        const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+        emitNdjsonSpanWithEvents(
+          'visor.fail_if',
+          { check: context.checkName || 'unknown', scope: source, name: conditionName },
+          [
+            {
+              name: 'fail_if.evaluated',
+              attrs: {
+                check: context.checkName,
+                scope: source,
+                name: conditionName,
+                expression: this.extractExpression(condition),
+              },
+            },
+          ]
+        );
+      } catch {}
+
+      try {
         const result = await this.evaluateSingleCondition(conditionName, condition, context);
         results.push(result);
+
+        if (result.failed) {
+          try {
+            addEvent('fail_if.triggered', {
+              check: context.checkName,
+              scope: source,
+              name: conditionName,
+              expression: result.expression,
+              severity: result.severity,
+              halt_execution: result.haltExecution,
+            });
+          } catch {}
+          try {
+            addFailIfTriggered(context.checkName || 'unknown', source);
+          } catch {}
+        }
       } catch (error) {
         // If evaluation fails, create an error result
         results.push({

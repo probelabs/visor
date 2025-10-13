@@ -9,6 +9,9 @@ import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
 import * as fs from 'fs';
 import * as path from 'path';
+import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
+import { flushNdjson } from './telemetry/fallback-ndjson';
+import { withActiveSpan } from './telemetry/trace-helpers';
 
 /**
  * Handle the validate subcommand
@@ -198,6 +201,37 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Initialize telemetry (env or config)
+    if ((config as any)?.telemetry) {
+      const t = (config as any).telemetry as {
+        enabled?: boolean;
+        sink?: 'otlp' | 'file' | 'console';
+        file?: { dir?: string; ndjson?: boolean };
+        tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
+      };
+      await initTelemetry({
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' ? true : !!t?.enabled,
+        sink:
+          (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
+        file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
+        autoInstrument: !!t?.tracing?.auto_instrumentations,
+        traceReport: !!t?.tracing?.trace_report?.enabled,
+      });
+    } else {
+      await initTelemetry();
+    }
+    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
+    } catch {}
+
+    try {
+      (await import('./telemetry/trace-helpers'))._appendRunMarker();
+    } catch {}
+
     // Determine checks to run and validate check types early
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
@@ -326,16 +360,21 @@ export async function main(): Promise<void> {
     prInfoWithContext.includeCodeContext = includeCodeContext;
 
     // Execute checks with proper parameters
-    const executionResult = await engine.executeGroupedChecks(
-      prInfo,
-      checksToRun,
-      options.timeout,
-      config,
-      options.output,
-      options.debug || false,
-      options.maxParallelism,
-      options.failFast,
-      tagFilter
+    const executionResult = await withActiveSpan(
+      'visor.run',
+      { 'visor.run.checks_configured': checksToRun.length },
+      async () =>
+        engine.executeGroupedChecks(
+          prInfo,
+          checksToRun,
+          options.timeout,
+          config,
+          options.output,
+          options.debug || false,
+          options.maxParallelism,
+          options.failFast,
+          tagFilter
+        )
     );
 
     // Extract results and statistics from the execution result
@@ -502,6 +541,29 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
+    // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
+    try {
+      if (process.env.VISOR_TRACE_REPORT === 'true') {
+        const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+        fs.mkdirSync(outDir, { recursive: true });
+        const hasReport = fs.readdirSync(outDir).some(f => f.endsWith('.report.html'));
+        if (!hasReport) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          const htmlPath = path.join(outDir, `${ts}.report.html`);
+          fs.writeFileSync(
+            htmlPath,
+            '<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2></body></html>',
+            'utf8'
+          );
+        }
+      }
+    } catch {}
+    try {
+      await flushNdjson();
+    } catch {}
+    try {
+      await shutdownTelemetry();
+    } catch {}
     process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
@@ -541,6 +603,9 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
+    try {
+      await shutdownTelemetry();
+    } catch {}
     process.exit(1);
   }
 }

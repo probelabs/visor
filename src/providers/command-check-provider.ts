@@ -130,7 +130,29 @@ export class CommandCheckProvider extends CheckProvider {
       const timeoutSeconds = (config.timeout as number) || 60;
       const timeoutMs = timeoutSeconds * 1000;
 
-      const { stdout, stderr } = await execAsync(renderedCommand, {
+      // Normalize only the eval payload for `node -e|--eval` invocations that may contain
+      // literal newlines due to YAML processing ("\n" -> newline). We re-escape newlines
+      // inside the quoted eval argument to keep JS string literals valid, without touching
+      // the rest of the command.
+      const normalizeNodeEval = (cmd: string): string => {
+        const re =
+          /^(?<prefix>\s*(?:\/usr\/bin\/env\s+)?node(?:\.exe)?\s+(?:-e|--eval)\s+)(['"])([\s\S]*?)\2(?<suffix>\s|$)/;
+        const m = cmd.match(re) as
+          | (RegExpMatchArray & { groups?: { prefix: string; suffix?: string } })
+          | null;
+        if (!m || !m.groups) return cmd;
+        const prefix = m.groups.prefix;
+        const quote = m[2];
+        const code = m[3];
+        const suffix = m.groups.suffix || '';
+        if (!code.includes('\n')) return cmd;
+        const escaped = code.replace(/\n/g, '\\n');
+        return cmd.replace(re, `${prefix}${quote}${escaped}${quote}${suffix}`);
+      };
+
+      const safeCommand = normalizeNodeEval(renderedCommand);
+
+      const { stdout, stderr } = await execAsync(safeCommand, {
         env: scriptEnv,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer

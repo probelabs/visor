@@ -26,6 +26,9 @@ import {
   resolveAssociationFromEvent,
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
+import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
+import { addEvent } from './telemetry/trace-helpers';
+import { addFailIfTriggered } from './telemetry/metrics';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -560,6 +563,12 @@ export class CheckExecutionEngine {
     // We treat each retry/goto/run as consuming one loop budget entry
     while (true) {
       try {
+        try {
+          emitNdjsonFallback('visor.provider', {
+            'visor.check.id': checkName,
+            'visor.provider.type': providerConfig.type || 'ai',
+          });
+        } catch {}
         const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
         try {
           currentRouteOutput = (res as any)?.output;
@@ -2063,7 +2072,12 @@ export class CheckExecutionEngine {
     } else {
       rendered = await liquid.parseAndRender(templateContent, templateData);
     }
-    return rendered.trim();
+    const finalRendered = rendered.trim();
+    try {
+      const { emitMermaidFromMarkdown } = await import('./utils/mermaid-telemetry');
+      emitMermaidFromMarkdown(checkName, finalRendered, 'content');
+    } catch {}
+    return finalRendered;
   }
 
   /**
@@ -2663,6 +2677,12 @@ export class CheckExecutionEngine {
                       debug: debug,
                     },
                   };
+                  try {
+                    emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                      { name: 'check.started' },
+                      { name: 'check.completed' },
+                    ]);
+                  } catch {}
 
                   // Build per-item dependency results for child, including transitive ancestors
                   const childDepResults = new Map<string, ReviewSummary>();
@@ -2838,6 +2858,17 @@ export class CheckExecutionEngine {
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                try {
+                  emitNdjsonSpanWithEvents(
+                    'visor.foreach.item',
+                    {
+                      'visor.check.id': checkName,
+                      'visor.foreach.index': itemIndex,
+                      'visor.foreach.total': forEachItems.length,
+                    },
+                    []
+                  );
+                } catch {}
                 // Create modified dependency results with current item
                 // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
                 const forEachDependencyResults = new Map<string, ReviewSummary>();
@@ -3641,6 +3672,12 @@ export class CheckExecutionEngine {
               debug,
               results
             );
+            try {
+              emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                { name: 'check.started' },
+                { name: 'check.completed' },
+              ]);
+            } catch {}
 
             // Evaluate fail_if for normal (non-forEach) execution
             if (config && (config.fail_if || checkConfig.fail_if)) {
@@ -3866,6 +3903,12 @@ export class CheckExecutionEngine {
             reviewSummaryWithOutput.isForEach = true;
           }
 
+          try {
+            emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+              { name: 'check.started' },
+              { name: 'check.completed' },
+            ]);
+          } catch {}
           results.set(checkName, reviewResult);
         } else {
           // Store error result for dependency tracking
@@ -4843,7 +4886,46 @@ export class CheckExecutionEngine {
           globalFailIf
         );
 
+        try {
+          addEvent('fail_if.evaluated', {
+            check: checkName,
+            scope: 'global',
+            name: 'global_fail_if',
+            expression: globalFailIf,
+          });
+        } catch {}
         if (failed) {
+          try {
+            addEvent('fail_if.triggered', {
+              check: checkName,
+              scope: 'global',
+              name: 'global_fail_if',
+              expression: globalFailIf,
+              severity: 'error',
+            });
+          } catch {}
+          try {
+            addFailIfTriggered(checkName, 'global');
+          } catch {}
+          try {
+            const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+            emitNdjsonSpanWithEvents(
+              'visor.fail_if',
+              { check: checkName, scope: 'global', name: 'global_fail_if' },
+              [
+                {
+                  name: 'fail_if.triggered',
+                  attrs: {
+                    check: checkName,
+                    scope: 'global',
+                    name: 'global_fail_if',
+                    expression: globalFailIf,
+                    severity: 'error',
+                  },
+                },
+              ]
+            );
+          } catch {}
           logger.warn(`⚠️  Check "${checkName}" - global fail_if condition met: ${globalFailIf}`);
           results.push({
             conditionName: 'global_fail_if',
@@ -4868,7 +4950,72 @@ export class CheckExecutionEngine {
           checkFailIf
         );
 
+        try {
+          addEvent('fail_if.evaluated', {
+            check: checkName,
+            scope: 'check',
+            name: `${checkName}_fail_if`,
+            expression: checkFailIf,
+          });
+        } catch {}
+        try {
+          const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+          emitNdjsonSpanWithEvents(
+            'visor.fail_if',
+            { check: checkName, scope: 'check', name: `${checkName}_fail_if` },
+            [
+              {
+                name: 'fail_if.evaluated',
+                attrs: {
+                  check: checkName,
+                  scope: 'check',
+                  name: `${checkName}_fail_if`,
+                  expression: checkFailIf,
+                },
+              },
+            ]
+          );
+        } catch {}
         if (failed) {
+          try {
+            addEvent('fail_if.triggered', {
+              check: checkName,
+              scope: 'check',
+              name: `${checkName}_fail_if`,
+              expression: checkFailIf,
+              severity: 'error',
+            });
+          } catch {}
+          try {
+            addEvent('fail_if.evaluated', {
+              check: checkName,
+              scope: 'check',
+              name: `${checkName}_fail_if`,
+              expression: checkFailIf,
+            });
+          } catch {}
+          try {
+            addFailIfTriggered(checkName, 'check');
+          } catch {}
+          try {
+            const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+            emitNdjsonSpanWithEvents(
+              'visor.fail_if',
+              { check: checkName, scope: 'check', name: `${checkName}_fail_if` },
+              [
+                {
+                  name: 'fail_if.triggered',
+                  attrs: {
+                    check: checkName,
+                    scope: 'check',
+                    name: `${checkName}_fail_if`,
+                    expression: checkFailIf,
+                    severity: 'error',
+                  },
+                },
+              ]
+            );
+          } catch {}
           logger.warn(`⚠️  Check "${checkName}" - fail_if condition met: ${checkFailIf}`);
           results.push({
             conditionName: `${checkName}_fail_if`,
@@ -4883,6 +5030,38 @@ export class CheckExecutionEngine {
         }
       }
 
+      try {
+        const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+        const hadTriggered = results.some(r => r.failed === true);
+        emitNdjsonSpanWithEvents(
+          'visor.fail_if',
+          {
+            check: checkName,
+            scope: hadTriggered
+              ? checkFailIf
+                ? 'check'
+                : 'global'
+              : checkFailIf
+                ? 'check'
+                : 'global',
+          },
+          [
+            {
+              name: 'fail_if.evaluated',
+              attrs: { check: checkName, scope: checkFailIf ? 'check' : 'global' },
+            },
+          ].concat(
+            hadTriggered
+              ? [
+                  {
+                    name: 'fail_if.triggered',
+                    attrs: { check: checkName, scope: checkFailIf ? 'check' : 'global' },
+                  },
+                ]
+              : []
+          )
+        );
+      } catch {}
       return results;
     }
 
