@@ -123,15 +123,33 @@ export class SessionRegistry {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sourceAgentAny = sourceAgent as any;
 
-      // Use ProbeAgent's official clone() method with options
-      // This handles intelligent message filtering automatically
-      // Note: TypeScript doesn't have types for clone() yet, so we cast to any
-      const clonedAgent = (sourceAgent as any).clone({
-        sessionId: newSessionId,
-        stripInternalMessages: true, // Remove schema reminders, tool prompts, etc.
-        keepSystemMessage: true, // Keep for cache efficiency
-        deepCopy: true, // Safe deep copy of history
-      }) as ProbeAgent;
+      let clonedAgent: ProbeAgent;
+
+      // Check if ProbeAgent has the clone() method (available in rc129+)
+      if (typeof sourceAgentAny.clone === 'function') {
+        // Use ProbeAgent's official clone() method with options
+        // This handles intelligent message filtering automatically
+        // Note: TypeScript doesn't have types for clone() yet, so we cast to any
+        clonedAgent = sourceAgentAny.clone({
+          sessionId: newSessionId,
+          stripInternalMessages: true, // Remove schema reminders, tool prompts, etc.
+          keepSystemMessage: true, // Keep for cache efficiency
+          deepCopy: true, // Safe deep copy of history
+        }) as ProbeAgent;
+      } else {
+        // Fallback for older ProbeAgent versions or mocks without clone()
+        // Create a new ProbeAgent instance with the same configuration
+        const ProbeAgentModule = await import('@probelabs/probe');
+        const ProbeAgentClass = ProbeAgentModule.ProbeAgent;
+
+        clonedAgent = new ProbeAgentClass({
+          ...sourceAgentAny.options,
+          sessionId: newSessionId,
+        }) as ProbeAgent;
+
+        // Copy history manually (deep copy to avoid mutations)
+        (clonedAgent as any).history = JSON.parse(JSON.stringify(sourceAgentAny.history || []));
+      }
 
       // Set up tracing for cloned session if debug mode is enabled
       if (sourceAgentAny.debug && checkName) {
