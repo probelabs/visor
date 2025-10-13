@@ -315,6 +315,10 @@ export class SessionRegistry {
       /Convert your previous response.*into actual JSON data/i,
       /Please reformat your previous response to match this schema/i,
       /Now you need to respond according to this schema/i,
+      /DO NOT return the schema definition itself/i,
+      /this is just the structure - provide ACTUAL DATA/i,
+      /You must provide your response as.*JSON/i,
+      /respond with.*valid JSON/i,
 
       // JSON validation and correction prompts
       /CRITICAL JSON ERROR/i,
@@ -335,6 +339,11 @@ export class SessionRegistry {
       /Please use proper XML format with BOTH opening and closing tags/i,
       /Remember to format your response as JSON/i,
       /Your response must match the provided schema/i,
+
+      // ProbeAgent's attempt_completion format instructions
+      /<attempt_completion>/i,
+      /attempt_completion.*tool.*provide.*final/i,
+      /Use attempt_completion.*response.*inside.*tags/i,
     ];
 
     // Additional patterns for system/reminder messages about formatting
@@ -364,8 +373,15 @@ export class SessionRegistry {
         content.includes('"isValid"') ||
         content.includes('"validationError"');
 
-      // Keep message if it's NOT a schema/formatting message
-      return !isSchemaMessage && !isSystemReminder && !isJsonValidationResult;
+      // Also filter out messages that contain actual JSON schema definitions
+      // These typically have "$schema", "properties", "required" fields
+      const containsSchemaDefinition =
+        content.includes('"$schema"') &&
+        content.includes('"properties"') &&
+        (content.includes('"type"') || content.includes('"required"'));
+
+      // Keep message if it's NOT a schema/formatting message or schema definition
+      return !isSchemaMessage && !isSystemReminder && !isJsonValidationResult && !containsSchemaDefinition;
     });
 
     // Ensure we don't accidentally remove too much
