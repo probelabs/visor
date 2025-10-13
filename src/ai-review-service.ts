@@ -280,8 +280,9 @@ export class AIReviewService {
 
     if (sessionMode === 'clone') {
       // Clone the session - creates a new agent with copied history
-      currentSessionId = `${parentSessionId}-clone-${Date.now()}`;
-      log(`📋 Cloning AI session ${parentSessionId} → ${currentSessionId}...`);
+      // Include check name in the session ID for better tracing
+      currentSessionId = `${checkName}-session-${Date.now()}`;
+      log(`📋 Cloning AI session ${parentSessionId} → ${currentSessionId} for ${checkName} check...`);
 
       const clonedAgent = await this.sessionRegistry.cloneSession(
         parentSessionId,
