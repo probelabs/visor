@@ -312,6 +312,16 @@ export class SessionRegistry {
   private filterHistoryForClone(history: any[]): any[] {
     const originalCount = history.length;
 
+    // Add detailed logging to debug what's in the history
+    console.error(`🔍 Filtering history for clone: ${originalCount} total messages`);
+    history.forEach((msg, idx) => {
+      const contentPreview =
+        typeof msg.content === 'string'
+          ? msg.content.substring(0, 100)
+          : JSON.stringify(msg.content).substring(0, 100);
+      console.error(`  [${idx}] ${msg.role}: ${contentPreview}...`);
+    });
+
     // Find the first user message that contains schema formatting request
     // This is added by ProbeAgent when it does recursive answer() call for schema formatting
     const schemaRequestIndex = history.findIndex((message, index) => {
@@ -336,6 +346,7 @@ export class SessionRegistry {
     } else {
       // No schema request found - keep all messages
       filtered = [...history];
+      console.error(`🔍 No schema formatting request found in history`);
     }
 
     // Log filtering results
