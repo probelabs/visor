@@ -846,7 +846,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(JSON.stringify(schemaOptions, null, 2));
       }
 
-      // Save prompt and debug info for session reuse too
+      // Save prompt and debug info for session reuse too (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
       try {
         const fs = require('fs');
         const path = require('path');
@@ -959,6 +960,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`   - Includes: full conversation history, schema, current prompt`);
       } catch (error) {
         log(`⚠️ Could not save debug file: ${error}`);
+      }
       }
 
       // Use existing agent's answer method - this reuses the conversation context
@@ -1145,7 +1147,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       const provider = this.config.provider || 'auto';
       const model = this.config.model || 'default';
 
-      // Save prompt to a temp file AND debug artifacts for easier reproduction
+      // Save prompt to a temp file AND debug artifacts for easier reproduction (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
       try {
         const fs = require('fs');
         const path = require('path');
@@ -1248,6 +1251,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`\n$ ${cliCommand}\n`);
       } catch (error) {
         log(`⚠️ Could not save prompt file: ${error}`);
+      }
       }
 
       const response = await agent.answer(prompt, undefined, schemaOptions);

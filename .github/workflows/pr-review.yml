@@ -65,6 +65,7 @@ jobs:
           VISOR_TELEMETRY_ENABLED: 'true'
           VISOR_TELEMETRY_SINK: 'file'
           VISOR_TRACE_REPORT: 'true'
+          VISOR_DEBUG_AI_SESSIONS: 'true'
           # AI Provider API Keys (configure one of these in your repository secrets)
           # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -72,6 +73,16 @@ jobs:
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Optional: Specify the AI model to use
           MODEL_NAME: 'glm-4.6'
+
+      - name: List Debug Artifacts
+        if: always()
+        run: |
+          echo "📁 Debug Artifacts:"
+          if [ -d "debug-artifacts" ]; then
+            ls -lh debug-artifacts/ || echo "No debug artifacts found"
+          else
+            echo "debug-artifacts directory not found"
+          fi
 
       - name: Upload Trace Artifacts
         if: always()
@@ -81,9 +92,11 @@ jobs:
           path: |
             output/traces/*.report.html
             output/traces/*.otlp.json
+            debug-artifacts/*.json
+            debug-artifacts/*.txt
           retention-days: 14
           if-no-files-found: ignore
-          
+
       - name: Validate Review Results
         if: steps.visor_review.outputs.review-score
         run: |
