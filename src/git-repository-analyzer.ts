@@ -204,9 +204,30 @@ export class GitRepositoryAnalyzer {
   }
 
   /**
-   * Check if a file is ignored by .gitignore (even if force-added)
+   * Check if a file should be excluded from analysis
+   * This includes:
+   * - Files in .gitignore (even if force-added)
+   * - Built/generated files (dist/, build/, .next/, etc.)
    */
-  private async isFileIgnored(filename: string): Promise<boolean> {
+  private async shouldExcludeFile(filename: string): Promise<boolean> {
+    // Check common build directories that should be excluded even if tracked
+    const excludePatterns = [
+      /^dist\//,
+      /^build\//,
+      /^\.next\//,
+      /^out\//,
+      /^node_modules\//,
+      /^coverage\//,
+      /^\.turbo\//,
+    ];
+
+    for (const pattern of excludePatterns) {
+      if (pattern.test(filename)) {
+        return true;
+      }
+    }
+
+    // Also check if file is in .gitignore
     try {
       const result = await this.git.raw(['check-ignore', filename]);
       return result.trim().length > 0;
@@ -264,9 +285,9 @@ export class GitRepositoryAnalyzer {
       ];
 
       for (const { file, status } of fileChanges) {
-        // Skip files that are in .gitignore (even if force-added)
-        if (await this.isFileIgnored(file)) {
-          console.log(`⏭️  Skipping gitignored file: ${file}`);
+        // Skip files that should be excluded from analysis
+        if (await this.shouldExcludeFile(file)) {
+          console.log(`⏭️  Skipping excluded file: ${file}`);
           continue;
         }
 
@@ -296,9 +317,9 @@ export class GitRepositoryAnalyzer {
       }
 
       for (const file of diffSummary.files) {
-        // Skip files that are in .gitignore (even if force-added)
-        if (await this.isFileIgnored(file.file)) {
-          console.log(`⏭️  Skipping gitignored file: ${file.file}`);
+        // Skip files that should be excluded from analysis
+        if (await this.shouldExcludeFile(file.file)) {
+          console.log(`⏭️  Skipping excluded file: ${file.file}`);
           continue;
         }
 
