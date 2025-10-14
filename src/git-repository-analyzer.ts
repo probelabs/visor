@@ -47,13 +47,25 @@ export class GitRepositoryAnalyzer {
 
     try {
       // Get current branch and status
-      const [status, currentBranch] = await Promise.all([
+      const [status, currentBranch, baseBranch] = await Promise.all([
         this.git.status(),
         this.getCurrentBranch(),
+        this.getBaseBranch(),
       ]);
 
+      // Auto-detect if we're on a feature branch and should analyze diff vs base
+      const isFeatureBranch = currentBranch !== baseBranch &&
+                              currentBranch !== 'main' &&
+                              currentBranch !== 'master';
+
       // Get uncommitted changes
-      const uncommittedFiles = await this.getUncommittedChanges(includeContext);
+      let uncommittedFiles = await this.getUncommittedChanges(includeContext);
+
+      // If on a feature branch with no uncommitted changes, get diff vs base branch
+      if (isFeatureBranch && uncommittedFiles.length === 0 && includeContext) {
+        console.log(`📊 Feature branch detected (${currentBranch}), analyzing diff vs ${baseBranch}`);
+        uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
+      }
 
       // Get recent commit info (handle repos with no commits)
       let lastCommit: (ListLogLine & DefaultLogFields) | null = null;
@@ -85,7 +97,7 @@ export class GitRepositoryAnalyzer {
         title: this.generateTitle(status, currentBranch),
         body: this.generateDescription(status, lastCommit),
         author,
-        base: await this.getBaseBranch(),
+        base: baseBranch,
         head: currentBranch,
         files: uncommittedFiles,
         totalAdditions: uncommittedFiles.reduce((sum, file) => sum + file.additions, 0),
@@ -215,6 +227,69 @@ export class GitRepositoryAnalyzer {
       return changes;
     } catch (error) {
       console.error('Error getting uncommitted changes:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get diff between current branch and base branch (for feature branch analysis)
+   */
+  private async getBranchDiff(baseBranch: string, includeContext: boolean = true): Promise<GitFileChange[]> {
+    try {
+      // Get the list of changed files between base and current branch
+      const diffSummary = await this.git.diffSummary([baseBranch]);
+      const changes: GitFileChange[] = [];
+
+      if (!diffSummary || !diffSummary.files) {
+        return [];
+      }
+
+      for (const file of diffSummary.files) {
+        const filePath = path.join(this.cwd, file.file);
+
+        // Handle different file types (binary files don't have insertions/deletions)
+        const isBinary = 'binary' in file && file.binary;
+        const insertions = 'insertions' in file ? file.insertions : 0;
+        const deletions = 'deletions' in file ? file.deletions : 0;
+        const fileChanges = 'changes' in file ? file.changes : 0;
+
+        // Determine status based on insertions/deletions
+        let status: 'added' | 'removed' | 'modified' | 'renamed';
+        if (isBinary) {
+          status = 'modified';
+        } else if (insertions > 0 && deletions === 0) {
+          status = 'added';
+        } else if (insertions === 0 && deletions > 0) {
+          status = 'removed';
+        } else {
+          status = 'modified';
+        }
+
+        // Get the actual diff patch if needed
+        let patch: string | undefined;
+        if (includeContext && !isBinary) {
+          try {
+            patch = await this.git.diff([baseBranch, '--', file.file]);
+          } catch {
+            // Ignore diff errors for specific files
+          }
+        }
+
+        const fileChange: GitFileChange = {
+          filename: file.file,
+          additions: insertions,
+          deletions: deletions,
+          changes: fileChanges,
+          status,
+          patch,
+        };
+
+        changes.push(fileChange);
+      }
+
+      return changes;
+    } catch (error) {
+      console.error('Error getting branch diff:', error);
       return [];
     }
   }
