@@ -846,6 +846,40 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(JSON.stringify(schemaOptions, null, 2));
       }
 
+      // Save prompt and debug info for session reuse too
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const provider = this.config.provider || 'auto';
+        const model = this.config.model || 'default';
+
+        const debugData = {
+          timestamp: timestamp,
+          checkName: _checkName || 'unknown',
+          provider: provider,
+          model: model,
+          schema: effectiveSchema,
+          schemaOptions: schemaOptions || 'none',
+          promptLength: prompt.length,
+          prompt: prompt,
+        };
+
+        const debugJson = JSON.stringify(debugData, null, 2);
+
+        const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                   path.join(process.cwd(), 'debug-artifacts');
+        if (!fs.existsSync(debugArtifactsDir)) {
+          fs.mkdirSync(debugArtifactsDir, { recursive: true });
+        }
+        const debugFile = path.join(debugArtifactsDir, `prompt-${_checkName || 'unknown'}-${timestamp}.json`);
+        fs.writeFileSync(debugFile, debugJson, 'utf-8');
+        log(`\n💾 Full debug info saved to: ${debugFile}`);
+        log(`   - Includes: prompt, schema, provider, model, session info`);
+      } catch (error) {
+        log(`⚠️ Could not save debug file: ${error}`);
+      }
+
       // Use existing agent's answer method - this reuses the conversation context
       const response = await agent.answer(prompt, undefined, schemaOptions);
 
@@ -1030,17 +1064,47 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       const provider = this.config.provider || 'auto';
       const model = this.config.model || 'default';
 
-      // Save prompt to a temp file for easier reproduction
+      // Save prompt to a temp file AND debug artifacts for easier reproduction
       try {
         const fs = require('fs');
         const path = require('path');
         const os = require('os');
-        const tempDir = os.tmpdir();
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
 
+        // Prepare debug info with full details
+        const debugData = {
+          timestamp,
+          checkName: _checkName || 'unknown',
+          provider,
+          model,
+          schema: effectiveSchema,
+          schemaOptions: schemaOptions || 'none',
+          promptLength: prompt.length,
+          prompt: prompt,
+        };
+
+        const debugJson = JSON.stringify(debugData, null, 2);
+
+        // Save to temp directory
+        const tempDir = os.tmpdir();
+        const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
         fs.writeFileSync(promptFile, prompt, 'utf-8');
         log(`\n💾 Prompt saved to: ${promptFile}`);
+
+        // Also save to debug-artifacts directory if available
+        const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                   path.join(process.cwd(), 'debug-artifacts');
+        try {
+          if (!fs.existsSync(debugArtifactsDir)) {
+            fs.mkdirSync(debugArtifactsDir, { recursive: true });
+          }
+          const debugFile = path.join(debugArtifactsDir, `prompt-${_checkName || 'unknown'}-${timestamp}.json`);
+          fs.writeFileSync(debugFile, debugJson, 'utf-8');
+          log(`\n💾 Full debug info saved to: ${debugFile}`);
+          log(`   - Includes: prompt, schema, provider, model, and schema options`);
+        } catch (e) {
+          // Ignore if we can't write to debug-artifacts
+        }
 
         log(`\n📝 To reproduce locally, run:`);
 
