@@ -1,5 +1,6 @@
 import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
+import type { AppTracer, TelemetryConfig } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
@@ -11,6 +12,24 @@ import { initializeTracer } from './utils/tracer-init';
  */
 function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
+}
+
+/**
+ * Extended ProbeAgent interface that includes tracing properties
+ */
+interface TracedProbeAgent extends ProbeAgent {
+  tracer?: AppTracer;
+  _telemetryConfig?: TelemetryConfig;
+  _traceFilePath?: string;
+}
+
+/**
+ * Extended ProbeAgentOptions interface that includes tracing properties
+ */
+interface TracedProbeAgentOptions extends ProbeAgentOptions {
+  tracer?: AppTracer;
+  _telemetryConfig?: TelemetryConfig;
+  _traceFilePath?: string;
 }
 
 export interface AIReviewConfig {
@@ -388,7 +407,7 @@ export class AIReviewService {
   /**
    * Register a new AI session in the session registry
    */
-  registerSession(sessionId: string, agent: ProbeAgent): void {
+  registerSession(sessionId: string, agent: TracedProbeAgent): void {
     this.sessionRegistry.registerSession(sessionId, agent);
   }
 
@@ -791,7 +810,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
    * Call ProbeAgent with an existing session
    */
   private async callProbeAgentWithExistingSession(
-    agent: ProbeAgent,
+    agent: TracedProbeAgent,
     prompt: string,
     schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
@@ -847,20 +866,47 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       }
 
       // Use existing agent's answer method - this reuses the conversation context
-      const response = await agent.answer(prompt, undefined, schemaOptions);
+      // Wrap in a span for hierarchical tracing
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const agentAny = agent as any;
+      let response: string;
+      if (agentAny.tracer && typeof agentAny.tracer.withSpan === 'function') {
+        response = await agentAny.tracer.withSpan(
+          'visor.ai_check_reuse',
+          async () => {
+            return await agent.answer(prompt, undefined, schemaOptions);
+          },
+          {
+            'check.name': _checkName || 'unknown',
+            'check.mode': 'session_reuse',
+            'prompt.length': prompt.length,
+            'schema.type': effectiveSchema || 'none',
+          }
+        );
+      } else {
+        response = await agent.answer(prompt, undefined, schemaOptions);
+      }
 
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
       // Finalize and save trace if this is a cloned session with tracing enabled
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const agentAny = agent as any;
-      if (agentAny._traceFilePath && agentAny.tracer) {
+      // Properly flush and shutdown OpenTelemetry to ensure all spans are exported
+      if (agentAny._traceFilePath && agentAny._telemetryConfig) {
         try {
-          // Call shutdown to properly close the file stream
-          if (agentAny.tracer && typeof agentAny.tracer.shutdown === 'function') {
-            await agentAny.tracer.shutdown();
-            log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
+          // First flush the tracer to export pending spans
+          if (agentAny.tracer && typeof agentAny.tracer.flush === 'function') {
+            await agentAny.tracer.flush();
+            log(`🔄 Flushed tracer spans for cloned session`);
+          }
+
+          // Then shutdown the telemetry config to finalize all exporters
+          if (
+            agentAny._telemetryConfig &&
+            typeof agentAny._telemetryConfig.shutdown === 'function'
+          ) {
+            await agentAny._telemetryConfig.shutdown();
+            log(`📊 OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
 
             // In GitHub Actions, also log file size for verification
             if (process.env.GITHUB_ACTIONS) {
@@ -872,6 +918,10 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
                 );
               }
             }
+          } else if (agentAny.tracer && typeof agentAny.tracer.shutdown === 'function') {
+            // Fallback for SimpleTelemetry
+            await agentAny.tracer.shutdown();
+            log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
           }
         } catch (exportError) {
           console.error('⚠️  Warning: Failed to export trace for cloned session:', exportError);
@@ -943,7 +993,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
-      const options: ProbeAgentOptions = {
+      const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
         promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
@@ -951,11 +1001,14 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       };
 
       // Enable tracing in debug mode for better diagnostics
+      // This uses OpenTelemetry for proper hierarchical span relationships
       let traceFilePath = '';
+      let telemetryConfig: TelemetryConfig | null = null;
       if (this.config.debug) {
         const tracerResult = await initializeTracer(sessionId, _checkName);
         if (tracerResult) {
-          (options as any).tracer = tracerResult.tracer;
+          options.tracer = tracerResult.tracer;
+          telemetryConfig = tracerResult.telemetryConfig;
           traceFilePath = tracerResult.filePath;
         }
       }
@@ -1059,28 +1112,59 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(`⚠️ Could not save prompt file: ${error}`);
       }
 
-      const response = await agent.answer(prompt, undefined, schemaOptions);
+      // Wrap the agent.answer() call in a span for hierarchical tracing
+      // This creates a parent span that will contain all ProbeAgent's child spans
+      let response: string;
+      const tracer = options.tracer;
+      if (tracer && typeof tracer.withSpan === 'function') {
+        response = await tracer.withSpan(
+          'visor.ai_check',
+          async () => {
+            return await agent.answer(prompt, undefined, schemaOptions);
+          },
+          {
+            'check.name': _checkName || 'unknown',
+            'check.session_id': sessionId,
+            'prompt.length': prompt.length,
+            'schema.type': effectiveSchema || 'none',
+          }
+        );
+      } else {
+        response = await agent.answer(prompt, undefined, schemaOptions);
+      }
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
       // Finalize and save trace if enabled
-      if (traceFilePath && (options as any).tracer) {
+      // Properly flush and shutdown OpenTelemetry to ensure all spans are exported
+      if (traceFilePath && telemetryConfig) {
         try {
-          const tracer = (options as any).tracer;
-          // Call shutdown to properly close the file stream
-          if (tracer && typeof tracer.shutdown === 'function') {
-            await tracer.shutdown();
-            log(`📊 Trace saved to: ${traceFilePath}`);
+          // First flush the tracer to export pending spans
+          if (tracer && typeof tracer.flush === 'function') {
+            await tracer.flush();
+            log(`🔄 Flushed tracer spans`);
+          }
+
+          // Then shutdown the telemetry config to finalize all exporters
+          if (telemetryConfig && typeof telemetryConfig.shutdown === 'function') {
+            await telemetryConfig.shutdown();
+            log(`📊 OpenTelemetry trace saved to: ${traceFilePath}`);
 
             // In GitHub Actions, also log file size for verification
             if (process.env.GITHUB_ACTIONS) {
               const fs = require('fs');
               if (fs.existsSync(traceFilePath)) {
                 const stats = fs.statSync(traceFilePath);
-                console.log(`::notice title=AI Trace Saved::Trace file size: ${stats.size} bytes`);
+                console.log(
+                  `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
+                );
               }
             }
+          } else if (tracer && typeof tracer.shutdown === 'function') {
+            // Fallback for SimpleTelemetry
+            await tracer.shutdown();
+            log(`📊 Trace saved to: ${traceFilePath}`);
           }
         } catch (exportError) {
           console.error('⚠️  Warning: Failed to export trace:', exportError);

@@ -25,6 +25,15 @@ export interface TelemetryInitOptions {
 let sdk: NodeSDKType | null = null;
 let patched = false;
 
+/**
+ * Reset telemetry state (for testing only).
+ * This forcefully resets the SDK singleton.
+ */
+export function resetTelemetryForTesting(): void {
+  sdk = null;
+  patched = false;
+}
+
 export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<void> {
   const enabled = !!opts.enabled || process.env.VISOR_TELEMETRY_ENABLED === 'true';
   if (!enabled || sdk) return;
