@@ -53,6 +53,7 @@ export class CLI {
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .option('--analyze-branch-diff', 'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)')
+      .option('--event <type>', 'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"')
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -117,6 +118,8 @@ export class CLI {
         )
         .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
         .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+        .option('--analyze-branch-diff', 'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)')
+        .option('--event <type>', 'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"')
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments

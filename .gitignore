@@ -49,6 +49,7 @@ coverage/
 .vow-consent
 .vow-cooldown
 traces/
+debug-artifacts/
 
 # Test files and traces
 test-*.js

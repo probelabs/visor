@@ -98,6 +98,16 @@ visor --check all --output table
 # Filter by tags (e.g., fast/local) and increase parallelism
 visor --tags fast,local --max-parallelism 5
 
+# Analyze full PR diff vs base branch (like GitHub Actions does)
+# Auto-enabled for code-review schemas, or force with --analyze-branch-diff
+visor --analyze-branch-diff       # Analyzes diff vs main/master branch
+visor --check security --analyze-branch-diff  # Specific checks on branch diff
+
+# Simulate GitHub events for event-based check filtering
+visor --event pr_updated          # Run checks triggered by PR updates (auto for code-review)
+visor --event issue_opened        # Run checks triggered by new issues
+visor --event all                 # Run all checks regardless of event filters (default)
+
 # Emit machine‑readable results and save to a file
 visor --check security --output json --output-file visor-results.json
 

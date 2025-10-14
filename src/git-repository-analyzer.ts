@@ -11,7 +11,11 @@ export interface GitFileChange {
   changes: number;
   content?: string;
   patch?: string;
+  truncated?: boolean;
 }
+
+// Maximum patch size in bytes (50KB) - helps prevent token limit issues
+const MAX_PATCH_SIZE = 50 * 1024;
 
 export interface GitRepositoryInfo {
   title: string;
@@ -61,10 +65,16 @@ export class GitRepositoryAnalyzer {
       // Get uncommitted changes first
       let uncommittedFiles = await this.getUncommittedChanges(includeContext);
 
-      // If on a feature branch with no uncommitted changes AND branch diff is enabled, get diff vs base branch
-      if (isFeatureBranch && uncommittedFiles.length === 0 && includeContext && enableBranchDiff) {
-        console.log(`📊 Feature branch detected: ${currentBranch}`);
-        console.log(`📂 Analyzing diff vs ${baseBranch} (enabled for code-review schemas)`);
+      // If branch diff is explicitly enabled, use branch diff (ignoring uncommitted changes)
+      // Otherwise, if on a feature branch with no uncommitted changes AND branch diff is enabled, get diff vs base branch
+      if (isFeatureBranch && includeContext && enableBranchDiff) {
+        if (uncommittedFiles.length > 0) {
+          console.log(`📊 Feature branch detected: ${currentBranch}`);
+          console.log(`⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) due to --analyze-branch-diff flag`);
+        } else {
+          console.log(`📊 Feature branch detected: ${currentBranch}`);
+        }
+        console.log(`📂 Analyzing diff vs ${baseBranch} (${uncommittedFiles.length > 0 ? 'forced by --analyze-branch-diff' : 'auto-enabled for code-review schemas'})`);
         uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
       } else if (uncommittedFiles.length > 0) {
         console.log(`📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)`);
@@ -193,6 +203,38 @@ export class GitRepositoryAnalyzer {
     }
   }
 
+  /**
+   * Check if a file is ignored by .gitignore (even if force-added)
+   */
+  private async isFileIgnored(filename: string): Promise<boolean> {
+    try {
+      const result = await this.git.raw(['check-ignore', filename]);
+      return result.trim().length > 0;
+    } catch {
+      // If check-ignore returns non-zero exit code, the file is not ignored
+      return false;
+    }
+  }
+
+  /**
+   * Truncate a patch if it exceeds MAX_PATCH_SIZE
+   */
+  private truncatePatch(patch: string, filename: string): { patch: string; truncated: boolean } {
+    const patchSize = Buffer.byteLength(patch, 'utf8');
+
+    if (patchSize <= MAX_PATCH_SIZE) {
+      return { patch, truncated: false };
+    }
+
+    // Truncate to MAX_PATCH_SIZE and add a notice
+    const truncated = patch.substring(0, MAX_PATCH_SIZE);
+    const truncatedPatch = `${truncated}\n\n... [TRUNCATED: Diff too large (${(patchSize / 1024).toFixed(1)}KB), showing first ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB] ...`;
+
+    console.log(`⚠️  Truncated diff for ${filename} (${(patchSize / 1024).toFixed(1)}KB → ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB)`);
+
+    return { patch: truncatedPatch, truncated: true };
+  }
+
   private async getRemoteInfo(): Promise<{ name: string; url: string } | null> {
     try {
       const remotes = await this.git.getRemotes(true);
@@ -222,6 +264,12 @@ export class GitRepositoryAnalyzer {
       ];
 
       for (const { file, status } of fileChanges) {
+        // Skip files that are in .gitignore (even if force-added)
+        if (await this.isFileIgnored(file)) {
+          console.log(`⏭️  Skipping gitignored file: ${file}`);
+          continue;
+        }
+
         const filePath = path.join(this.cwd, file);
         const fileChange = await this.analyzeFileChange(file, status, filePath, includeContext);
         changes.push(fileChange);
@@ -248,7 +296,11 @@ export class GitRepositoryAnalyzer {
       }
 
       for (const file of diffSummary.files) {
-        const filePath = path.join(this.cwd, file.file);
+        // Skip files that are in .gitignore (even if force-added)
+        if (await this.isFileIgnored(file.file)) {
+          console.log(`⏭️  Skipping gitignored file: ${file.file}`);
+          continue;
+        }
 
         // Handle different file types (binary files don't have insertions/deletions)
         const isBinary = 'binary' in file && file.binary;
@@ -270,9 +322,15 @@ export class GitRepositoryAnalyzer {
 
         // Get the actual diff patch if needed
         let patch: string | undefined;
+        let truncated = false;
         if (includeContext && !isBinary) {
           try {
-            patch = await this.git.diff([baseBranch, '--', file.file]);
+            const rawPatch = await this.git.diff([baseBranch, '--', file.file]);
+            if (rawPatch) {
+              const result = this.truncatePatch(rawPatch, file.file);
+              patch = result.patch;
+              truncated = result.truncated;
+            }
           } catch {
             // Ignore diff errors for specific files
           }
@@ -285,6 +343,7 @@ export class GitRepositoryAnalyzer {
           changes: fileChanges,
           status,
           patch,
+          truncated,
         };
 
         changes.push(fileChange);
@@ -307,13 +366,16 @@ export class GitRepositoryAnalyzer {
     let deletions = 0;
     let patch: string | undefined;
     let content: string | undefined;
+    let truncated = false;
 
     try {
       // Get diff for the file if it exists and is not binary
       if (includeContext && status !== 'added' && fs.existsSync(filePath)) {
         const diff = await this.git.diff(['--', filename]).catch(() => '');
         if (diff) {
-          patch = diff;
+          const result = this.truncatePatch(diff, filename);
+          patch = result.patch;
+          truncated = result.truncated;
           // Count additions and deletions from diff
           const lines = diff.split('\n');
           additions = lines.filter(line => line.startsWith('+')).length;
@@ -337,7 +399,9 @@ export class GitRepositoryAnalyzer {
             // Skip files larger than 1MB
             if (includeContext) {
               content = fs.readFileSync(filePath, 'utf8');
-              patch = content; // For new files, the entire content is the "patch"
+              const result = this.truncatePatch(content, filename);
+              patch = result.patch; // For new files, the entire content is the "patch"
+              truncated = result.truncated;
             }
             // Always count additions for statistics
             const fileContent = includeContext ? content : fs.readFileSync(filePath, 'utf8');
@@ -364,6 +428,7 @@ export class GitRepositoryAnalyzer {
       changes: additions + deletions,
       content,
       patch,
+      truncated,
     };
   }
 

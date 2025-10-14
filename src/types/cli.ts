@@ -46,6 +46,8 @@ export interface CliOptions {
   outputFile?: string;
   /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
   analyzeBranchDiff?: boolean;
+  /** Simulate GitHub event type for event-based filtering */
+  event?: string;
 }
 
 /**

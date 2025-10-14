@@ -363,8 +363,31 @@ export async function main(): Promise<void> {
     const prInfo = analyzer.toPRInfo(repositoryInfo, includeCodeContext);
 
     // Store the includeCodeContext flag in prInfo for downstream use
-    const prInfoWithContext = prInfo as PRInfo & { includeCodeContext?: boolean };
+    type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed' | 'issue_opened' | 'issue_comment' | 'manual' | 'schedule' | 'webhook_received';
+    const prInfoWithContext = prInfo as PRInfo & { includeCodeContext?: boolean; eventType?: EventTrigger };
     prInfoWithContext.includeCodeContext = includeCodeContext;
+
+    // Determine event type for filtering
+    let eventType = options.event || 'all';
+
+    // Auto-detect event based on schema if not explicitly set
+    if (eventType === 'all' || !options.event) {
+      const hasCodeReviewSchema = checksToRun.some(
+        check => config.checks?.[check]?.schema === 'code-review'
+      );
+      if (hasCodeReviewSchema && !options.event) {
+        eventType = 'pr_updated'; // Default for code-review schemas
+        logger.verbose(`📋 Auto-detected event type: ${eventType} (code-review schema detected)`);
+      }
+    }
+
+    // Set event type on prInfo (unless it's 'all', which means no filtering)
+    if (eventType !== 'all') {
+      prInfoWithContext.eventType = eventType as EventTrigger;
+      logger.verbose(`🎯 Simulating event: ${eventType}`);
+    } else {
+      logger.verbose(`🎯 Event filtering: DISABLED (running all checks regardless of event triggers)`);
+    }
 
     // Execute checks with proper parameters
     const executionResult = await withActiveSpan(
