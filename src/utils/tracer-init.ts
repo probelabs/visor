@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { TelemetryConfig, AppTracer, SimpleTelemetry, SimpleAppTracer } from '@probelabs/probe';
 
 /**
  * Safely initialize a tracer for ProbeAgent with proper path sanitization
@@ -9,15 +10,10 @@ import * as fs from 'fs';
 export async function initializeTracer(
   sessionId: string,
   checkName?: string
-): Promise<{ tracer: any; telemetryConfig: any; filePath: string } | null> {
+): Promise<{ tracer: AppTracer; telemetryConfig: TelemetryConfig; filePath: string } | null> {
   try {
-    // Import telemetry modules dynamically
-    const probeModule = (await import('@probelabs/probe')) as any;
-
     // Try to use full OpenTelemetry integration first (provides proper span hierarchy)
-    if (probeModule.TelemetryConfig && probeModule.AppTracer) {
-      const TelemetryConfig = probeModule.TelemetryConfig;
-      const AppTracer = probeModule.AppTracer;
+    if (TelemetryConfig && AppTracer) {
 
       // SECURITY: Sanitize checkName to prevent path traversal attacks
       // Use path.basename to strip any directory traversal characters (../, etc.)
@@ -82,13 +78,10 @@ export async function initializeTracer(
     }
 
     // Fallback to SimpleTelemetry if full OpenTelemetry is not available
-    if (probeModule.SimpleTelemetry && probeModule.SimpleAppTracer) {
+    if (SimpleTelemetry && SimpleAppTracer) {
       console.warn(
         '⚠️ Using SimpleTelemetry fallback - hierarchical span relationships may not be available'
       );
-
-      const SimpleTelemetry = probeModule.SimpleTelemetry;
-      const SimpleAppTracer = probeModule.SimpleAppTracer;
 
       // SECURITY: Sanitize checkName to prevent path traversal attacks
       const sanitizedCheckName = checkName ? path.basename(checkName) : 'check';
@@ -119,7 +112,6 @@ export async function initializeTracer(
 
       // Initialize simple telemetry
       const telemetry = new SimpleTelemetry({
-        serviceName: 'visor-ai',
         enableFile: true,
         filePath: traceFilePath,
         enableConsole: false,
@@ -135,7 +127,12 @@ export async function initializeTracer(
         console.log(`::set-output name=trace-path::${traceFilePath}`);
       }
 
-      return { tracer, telemetryConfig: telemetry, filePath: traceFilePath };
+      // Return with proper typing for SimpleTelemetry
+      return {
+        tracer: tracer as any as AppTracer,
+        telemetryConfig: telemetry as any as TelemetryConfig,
+        filePath: traceFilePath,
+      };
     }
 
     console.error('⚠️ Telemetry classes not available in ProbeAgent, skipping tracing');
