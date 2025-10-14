@@ -80,6 +80,10 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
   });
 
   it('runs the example, outputs JSON, and writes forEach spans to NDJSON', async () => {
+    // Clean up old trace files to avoid test flakiness
+    const oldFiles = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
+    oldFiles.forEach(f => fs.unlinkSync(path.join(tracesDir, f)));
+
     // Prepare CLI argv (write to file for explicit JSON reading)
     process.argv = [
       'node',
@@ -109,11 +113,13 @@ describe('Telemetry E2E — forEach tracing + JSON output', () => {
     // Ensure a trace file was written
     const files = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
     expect(files.length).toBeGreaterThan(0);
-    const newest = files
-      .map(f => ({ f, t: fs.statSync(path.join(tracesDir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t)[0].f;
+    // Pick the file with the most content (not just newest by mtime)
+    // because multiple files may be created during initialization
+    const largest = files
+      .map(f => ({ f, size: fs.statSync(path.join(tracesDir, f)).size }))
+      .sort((a, b) => b.size - a.size)[0].f;
 
-    const ndjson = fs.readFileSync(path.join(tracesDir, newest), 'utf8').trim();
+    const ndjson = fs.readFileSync(path.join(tracesDir, largest), 'utf8').trim();
     expect(ndjson.length).toBeGreaterThan(0);
     const lines = ndjson.split(/\r?\n/).map(l => JSON.parse(l));
 
