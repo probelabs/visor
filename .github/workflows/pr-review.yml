@@ -90,10 +90,12 @@ jobs:
         with:
           name: visor-trace-${{ github.run_number }}
           path: |
+            output/traces/*.ndjson
             output/traces/*.report.html
             output/traces/*.otlp.json
             debug-artifacts/*.json
             debug-artifacts/*.txt
+            debug-artifacts/*.jsonl
           retention-days: 14
           if-no-files-found: ignore
 
