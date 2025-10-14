@@ -292,7 +292,10 @@ export class AIReviewService {
     }
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+    // When reusing session, skip PR context since it's already in the conversation history
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
+      skipPRContext: true,
+    });
 
     // Determine which agent to use based on session mode
     let agentToUse: typeof existingAgent;
@@ -424,9 +427,13 @@ export class AIReviewService {
   private async buildCustomPrompt(
     prInfo: PRInfo,
     customInstructions: string,
-    schema?: string | Record<string, unknown>
+    schema?: string | Record<string, unknown>,
+    options?: { skipPRContext?: boolean }
   ): Promise<string> {
-    const prContext = this.formatPRContext(prInfo);
+    // When reusing sessions, skip PR context to avoid sending duplicate diff data
+    const skipPRContext = options?.skipPRContext === true;
+
+    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     // Check if we're using the code-review schema
@@ -434,6 +441,13 @@ export class AIReviewService {
 
     if (isIssue) {
       // Issue context - no code analysis needed
+      if (skipPRContext) {
+        // Session reuse: just send new instructions
+        return `<instructions>
+${customInstructions}
+</instructions>`;
+      }
+
       return `<review_request>
   <instructions>
 ${customInstructions}
@@ -459,6 +473,21 @@ ${prContext}
     if (isCodeReviewSchema) {
       // PR context with code-review schema - structured XML format
       const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
+
+      if (skipPRContext) {
+        // Session reuse: just send new instructions without repeating the context
+        return `<instructions>
+${customInstructions}
+</instructions>
+
+<reminder>
+  <rule>The code context and diff were provided in the previous message</rule>
+  <rule>Focus on the new analysis instructions above</rule>
+  <rule>Only analyze code that appears with + (additions) or - (deletions) in the diff sections</rule>
+  <rule>STRICT OUTPUT POLICY: Report only actual problems, risks, or deficiencies</rule>
+  <rule>SEVERITY ASSIGNMENT: Assign severity ONLY to problems introduced or left unresolved by this change</rule>
+</reminder>`;
+      }
 
       return `<review_request>
   <analysis_type>${analysisType}</analysis_type>
@@ -495,6 +524,13 @@ ${prContext}
     }
 
     // For non-code-review schemas, just provide instructions and context without review-specific wrapper
+    if (skipPRContext) {
+      // Session reuse: just send new instructions
+      return `<instructions>
+${customInstructions}
+</instructions>`;
+    }
+
     return `<instructions>
 ${customInstructions}
 </instructions>
