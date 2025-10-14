@@ -244,12 +244,6 @@ checks:
     depends_on: [overview]
     reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
-    # After the first successful pass, jump back to 'overview' once and
-    # re-run this step under simulated PR update semantics to refresh context.
-    on_success:
-      goto_js: |
-        return attempt === 1 ? 'overview' : null
-      goto_event: pr_updated
 
   # Code style and formatting analysis
   style:
