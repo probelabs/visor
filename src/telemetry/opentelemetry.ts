@@ -41,9 +41,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   try {
     const { NodeSDK } = require('@opentelemetry/sdk-node');
 
-    const { Resource } = require('@opentelemetry/resources');
-
-    const { SemanticResourceAttributes } = require('@opentelemetry/semantic-conventions');
+    // Support both OpenTelemetry v1 and v2 APIs
+    const resourcesModule = require('@opentelemetry/resources');
+    const semanticConventions = require('@opentelemetry/semantic-conventions');
 
     const {
       BatchSpanProcessor,
@@ -110,11 +110,24 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       processors.push(new BatchSpanProcessor(exporter, batchParams()));
     }
 
-    const resource = new Resource({
-      [SemanticResourceAttributes.SERVICE_NAME]: 'visor',
-      [SemanticResourceAttributes.SERVICE_VERSION]: process.env.VISOR_VERSION || 'dev',
-      'deployment.environment': detectEnvironment(),
-    });
+    // Create resource - support both v1 (new Resource()) and v2 (resourceFromAttributes())
+    let resource;
+    if (resourcesModule.Resource) {
+      // OpenTelemetry v1 API
+      resource = new resourcesModule.Resource({
+        [semanticConventions.SemanticResourceAttributes.SERVICE_NAME]: 'visor',
+        [semanticConventions.SemanticResourceAttributes.SERVICE_VERSION]:
+          process.env.VISOR_VERSION || 'dev',
+        'deployment.environment': detectEnvironment(),
+      });
+    } else {
+      // OpenTelemetry v2 API
+      resource = resourcesModule.resourceFromAttributes({
+        [semanticConventions.ATTR_SERVICE_NAME]: 'visor',
+        [semanticConventions.ATTR_SERVICE_VERSION]: process.env.VISOR_VERSION || 'dev',
+        'deployment.environment': detectEnvironment(),
+      });
+    }
 
     // Configure Metrics OTLP exporter when using 'otlp' sink
     let metricReader: MetricReader | undefined;
