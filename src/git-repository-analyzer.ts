@@ -71,19 +71,19 @@ export class GitRepositoryAnalyzer {
       // Otherwise, if on a feature branch with no uncommitted changes AND branch diff is enabled, get diff vs base branch
       if (isFeatureBranch && includeContext && enableBranchDiff) {
         if (uncommittedFiles.length > 0) {
-          console.log(`📊 Feature branch detected: ${currentBranch}`);
-          console.log(
+          console.error(`📊 Feature branch detected: ${currentBranch}`);
+          console.error(
             `⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) due to --analyze-branch-diff flag`
           );
         } else {
-          console.log(`📊 Feature branch detected: ${currentBranch}`);
+          console.error(`📊 Feature branch detected: ${currentBranch}`);
         }
-        console.log(
+        console.error(
           `📂 Analyzing diff vs ${baseBranch} (${uncommittedFiles.length > 0 ? 'forced by --analyze-branch-diff' : 'auto-enabled for code-review schemas'})`
         );
         uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
       } else if (uncommittedFiles.length > 0) {
-        console.log(`📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)`);
+        console.error(`📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)`);
       }
 
       // Get recent commit info (handle repos with no commits)
@@ -93,7 +93,7 @@ export class GitRepositoryAnalyzer {
         lastCommit = recentCommits.latest;
       } catch {
         // Repository has no commits yet - this is OK
-        console.log('📝 Repository has no commits yet, analyzing uncommitted changes');
+        console.error('📝 Repository has no commits yet, analyzing uncommitted changes');
       }
 
       // Get author from git config if no commits exist
@@ -257,7 +257,7 @@ export class GitRepositoryAnalyzer {
     const truncated = patch.substring(0, MAX_PATCH_SIZE);
     const truncatedPatch = `${truncated}\n\n... [TRUNCATED: Diff too large (${(patchSize / 1024).toFixed(1)}KB), showing first ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB] ...`;
 
-    console.log(
+    console.error(
       `⚠️  Truncated diff for ${filename} (${(patchSize / 1024).toFixed(1)}KB → ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB)`
     );
 
@@ -295,7 +295,7 @@ export class GitRepositoryAnalyzer {
       for (const { file, status } of fileChanges) {
         // Skip files that should be excluded from analysis
         if (await this.shouldExcludeFile(file)) {
-          console.log(`⏭️  Skipping excluded file: ${file}`);
+          console.error(`⏭️  Skipping excluded file: ${file}`);
           continue;
         }
 
@@ -330,7 +330,7 @@ export class GitRepositoryAnalyzer {
       for (const file of diffSummary.files) {
         // Skip files that should be excluded from analysis
         if (await this.shouldExcludeFile(file.file)) {
-          console.log(`⏭️  Skipping excluded file: ${file.file}`);
+          console.error(`⏭️  Skipping excluded file: ${file.file}`);
           continue;
         }
 
