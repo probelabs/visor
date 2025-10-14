@@ -1,11 +1,21 @@
 import { ProbeAgent } from '@probelabs/probe';
+import type { AppTracer, TelemetryConfig } from '@probelabs/probe';
+
+/**
+ * Extended ProbeAgent interface that includes tracing properties
+ */
+interface TracedProbeAgent extends ProbeAgent {
+  tracer?: AppTracer;
+  _telemetryConfig?: TelemetryConfig;
+  _traceFilePath?: string;
+}
 
 /**
  * Registry to manage active ProbeAgent sessions for session reuse
  */
 export class SessionRegistry {
   private static instance: SessionRegistry;
-  private sessions: Map<string, ProbeAgent> = new Map();
+  private sessions: Map<string, TracedProbeAgent> = new Map();
   private exitHandlerRegistered = false;
 
   private constructor() {
@@ -26,7 +36,7 @@ export class SessionRegistry {
   /**
    * Register a ProbeAgent session
    */
-  public registerSession(sessionId: string, agent: ProbeAgent): void {
+  public registerSession(sessionId: string, agent: TracedProbeAgent): void {
     console.error(`🔄 Registering AI session: ${sessionId}`);
     this.sessions.set(sessionId, agent);
   }
@@ -34,7 +44,7 @@ export class SessionRegistry {
   /**
    * Get an existing ProbeAgent session
    */
-  public getSession(sessionId: string): ProbeAgent | undefined {
+  public getSession(sessionId: string): TracedProbeAgent | undefined {
     const agent = this.sessions.get(sessionId);
     if (agent) {
       console.error(`♻️  Reusing AI session: ${sessionId}`);
@@ -127,22 +137,18 @@ export class SessionRegistry {
         stripInternalMessages: true, // Remove schema reminders, tool prompts, etc.
         keepSystemMessage: true, // Keep for cache efficiency
         deepCopy: true, // Safe deep copy of history
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceAgentAny = sourceAgent as any;
+      }) as TracedProbeAgent;
 
       // Set up tracing for cloned session if debug mode is enabled
-      if (sourceAgentAny.debug && checkName) {
+      if ((sourceAgent as any).debug && checkName) {
         try {
           const { initializeTracer } = await import('./utils/tracer-init');
           const tracerResult = await initializeTracer(newSessionId, checkName);
           if (tracerResult) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (clonedAgent as any).tracer = tracerResult.tracer;
-            // Store trace file path for later use
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (clonedAgent as any)._traceFilePath = tracerResult.filePath;
+            clonedAgent.tracer = tracerResult.tracer;
+            // Store telemetry config and trace file path for proper shutdown
+            clonedAgent._telemetryConfig = tracerResult.telemetryConfig;
+            clonedAgent._traceFilePath = tracerResult.filePath;
           }
         } catch (traceError) {
           console.error(
@@ -152,13 +158,13 @@ export class SessionRegistry {
         }
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const clonedAgentAny = clonedAgent as any;
-
       // Initialize MCP tools if the source agent had them initialized
-      if (sourceAgentAny._mcpInitialized && typeof clonedAgentAny.initialize === 'function') {
+      if (
+        (sourceAgent as any)._mcpInitialized &&
+        typeof (clonedAgent as any).initialize === 'function'
+      ) {
         try {
-          await clonedAgentAny.initialize();
+          await (clonedAgent as any).initialize();
           console.error(`🔧 Initialized MCP tools for cloned session`);
         } catch (initError) {
           console.error(`⚠️  Warning: Failed to initialize cloned agent: ${initError}`);
@@ -166,7 +172,7 @@ export class SessionRegistry {
       }
 
       // Get history length for logging
-      const historyLength = clonedAgentAny.history?.length || 0;
+      const historyLength = (clonedAgent as any).history?.length || 0;
 
       console.error(
         `📋 Cloned session ${sourceSessionId} → ${newSessionId} using ProbeAgent.clone() (${historyLength} messages, internal messages filtered)`

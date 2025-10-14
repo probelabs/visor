@@ -42,7 +42,10 @@ export class GitRepositoryAnalyzer {
   /**
    * Analyze the current git repository state and return data compatible with PRInfo interface
    */
-  async analyzeRepository(includeContext: boolean = true, enableBranchDiff: boolean = false): Promise<GitRepositoryInfo> {
+  async analyzeRepository(
+    includeContext: boolean = true,
+    enableBranchDiff: boolean = false
+  ): Promise<GitRepositoryInfo> {
     // Check if we're in a git repository
     const isRepo = await this.isGitRepository();
     if (!isRepo) {
@@ -58,9 +61,8 @@ export class GitRepositoryAnalyzer {
       ]);
 
       // Determine if we're on a feature branch
-      const isFeatureBranch = currentBranch !== baseBranch &&
-                              currentBranch !== 'main' &&
-                              currentBranch !== 'master';
+      const isFeatureBranch =
+        currentBranch !== baseBranch && currentBranch !== 'main' && currentBranch !== 'master';
 
       // Get uncommitted changes first
       let uncommittedFiles = await this.getUncommittedChanges(includeContext);
@@ -70,11 +72,15 @@ export class GitRepositoryAnalyzer {
       if (isFeatureBranch && includeContext && enableBranchDiff) {
         if (uncommittedFiles.length > 0) {
           console.log(`📊 Feature branch detected: ${currentBranch}`);
-          console.log(`⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) due to --analyze-branch-diff flag`);
+          console.log(
+            `⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) due to --analyze-branch-diff flag`
+          );
         } else {
           console.log(`📊 Feature branch detected: ${currentBranch}`);
         }
-        console.log(`📂 Analyzing diff vs ${baseBranch} (${uncommittedFiles.length > 0 ? 'forced by --analyze-branch-diff' : 'auto-enabled for code-review schemas'})`);
+        console.log(
+          `📂 Analyzing diff vs ${baseBranch} (${uncommittedFiles.length > 0 ? 'forced by --analyze-branch-diff' : 'auto-enabled for code-review schemas'})`
+        );
         uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
       } else if (uncommittedFiles.length > 0) {
         console.log(`📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)`);
@@ -251,7 +257,9 @@ export class GitRepositoryAnalyzer {
     const truncated = patch.substring(0, MAX_PATCH_SIZE);
     const truncatedPatch = `${truncated}\n\n... [TRUNCATED: Diff too large (${(patchSize / 1024).toFixed(1)}KB), showing first ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB] ...`;
 
-    console.log(`⚠️  Truncated diff for ${filename} (${(patchSize / 1024).toFixed(1)}KB → ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB)`);
+    console.log(
+      `⚠️  Truncated diff for ${filename} (${(patchSize / 1024).toFixed(1)}KB → ${(MAX_PATCH_SIZE / 1024).toFixed(0)}KB)`
+    );
 
     return { patch: truncatedPatch, truncated: true };
   }
@@ -306,7 +314,10 @@ export class GitRepositoryAnalyzer {
   /**
    * Get diff between current branch and base branch (for feature branch analysis)
    */
-  private async getBranchDiff(baseBranch: string, includeContext: boolean = true): Promise<GitFileChange[]> {
+  private async getBranchDiff(
+    baseBranch: string,
+    includeContext: boolean = true
+  ): Promise<GitFileChange[]> {
     try {
       // Get the list of changed files between base and current branch
       const diffSummary = await this.git.diffSummary([baseBranch]);
