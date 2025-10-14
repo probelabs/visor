@@ -159,7 +159,10 @@ export class SessionRegistry {
       }
 
       // Initialize MCP tools if the source agent had them initialized
-      if ((sourceAgent as any)._mcpInitialized && typeof (clonedAgent as any).initialize === 'function') {
+      if (
+        (sourceAgent as any)._mcpInitialized &&
+        typeof (clonedAgent as any).initialize === 'function'
+      ) {
         try {
           await (clonedAgent as any).initialize();
           console.error(`🔧 Initialized MCP tools for cloned session`);
