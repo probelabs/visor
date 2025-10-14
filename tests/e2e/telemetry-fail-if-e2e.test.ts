@@ -39,6 +39,9 @@ describe('Telemetry E2E — fail_if events and metrics', () => {
 
     await shutdownTelemetry();
 
+    // Give time for file system flush
+    await new Promise(resolve => setTimeout(resolve, 100));
+
     // Assert metric increment via test snapshot
     const snap = getTestMetricsSnapshot();
     expect(snap.fail_if_triggered).toBeGreaterThanOrEqual(1);
