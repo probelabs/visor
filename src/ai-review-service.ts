@@ -1,5 +1,6 @@
 import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
+import type { AppTracer, TelemetryConfig } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
@@ -11,6 +12,24 @@ import { initializeTracer } from './utils/tracer-init';
  */
 function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
+}
+
+/**
+ * Extended ProbeAgent interface that includes tracing properties
+ */
+interface TracedProbeAgent extends ProbeAgent {
+  tracer?: AppTracer;
+  _telemetryConfig?: TelemetryConfig;
+  _traceFilePath?: string;
+}
+
+/**
+ * Extended ProbeAgentOptions interface that includes tracing properties
+ */
+interface TracedProbeAgentOptions extends ProbeAgentOptions {
+  tracer?: AppTracer;
+  _telemetryConfig?: TelemetryConfig;
+  _traceFilePath?: string;
 }
 
 export interface AIReviewConfig {
@@ -974,7 +993,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
-      const options: ProbeAgentOptions = {
+      const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
         promptType: schema ? ('code-review-template' as 'code-review') : undefined,
         allowEdit: false, // We don't want the agent to modify files
@@ -984,11 +1003,11 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Enable tracing in debug mode for better diagnostics
       // This uses OpenTelemetry for proper hierarchical span relationships
       let traceFilePath = '';
-      let telemetryConfig: any = null;
+      let telemetryConfig: TelemetryConfig | null = null;
       if (this.config.debug) {
         const tracerResult = await initializeTracer(sessionId, _checkName);
         if (tracerResult) {
-          (options as any).tracer = tracerResult.tracer;
+          options.tracer = tracerResult.tracer;
           telemetryConfig = tracerResult.telemetryConfig;
           traceFilePath = tracerResult.filePath;
         }
@@ -1096,7 +1115,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       // Wrap the agent.answer() call in a span for hierarchical tracing
       // This creates a parent span that will contain all ProbeAgent's child spans
       let response: string;
-      const tracer = (options as any).tracer;
+      const tracer = options.tracer;
       if (tracer && typeof tracer.withSpan === 'function') {
         response = await tracer.withSpan(
           'visor.ai_check',
@@ -1122,7 +1141,6 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       if (traceFilePath && telemetryConfig) {
         try {
           // First flush the tracer to export pending spans
-          const tracer = (options as any).tracer;
           if (tracer && typeof tracer.flush === 'function') {
             await tracer.flush();
             log(`🔄 Flushed tracer spans`);
