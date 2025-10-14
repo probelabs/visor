@@ -140,7 +140,9 @@ export class SessionRegistry {
           if (tracerResult) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (clonedAgent as any).tracer = tracerResult.tracer;
-            // Store trace file path for later use
+            // Store telemetry config and trace file path for proper shutdown
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (clonedAgent as any)._telemetryConfig = tracerResult.telemetryConfig;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (clonedAgent as any)._traceFilePath = tracerResult.filePath;
           }
