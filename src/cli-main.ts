@@ -299,10 +299,17 @@ export async function main(): Promise<void> {
     const { GitRepositoryAnalyzer } = await import('./git-repository-analyzer');
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
 
+    // Determine if we should analyze branch diff
+    // Auto-enable when: --analyze-branch-diff flag OR code-review schema detected
+    const hasCodeReviewSchema = checksToRun.some(
+      check => config.checks?.[check]?.schema === 'code-review'
+    );
+    const analyzeBranchDiff = options.analyzeBranchDiff || hasCodeReviewSchema;
+
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
     try {
       logger.step('Analyzing repository');
-      repositoryInfo = await analyzer.analyzeRepository(includeCodeContext);
+      repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff);
     } catch (error) {
       logger.error(
         '❌ Error analyzing git repository: ' +

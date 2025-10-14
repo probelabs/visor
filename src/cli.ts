@@ -52,6 +52,7 @@ export class CLI {
       .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+      .option('--analyze-branch-diff', 'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)')
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -284,6 +285,7 @@ export class CLI {
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+      .option('--analyze-branch-diff', 'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)')
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .addHelpText('after', this.getExamplesText());
 
