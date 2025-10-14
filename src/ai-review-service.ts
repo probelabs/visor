@@ -867,7 +867,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           } else if (agentAny._messages) {
             conversationHistory = agentAny._messages;
           }
-        } catch (e) {
+        } catch {
           // Ignore if we can't access history
         }
 
@@ -968,6 +968,75 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Save COMPLETE conversation history AFTER AI response (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          // Extract FULL conversation history AFTER the AI call
+          const agentAny = agent as any;
+          let fullHistory: any[] = [];
+
+          // Try multiple properties to get complete history
+          if (agentAny.history) {
+            fullHistory = agentAny.history;
+          } else if (agentAny.messages) {
+            fullHistory = agentAny.messages;
+          } else if (agentAny._messages) {
+            fullHistory = agentAny._messages;
+          }
+
+          const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                     path.join(process.cwd(), 'debug-artifacts');
+
+          // Save complete session history (all messages sent and received)
+          const sessionFile = path.join(debugArtifactsDir, `session-${_checkName || 'unknown'}-${timestamp}.json`);
+          const sessionData = {
+            timestamp,
+            checkName: _checkName || 'unknown',
+            provider: this.config.provider || 'auto',
+            model: this.config.model || 'default',
+            schema: effectiveSchema,
+            fullConversationHistory: fullHistory,
+            totalMessages: fullHistory.length,
+            latestResponse: response,
+          };
+
+          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+
+          // Save human-readable version
+          const sessionTxtFile = path.join(debugArtifactsDir, `session-${_checkName || 'unknown'}-${timestamp}.txt`);
+          let readable = `=============================================================\n`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
+          readable += `=============================================================\n`;
+          readable += `Timestamp: ${timestamp}\n`;
+          readable += `Check: ${_checkName || 'unknown'}\n`;
+          readable += `Total Messages: ${fullHistory.length}\n`;
+          readable += `=============================================================\n\n`;
+
+          fullHistory.forEach((msg: any, idx: number) => {
+            readable += `\n${'='.repeat(60)}\n`;
+            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
+            readable += `Role: ${msg.role || 'unknown'}\n`;
+            readable += `${'='.repeat(60)}\n`;
+
+            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += content + '\n';
+          });
+
+          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+
+          log(`💾 Complete session history saved:`);
+          log(`   JSON: ${sessionFile}`);
+          log(`   TXT:  ${sessionTxtFile}`);
+          log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
+        } catch (error) {
+          log(`⚠️ Could not save complete session history: ${error}`);
+        }
+      }
 
       // Save response if debug is enabled
       if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
@@ -1267,7 +1336,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
           log(`   JSON: ${debugFile}`);
           log(`   TXT:  ${readableFile}`);
           log(`   - Includes: prompt, schema, provider, model, and schema options`);
-        } catch (e) {
+        } catch {
           // Ignore if we can't write to debug-artifacts
         }
 
@@ -1293,6 +1362,75 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Save COMPLETE conversation history AFTER AI response (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          // Extract FULL conversation history AFTER the AI call
+          const agentAny = agent as any;
+          let fullHistory: any[] = [];
+
+          // Try multiple properties to get complete history
+          if (agentAny.history) {
+            fullHistory = agentAny.history;
+          } else if (agentAny.messages) {
+            fullHistory = agentAny.messages;
+          } else if (agentAny._messages) {
+            fullHistory = agentAny._messages;
+          }
+
+          const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                     path.join(process.cwd(), 'debug-artifacts');
+
+          // Save complete session history (all messages sent and received)
+          const sessionFile = path.join(debugArtifactsDir, `session-${_checkName || 'unknown'}-${timestamp}.json`);
+          const sessionData = {
+            timestamp,
+            checkName: _checkName || 'unknown',
+            provider: this.config.provider || 'auto',
+            model: this.config.model || 'default',
+            schema: effectiveSchema,
+            fullConversationHistory: fullHistory,
+            totalMessages: fullHistory.length,
+            latestResponse: response,
+          };
+
+          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+
+          // Save human-readable version
+          const sessionTxtFile = path.join(debugArtifactsDir, `session-${_checkName || 'unknown'}-${timestamp}.txt`);
+          let readable = `=============================================================\n`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
+          readable += `=============================================================\n`;
+          readable += `Timestamp: ${timestamp}\n`;
+          readable += `Check: ${_checkName || 'unknown'}\n`;
+          readable += `Total Messages: ${fullHistory.length}\n`;
+          readable += `=============================================================\n\n`;
+
+          fullHistory.forEach((msg: any, idx: number) => {
+            readable += `\n${'='.repeat(60)}\n`;
+            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
+            readable += `Role: ${msg.role || 'unknown'}\n`;
+            readable += `${'='.repeat(60)}\n`;
+
+            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += content + '\n';
+          });
+
+          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+
+          log(`💾 Complete session history saved:`);
+          log(`   JSON: ${sessionFile}`);
+          log(`   TXT:  ${sessionTxtFile}`);
+          log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
+        } catch (error) {
+          log(`⚠️ Could not save complete session history: ${error}`);
+        }
+      }
 
       // Save response if debug is enabled
       if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
