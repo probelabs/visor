@@ -14,7 +14,6 @@ export async function initializeTracer(
   try {
     // Try to use full OpenTelemetry integration first (provides proper span hierarchy)
     if (TelemetryConfig && AppTracer) {
-
       // SECURITY: Sanitize checkName to prevent path traversal attacks
       // Use path.basename to strip any directory traversal characters (../, etc.)
       const sanitizedCheckName = checkName ? path.basename(checkName) : 'check';
