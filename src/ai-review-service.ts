@@ -407,7 +407,7 @@ export class AIReviewService {
   /**
    * Register a new AI session in the session registry
    */
-  registerSession(sessionId: string, agent: ProbeAgent): void {
+  registerSession(sessionId: string, agent: TracedProbeAgent): void {
     this.sessionRegistry.registerSession(sessionId, agent);
   }
 
@@ -810,7 +810,7 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
    * Call ProbeAgent with an existing session
    */
   private async callProbeAgentWithExistingSession(
-    agent: ProbeAgent,
+    agent: TracedProbeAgent,
     prompt: string,
     schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
