@@ -969,6 +969,41 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
+      // Save response if debug is enabled
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                     path.join(process.cwd(), 'debug-artifacts');
+
+          // Create a response file with the same timestamp pattern
+          const responseFile = path.join(debugArtifactsDir, `response-${_checkName || 'unknown'}-${timestamp}.txt`);
+
+          let responseContent = `=============================================================\n`;
+          responseContent += `VISOR AI RESPONSE - SESSION REUSE\n`;
+          responseContent += `=============================================================\n`;
+          responseContent += `Timestamp: ${timestamp}\n`;
+          responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          responseContent += `Response Length: ${response.length} characters\n`;
+          responseContent += `=============================================================\n\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += `AI RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += response;
+          responseContent += `\n${'='.repeat(60)}\n`;
+          responseContent += `END OF RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+
+          fs.writeFileSync(responseFile, responseContent, 'utf-8');
+          log(`💾 Response saved to: ${responseFile}`);
+        } catch (error) {
+          log(`⚠️ Could not save response file: ${error}`);
+        }
+      }
+
       // Finalize and save trace if this is a cloned session with tracing enabled
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const agentAny = agent as any;
@@ -1258,6 +1293,41 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Save response if debug is enabled
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS ||
+                                     path.join(process.cwd(), 'debug-artifacts');
+
+          // Create a response file
+          const responseFile = path.join(debugArtifactsDir, `response-${_checkName || 'unknown'}-${timestamp}.txt`);
+
+          let responseContent = `=============================================================\n`;
+          responseContent += `VISOR AI RESPONSE - NEW SESSION\n`;
+          responseContent += `=============================================================\n`;
+          responseContent += `Timestamp: ${timestamp}\n`;
+          responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          responseContent += `Response Length: ${response.length} characters\n`;
+          responseContent += `=============================================================\n\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += `AI RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += response;
+          responseContent += `\n${'='.repeat(60)}\n`;
+          responseContent += `END OF RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+
+          fs.writeFileSync(responseFile, responseContent, 'utf-8');
+          log(`💾 Response saved to: ${responseFile}`);
+        } catch (error) {
+          log(`⚠️ Could not save response file: ${error}`);
+        }
+      }
 
       // Finalize and save trace if enabled
       if (traceFilePath && (options as any).tracer) {
