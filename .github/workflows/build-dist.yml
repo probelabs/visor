@@ -31,30 +31,30 @@ jobs:
       - name: Build project
         run: npm run build
 
-      - name: Bundle action
+      - name: Prepare bundled directory
         run: |
-          # Install ncc to bundle the action
-          npm install -g @vercel/ncc
+          # Note: dist/index.js is already bundled by ncc during build:cli
+          # We just need to organize files for GitHub Actions deployment
+          mkdir -p bundled
 
-          # Bundle the main action file with all dependencies
-          ncc build dist/index.js -o bundled --license licenses.txt
+          # Copy the main bundled file
+          cp dist/index.js bundled/index.js
 
-          # Copy the tiktoken WASM file to the bundled directory
-          # This is needed because ncc doesn't automatically include WASM files
-          if [ -f node_modules/tiktoken/tiktoken_bg.wasm ]; then
-            cp node_modules/tiktoken/tiktoken_bg.wasm bundled/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm to bundle"
-          else
-            echo "⚠️  Warning: tiktoken_bg.wasm not found - token counting may fail"
+          # Copy additional required files
+          if [ -d dist/defaults ]; then
+            cp -r dist/defaults bundled/
+            echo "✅ Copied defaults to bundle"
           fi
 
-          # Copy schema files to the bundled directory
-          # ncc doesn't automatically include JSON schema files
-          if [ -d output ]; then
-            cp -r output bundled/
+          # Copy schema files if they exist
+          if [ -d dist/generated ]; then
+            cp -r dist/generated bundled/
+            echo "✅ Copied generated schemas to bundle"
+          fi
+
+          if [ -d dist/output ]; then
+            cp -r dist/output bundled/
             echo "✅ Copied output schemas to bundle"
-          else
-            echo "⚠️  Warning: output schemas not found - validation may fail"
           fi
 
       - name: Update dist files
@@ -74,12 +74,16 @@ jobs:
 
           # Copy bundled files to dist/ directory
           cp bundled/index.js dist/
-          cp bundled/licenses.txt dist/ 2>/dev/null || true
 
-          # Copy tiktoken WASM file if it exists
-          if [ -f bundled/tiktoken_bg.wasm ]; then
-            cp bundled/tiktoken_bg.wasm dist/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm to dist/"
+          # Copy additional files if they exist
+          if [ -d bundled/defaults ]; then
+            cp -r bundled/defaults dist/
+            echo "✅ Copied defaults to dist/"
+          fi
+
+          if [ -d bundled/generated ]; then
+            cp -r bundled/generated dist/
+            echo "✅ Copied generated schemas to dist/"
           fi
 
           # Copy schema files if they exist
