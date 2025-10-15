@@ -62,18 +62,66 @@ jobs:
       - name: 🧪 Test Markdown Output
         run: |
           echo "Testing Markdown output format..."
-          ./dist/index.js --cli --check performance --output markdown 2>&1 | grep -qi "analysis results" || {
-            echo "Markdown output test failed"
+          echo "Running: ./dist/index.js --cli --check performance --output markdown"
+
+          # Capture output and exit code
+          OUTPUT=$(./dist/index.js --cli --check performance --output markdown 2>&1)
+          EXIT_CODE=$?
+
+          echo "Exit code: $EXIT_CODE"
+          echo ""
+          echo "=== Output (first 50 lines) ==="
+          echo "$OUTPUT" | head -50
+          echo "=== End of output ==="
+          echo ""
+
+          # Check for expected pattern
+          if echo "$OUTPUT" | grep -qi "analysis results"; then
+            echo "✅ PASS: Found 'analysis results' in markdown output"
+          else
+            echo "❌ FAIL: 'analysis results' not found in markdown output"
+            echo ""
+            echo "Searching for alternative patterns:"
+            echo "  - Contains 'Visor': $(echo "$OUTPUT" | grep -c 'Visor' || echo 0)"
+            echo "  - Contains 'Summary': $(echo "$OUTPUT" | grep -c 'Summary' || echo 0)"
+            echo "  - Contains '#': $(echo "$OUTPUT" | grep -c '^#' || echo 0)"
+            echo ""
+            echo "=== Full output for debugging ==="
+            echo "$OUTPUT"
             exit 1
-          }
+          fi
       
       - name: 🧪 Test Table Output
         run: |
           echo "Testing Table output format..."
-          ./dist/index.js --cli --check style --output table 2>&1 | grep -q "Analysis Summary" || {
-            echo "Table output test failed"
+          echo "Running: ./dist/index.js --cli --check style --output table"
+
+          # Capture output and exit code
+          OUTPUT=$(./dist/index.js --cli --check style --output table 2>&1)
+          EXIT_CODE=$?
+
+          echo "Exit code: $EXIT_CODE"
+          echo ""
+          echo "=== Output (first 50 lines) ==="
+          echo "$OUTPUT" | head -50
+          echo "=== End of output ==="
+          echo ""
+
+          # Check for expected pattern
+          if echo "$OUTPUT" | grep -q "Analysis Summary"; then
+            echo "✅ PASS: Found 'Analysis Summary' in table output"
+          else
+            echo "❌ FAIL: 'Analysis Summary' not found in table output"
+            echo ""
+            echo "Searching for alternative patterns:"
+            echo "  - Contains 'Summary': $(echo "$OUTPUT" | grep -c 'Summary' || echo 0)"
+            echo "  - Contains '─': $(echo "$OUTPUT" | grep -c '─' || echo 0)"
+            echo "  - Contains 'Check': $(echo "$OUTPUT" | grep -c 'Check' || echo 0)"
+            echo ""
+            echo "=== Full output for debugging ==="
+            echo "$OUTPUT"
             exit 1
-          }
+          fi
       
       - name: 📊 Generate Sample Reports
         run: |
