@@ -182,14 +182,28 @@ export class PRReviewer {
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-      // Only AI-powered checks should post PR comments
-      // Other check types (command, github, http, etc.) are for orchestration/operations only
+      // Only checks with comment-generating schemas should post PR comments
+      // Schemas that generate comments: text, plain, empty/undefined, code-review
+      // Other check types (command, github, http, etc.) without these schemas are for orchestration only
       const filteredResults = options.config
         ? checkResults.filter(r => {
             const cfg = options.config!.checks?.[r.checkName];
-            const t = cfg?.type || 'ai'; // Default to 'ai' if not specified
-            // Only ai and claude-code types generate human-readable review content
-            const shouldPostComment = t === 'ai' || t === 'claude-code';
+            const schema = cfg?.schema;
+
+            // Determine if this check should generate a comment based on its schema
+            // Include checks with:
+            // 1. 'text' schema - plain text output
+            // 2. 'plain' schema - unstructured output
+            // 3. 'code-review' schema - structured code review
+            // 4. No schema (undefined) - defaults to text output
+            // 5. Empty string schema - defaults to text output
+            const shouldPostComment =
+              !schema || // No schema specified
+              schema === '' || // Empty schema
+              schema === 'text' ||
+              schema === 'plain' ||
+              schema === 'code-review';
+
             return shouldPostComment;
           })
         : checkResults;
