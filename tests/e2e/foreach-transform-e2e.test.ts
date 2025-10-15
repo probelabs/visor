@@ -222,7 +222,7 @@ output:
     const result = execCLI(['--check', 'process-item', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output['analyze-ticket'][0];
+    const checkResult = output['process-item'][0];
     const content = checkResult.content || '';
 
     // Verify nested objects are properly accessed
@@ -260,7 +260,7 @@ output:
     const result = execCLI(['--check', 'process-single', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output['analyze-ticket'][0];
+    const checkResult = output['process-single'][0];
     const content = checkResult.content || '';
 
     // Should process the single item
@@ -303,9 +303,9 @@ output:
     const result = execCLI(['--check', 'summarize', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    expect(output.default).toBeDefined();
+    expect(output['summarize']).toBeDefined();
 
-    const checkResult = output['analyze-ticket'][0];
+    const checkResult = output['summarize'][0];
     const content = checkResult.content || '';
 
     // Should contain summary with enriched data
@@ -344,8 +344,8 @@ output:
     const output = JSON.parse(result);
 
     // Should handle empty array without errors
-    expect(output.default).toBeDefined();
-    expect(Array.isArray(output.default)).toBe(true);
+    expect(output['process-empty']).toBeDefined();
+    expect(Array.isArray(output['process-empty'])).toBe(true);
   });
 
   it('should raise error on undefined forEach output and skip dependents', () => {
@@ -389,8 +389,8 @@ output:
     const output = JSON.parse(jsonString);
 
     // Only the requested check appears; it should not contain content from execution
-    expect(output.default).toBeDefined();
-    const check = output.default.find((r: any) => r.checkName === 'analyze-bug');
+    const allChecks = Object.values(output).flat() as any[];
+    const check = allChecks.find((r: any) => r.checkName === 'analyze-bug');
     expect(check).toBeDefined();
     // Skipped dependent should not have produced command output
     expect(check.content || '').toBe('');
@@ -431,7 +431,7 @@ output:
     const result = execCLI(['--check', 'check-file', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output['analyze-ticket'][0];
+    const checkResult = output['check-file'][0];
 
     // Should aggregate issues from all forEach iterations
     expect(checkResult.issues).toBeDefined();
@@ -479,7 +479,7 @@ output:
     const result = execCLI(['--check', 'analyze-post', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output['analyze-ticket'][0];
+    const checkResult = output['analyze-post'][0];
     const content = checkResult.content || '';
 
     // Should process all flattened posts
