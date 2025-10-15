@@ -64,9 +64,11 @@ jobs:
           echo "Testing Markdown output format..."
           echo "Running: ./dist/index.js --cli --check performance --output markdown"
 
-          # Capture output and exit code
+          # Capture output and exit code (disable exit-on-error temporarily)
+          set +e
           OUTPUT=$(./dist/index.js --cli --check performance --output markdown 2>&1)
           EXIT_CODE=$?
+          set -e
 
           echo "Exit code: $EXIT_CODE"
           echo ""
@@ -96,9 +98,11 @@ jobs:
           echo "Testing Table output format..."
           echo "Running: ./dist/index.js --cli --check style --output table"
 
-          # Capture output and exit code
+          # Capture output and exit code (disable exit-on-error temporarily)
+          set +e
           OUTPUT=$(./dist/index.js --cli --check style --output table 2>&1)
           EXIT_CODE=$?
+          set -e
 
           echo "Exit code: $EXIT_CODE"
           echo ""
