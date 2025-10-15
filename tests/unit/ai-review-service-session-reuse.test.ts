@@ -270,6 +270,112 @@ describe('AIReviewService Session Reuse', () => {
     });
   });
 
+  describe('Diff Information Not Duplicated on Session Reuse', () => {
+    it('should NOT send diff context when reusing session', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      // Create mock PRInfo with explicit diff content
+      const prInfoWithDiff: PRInfo = {
+        ...mockPRInfo,
+        fullDiff: `diff --git a/test.js b/test.js
+index 1234567..abcdefg 100644
+--- a/test.js
++++ b/test.js
+@@ -1,3 +1,4 @@
+ console.log('old code');
++console.log('new code');
+ console.log('more code');`,
+      };
+
+      await service.executeReviewWithSessionReuse(
+        prInfoWithDiff,
+        'Analyze new changes only',
+        parentSessionId,
+        'code-review',
+        'dependent-check',
+        'append'
+      );
+
+      // Get the prompt that was sent to the agent
+      const promptSent = existingAgent.answer.mock.calls[0][0];
+
+      // Verify that the prompt does NOT contain the diff
+      expect(promptSent).not.toContain('diff --git');
+      expect(promptSent).not.toContain('console.log');
+      expect(promptSent).not.toContain('fullDiff');
+      expect(promptSent).not.toContain('full_diff');
+
+      // Verify the prompt contains only the new instructions
+      expect(promptSent).toContain('Analyze new changes only');
+      expect(promptSent).toContain('instructions');
+
+      // Verify it contains a reminder about the previous context
+      expect(promptSent).toContain('code context and diff were provided in the previous message');
+    });
+
+    it('should NOT send PR context when reusing session (non-code-review schema)', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+      };
+
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+
+      const prInfoWithMetadata: PRInfo = {
+        ...mockPRInfo,
+        title: 'Add new feature',
+        body: 'This is a detailed PR description with lots of context',
+        fullDiff: 'some diff content',
+      };
+
+      await service.executeReviewWithSessionReuse(
+        prInfoWithMetadata,
+        'Check for security issues',
+        parentSessionId,
+        undefined, // no schema
+        'dependent-check',
+        'append'
+      );
+
+      const promptSent = existingAgent.answer.mock.calls[0][0];
+
+      // Should NOT contain PR metadata or diff
+      expect(promptSent).not.toContain('Add new feature');
+      expect(promptSent).not.toContain('This is a detailed PR description');
+      expect(promptSent).not.toContain('some diff content');
+
+      // Should only contain new instructions
+      expect(promptSent).toContain('Check for security issues');
+      expect(promptSent).toContain('instructions');
+    });
+
+    it('should send full context on initial executeReview call', async () => {
+      // This test verifies the baseline: initial calls DO include context
+      const checkName = 'initial-check';
+
+      const prInfoWithDiff: PRInfo = {
+        ...mockPRInfo,
+        fullDiff: 'diff content here',
+        title: 'My PR Title',
+      };
+
+      await service.executeReview(prInfoWithDiff, 'Initial analysis', 'code-review', checkName);
+
+      // Get the prompt that was sent
+      const promptSent = mockProbeAgent.answer.mock.calls[0][0];
+
+      // Initial call SHOULD include full context
+      expect(promptSent).toContain('diff content here');
+      expect(promptSent).toContain('My PR Title');
+      expect(promptSent).toContain('Initial analysis');
+    });
+  });
+
   describe('Session Mode: Clone vs Append', () => {
     beforeEach(() => {
       // Mock the cloneSession method
