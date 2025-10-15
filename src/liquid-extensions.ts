@@ -14,6 +14,30 @@ import {
 import { MemoryStore } from './memory-store';
 
 /**
+ * Sanitize label strings to only allow [A-Za-z0-9:/] characters
+ * @param value - Label value to sanitize
+ * @returns Sanitized label string
+ */
+export function sanitizeLabel(value: unknown): string {
+  if (value == null) return '';
+  const s = String(value);
+  // Keep only alphanumerics, colon, slash; collapse repeated slashes
+  return s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/');
+}
+
+/**
+ * Sanitize an array of labels
+ * @param labels - Array of label values
+ * @returns Array of sanitized, non-empty label strings
+ */
+export function sanitizeLabelList(labels: unknown): string[] {
+  if (!Array.isArray(labels)) return [];
+  return (labels as unknown[])
+    .map(v => sanitizeLabel(v))
+    .filter(s => s.length > 0);
+}
+
+/**
  * Custom ReadFile tag for Liquid templates
  * Usage: {% readfile "path/to/file.txt" %}
  * or with variable: {% readfile filename %}
@@ -100,21 +124,10 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
   });
 
   // Sanitize a label to allowed characters only: [A-Za-z0-9:/]
-  liquid.registerFilter('safe_label', (value: unknown) => {
-    if (value == null) return '';
-    const s = String(value);
-    // Keep only alphanumerics, colon, slash; collapse repeated slashes
-    return s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/');
-  });
+  liquid.registerFilter('safe_label', (value: unknown) => sanitizeLabel(value));
 
   // Sanitize an array of labels
-  liquid.registerFilter('safe_label_list', (value: unknown) => {
-    if (!Array.isArray(value)) return [] as string[];
-    return (value as unknown[])
-      .map(v => (v == null ? '' : String(v)))
-      .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
-      .filter(s => s.length > 0);
-  });
+  liquid.registerFilter('safe_label_list', (value: unknown) => sanitizeLabelList(value));
 
   // Convert literal escape sequences (e.g., "\n") into actual newlines
   liquid.registerFilter('unescape_newlines', (value: unknown) => {
