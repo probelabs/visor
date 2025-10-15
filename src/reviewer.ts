@@ -183,26 +183,27 @@ export class PRReviewer {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
       // Only checks with comment-generating schemas should post PR comments
-      // Schemas that generate comments: text, plain, empty/undefined, code-review, or custom schemas with "text" field
-      // Other check types (command, github, http, etc.) without these schemas are for orchestration only
+      // AI checks (ai, claude-code) generate comments by default
+      // Other types need explicit comment-generating schemas
       const filteredResults = options.config
         ? checkResults.filter(r => {
             const cfg = options.config!.checks?.[r.checkName];
+            const type = cfg?.type || 'ai'; // Default to 'ai' if not specified
             const schema = cfg?.schema;
 
-            // Determine if this check should generate a comment based on its schema
+            // Determine if this check should generate a comment
             // Include checks with:
-            // 1. 'text' schema - plain text output
-            // 2. 'plain' schema - unstructured output
-            // 3. 'code-review' schema - structured code review
-            // 4. No schema (undefined) - defaults to text output
-            // 5. Empty string schema - defaults to text output
-            // 6. Custom schema (object) with "text" field at root level - generates text output
+            // 1. type: 'ai' or 'claude-code' with no schema or comment-generating schemas
+            // 2. Other types ONLY if they have explicit comment-generating schemas
             let shouldPostComment = false;
 
+            // AI-powered checks generate comments by default
+            const isAICheck = type === 'ai' || type === 'claude-code';
+
             if (!schema || schema === '') {
-              // No schema or empty schema - defaults to text output
-              shouldPostComment = true;
+              // No schema specified - only AI checks generate comments by default
+              // Other types (github, command, http, etc.) without schema are for orchestration
+              shouldPostComment = isAICheck;
             } else if (typeof schema === 'string') {
               // String schema - check for known comment-generating schemas
               shouldPostComment =
