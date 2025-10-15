@@ -1254,10 +1254,15 @@ export class CheckExecutionEngine {
       if (this.providerRegistry.hasProvider(checks[0])) {
         const provider = this.providerRegistry.getProviderOrThrow(checks[0]);
         this.setProviderWebhookContext(provider);
+        // Inject authenticated octokit into event context for providers
+        const enrichedEventContext = {
+          ...prInfo.eventContext,
+          ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+        };
         const providerConfig: CheckProviderConfig = {
           type: checks[0],
           prompt: 'all',
-          eventContext: prInfo.eventContext, // Pass event context for templates
+          eventContext: enrichedEventContext, // Pass event context with authenticated octokit
           ai: timeout ? { timeout } : undefined,
         };
         const result = await provider.execute(prInfo, providerConfig);
@@ -1295,11 +1300,17 @@ export class CheckExecutionEngine {
         focus = 'all';
       }
 
+      // Inject authenticated octokit into event context for providers
+      const enrichedEventContext = {
+        ...prInfo.eventContext,
+        ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+      };
+
       const providerConfig: CheckProviderConfig = {
         type: 'ai',
         prompt: focus,
         focus: focus,
-        eventContext: prInfo.eventContext, // Pass event context for templates
+        eventContext: enrichedEventContext, // Pass event context with authenticated octokit
         ai: timeout ? { timeout } : undefined,
         // Inherit global AI provider and model settings if config is available
         ai_provider: config?.ai_provider,
@@ -1507,13 +1518,19 @@ export class CheckExecutionEngine {
     const provider = this.providerRegistry.getProviderOrThrow(providerType);
     this.setProviderWebhookContext(provider);
 
+    // Inject authenticated octokit into event context for providers
+    const enrichedEventContext = {
+      ...prInfo.eventContext,
+      ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+    };
+
     const providerConfig: CheckProviderConfig = {
       type: providerType,
       prompt: checkConfig.prompt,
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
-      eventContext: prInfo.eventContext, // Pass event context for templates
+      eventContext: enrichedEventContext, // Pass event context with authenticated octokit
       ai: {
         timeout: timeout || 600000,
         debug: debug,
@@ -2368,6 +2385,12 @@ export class CheckExecutionEngine {
           }
           this.setProviderWebhookContext(provider);
 
+          // Inject authenticated octokit into event context for providers
+          const enrichedEventContext = {
+            ...prInfo.eventContext,
+            ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+          };
+
           // Create provider config for this specific check
           const extendedCheckConfig = checkConfig as CheckConfig & {
             level?: string;
@@ -2382,7 +2405,7 @@ export class CheckExecutionEngine {
             schema: checkConfig.schema,
             group: checkConfig.group,
             checkName: checkName, // Add checkName for sessionID
-            eventContext: prInfo.eventContext, // Pass event context for templates
+            eventContext: enrichedEventContext, // Pass event context with authenticated octokit
             transform: checkConfig.transform,
             transform_js: checkConfig.transform_js,
             // Important: pass through provider-level timeout from check config
@@ -2656,6 +2679,11 @@ export class CheckExecutionEngine {
                   const childProviderType = childCfg.type || 'ai';
                   const childProv = this.providerRegistry.getProviderOrThrow(childProviderType);
                   this.setProviderWebhookContext(childProv);
+                  // Inject authenticated octokit into event context for providers
+                  const enrichedEventContext = {
+                    ...prInfo.eventContext,
+                    ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+                  };
                   const childProviderConfig: CheckProviderConfig = {
                     type: childProviderType,
                     prompt: childCfg.prompt,
@@ -2664,7 +2692,7 @@ export class CheckExecutionEngine {
                     schema: childCfg.schema,
                     group: childCfg.group,
                     checkName: childName,
-                    eventContext: prInfo.eventContext,
+                    eventContext: enrichedEventContext,
                     transform: childCfg.transform,
                     transform_js: childCfg.transform_js,
                     env: childCfg.env,
@@ -3191,6 +3219,11 @@ export class CheckExecutionEngine {
                     const nodeProvType = nodeCfg.type || 'ai';
                     const nodeProv = this.providerRegistry.getProviderOrThrow(nodeProvType);
                     this.setProviderWebhookContext(nodeProv);
+                    // Inject authenticated octokit into event context for providers
+                    const enrichedEventContext = {
+                      ...prInfo.eventContext,
+                      ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+                    };
                     const nodeProviderConfig: CheckProviderConfig = {
                       type: nodeProvType,
                       prompt: nodeCfg.prompt,
@@ -3199,7 +3232,7 @@ export class CheckExecutionEngine {
                       schema: nodeCfg.schema,
                       group: nodeCfg.group,
                       checkName: node,
-                      eventContext: prInfo.eventContext,
+                      eventContext: enrichedEventContext,
                       transform: nodeCfg.transform,
                       transform_js: nodeCfg.transform_js,
                       env: nodeCfg.env,
@@ -4111,6 +4144,12 @@ export class CheckExecutionEngine {
           }
         }
 
+        // Inject authenticated octokit into event context for providers
+        const enrichedEventContext = {
+          ...prInfo.eventContext,
+          ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+        };
+
         // Create provider config for this specific check
         const providerConfig: CheckProviderConfig = {
           type: 'ai',
@@ -4118,7 +4157,7 @@ export class CheckExecutionEngine {
           focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
           schema: checkConfig.schema,
           group: checkConfig.group,
-          eventContext: prInfo.eventContext, // Pass event context for templates
+          eventContext: enrichedEventContext, // Pass event context with authenticated octokit
           ai: {
             timeout: timeout || 600000,
             debug: debug, // Pass debug flag to AI provider
@@ -4209,13 +4248,19 @@ export class CheckExecutionEngine {
     const provider = this.providerRegistry.getProviderOrThrow('ai');
     this.setProviderWebhookContext(provider);
 
+    // Inject authenticated octokit into event context for providers
+    const enrichedEventContext = {
+      ...prInfo.eventContext,
+      ...(this.actionContext?.octokit ? { octokit: this.actionContext.octokit } : {}),
+    };
+
     const providerConfig: CheckProviderConfig = {
       type: 'ai',
       prompt: checkConfig.prompt,
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
-      eventContext: prInfo.eventContext, // Pass event context for templates
+      eventContext: enrichedEventContext, // Pass event context with authenticated octokit
       ai: {
         timeout: timeout || 600000,
         ...(checkConfig.ai || {}),
