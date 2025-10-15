@@ -124,7 +124,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['analyze-item']?.[0];
     const issues = checkResult?.issues || [];
 
     if (issues.length !== 3) {
@@ -203,7 +203,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['compare-item']?.[0]?.issues || [];
 
     // Should have 3 issues
     if (issues.length !== 3) {
@@ -269,7 +269,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0] || {};
+    const checkResult = output['compare-item']?.[0] || {};
     const content = checkResult.content || '';
     expect(typeof content).toBe('string');
     expect(content).toContain('DIFF:base');
@@ -314,7 +314,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['process-category']?.[0]?.issues || [];
 
     // Should have 2 issues
     if (issues.length !== 2) {

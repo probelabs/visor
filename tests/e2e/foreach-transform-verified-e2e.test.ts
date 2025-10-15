@@ -111,11 +111,11 @@ output:
     const output = JSON.parse(result || '{}');
 
     // Verify the check ran successfully
-    expect(output.default).toBeDefined();
-    expect(Array.isArray(output.default)).toBe(true);
-    expect(output.default.length).toBeGreaterThan(0);
+    expect(output['analyze-ticket']).toBeDefined();
+    expect(Array.isArray(output['analyze-ticket'])).toBe(true);
+    expect(output['analyze-ticket'].length).toBeGreaterThan(0);
 
-    const checkResult = output.default[0];
+    const checkResult = output['analyze-ticket'][0];
     expect(checkResult.checkName).toBe('analyze-ticket');
 
     // Verify we got issues from both forEach iterations
@@ -172,7 +172,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['validate-data']?.[0];
     const issues = checkResult?.issues || [];
 
     // Should have 2 issues
@@ -233,7 +233,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['process-item']?.[0]?.issues || [];
 
     // Should have 3 issues (a1, a2, b1)
     expect(issues.length).toBe(3);
@@ -277,7 +277,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['process-empty']?.[0];
 
     // Should have no issues since forEach had empty array
     expect(checkResult?.issues || []).toEqual([]);
@@ -318,7 +318,8 @@ output:
     const output = JSON.parse(result || '{}');
 
     // Should report the transform_js error
-    const fetchResult = output.default?.find((r: any) => r.checkName === 'fetch-invalid');
+    const allChecks = Object.values(output).flat() as any[];
+    const fetchResult = allChecks.find((r: any) => r.checkName === 'fetch-invalid');
     expect(fetchResult).toBeDefined();
     expect(fetchResult.issues).toBeDefined();
     expect(fetchResult.issues.length).toBeGreaterThan(0);
@@ -367,7 +368,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['scan-file']?.[0]?.issues || [];
 
     // Should have 3 total issues (2 from file1.js, 1 from file2.js, 0 from file3.js)
     expect(issues.length).toBe(3);
