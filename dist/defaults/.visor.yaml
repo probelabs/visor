@@ -1,0 +1,385 @@
+version: "1.0"
+
+# Default Visor configuration - provides comprehensive code analysis out-of-the-box
+# Uses mock provider for CI compatibility when no AI API keys are configured
+# Users can override this by creating their own .visor.yaml in their project root
+
+# Global AI provider settings - users should configure their preferred provider
+# For CI testing, use --provider mock CLI flag instead
+
+# Run up to 4 checks in parallel for faster execution
+max_parallelism: 4
+
+# Global fail condition - fail if critical or error severity issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
+
+checks:
+  # AI-powered release notes generation - manual execution only for release workflows
+  release-notes:
+    type: ai
+    group: release
+    schema: plain
+    prompt: |
+      Generate professional release notes for version {{ env.TAG_NAME }} of this project.
+
+      Analyze the git commits since the last release:
+      ```
+      {{ env.GIT_LOG }}
+      ```
+
+      And the file changes summary:
+      ```
+      {{ env.GIT_DIFF_STAT }}
+      ```
+
+      Create release notes with these sections:
+
+      ## 🚀 What's New in {{ env.TAG_NAME }}
+
+      ### ✨ New Features
+      List any new features added (look for feat: commits)
+
+      ### 🐛 Bug Fixes
+      List any bugs fixed (look for fix: commits)
+
+      ### 📈 Improvements
+      List any improvements or refactoring (look for refactor:, perf:, chore:, build: commits)
+
+      ### 🔥 Breaking Changes
+      List any breaking changes if present (look for BREAKING CHANGE or ! in commits)
+
+      ### 📊 Statistics
+      - Number of commits since last release
+      - Number of contributors involved
+      - Number of files changed
+
+      Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
+      Use present tense and action-oriented language. Group similar changes together.
+    on: [manual]
+
+  # PR overview with intelligent analysis - runs first to establish context
+  overview:
+    type: ai
+    group: overview
+    schema: overview
+    prompt: |
+        You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
+
+        ## Files Changed Analysis
+        After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
+
+        Next ensure you cover all below:
+
+        ## Architecture & Impact Assessment
+          - What this PR accomplishes
+          - Key technical changes introduced
+          - Affected system components
+          - Include one or more mermaid diagrams when useful to visualize component relationships or flow.
+          
+        ## Scope Discovery & Context Expansion
+        - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
+        - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
+
+        You may also be asked to assign labels to PR; if so use this:
+        - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
+        - `tags.label`: one of [bug, chore, documentation, enhancement, feature]. Choose the best fit.
+
+        Important:
+        - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
+        - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
+
+        Be concise, specific, and actionable. Avoid praise or celebration.
+    on: [pr_opened, pr_updated]
+
+  # Security analysis - Critical for all projects
+  security:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Based on our overview discussion, please perform a comprehensive security analysis of the code changes.
+
+        Analyze the files listed in the `<files_summary>` section and focus on the code changes shown in the diff sections.
+
+        ## Security Analysis Areas
+
+        **Input Validation & Injection:**
+        - SQL injection in database queries
+        - XSS vulnerabilities in user input handling
+        - Command injection in system calls
+        - Path traversal in file operations
+
+        **Authentication & Authorization:**
+        - Weak authentication mechanisms
+        - Session management flaws
+        - Access control bypasses
+        - Privilege escalation opportunities
+
+        **Data Protection:**
+        - Sensitive data exposure in logs/errors
+        - Unencrypted data storage
+        - API key or credential leaks
+        - Privacy regulation compliance
+
+        **Infrastructure Security:**
+        - Insecure configurations
+        - Missing security headers
+        - Vulnerable dependencies
+        - Resource exhaustion vulnerabilities
+
+        Provide specific findings with clear explanations and actionable remediation steps.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Security vulnerabilities that could lead to immediate compromise (RCE, SQL injection, authentication bypass, exposed secrets)
+        - **error**: Security issues that must be fixed before production (XSS, path traversal, weak crypto, missing auth checks)
+        - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
+        - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Performance analysis - Important for all applications
+  performance:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview analysis, now review the code changes for performance issues.
+
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
+
+        ## Performance Analysis Areas
+        **Algorithm & Data Structure Efficiency:**
+        - Time complexity analysis (O(n), O(n²), etc.)
+        - Space complexity and memory usage
+        - Inefficient loops and nested operations
+        - Suboptimal data structure choices
+
+        **Database Performance:**
+        - N+1 query problems
+        - Missing database indexes
+        - Inefficient JOIN operations
+        - Large result set retrievals
+
+        **Resource Management:**
+        - Memory leaks and excessive allocations
+        - File handle management
+        - Connection pooling issues
+        - Resource cleanup patterns
+
+        **Async & Concurrency:**
+        - Blocking operations in async contexts
+        - Race conditions and deadlocks
+        - Inefficient parallel processing
+
+        Building on our overview analysis, identify performance issues and provide optimization recommendations.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Performance issues causing system failure or severe degradation (infinite loops, memory leaks causing OOM)
+        - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
+        - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
+        - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Code quality and maintainability
+  quality:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview discussion, evaluate the code quality and maintainability.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Quality Assessment Areas
+        **Code Structure & Design:**
+        - SOLID principles adherence
+        - Design pattern appropriateness
+        - Separation of concerns
+        - Code organization and clarity
+
+        **Error Handling & Reliability:**
+        - Exception handling completeness
+        - Error propagation patterns
+        - Input validation thoroughness
+        - Edge case coverage
+
+        **Testing & Test Coverage:**
+        - Missing tests for critical functionality
+        - Test coverage gaps
+        - Test quality and effectiveness
+        - Edge cases and error scenarios coverage
+
+        **Maintainability:**
+        - Code testability issues
+        - Dependencies and coupling problems
+        - Technical debt introduction
+        - Code duplication (DRY violations)
+
+        **Language-Specific Best Practices:**
+        - Idiomatic code usage
+        - Framework/library best practices
+        - Type safety (if applicable)
+
+        Focus on actionable improvements that enhance code maintainability based on the overview analysis.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Code quality issues that will cause bugs or failures (logic errors, race conditions, null pointer issues)
+        - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling)
+        - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming)
+        - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Code style and formatting analysis
+  style:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview discussion, analyze the code style and formatting consistency.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Style Assessment Areas
+        **Code Formatting & Consistency:**
+        - Indentation and spacing consistency
+        - Naming conventions adherence
+        - Code organization and structure
+        - Comment style and documentation
+
+        **Language-Specific Style Guidelines:**
+        - Adherence to language style guides (PEP 8, ESLint, etc.)
+        - Import/require statement organization
+        - Variable and function naming patterns
+        - Code readability and clarity
+
+        **Team Standards:**
+        - Consistency with existing codebase patterns
+        - Formatting tool configuration compliance
+        - Documentation standards adherence
+        - Code comment quality and completeness
+
+        Focus on style improvements that enhance code readability and maintainability based on the overview analysis.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Never use for style issues (style issues are never critical)
+        - **error**: Major style violations that significantly harm readability (completely inconsistent formatting, misleading names)
+        - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
+        - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
+  apply-overview-labels:
+    type: github
+    tags: [github]
+    depends_on: [overview]
+    on: [pr_opened]
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
+
+  # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
+  issue-assistant:
+    type: ai
+    group: dynamic  # New issue triage posts a standalone comment
+    schema: issue-assistant
+    prompt: |
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
+        - `intent`: must be "issue_triage" for this flow.
+        - `labels` (optional): array of labels that would help organization for this new issue.
+
+        Use this triage rubric (adopted from our main prompt):
+        1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
+        2) Assess priority (low/medium/high/urgent)
+        3) Estimate complexity (trivial/simple/moderate/complex)
+        4) Recommend labels from the categories above
+        5) Identify potential areas affected or relevant documentation
+        6) Provide an initial response with clarifying questions if needed
+
+        Response style:
+        - Professional and welcoming
+        - Actionable guidance and clear next steps
+        - Ask clarifying questions when information is missing
+        - Use markdown formatting; include code snippets where useful
+        - NEVER make promises about timelines, release dates, or team commitments
+        - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
+        - Focus on technical analysis and helpful information rather than commitments
+    on: [issue_opened]
+
+  # Comment Assistant (comments only) — intent detection and reply
+  comment-assistant:
+    type: ai
+    group: dynamic
+    schema: issue-assistant
+    command: "visor"
+    prompt: |
+        You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: a concise, helpful markdown reply to the latest comment.
+        - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
+        - `labels`: omit for comments (do not include).
+
+        Rules:
+        - Never suggest rerun/disable unless asked explicitly.
+        - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
+        - Stay technical, direct, and specific; add code snippets or links when helpful.
+    on: [issue_comment]
+    on_success:
+      goto_js: |
+        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
+        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+      goto_event: pr_updated
+
+  # Apply labels to new issues based on assistant output (GitHub-only)
+  apply-issue-labels:
+    type: github
+    tags: [github]
+    depends_on: [issue-assistant]
+    on: [issue_opened]
+    op: labels.add
+    value_js: |
+      try {
+        const labels = outputs['issue-assistant']?.labels;
+        if (!Array.isArray(labels)) return [];
+        // Sanitize labels: remove non-alphanumeric chars except :/ and collapse repeated /
+        return labels
+          .map(v => v == null ? '' : String(v))
+          .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+          .filter(s => s.length > 0);
+      } catch (error) {
+        log('Error processing issue labels:', error);
+        return [];
+      }
+
+  # External origin labelling for PRs and Issues
+  external-label:
+    type: github
+    tags: [github]
+    on: [pr_opened, issue_opened]
+    if: "!isMember() && !isContributor()"
+    op: labels.add
+    values:
+      - "external"
+
+  # Retrigger noop removed — comment-assistant schedules overview directly
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
