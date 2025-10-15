@@ -27,7 +27,12 @@ jobs:
       
       - name: 🏗️ Build Visor
         run: npm run build
-      
+
+      - name: 🔗 Ensure main branch exists
+        run: |
+          # Fetch main branch to enable diff comparisons
+          git fetch origin main:main || git branch main || echo "main branch already exists"
+
       - name: 🔍 Test CLI Basic Functionality
         run: |
           chmod +x ./dist/index.js
