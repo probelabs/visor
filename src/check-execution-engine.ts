@@ -1573,10 +1573,16 @@ export class CheckExecutionEngine {
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
+    // Determine the group: if group_by is 'check', use the check name; otherwise use configured group or 'default'
+    let group = checkConfig.group || 'default';
+    if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
+      group = checkName;
+    }
+
     return {
       checkName,
       content,
-      group: checkConfig.group || 'default',
+      group,
       output: (result as any).output,
       debug: result.debug,
       issues: result.issues, // Include structured issues
@@ -1785,17 +1791,22 @@ export class CheckExecutionEngine {
         ];
       }
 
+      // Determine the group: if group_by is 'check', use the check name; otherwise use configured group or 'default'
+      let group = checkConfig.group || 'default';
+      if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
+        group = checkName;
+      }
+
       const checkResult: CheckResult = {
         checkName,
         content,
-        group: checkConfig.group || 'default',
+        group,
         output: checkSummary.output,
         debug: reviewSummary.debug,
         issues: issuesForCheck, // Include structured issues + rendering error if any
       };
 
       // Add to appropriate group
-      const group = checkResult.group;
       if (!groupedResults[group]) {
         groupedResults[group] = [];
       }
