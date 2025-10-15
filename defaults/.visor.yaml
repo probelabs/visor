@@ -7,16 +7,8 @@ version: "1.0"
 # Global AI provider settings - users should configure their preferred provider
 # For CI testing, use --provider mock CLI flag instead
 
-# Run checks sequentially to ensure session reuse works correctly
-max_parallelism: 1
-
-# 🔄 AI Session Reuse Feature:
-# This configuration demonstrates the new 'reuse_ai_session' feature that allows
-# dependent checks to continue conversations with the same AI session, providing
-# context continuity and more intelligent follow-up analysis.
-#
-# Example: security-remediation reuses the session from the security check,
-# allowing the AI to reference the previous security analysis discussion.
+# Run up to 4 checks in parallel for faster execution
+max_parallelism: 4
 
 # Global fail condition - fail if critical or error severity issues are found
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
@@ -144,7 +136,6 @@ checks:
         - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
         - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
     depends_on: [overview]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Performance analysis - Important for all applications
@@ -190,7 +181,6 @@ checks:
         - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
         - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
     depends_on: [overview]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Code quality and maintainability
@@ -242,7 +232,6 @@ checks:
         - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming)
         - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements)
     depends_on: [overview]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Code style and formatting analysis
@@ -283,7 +272,6 @@ checks:
         - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
         - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
     depends_on: [overview]
-    reuse_ai_session: overview  # 🔄 Reuses the overview check's AI session for context continuity
     on: [pr_opened, pr_updated]
 
   # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
@@ -364,8 +352,19 @@ checks:
     depends_on: [issue-assistant]
     on: [issue_opened]
     op: labels.add
-    values:
-      - "{{ outputs['issue-assistant'].labels | safe_label_list }}"
+    value_js: |
+      try {
+        const labels = outputs['issue-assistant']?.labels;
+        if (!Array.isArray(labels)) return [];
+        // Sanitize labels: remove non-alphanumeric chars except :/ and collapse repeated /
+        return labels
+          .map(v => v == null ? '' : String(v))
+          .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+          .filter(s => s.length > 0);
+      } catch (error) {
+        log('Error processing issue labels:', error);
+        return [];
+      }
 
   # External origin labelling for PRs and Issues
   external-label:
