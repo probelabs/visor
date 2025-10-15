@@ -364,8 +364,14 @@ checks:
     depends_on: [issue-assistant]
     on: [issue_opened]
     op: labels.add
-    values:
-      - "{{ outputs['issue-assistant'].labels | safe_label_list }}"
+    value_js: |
+      const labels = outputs['issue-assistant']?.labels;
+      if (!Array.isArray(labels)) return [];
+      // Sanitize labels to allowed characters only: [A-Za-z0-9:/]
+      return labels
+        .map(v => (v == null ? '' : String(v)))
+        .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+        .filter(s => s.length > 0);
 
   # External origin labelling for PRs and Issues
   external-label:
