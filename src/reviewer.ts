@@ -183,7 +183,7 @@ export class PRReviewer {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
       // Only checks with comment-generating schemas should post PR comments
-      // Schemas that generate comments: text, plain, empty/undefined, code-review
+      // Schemas that generate comments: text, plain, empty/undefined, code-review, or custom schemas with "text" field
       // Other check types (command, github, http, etc.) without these schemas are for orchestration only
       const filteredResults = options.config
         ? checkResults.filter(r => {
@@ -197,12 +197,22 @@ export class PRReviewer {
             // 3. 'code-review' schema - structured code review
             // 4. No schema (undefined) - defaults to text output
             // 5. Empty string schema - defaults to text output
-            const shouldPostComment =
-              !schema || // No schema specified
-              schema === '' || // Empty schema
-              schema === 'text' ||
-              schema === 'plain' ||
-              schema === 'code-review';
+            // 6. Custom schema (object) with "text" field at root level - generates text output
+            let shouldPostComment = false;
+
+            if (!schema || schema === '') {
+              // No schema or empty schema - defaults to text output
+              shouldPostComment = true;
+            } else if (typeof schema === 'string') {
+              // String schema - check for known comment-generating schemas
+              shouldPostComment =
+                schema === 'text' || schema === 'plain' || schema === 'code-review';
+            } else if (typeof schema === 'object') {
+              // Custom inline schema object - check if it has a "text" field in properties
+              const schemaObj = schema as Record<string, unknown>;
+              const properties = schemaObj.properties as Record<string, unknown> | undefined;
+              shouldPostComment = !!(properties && 'text' in properties);
+            }
 
             return shouldPostComment;
           })
