@@ -292,7 +292,10 @@ export class AIReviewService {
     }
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+    // When reusing session, skip PR context since it's already in the conversation history
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
+      skipPRContext: true,
+    });
 
     // Determine which agent to use based on session mode
     let agentToUse: typeof existingAgent;
@@ -424,9 +427,13 @@ export class AIReviewService {
   private async buildCustomPrompt(
     prInfo: PRInfo,
     customInstructions: string,
-    schema?: string | Record<string, unknown>
+    schema?: string | Record<string, unknown>,
+    options?: { skipPRContext?: boolean }
   ): Promise<string> {
-    const prContext = this.formatPRContext(prInfo);
+    // When reusing sessions, skip PR context to avoid sending duplicate diff data
+    const skipPRContext = options?.skipPRContext === true;
+
+    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     // Check if we're using the code-review schema
@@ -434,6 +441,13 @@ export class AIReviewService {
 
     if (isIssue) {
       // Issue context - no code analysis needed
+      if (skipPRContext) {
+        // Session reuse: just send new instructions
+        return `<instructions>
+${customInstructions}
+</instructions>`;
+      }
+
       return `<review_request>
   <instructions>
 ${customInstructions}
@@ -459,6 +473,21 @@ ${prContext}
     if (isCodeReviewSchema) {
       // PR context with code-review schema - structured XML format
       const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
+
+      if (skipPRContext) {
+        // Session reuse: just send new instructions without repeating the context
+        return `<instructions>
+${customInstructions}
+</instructions>
+
+<reminder>
+  <rule>The code context and diff were provided in the previous message</rule>
+  <rule>Focus on the new analysis instructions above</rule>
+  <rule>Only analyze code that appears with + (additions) or - (deletions) in the diff sections</rule>
+  <rule>STRICT OUTPUT POLICY: Report only actual problems, risks, or deficiencies</rule>
+  <rule>SEVERITY ASSIGNMENT: Assign severity ONLY to problems introduced or left unresolved by this change</rule>
+</reminder>`;
+      }
 
       return `<review_request>
   <analysis_type>${analysisType}</analysis_type>
@@ -495,6 +524,13 @@ ${prContext}
     }
 
     // For non-code-review schemas, just provide instructions and context without review-specific wrapper
+    if (skipPRContext) {
+      // Session reuse: just send new instructions
+      return `<instructions>
+${customInstructions}
+</instructions>`;
+    }
+
     return `<instructions>
 ${customInstructions}
 </instructions>
@@ -865,6 +901,132 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         log(JSON.stringify(schemaOptions, null, 2));
       }
 
+      // Save prompt and debug info for session reuse too (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const provider = this.config.provider || 'auto';
+          const model = this.config.model || 'default';
+
+          // Try to extract conversation history from ProbeAgent
+          let conversationHistory: any[] = [];
+          try {
+            // ProbeAgent stores history in different ways depending on version
+            const agentAny = agent as any;
+            if (agentAny.history) {
+              conversationHistory = agentAny.history;
+            } else if (agentAny.messages) {
+              conversationHistory = agentAny.messages;
+            } else if (agentAny._messages) {
+              conversationHistory = agentAny._messages;
+            }
+          } catch {
+            // Ignore if we can't access history
+          }
+
+          const debugData = {
+            timestamp: timestamp,
+            checkName: _checkName || 'unknown',
+            provider: provider,
+            model: model,
+            schema: effectiveSchema,
+            schemaOptions: schemaOptions || 'none',
+            sessionInfo: {
+              isSessionReuse: true,
+              historyMessageCount: conversationHistory.length,
+            },
+            currentPromptLength: prompt.length,
+            currentPrompt: prompt,
+            conversationHistory: conversationHistory,
+          };
+
+          const debugJson = JSON.stringify(debugData, null, 2);
+
+          // Also create a human-readable version with clear separators
+          let readableVersion = `=============================================================\n`;
+          readableVersion += `VISOR DEBUG REPORT - SESSION REUSE\n`;
+          readableVersion += `=============================================================\n`;
+          readableVersion += `Timestamp: ${timestamp}\n`;
+          readableVersion += `Check Name: ${_checkName || 'unknown'}\n`;
+          readableVersion += `Provider: ${provider}\n`;
+          readableVersion += `Model: ${model}\n`;
+          readableVersion += `Schema: ${effectiveSchema}\n`;
+          readableVersion += `Schema Options: ${schemaOptions ? 'provided' : 'none'}\n`;
+          readableVersion += `History Messages: ${conversationHistory.length}\n`;
+          readableVersion += `=============================================================\n\n`;
+
+          // Add schema details if provided
+          if (schemaOptions) {
+            readableVersion += `\n${'='.repeat(60)}\n`;
+            readableVersion += `SCHEMA CONFIGURATION\n`;
+            readableVersion += `${'='.repeat(60)}\n`;
+            readableVersion += JSON.stringify(schemaOptions, null, 2);
+            readableVersion += `\n`;
+          }
+
+          // Add conversation history with clear separators
+          if (conversationHistory.length > 0) {
+            readableVersion += `\n${'='.repeat(60)}\n`;
+            readableVersion += `CONVERSATION HISTORY (${conversationHistory.length} messages)\n`;
+            readableVersion += `${'='.repeat(60)}\n`;
+            conversationHistory.forEach((msg: any, index: number) => {
+              readableVersion += `\n${'-'.repeat(60)}\n`;
+              readableVersion += `MESSAGE #${index + 1}\n`;
+              readableVersion += `Role: ${msg.role || 'unknown'}\n`;
+              if (msg.content) {
+                const contentStr =
+                  typeof msg.content === 'string'
+                    ? msg.content
+                    : JSON.stringify(msg.content, null, 2);
+                readableVersion += `Length: ${contentStr.length} characters\n`;
+                readableVersion += `${'-'.repeat(60)}\n`;
+                readableVersion += `${contentStr}\n`;
+              }
+            });
+          }
+
+          // Add current prompt
+          readableVersion += `\n${'='.repeat(60)}\n`;
+          readableVersion += `CURRENT PROMPT (NEW MESSAGE)\n`;
+          readableVersion += `${'='.repeat(60)}\n`;
+          readableVersion += `Length: ${prompt.length} characters\n`;
+          readableVersion += `${'-'.repeat(60)}\n`;
+          readableVersion += `${prompt}\n`;
+          readableVersion += `\n${'='.repeat(60)}\n`;
+          readableVersion += `END OF DEBUG REPORT\n`;
+          readableVersion += `${'='.repeat(60)}\n`;
+
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          if (!fs.existsSync(debugArtifactsDir)) {
+            fs.mkdirSync(debugArtifactsDir, { recursive: true });
+          }
+
+          // Save JSON version
+          const debugFile = path.join(
+            debugArtifactsDir,
+            `prompt-${_checkName || 'unknown'}-${timestamp}.json`
+          );
+          fs.writeFileSync(debugFile, debugJson, 'utf-8');
+
+          // Save readable version
+          const readableFile = path.join(
+            debugArtifactsDir,
+            `prompt-${_checkName || 'unknown'}-${timestamp}.txt`
+          );
+          fs.writeFileSync(readableFile, readableVersion, 'utf-8');
+
+          log(`\n💾 Full debug info saved to:`);
+          log(`   JSON: ${debugFile}`);
+          log(`   TXT:  ${readableFile}`);
+          log(`   - Includes: full conversation history, schema, current prompt`);
+        } catch (error) {
+          log(`⚠️ Could not save debug file: ${error}`);
+        }
+      }
+
       // Use existing agent's answer method - this reuses the conversation context
       // Wrap in a span for hierarchical tracing
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -889,6 +1051,120 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Save COMPLETE conversation history AFTER AI response (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          // Extract FULL conversation history AFTER the AI call
+          const agentAny = agent as any;
+          let fullHistory: any[] = [];
+
+          // Try multiple properties to get complete history
+          if (agentAny.history) {
+            fullHistory = agentAny.history;
+          } else if (agentAny.messages) {
+            fullHistory = agentAny.messages;
+          } else if (agentAny._messages) {
+            fullHistory = agentAny._messages;
+          }
+
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+
+          // Save complete session history (all messages sent and received)
+          const sessionFile = path.join(
+            debugArtifactsDir,
+            `session-${_checkName || 'unknown'}-${timestamp}.json`
+          );
+          const sessionData = {
+            timestamp,
+            checkName: _checkName || 'unknown',
+            provider: this.config.provider || 'auto',
+            model: this.config.model || 'default',
+            schema: effectiveSchema,
+            fullConversationHistory: fullHistory,
+            totalMessages: fullHistory.length,
+            latestResponse: response,
+          };
+
+          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+
+          // Save human-readable version
+          const sessionTxtFile = path.join(
+            debugArtifactsDir,
+            `session-${_checkName || 'unknown'}-${timestamp}.txt`
+          );
+          let readable = `=============================================================\n`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
+          readable += `=============================================================\n`;
+          readable += `Timestamp: ${timestamp}\n`;
+          readable += `Check: ${_checkName || 'unknown'}\n`;
+          readable += `Total Messages: ${fullHistory.length}\n`;
+          readable += `=============================================================\n\n`;
+
+          fullHistory.forEach((msg: any, idx: number) => {
+            readable += `\n${'='.repeat(60)}\n`;
+            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
+            readable += `Role: ${msg.role || 'unknown'}\n`;
+            readable += `${'='.repeat(60)}\n`;
+
+            const content =
+              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += content + '\n';
+          });
+
+          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+
+          log(`💾 Complete session history saved:`);
+          log(`   JSON: ${sessionFile}`);
+          log(`   TXT:  ${sessionTxtFile}`);
+          log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
+        } catch (error) {
+          log(`⚠️ Could not save complete session history: ${error}`);
+        }
+      }
+
+      // Save response if debug is enabled
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+
+          // Create a response file with the same timestamp pattern
+          const responseFile = path.join(
+            debugArtifactsDir,
+            `response-${_checkName || 'unknown'}-${timestamp}.txt`
+          );
+
+          let responseContent = `=============================================================\n`;
+          responseContent += `VISOR AI RESPONSE - SESSION REUSE\n`;
+          responseContent += `=============================================================\n`;
+          responseContent += `Timestamp: ${timestamp}\n`;
+          responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          responseContent += `Response Length: ${response.length} characters\n`;
+          responseContent += `=============================================================\n\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += `AI RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += response;
+          responseContent += `\n${'='.repeat(60)}\n`;
+          responseContent += `END OF RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+
+          fs.writeFileSync(responseFile, responseContent, 'utf-8');
+          log(`💾 Response saved to: ${responseFile}`);
+        } catch (error) {
+          log(`⚠️ Could not save response file: ${error}`);
+        }
+      }
 
       // Finalize and save trace if this is a cloned session with tracing enabled
       // Properly flush and shutdown OpenTelemetry to ensure all spans are exported
@@ -1083,33 +1359,117 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       const provider = this.config.provider || 'auto';
       const model = this.config.model || 'default';
 
-      // Save prompt to a temp file for easier reproduction
-      try {
-        const fs = require('fs');
-        const path = require('path');
-        const os = require('os');
-        const tempDir = os.tmpdir();
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+      // Save prompt to a temp file AND debug artifacts for easier reproduction (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const os = require('os');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
-        fs.writeFileSync(promptFile, prompt, 'utf-8');
-        log(`\n💾 Prompt saved to: ${promptFile}`);
+          // Prepare debug info with full details
+          const debugData = {
+            timestamp,
+            checkName: _checkName || 'unknown',
+            provider,
+            model,
+            schema: effectiveSchema,
+            schemaOptions: schemaOptions || 'none',
+            sessionInfo: {
+              isSessionReuse: false,
+              isNewSession: true,
+            },
+            promptLength: prompt.length,
+            prompt: prompt,
+          };
 
-        log(`\n📝 To reproduce locally, run:`);
+          const debugJson = JSON.stringify(debugData, null, 2);
 
-        let cliCommand = `npx @probelabs/probe@latest agent`;
-        cliCommand += ` --provider ${provider}`;
-        if (model !== 'default') {
-          cliCommand += ` --model ${model}`;
+          // Create human-readable version with clear separators
+          let readableVersion = `=============================================================\n`;
+          readableVersion += `VISOR DEBUG REPORT - NEW SESSION\n`;
+          readableVersion += `=============================================================\n`;
+          readableVersion += `Timestamp: ${timestamp}\n`;
+          readableVersion += `Check Name: ${_checkName || 'unknown'}\n`;
+          readableVersion += `Provider: ${provider}\n`;
+          readableVersion += `Model: ${model}\n`;
+          readableVersion += `Schema: ${effectiveSchema}\n`;
+          readableVersion += `Schema Options: ${schemaOptions ? 'provided' : 'none'}\n`;
+          readableVersion += `Session Type: New Session (no history)\n`;
+          readableVersion += `=============================================================\n\n`;
+
+          // Add schema details if provided
+          if (schemaOptions) {
+            readableVersion += `\n${'='.repeat(60)}\n`;
+            readableVersion += `SCHEMA CONFIGURATION\n`;
+            readableVersion += `${'='.repeat(60)}\n`;
+            readableVersion += JSON.stringify(schemaOptions, null, 2);
+            readableVersion += `\n`;
+          }
+
+          // Add prompt
+          readableVersion += `\n${'='.repeat(60)}\n`;
+          readableVersion += `PROMPT\n`;
+          readableVersion += `${'='.repeat(60)}\n`;
+          readableVersion += `Length: ${prompt.length} characters\n`;
+          readableVersion += `${'-'.repeat(60)}\n`;
+          readableVersion += `${prompt}\n`;
+          readableVersion += `\n${'='.repeat(60)}\n`;
+          readableVersion += `END OF DEBUG REPORT\n`;
+          readableVersion += `${'='.repeat(60)}\n`;
+
+          // Save to temp directory
+          const tempDir = os.tmpdir();
+          const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+          fs.writeFileSync(promptFile, prompt, 'utf-8');
+          log(`\n💾 Prompt saved to: ${promptFile}`);
+
+          // Also save to debug-artifacts directory if available
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          try {
+            if (!fs.existsSync(debugArtifactsDir)) {
+              fs.mkdirSync(debugArtifactsDir, { recursive: true });
+            }
+
+            // Save JSON version
+            const debugFile = path.join(
+              debugArtifactsDir,
+              `prompt-${_checkName || 'unknown'}-${timestamp}.json`
+            );
+            fs.writeFileSync(debugFile, debugJson, 'utf-8');
+
+            // Save readable version
+            const readableFile = path.join(
+              debugArtifactsDir,
+              `prompt-${_checkName || 'unknown'}-${timestamp}.txt`
+            );
+            fs.writeFileSync(readableFile, readableVersion, 'utf-8');
+
+            log(`\n💾 Full debug info saved to:`);
+            log(`   JSON: ${debugFile}`);
+            log(`   TXT:  ${readableFile}`);
+            log(`   - Includes: prompt, schema, provider, model, and schema options`);
+          } catch {
+            // Ignore if we can't write to debug-artifacts
+          }
+
+          log(`\n📝 To reproduce locally, run:`);
+
+          let cliCommand = `npx @probelabs/probe@latest agent`;
+          cliCommand += ` --provider ${provider}`;
+          if (model !== 'default') {
+            cliCommand += ` --model ${model}`;
+          }
+          if (schema) {
+            cliCommand += ` --schema output/${schema}/schema.json`;
+          }
+          cliCommand += ` "${promptFile}"`;
+
+          log(`\n$ ${cliCommand}\n`);
+        } catch (error) {
+          log(`⚠️ Could not save prompt file: ${error}`);
         }
-        if (schema) {
-          cliCommand += ` --schema output/${schema}/schema.json`;
-        }
-        cliCommand += ` "${promptFile}"`;
-
-        log(`\n$ ${cliCommand}\n`);
-      } catch (error) {
-        log(`⚠️ Could not save prompt file: ${error}`);
       }
 
       // Wrap the agent.answer() call in a span for hierarchical tracing
@@ -1135,6 +1495,120 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);
+
+      // Save COMPLETE conversation history AFTER AI response (only if debug enabled)
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          // Extract FULL conversation history AFTER the AI call
+          const agentAny = agent as any;
+          let fullHistory: any[] = [];
+
+          // Try multiple properties to get complete history
+          if (agentAny.history) {
+            fullHistory = agentAny.history;
+          } else if (agentAny.messages) {
+            fullHistory = agentAny.messages;
+          } else if (agentAny._messages) {
+            fullHistory = agentAny._messages;
+          }
+
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+
+          // Save complete session history (all messages sent and received)
+          const sessionFile = path.join(
+            debugArtifactsDir,
+            `session-${_checkName || 'unknown'}-${timestamp}.json`
+          );
+          const sessionData = {
+            timestamp,
+            checkName: _checkName || 'unknown',
+            provider: this.config.provider || 'auto',
+            model: this.config.model || 'default',
+            schema: effectiveSchema,
+            fullConversationHistory: fullHistory,
+            totalMessages: fullHistory.length,
+            latestResponse: response,
+          };
+
+          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+
+          // Save human-readable version
+          const sessionTxtFile = path.join(
+            debugArtifactsDir,
+            `session-${_checkName || 'unknown'}-${timestamp}.txt`
+          );
+          let readable = `=============================================================\n`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
+          readable += `=============================================================\n`;
+          readable += `Timestamp: ${timestamp}\n`;
+          readable += `Check: ${_checkName || 'unknown'}\n`;
+          readable += `Total Messages: ${fullHistory.length}\n`;
+          readable += `=============================================================\n\n`;
+
+          fullHistory.forEach((msg: any, idx: number) => {
+            readable += `\n${'='.repeat(60)}\n`;
+            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
+            readable += `Role: ${msg.role || 'unknown'}\n`;
+            readable += `${'='.repeat(60)}\n`;
+
+            const content =
+              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += content + '\n';
+          });
+
+          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+
+          log(`💾 Complete session history saved:`);
+          log(`   JSON: ${sessionFile}`);
+          log(`   TXT:  ${sessionTxtFile}`);
+          log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
+        } catch (error) {
+          log(`⚠️ Could not save complete session history: ${error}`);
+        }
+      }
+
+      // Save response if debug is enabled
+      if (process.env.VISOR_DEBUG_AI_SESSIONS === 'true') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+          const debugArtifactsDir =
+            process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+
+          // Create a response file
+          const responseFile = path.join(
+            debugArtifactsDir,
+            `response-${_checkName || 'unknown'}-${timestamp}.txt`
+          );
+
+          let responseContent = `=============================================================\n`;
+          responseContent += `VISOR AI RESPONSE - NEW SESSION\n`;
+          responseContent += `=============================================================\n`;
+          responseContent += `Timestamp: ${timestamp}\n`;
+          responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          responseContent += `Response Length: ${response.length} characters\n`;
+          responseContent += `=============================================================\n\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += `AI RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+          responseContent += response;
+          responseContent += `\n${'='.repeat(60)}\n`;
+          responseContent += `END OF RESPONSE\n`;
+          responseContent += `${'='.repeat(60)}\n`;
+
+          fs.writeFileSync(responseFile, responseContent, 'utf-8');
+          log(`💾 Response saved to: ${responseFile}`);
+        } catch (error) {
+          log(`⚠️ Could not save response file: ${error}`);
+        }
+      }
 
       // Finalize and save trace if enabled
       // Properly flush and shutdown OpenTelemetry to ensure all spans are exported
@@ -1283,27 +1757,8 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
       log('📋 Full response preview:', response);
     }
 
-    // Check for Liquid template syntax in response (critical bug prevention)
-    if (_schema && _schema !== 'plain' && (response.includes('{%') || response.includes('{{'))) {
-      console.error('⚠️ CRITICAL: AI returned Liquid template syntax when JSON was expected!');
-      console.error(`Response that caused issue: "${response.substring(0, 100)}..."`);
-
-      // Return error issue instead of trying to parse
-      return {
-        issues: [
-          {
-            file: 'system',
-            line: 0,
-            ruleId: 'system/liquid-template-in-json',
-            message:
-              'AI returned Liquid template syntax instead of JSON. This indicates a prompt confusion error.',
-            severity: 'error',
-            category: 'logic',
-          },
-        ],
-        debug: debugInfo,
-      };
-    }
+    // Note: Removed overly aggressive Liquid template check that was causing false positives
+    // JSON parsing below will catch actual malformed responses
 
     try {
       // Handle different schema types differently

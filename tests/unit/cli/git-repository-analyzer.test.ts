@@ -153,11 +153,16 @@ describe('GitRepositoryAnalyzer', () => {
       mockGit.log.mockRejectedValue(
         new Error("your current branch 'main' does not have any commits yet")
       );
-      // Mock git config for author
-      mockGit.raw = jest
-        .fn()
-        .mockResolvedValueOnce('John Doe\n') // user.name
-        .mockResolvedValueOnce('john@example.com\n'); // user.email
+      // Mock git config for author (needs to handle --local flag)
+      mockGit.raw.mockImplementation((args: string[]) => {
+        if (args.includes('user.name')) {
+          return Promise.resolve('John Doe\n');
+        }
+        if (args.includes('user.email')) {
+          return Promise.resolve('john@example.com\n');
+        }
+        return Promise.resolve('');
+      });
 
       const testFile = path.join(tempDir, 'new-file.ts');
       fs.writeFileSync(testFile, 'console.log("test");\n');

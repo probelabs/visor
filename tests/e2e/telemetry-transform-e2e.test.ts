@@ -105,6 +105,10 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
   });
 
   it('writes JSON file and traces with forEach spans', async () => {
+    // Clean up old trace files to avoid test flakiness
+    const oldFiles = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
+    oldFiles.forEach(f => fs.unlinkSync(path.join(tracesDir, f)));
+
     process.argv = [
       'node',
       'visor',
@@ -133,12 +137,14 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
     // Validate traces emitted
     const files = fs.readdirSync(tracesDir).filter(f => f.endsWith('.ndjson'));
     expect(files.length).toBeGreaterThan(0);
-    const newest = files
-      .map(f => ({ f, t: fs.statSync(path.join(tracesDir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t)[0].f;
+    // Pick the file with the most content (not just newest by mtime)
+    // because multiple files may be created during initialization
+    const largest = files
+      .map(f => ({ f, size: fs.statSync(path.join(tracesDir, f)).size }))
+      .sort((a, b) => b.size - a.size)[0].f;
 
     const lines = fs
-      .readFileSync(path.join(tracesDir, newest), 'utf8')
+      .readFileSync(path.join(tracesDir, largest), 'utf8')
       .trim()
       .split(/\r?\n/)
       .map(l => JSON.parse(l));

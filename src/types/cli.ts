@@ -44,6 +44,10 @@ export interface CliOptions {
   codeContext?: 'auto' | 'enabled' | 'disabled';
   /** When set, write formatted output to this file instead of stdout */
   outputFile?: string;
+  /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
+  analyzeBranchDiff?: boolean;
+  /** Simulate GitHub event type for event-based filtering */
+  event?: string;
 }
 
 /**

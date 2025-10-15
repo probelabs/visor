@@ -10,6 +10,7 @@ Visor can be triggered in two main modes:
 - **When**: Running `visor` command locally
 - **Log indicator**: `🖥️  Mode: Manual CLI`
 - **Context**: Local git repository analysis
+- **Event simulation**: Use `--event` flag to simulate GitHub events (see [CLI Event Simulation](#cli-event-simulation))
 
 ### 2. GitHub Action Mode
 - **When**: Triggered by GitHub webhook events
@@ -173,3 +174,119 @@ checks:
 ```
 
 During that inline execution, event filtering and `if:` expressions see the simulated event. The current step is then re-run once. For a full PR re-run from an issue comment, synthesize a PR event and re-invoke the action entrypoint (see failure-routing docs for details).
+
+## CLI Event Simulation
+
+When running Visor locally via CLI, you can simulate GitHub events to test event-based check filtering. This is useful for testing your configuration locally before deploying to GitHub Actions.
+
+### Usage
+
+```bash
+# Simulate a PR update event
+visor --event pr_updated
+
+# Simulate a PR opened event
+visor --event pr_opened
+
+# Simulate an issue comment event
+visor --event issue_comment
+
+# Simulate an issue opened event
+visor --event issue_opened
+
+# Run all checks regardless of event filters (default)
+visor --event all
+```
+
+### Auto-Detection
+
+Visor automatically detects the appropriate event based on the checks being run:
+
+- **Code-review schemas** → Defaults to `pr_updated`
+- **Other schemas** → Defaults to `all` (no filtering)
+
+```bash
+# These two are equivalent when running checks with code-review schema
+visor --check security
+visor --check security --event pr_updated
+```
+
+### Event Filtering Behavior
+
+| Flag | Behavior | Use Case |
+|------|----------|----------|
+| `--event pr_updated` | Only runs checks with `on: [pr_updated]` | Test PR update scenario locally |
+| `--event pr_opened` | Only runs checks with `on: [pr_opened]` | Test PR opened scenario |
+| `--event issue_comment` | Only runs checks with `on: [issue_comment]` | Test comment assistant |
+| `--event manual` | Only runs checks with `on: [manual]` | Test manual-triggered checks |
+| `--event all` | Runs all checks (except manual-only) | Default behavior, ignores `on:` filters |
+| (no flag) | Auto-detects based on schema | Smart default |
+
+### Example Workflow
+
+**Testing PR review locally before pushing:**
+
+```bash
+# 1. Make changes on a feature branch
+git checkout -b feature/new-feature
+
+# 2. Simulate PR update event to see what checks would run
+visor --event pr_updated --analyze-branch-diff
+
+# 3. Review the output and fix any issues
+
+# 4. Push and open PR (GitHub Actions will run the same checks)
+git push origin feature/new-feature
+```
+
+### Combining with Other Flags
+
+Event simulation works alongside other CLI flags:
+
+```bash
+# Analyze branch diff with PR update event
+visor --event pr_updated --analyze-branch-diff
+
+# Run specific checks with event filtering
+visor --check security --check style --event pr_opened
+
+# Debug mode with event simulation
+visor --event pr_updated --debug
+
+# JSON output with event filtering
+visor --event issue_comment --output json
+```
+
+### Log Output
+
+When using event simulation, you'll see:
+
+```
+🎯 Simulating event: pr_updated
+▶ Running check: overview [1/4]
+▶ Running check: security [2/4]
+```
+
+When using `--event all`:
+
+```
+🎯 Event filtering: DISABLED (running all checks regardless of event triggers)
+```
+
+### Common Patterns
+
+**Test all PR checks locally:**
+```bash
+visor --event pr_updated --analyze-branch-diff
+```
+
+**Test issue assistant:**
+```bash
+# Issue assistants typically run on issue_comment or issue_opened
+visor --event issue_comment
+```
+
+**Run everything (useful for local development):**
+```bash
+visor --event all  # or just: visor
+```
