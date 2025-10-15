@@ -182,14 +182,15 @@ export class PRReviewer {
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-      // Filter out command-type checks from PR comments (they should report via GitHub Checks only)
+      // Only AI-powered checks should post PR comments
+      // Other check types (command, github, http, etc.) are for orchestration/operations only
       const filteredResults = options.config
         ? checkResults.filter(r => {
             const cfg = options.config!.checks?.[r.checkName];
-            const t = cfg?.type || '';
-            const isGitHubOps =
-              t === 'github' || r.group === 'github' || t === 'noop' || t === 'command';
-            return !isGitHubOps;
+            const t = cfg?.type || 'ai'; // Default to 'ai' if not specified
+            // Only ai and claude-code types generate human-readable review content
+            const shouldPostComment = t === 'ai' || t === 'claude-code';
+            return shouldPostComment;
           })
         : checkResults;
 
