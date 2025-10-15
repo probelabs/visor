@@ -27,7 +27,9 @@ Visor uses [LiquidJS](https://liquidjs.com/) for templating in prompts, commands
 - `event` - GitHub event context (varies by trigger)
 
 - `outputs` - Results from dependency checks (Map)
-  - Access with: `outputs.checkName`
+  - Access current value: `outputs.checkName`
+  - Access history: `outputs.history.checkName` - Array of all previous outputs from this check
+  - See [Output History](./output-history.md) for detailed usage in loops, retries, and forEach
 
 - `env` - Safe environment variables
 

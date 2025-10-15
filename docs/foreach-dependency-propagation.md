@@ -40,8 +40,35 @@ checks:
 - If `tickets` is `[]`, `analyze-ticket` is effectively skipped (no per‑item execution).
 - If `transform_js` returns `undefined`, the engine raises `forEach/undefined_output` and `analyze-ticket` is skipped due to a failed dependency.
 
+## Output History with forEach
+
+When a check has `forEach: true`, each iteration's output is tracked in `outputs.history`. After processing multiple items, `outputs.history['check-name']` will contain an array with one entry per iteration.
+
+```yaml
+checks:
+  process-items:
+    type: memory
+    depends_on: [fetch-tickets]
+    forEach: true
+    operation: exec_js
+    memory_js: |
+      return { itemId: item.key, processed: true };
+
+  summarize:
+    type: memory
+    depends_on: [process-items]
+    operation: exec_js
+    memory_js: |
+      // Access all forEach iteration results
+      const allProcessed = outputs.history['process-items'];
+      return { totalProcessed: allProcessed.length };
+```
+
+See [Output History](./output-history.md) for more details on tracking outputs across iterations.
+
 ## Tips
 
 - Always `return` from `transform_js`. Missing `return` is the most common cause of `undefined`.
 - Prefer returning arrays directly from `transform_js` (avoid stringifying) to keep types clear and avoid parsing surprises.
+- Use `outputs.history` to access all forEach iteration results in dependent checks.
 

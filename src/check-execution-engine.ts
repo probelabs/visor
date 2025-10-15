@@ -186,6 +186,8 @@ export class CheckExecutionEngine {
   private webhookContext?: { webhookData: Map<string, unknown> };
   private routingSandbox?: Sandbox;
   private executionStats: Map<string, CheckExecutionStats> = new Map();
+  // Track history of all outputs for each check (useful for loops and goto)
+  private outputHistory: Map<string, unknown[]> = new Map();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Cached GitHub context for context elevation when running in Actions
@@ -486,6 +488,8 @@ export class CheckExecutionEngine {
         transform_js: targetCfg.transform_js,
         env: targetCfg.env,
         forEach: targetCfg.forEach,
+        // Pass output history for loop/goto scenarios
+        __outputHistory: this.outputHistory,
         // Include provider-specific keys (e.g., op/values for github)
         ...targetCfg,
         ai: {
@@ -562,6 +566,13 @@ export class CheckExecutionEngine {
         timestamp: Date.now(),
       }));
       const enriched = { ...r, issues: enrichedIssues } as ReviewSummary;
+
+      // Track output history for loop/goto scenarios
+      const enrichedWithOutput = enriched as ReviewSummary & { output?: unknown };
+      if (enrichedWithOutput.output !== undefined) {
+        this.trackOutputHistory(target, enrichedWithOutput.output);
+      }
+
       resultsMap?.set(target, enriched);
       if (debug) log(`🔧 Debug: inline executed '${target}', issues: ${enrichedIssues.length}`);
       return enriched;
@@ -1531,6 +1542,8 @@ export class CheckExecutionEngine {
       ai_model: checkConfig.ai_model || config.ai_model,
       // Pass claude_code config if present
       claude_code: checkConfig.claude_code,
+      // Pass output history for loop/goto scenarios
+      __outputHistory: this.outputHistory,
       // Pass any provider-specific config
       ...checkConfig,
     };
@@ -3113,6 +3126,12 @@ export class CheckExecutionEngine {
                   (itemResult as any).output
                 );
 
+                // Track output history for forEach iterations
+                const itemOutput = (itemResult as any).output;
+                if (itemOutput !== undefined) {
+                  this.trackOutputHistory(checkName, itemOutput);
+                }
+
                 // General branch-first scheduling for this item: execute all descendants (from current node only) when ready
                 const descendantSet = (() => {
                   const visited = new Set<string>();
@@ -3928,6 +3947,13 @@ export class CheckExecutionEngine {
               { name: 'check.completed' },
             ]);
           } catch {}
+
+          // Track output history for loop/goto scenarios
+          const reviewResultWithOutput = reviewResult as ReviewSummary & { output?: unknown };
+          if (reviewResultWithOutput.output !== undefined) {
+            this.trackOutputHistory(checkName, reviewResultWithOutput.output);
+          }
+
           results.set(checkName, reviewResult);
         } else {
           // Store error result for dependency tracking
@@ -5517,6 +5543,18 @@ export class CheckExecutionEngine {
     if (output !== undefined) {
       stats.outputsProduced = (stats.outputsProduced || 0) + 1;
     }
+  }
+
+  /**
+   * Track output in history for loop/goto scenarios
+   */
+  private trackOutputHistory(checkName: string, output: unknown): void {
+    if (output === undefined) return;
+
+    if (!this.outputHistory.has(checkName)) {
+      this.outputHistory.set(checkName, []);
+    }
+    this.outputHistory.get(checkName)!.push(output);
   }
 
   /**

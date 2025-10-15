@@ -45,6 +45,8 @@ checks:
   notify: { type: command, exec: "echo notify" }
 ```
 
+**Note:** When using goto loops, `outputs.history` tracks all previous check outputs, while `outputs` always contains the current/latest value. See [Output History](./output-history.md) for accessing historical data in loops and retries.
+
 forEach remediation with retry:
 ```yaml
 checks:
@@ -140,6 +142,7 @@ When to use goto_event vs. full re-run:
 
 - `goto_js` / `run_js` are evaluated in a sandbox with:
   - Read-only context: `{ step, attempt, loop, error, foreach, outputs, pr, files, env }`
+  - `outputs` contains current values, `outputs.history` contains arrays of all previous values (see [Output History](./output-history.md))
   - Pure sync execution; no IO, no async, no timers, no require/process.
   - Time and size limits (short wall time; small code/output caps) — evaluation failures fall back to static routing.
 

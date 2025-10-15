@@ -76,7 +76,8 @@ export class LogCheckProvider extends CheckProvider {
       dependencyResults,
       includePrContext,
       includeDependencies,
-      includeMetadata
+      includeMetadata,
+      config.__outputHistory as Map<string, unknown[]> | undefined
     );
 
     // Render the log message template
@@ -111,7 +112,8 @@ export class LogCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     _includePrContext: boolean = true,
     _includeDependencies: boolean = true,
-    includeMetadata: boolean = true
+    includeMetadata: boolean = true,
+    outputHistory?: Map<string, unknown[]>
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -142,6 +144,7 @@ export class LogCheckProvider extends CheckProvider {
     if (dependencyResults) {
       const dependencies: Record<string, unknown> = {};
       const outputs: Record<string, unknown> = {};
+      const history: Record<string, unknown[]> = {};
       context.dependencyCount = dependencyResults.size;
 
       for (const [checkName, result] of dependencyResults.entries()) {
@@ -155,6 +158,16 @@ export class LogCheckProvider extends CheckProvider {
         const summary = result as import('../reviewer').ReviewSummary & { output?: unknown };
         outputs[checkName] = summary.output !== undefined ? summary.output : summary;
       }
+
+      // Add history for each check if available
+      if (outputHistory) {
+        for (const [checkName, historyArray] of outputHistory) {
+          history[checkName] = historyArray;
+        }
+      }
+
+      // Attach history to the outputs object
+      (outputs as any).history = history;
 
       context.dependencies = dependencies;
       context.outputs = outputs;

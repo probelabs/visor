@@ -90,7 +90,10 @@ export class CommandCheckProvider extends CheckProvider {
       },
       files: prInfo.files,
       fileCount: prInfo.files.length,
-      outputs: this.buildOutputContext(dependencyResults),
+      outputs: this.buildOutputContext(
+        dependencyResults,
+        config.__outputHistory as Map<string, unknown[]> | undefined
+      ),
       env: this.getSafeEnvironmentVariables(),
     };
 
@@ -966,13 +969,16 @@ ${bodyWithReturn}
   }
 
   private buildOutputContext(
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
   ): Record<string, unknown> {
     if (!dependencyResults) {
       return {};
     }
 
     const outputs: Record<string, unknown> = {};
+    const history: Record<string, unknown[]> = {};
+
     for (const [checkName, result] of dependencyResults) {
       // If the result has a direct output field, use it directly
       // Otherwise, expose the entire result as-is
@@ -980,6 +986,17 @@ ${bodyWithReturn}
       const value = summary.output !== undefined ? summary.output : summary;
       outputs[checkName] = this.makeJsonSmart(value);
     }
+
+    // Add history for each check if available
+    if (outputHistory) {
+      for (const [checkName, historyArray] of outputHistory) {
+        history[checkName] = historyArray.map(val => this.makeJsonSmart(val));
+      }
+    }
+
+    // Attach history to the outputs object
+    (outputs as any).history = history;
+
     return outputs;
   }
 

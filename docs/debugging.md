@@ -209,7 +209,10 @@ checks:
     depends_on: [fetch-items]
     message: |
       Processing item: {{ outputs["fetch-items"] | json }}
+      All processed so far: {{ outputs.history["fetch-items"] | json }}
 ```
+
+**Note:** Use `outputs.history['check-name']` to access all previous iteration outputs. See [Output History](./output-history.md) for tracking outputs across loop iterations and forEach processing.
 
 **Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts, giving you direct access to the array. This makes it easier to work with the data:
 
@@ -314,8 +317,16 @@ checks:
       log("Output keys:", Object.keys(outputs));
       log("Previous check type:", typeof outputs["previous-check"]);
       log("Is array?", Array.isArray(outputs["previous-check"]));
+
+      // Debug output history
+      log("History available:", !!outputs.history);
+      log("History keys:", Object.keys(outputs.history || {}));
+      log("Previous check history length:", outputs.history["previous-check"]?.length);
+
       return "debug complete";
 ```
+
+**Tip:** Use `outputs` for current values and `outputs.history` to see all previous values from loop iterations or retries. See [Output History](./output-history.md) for more details.
 
 ### 2. Validate JSON Before Parsing
 
