@@ -46,17 +46,6 @@ jobs:
             echo "✅ Copied defaults to bundle"
           fi
 
-          # Copy the tiktoken WASM file if it exists in dist or node_modules
-          if [ -f dist/tiktoken_bg.wasm ]; then
-            cp dist/tiktoken_bg.wasm bundled/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm from dist/"
-          elif [ -f node_modules/tiktoken/tiktoken_bg.wasm ]; then
-            cp node_modules/tiktoken/tiktoken_bg.wasm bundled/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm from node_modules"
-          else
-            echo "⚠️  Warning: tiktoken_bg.wasm not found - token counting may fail"
-          fi
-
           # Copy schema files if they exist
           if [ -d dist/generated ]; then
             cp -r dist/generated bundled/
@@ -85,12 +74,16 @@ jobs:
 
           # Copy bundled files to dist/ directory
           cp bundled/index.js dist/
-          cp bundled/licenses.txt dist/ 2>/dev/null || true
 
-          # Copy tiktoken WASM file if it exists
-          if [ -f bundled/tiktoken_bg.wasm ]; then
-            cp bundled/tiktoken_bg.wasm dist/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm to dist/"
+          # Copy additional files if they exist
+          if [ -d bundled/defaults ]; then
+            cp -r bundled/defaults dist/
+            echo "✅ Copied defaults to dist/"
+          fi
+
+          if [ -d bundled/generated ]; then
+            cp -r bundled/generated dist/
+            echo "✅ Copied generated schemas to dist/"
           fi
 
           # Copy schema files if they exist
