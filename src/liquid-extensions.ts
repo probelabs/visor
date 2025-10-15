@@ -32,9 +32,7 @@ export function sanitizeLabel(value: unknown): string {
  */
 export function sanitizeLabelList(labels: unknown): string[] {
   if (!Array.isArray(labels)) return [];
-  return (labels as unknown[])
-    .map(v => sanitizeLabel(v))
-    .filter(s => s.length > 0);
+  return (labels as unknown[]).map(v => sanitizeLabel(v)).filter(s => s.length > 0);
 }
 
 /**

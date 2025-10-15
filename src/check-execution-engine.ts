@@ -221,9 +221,7 @@ export class CheckExecutionEngine {
    * @param eventContext - The event context to enrich
    * @returns Enriched event context with octokit if available
    */
-  private enrichEventContext(
-    eventContext?: Record<string, unknown>
-  ): Record<string, unknown> {
+  private enrichEventContext(eventContext?: Record<string, unknown>): Record<string, unknown> {
     const baseContext = eventContext || {};
     if (this.actionContext?.octokit) {
       return { ...baseContext, octokit: this.actionContext.octokit };
