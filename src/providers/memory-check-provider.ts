@@ -174,7 +174,12 @@ export class MemoryCheckProvider extends CheckProvider {
     const memoryStore = MemoryStore.getInstance();
 
     // Build template context for value computation
-    const templateContext = this.buildTemplateContext(prInfo, dependencyResults, memoryStore);
+    const templateContext = this.buildTemplateContext(
+      prInfo,
+      dependencyResults,
+      memoryStore,
+      config.__outputHistory as Map<string, unknown[]> | undefined
+    );
 
     let result: unknown;
 
@@ -553,7 +558,8 @@ export class MemoryCheckProvider extends CheckProvider {
   private buildTemplateContext(
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
-    memoryStore?: MemoryStore
+    memoryStore?: MemoryStore,
+    outputHistory?: Map<string, unknown[]>
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -576,15 +582,28 @@ export class MemoryCheckProvider extends CheckProvider {
       })),
     };
 
-    // Add dependency outputs
+    // Add dependency outputs - always create outputs object even if no dependencies
+    const outputs: Record<string, unknown> = {};
+    const history: Record<string, unknown[]> = {};
+
     if (dependencyResults) {
-      const outputs: Record<string, unknown> = {};
       for (const [checkName, result] of dependencyResults.entries()) {
         const summary = result as ReviewSummary & { output?: unknown };
         outputs[checkName] = summary.output !== undefined ? summary.output : summary;
       }
-      context.outputs = outputs;
     }
+
+    // Add history for each check if available
+    if (outputHistory) {
+      for (const [checkName, historyArray] of outputHistory) {
+        history[checkName] = historyArray;
+      }
+    }
+
+    // Attach history to the outputs object
+    (outputs as any).history = history;
+
+    context.outputs = outputs;
 
     // Add memory accessor
     if (memoryStore) {

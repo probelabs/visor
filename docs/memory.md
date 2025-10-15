@@ -256,7 +256,8 @@ checks:
 **Context available in exec_js:**
 - `memory` - Memory operations object
 - `pr` - PR information (number, title, author, etc.)
-- `outputs` - Previous check outputs
+- `outputs` - Previous check outputs (current values)
+- `outputs.history` - All previous outputs from each check (arrays). See [Output History](./output-history.md)
 - `env` - Environment variables
 - `log(...args)` - Debug logging function
 
@@ -470,6 +471,8 @@ checks:
     operation: increment
     key: retry_count
 ```
+
+**Note:** You can also track retry history using `outputs.history['increment-retry']` to see all previous retry count values. See [Output History](./output-history.md) for tracking outputs across loop iterations.
 
 ### Error Collection
 
