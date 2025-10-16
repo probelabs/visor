@@ -10,7 +10,7 @@ npm i -D @probelabs/visor
 
 ## Quick Start
 
-ESM
+### JavaScript (ESM)
 ```ts
 import { loadConfig, runChecks } from '@probelabs/visor/sdk';
 
@@ -29,6 +29,32 @@ const result = await runChecks({
   output: { format: 'json' },
 });
 console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
+```
+
+### TypeScript
+```typescript
+import { loadConfig, runChecks, type VisorConfig, type RunOptions } from '@probelabs/visor/sdk';
+
+// Type-safe config construction
+const rawConfig: Partial<VisorConfig> = {
+  version: '1.0',
+  checks: {
+    'security': { type: 'command', exec: 'npm audit' },
+    'lint': { type: 'command', exec: 'npm run lint' },
+  }
+};
+
+const config = await loadConfig(rawConfig);
+const result = await runChecks({
+  config,
+  checks: Object.keys(config.checks),
+  output: { format: 'json' },
+});
+
+// Type-safe result access with full type inference
+console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
+console.log('Checks executed:', result.checksExecuted);
+console.log('Execution time:', result.executionTime);
 ```
 
 CommonJS
@@ -131,8 +157,22 @@ Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 
 ## Examples (in repo)
 
-- `examples/sdk-basic.mjs` (ESM) – runs with local bundle `dist/sdk/sdk.mjs`.
-- `examples/sdk-cjs.cjs` (CJS) – runs with local bundle `dist/sdk/sdk.js`.
-- `examples/sdk-manual-config.mjs` (ESM) – demonstrates manual config construction.
+- `examples/sdk-basic.mjs` (ESM) – Minimal example with raw config object
+- `examples/sdk-cjs.cjs` (CJS) – CommonJS usage
+- `examples/sdk-manual-config.mjs` (ESM) – Manual config construction with validation
+- `examples/sdk-typescript.ts` (TypeScript) – **Type-safe example** showing:
+  - Full TypeScript type safety with SDK type definitions
+  - Importing types from `@probelabs/visor/sdk`
+  - Type inference for configs and results
+  - Compile-time type checking
+  - Using exported types (`VisorConfig`, `RunOptions`)
+  - To run: `npx tsc examples/sdk-typescript.ts --module esnext --target es2022 --moduleResolution bundler --esModuleInterop --skipLibCheck && node examples/sdk-typescript.js`
+- `examples/sdk-comprehensive.mjs` (ESM) – **Complex example** showing:
+  - Multi-level check dependencies (`depends_on`)
+  - Tag filtering
+  - Parallel execution control
+  - Dependency resolution with `resolveChecks()`
+  - Strict validation mode
+  - Complete pipeline execution
 
 These are also exercised by CI smoke tests.

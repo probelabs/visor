@@ -1,268 +1,175 @@
 /**
  * Comprehensive SDK Example
  *
- * This example demonstrates:
- * 1. Loading config from file vs manual construction
- * 2. Using resolveChecks to expand dependencies
- * 3. Different output formats
- * 4. Tag filtering
- * 5. Parallel execution control
- * 6. Timeout handling
- * 7. Error handling and result inspection
+ * Demonstrates:
+ * - loadConfig() with raw object
+ * - Complex check dependencies (depends_on)
+ * - Check execution order
+ * - Different check types
+ * - Tag filtering
+ * - Parallel execution control
+ * - Error handling and results inspection
  */
 
 import { loadConfig, runChecks, resolveChecks } from '../dist/sdk/sdk.mjs';
 
-// Example 1: Manual Config with Dependencies
-async function example1_manualConfig() {
-  console.log('\n=== Example 1: Manual Config with Dependencies ===\n');
+async function main() {
+  console.log('=== Visor SDK - Comprehensive Example ===\n');
 
-  const config = {
+  // Create a complex config with dependencies
+  const config = await loadConfig({
     version: '1.0',
     checks: {
+      // Step 1: Setup/preparation check
       'setup': {
         type: 'command',
-        exec: 'echo "Setup complete"',
+        exec: 'echo "Setup: Installing dependencies..."',
+        tags: ['setup'],
       },
-      'test-a': {
+
+      // Step 2: Run tests (depends on setup)
+      'unit-tests': {
         type: 'command',
-        exec: 'echo "Test A passed"',
+        exec: 'echo "Running unit tests..."',
         depends_on: ['setup'],
+        tags: ['tests'],
       },
-      'test-b': {
+
+      // Step 3: Integration tests (depends on setup)
+      'integration-tests': {
         type: 'command',
-        exec: 'echo "Test B passed"',
+        exec: 'echo "Running integration tests..."',
         depends_on: ['setup'],
+        tags: ['tests'],
       },
-      'report': {
-        type: 'command',
-        exec: 'echo "All tests complete"',
-        depends_on: ['test-a', 'test-b'],
-      },
-    },
-    output: {
-      format: 'json',
-      comments: { enabled: false },
-    },
-  };
 
-  // Resolve dependencies for 'report' check
-  const checksToRun = resolveChecks(['report'], config);
-  console.log('Resolved checks:', checksToRun);
-
-  const result = await runChecks({
-    config,
-    checks: checksToRun,
-    output: { format: 'json' },
-    maxParallelism: 2,
-  });
-
-  console.log(`Executed ${result.checksExecuted.length} checks in ${result.executionTime}ms`);
-  return result;
-}
-
-// Example 2: Tag Filtering
-async function example2_tagFiltering() {
-  console.log('\n=== Example 2: Tag Filtering ===\n');
-
-  const config = {
-    version: '1.0',
-    checks: {
+      // Step 4: Security scan (depends on setup)
       'security-scan': {
         type: 'command',
-        exec: 'echo "Security scan complete"',
+        exec: 'echo "Running security scan..."',
+        depends_on: ['setup'],
         tags: ['security', 'critical'],
       },
-      'style-check': {
-        type: 'command',
-        exec: 'echo "Style check complete"',
-        tags: ['style'],
-      },
-      'performance-test': {
-        type: 'command',
-        exec: 'echo "Performance test complete"',
-        tags: ['performance', 'critical'],
-      },
-    },
-    output: {
-      format: 'json',
-      comments: { enabled: false },
-    },
-  };
 
-  // Run only checks tagged with 'critical'
-  const result = await runChecks({
-    config,
-    checks: Object.keys(config.checks),
-    tagFilter: {
-      include: ['critical'],
+      // Step 5: Linting (depends on setup)
+      'lint': {
+        type: 'command',
+        exec: 'echo "Running linter..."',
+        depends_on: ['setup'],
+        tags: ['quality'],
+      },
+
+      // Step 6: Build (depends on all tests passing)
+      'build': {
+        type: 'command',
+        exec: 'echo "Building application..."',
+        depends_on: ['unit-tests', 'integration-tests', 'lint'],
+        tags: ['build'],
+      },
+
+      // Step 7: Deploy check (depends on build and security)
+      'deploy-check': {
+        type: 'command',
+        exec: 'echo "Checking deployment readiness..."',
+        depends_on: ['build', 'security-scan'],
+        tags: ['deployment'],
+      },
+
+      // Step 8: Final report (depends on everything)
+      'report': {
+        type: 'command',
+        exec: 'echo "Generating final report..."',
+        depends_on: ['deploy-check'],
+        tags: ['reporting'],
+      },
     },
+    max_parallelism: 3,
+    fail_fast: false,
   });
 
-  console.log('Checks with "critical" tag:');
-  result.checksExecuted.forEach((check) => console.log(`  - ${check}`));
+  console.log('📋 Config loaded with', Object.keys(config.checks).length, 'checks\n');
 
-  return result;
-}
+  // Example 1: Resolve dependencies
+  console.log('=== Example 1: Dependency Resolution ===');
+  const reportDeps = resolveChecks(['report'], config);
+  console.log('To run "report", these checks execute in order:');
+  reportDeps.forEach((check, idx) => {
+    console.log(`  ${idx + 1}. ${check}`);
+  });
 
-// Example 3: Different Output Formats
-async function example3_outputFormats() {
-  console.log('\n=== Example 3: Different Output Formats ===\n');
+  // Example 2: Run specific checks
+  console.log('\n=== Example 2: Run Specific Checks ===');
+  const testResult = await runChecks({
+    config,
+    checks: ['setup', 'unit-tests', 'integration-tests'],
+    output: { format: 'json' },
+    debug: false,
+  });
+  console.log('✅ Executed:', testResult.checksExecuted.join(', '));
+  console.log('⏱️  Time:', testResult.executionTime, 'ms');
 
-  const config = {
-    version: '1.0',
-    checks: {
-      'check-1': {
-        type: 'command',
-        exec: 'echo "Check complete"',
-      },
-    },
-    output: {
-      format: 'json',
-      comments: { enabled: false },
-    },
-  };
+  // Example 3: Tag filtering
+  console.log('\n=== Example 3: Tag Filtering ===');
+  const securityResult = await runChecks({
+    config,
+    checks: Object.keys(config.checks),
+    tagFilter: { include: ['critical'] },
+    output: { format: 'json' },
+    debug: false,
+  });
+  console.log('✅ Critical checks:', securityResult.checksExecuted.join(', '));
+  console.log('⏱️  Time:', securityResult.executionTime, 'ms');
 
-  // Run with different output formats
-  const formats = ['json', 'table', 'markdown'];
+  // Example 4: Full pipeline
+  console.log('\n=== Example 4: Full Pipeline ===');
+  const fullResult = await runChecks({
+    config,
+    checks: Object.keys(config.checks),
+    output: { format: 'json' },
+    maxParallelism: 3,
+    debug: false,
+  });
 
-  for (const format of formats) {
-    console.log(`\nRunning with format: ${format}`);
-    const result = await runChecks({
-      config,
-      checks: ['check-1'],
-      output: { format },
-      debug: false,
-    });
-    console.log(`  Execution time: ${result.executionTime}ms`);
-  }
-}
+  console.log('📊 Results:');
+  console.log('  Checks:', fullResult.checksExecuted.length);
+  console.log('  Time:', fullResult.executionTime, 'ms');
+  console.log('  Issues:', fullResult.reviewSummary.issues?.length || 0);
 
-// Example 4: Loading Config from File
-async function example4_loadFromFile() {
-  console.log('\n=== Example 4: Loading Config from File ===\n');
+  console.log('\n  Execution order:');
+  fullResult.checksExecuted.forEach((check, idx) => {
+    console.log(`    ${idx + 1}. ${check}`);
+  });
 
+  // Example 5: Strict validation
+  console.log('\n=== Example 5: Strict Validation ===');
   try {
-    // Try to load config from default location
-    const config = await loadConfig();
-    console.log(`Loaded config with ${Object.keys(config.checks || {}).length} checks`);
+    await loadConfig({
+      version: '1.0',
+      checks: { test: { type: 'command', exec: 'echo test' } },
+      typo_field: 'error!',
+    }, { strict: true });
+    console.log('❌ Should have thrown');
+  } catch (error) {
+    console.log('✅ Caught:', error.message.substring(0, 50) + '...');
+  }
 
-    // Run a subset of checks
-    const checksToRun = Object.keys(config.checks || {}).slice(0, 2);
-    if (checksToRun.length > 0) {
-      const result = await runChecks({
-        config,
-        checks: checksToRun,
-        output: { format: 'json' },
-      });
-      console.log(`Executed ${result.checksExecuted.length} checks`);
+  // Example 6: Dependency graph
+  console.log('\n=== Example 6: Dependency Graph ===');
+  for (const name of Object.keys(config.checks)) {
+    const deps = config.checks[name].depends_on || [];
+    const tags = config.checks[name].tags || [];
+    const tagStr = tags.length ? ` [${tags.join(',')}]` : '';
+    if (deps.length) {
+      console.log(`  ${name}${tagStr} → ${deps.join(', ')}`);
     } else {
-      console.log('No checks found in config');
+      console.log(`  ${name}${tagStr} → (root)`);
     }
-  } catch (error) {
-    console.log('No config file found (expected in this example)');
   }
+
+  console.log('\n✅ All examples complete!\n');
 }
 
-// Example 5: Error Handling and Fail Fast
-async function example5_errorHandling() {
-  console.log('\n=== Example 5: Error Handling and Fail Fast ===\n');
-
-  const config = {
-    version: '1.0',
-    checks: {
-      'pass-check': {
-        type: 'command',
-        exec: 'echo "This passes"',
-      },
-      'fail-check': {
-        type: 'command',
-        exec: 'exit 1',
-        depends_on: ['pass-check'],
-      },
-      'skip-check': {
-        type: 'command',
-        exec: 'echo "This might be skipped"',
-        depends_on: ['fail-check'],
-      },
-    },
-    output: {
-      format: 'json',
-      comments: { enabled: false },
-    },
-  };
-
-  // Run without fail_fast
-  console.log('Running without fail_fast:');
-  const result1 = await runChecks({
-    config,
-    checks: Object.keys(config.checks),
-    failFast: false,
-  });
-  console.log(`  Executed: ${result1.checksExecuted.length} checks`);
-
-  // Run with fail_fast
-  console.log('\nRunning with fail_fast:');
-  const result2 = await runChecks({
-    config,
-    checks: Object.keys(config.checks),
-    failFast: true,
-  });
-  console.log(`  Executed: ${result2.checksExecuted.length} checks`);
-}
-
-// Example 6: Programmatic Result Inspection
-async function example6_resultInspection() {
-  console.log('\n=== Example 6: Programmatic Result Inspection ===\n');
-
-  const config = {
-    version: '1.0',
-    checks: {
-      'check-1': {
-        type: 'command',
-        exec: 'echo "Check complete"',
-      },
-    },
-    output: {
-      format: 'json',
-      comments: { enabled: false },
-    },
-  };
-
-  const result = await runChecks({
-    config,
-    checks: ['check-1'],
-  });
-
-  // Inspect the result structure
-  console.log('Result structure:');
-  console.log(`  - checksExecuted: ${result.checksExecuted.join(', ')}`);
-  console.log(`  - executionTime: ${result.executionTime}ms`);
-  console.log(`  - timestamp: ${result.timestamp}`);
-  console.log(`  - issues count: ${result.reviewSummary.issues?.length || 0}`);
-  console.log(`  - has reviewSummary: ${!!result.reviewSummary}`);
-
-  return result;
-}
-
-// Run all examples
-async function main() {
-  console.log('Visor SDK - Comprehensive Examples');
-  console.log('====================================');
-
-  try {
-    await example1_manualConfig();
-    await example2_tagFiltering();
-    await example3_outputFormats();
-    await example4_loadFromFile();
-    await example5_errorHandling();
-    await example6_resultInspection();
-
-    console.log('\n✅ All examples completed successfully!\n');
-  } catch (error) {
-    console.error('\n❌ Error running examples:', error.message);
-    process.exit(1);
-  }
-}
-
-main();
+main().catch(err => {
+  console.error('❌ Error:', err.message);
+  process.exit(1);
+});

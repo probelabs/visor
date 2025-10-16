@@ -54,15 +54,15 @@ export async function loadConfig(
         pr_comment: {
           format: 'markdown',
           group_by: 'check',
-          collapse: true
-        }
-      }
+          collapse: true,
+        },
+      },
     }));
 
     return {
       ...defaultConfig,
       ...configOrPath,
-      checks: configOrPath.checks || {}
+      checks: configOrPath.checks || {},
     } as VisorConfig;
   }
 
