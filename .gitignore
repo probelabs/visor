@@ -65,3 +65,5 @@ tests/fixtures/temp/
 # Workshop artifacts
 workshop/build/
 !workshop/Visor-Workshop.pdf
+dist/traces/*.ndjson
+dist/traces/

@@ -258,6 +258,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/OnSuccessConfig";
                     readonly description: "Success routing configuration for this check (post-actions and optional goto)";
                 };
+                readonly on_finish: {
+                    readonly $ref: "#/definitions/OnFinishConfig";
+                    readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
+                };
                 readonly message: {
                     readonly type: "string";
                     readonly description: "Message template for log checks";
@@ -646,6 +650,39 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Success routing configuration per check";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly OnFinishConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly run: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Post-finish steps to run";
+                };
+                readonly goto: {
+                    readonly type: "string";
+                    readonly description: "Optional jump back to ancestor step (by id)";
+                };
+                readonly goto_event: {
+                    readonly $ref: "#/definitions/EventTrigger";
+                    readonly description: "Simulate a different event when performing goto (e.g., 'pr_updated')";
+                };
+                readonly goto_js: {
+                    readonly type: "string";
+                    readonly description: "Dynamic goto: JS expression returning step id or null";
+                };
+                readonly run_js: {
+                    readonly type: "string";
+                    readonly description: "Dynamic post-finish steps: JS expression returning string[]";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

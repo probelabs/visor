@@ -369,6 +369,8 @@ export interface CheckConfig {
   on_fail?: OnFailConfig;
   /** Success routing configuration for this check (post-actions and optional goto) */
   on_success?: OnSuccessConfig;
+  /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
+  on_finish?: OnFinishConfig;
   /**
    * Log provider specific options (optional, only used when type === 'log').
    * Declared here to ensure JSON Schema allows these keys and Ajv does not warn.
@@ -458,6 +460,23 @@ export interface OnSuccessConfig {
   /** Dynamic goto: JS expression returning step id or null */
   goto_js?: string;
   /** Dynamic post-success steps: JS expression returning string[] */
+  run_js?: string;
+}
+
+/**
+ * Finish routing configuration for forEach checks
+ * Runs once after ALL iterations of forEach and ALL dependent checks complete
+ */
+export interface OnFinishConfig {
+  /** Post-finish steps to run */
+  run?: string[];
+  /** Optional jump back to ancestor step (by id) */
+  goto?: string;
+  /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+  goto_event?: EventTrigger;
+  /** Dynamic goto: JS expression returning step id or null */
+  goto_js?: string;
+  /** Dynamic post-finish steps: JS expression returning string[] */
   run_js?: string;
 }
 

@@ -274,6 +274,10 @@
           "$ref": "#/definitions/OnSuccessConfig",
           "description": "Success routing configuration for this check (post-actions and optional goto)"
         },
+        "on_finish": {
+          "$ref": "#/definitions/OnFinishConfig",
+          "description": "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
+        },
         "message": {
           "type": "string",
           "description": "Message template for log checks"
@@ -723,6 +727,39 @@
       },
       "additionalProperties": false,
       "description": "Success routing configuration per check",
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
+    "OnFinishConfig": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Post-finish steps to run"
+        },
+        "goto": {
+          "type": "string",
+          "description": "Optional jump back to ancestor step (by id)"
+        },
+        "goto_event": {
+          "$ref": "#/definitions/EventTrigger",
+          "description": "Simulate a different event when performing goto (e.g., 'pr_updated')"
+        },
+        "goto_js": {
+          "type": "string",
+          "description": "Dynamic goto: JS expression returning step id or null"
+        },
+        "run_js": {
+          "type": "string",
+          "description": "Dynamic post-finish steps: JS expression returning string[]"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete",
       "patternProperties": {
         "^x-": {}
       }
