@@ -179,7 +179,9 @@ export class PRReviewer {
    * - Built-in schemas: code-review, overview, plain, text
    * - Custom schemas with a "text" field in properties
    */
-  private async isCommentGeneratingSchema(schema: string | Record<string, unknown>): Promise<boolean> {
+  private async isCommentGeneratingSchema(
+    schema: string | Record<string, unknown>
+  ): Promise<boolean> {
     try {
       // Check for built-in comment-generating schemas
       if (typeof schema === 'string') {
