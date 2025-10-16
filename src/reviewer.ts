@@ -174,17 +174,21 @@ export class PRReviewer {
   }
 
   /**
-   * Helper to check if a schema definition has a "text" field in its properties
+   * Helper to check if a schema is comment-generating
+   * Comment-generating schemas include:
+   * - Built-in schemas: code-review, overview, plain, text
+   * - Custom schemas with a "text" field in properties
    */
-  private async schemaHasTextField(schema: string | Record<string, unknown>): Promise<boolean> {
+  private async isCommentGeneratingSchema(schema: string | Record<string, unknown>): Promise<boolean> {
     try {
-      let schemaObj: Record<string, unknown>;
+      // Check for built-in comment-generating schemas
+      if (typeof schema === 'string') {
+        // Well-known comment-generating schemas
+        if (['code-review', 'overview', 'plain', 'text'].includes(schema)) {
+          return true;
+        }
 
-      if (typeof schema === 'object') {
-        // Inline schema object
-        schemaObj = schema;
-      } else {
-        // String reference - load the schema
+        // Try to load and check custom string schema
         const fs = require('fs').promises;
         const path = require('path');
 
@@ -199,16 +203,20 @@ export class PRReviewer {
 
         try {
           const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-          schemaObj = JSON.parse(schemaContent);
+          const schemaObj = JSON.parse(schemaContent);
+
+          // Check if schema has a "text" field in properties
+          const properties = schemaObj.properties as Record<string, unknown> | undefined;
+          return !!(properties && 'text' in properties);
         } catch {
           // Schema file not found or invalid, return false
           return false;
         }
+      } else {
+        // Inline schema object - check if it has a "text" field in properties
+        const properties = schema.properties as Record<string, unknown> | undefined;
+        return !!(properties && 'text' in properties);
       }
-
-      // Check if schema has a "text" field in properties
-      const properties = schemaObj.properties as Record<string, unknown> | undefined;
-      return !!(properties && 'text' in properties);
     } catch {
       return false;
     }
@@ -241,17 +249,9 @@ export class PRReviewer {
         // No schema specified - only AI checks generate comments by default
         // Other types (github, command, http, etc.) without schema are for orchestration
         shouldPostComment = isAICheck;
-      } else if (typeof schema === 'string') {
-        // String schema - check if it's a known plain text schema OR has a text field
-        if (schema === 'text' || schema === 'plain') {
-          shouldPostComment = true;
-        } else {
-          // Load the schema and check if it has a text field
-          shouldPostComment = await this.schemaHasTextField(schema);
-        }
-      } else if (typeof schema === 'object') {
-        // Custom inline schema object - check if it has a "text" field in properties
-        shouldPostComment = await this.schemaHasTextField(schema);
+      } else {
+        // Check if the schema is comment-generating (built-in or custom with text field)
+        shouldPostComment = await this.isCommentGeneratingSchema(schema);
       }
 
       if (shouldPostComment) {
