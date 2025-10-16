@@ -1,6 +1,34 @@
-# Visor Configuration Examples
+# Visor Examples
 
-This directory contains example configurations demonstrating various Visor features and use cases.
+This directory contains SDK examples (programmatic usage) and configuration examples (YAML files).
+
+## 🚀 SDK Examples (Programmatic Usage)
+
+Use Visor from Node.js without shelling out.
+
+### Running SDK Examples
+
+```bash
+# Build SDK first
+npm run build:sdk
+
+# Run examples
+node examples/sdk-basic.mjs           # Minimal (5 lines)
+node examples/sdk-cjs.cjs             # CommonJS
+node examples/sdk-manual-config.mjs   # Manual config
+node examples/sdk-comprehensive.mjs   # Complex with dependencies
+
+# TypeScript (full type safety with SDK types)
+npx tsc examples/sdk-typescript.ts --module esnext --target es2022 --moduleResolution bundler --esModuleInterop --skipLibCheck && node examples/sdk-typescript.js
+```
+
+See `docs/sdk.md` for full SDK documentation.
+
+---
+
+## 📝 Configuration Examples (YAML)
+
+Example configurations demonstrating various Visor features and use cases.
 
 ## 📁 Files Overview
 
