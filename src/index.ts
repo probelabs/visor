@@ -1082,6 +1082,7 @@ async function handleIssueComment(
           await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
             focus,
             format,
+            config: config as import('./types/config').VisorConfig,
             commentId: `pr-review-${prNumber}`,
             triggeredBy: comment?.user?.login
               ? `comment by @${comment.user.login}`
@@ -1245,6 +1246,7 @@ async function handlePullRequestWithConfig(
   const shouldComment = inputs['comment-on-pr'] !== 'false';
   if (shouldComment) {
     await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
+      config,
       commentId,
       triggeredBy: action,
       commitSha: pullRequest.head?.sha,
