@@ -176,9 +176,7 @@ export class PRReviewer {
   /**
    * Helper to check if a schema definition has a "text" field in its properties
    */
-  private async schemaHasTextField(
-    schema: string | Record<string, unknown>
-  ): Promise<boolean> {
+  private async schemaHasTextField(schema: string | Record<string, unknown>): Promise<boolean> {
     try {
       let schemaObj: Record<string, unknown>;
 
