@@ -173,6 +173,97 @@ export class PRReviewer {
     );
   }
 
+  /**
+   * Helper to check if a schema definition has a "text" field in its properties
+   */
+  private async schemaHasTextField(
+    schema: string | Record<string, unknown>
+  ): Promise<boolean> {
+    try {
+      let schemaObj: Record<string, unknown>;
+
+      if (typeof schema === 'object') {
+        // Inline schema object
+        schemaObj = schema;
+      } else {
+        // String reference - load the schema
+        const fs = require('fs').promises;
+        const path = require('path');
+
+        // Sanitize schema name
+        const sanitizedSchemaName = schema.replace(/[^a-zA-Z0-9-]/g, '');
+        if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
+          return false;
+        }
+
+        // Construct path to built-in schema file
+        const schemaPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
+
+        try {
+          const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+          schemaObj = JSON.parse(schemaContent);
+        } catch {
+          // Schema file not found or invalid, return false
+          return false;
+        }
+      }
+
+      // Check if schema has a "text" field in properties
+      const properties = schemaObj.properties as Record<string, unknown> | undefined;
+      return !!(properties && 'text' in properties);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Filter check results to only include those that should post GitHub comments
+   */
+  private async filterCommentGeneratingChecks(
+    checkResults: CheckResult[],
+    config: import('./types/config').VisorConfig
+  ): Promise<CheckResult[]> {
+    const filtered: CheckResult[] = [];
+
+    for (const r of checkResults) {
+      const cfg = config.checks?.[r.checkName];
+      const type = cfg?.type || 'ai'; // Default to 'ai' if not specified
+      const schema = cfg?.schema;
+
+      // Determine if this check should generate a comment
+      // Include checks with:
+      // 1. type: 'ai' or 'claude-code' with no schema or comment-generating schemas
+      // 2. Other types ONLY if they have explicit comment-generating schemas
+      let shouldPostComment = false;
+
+      // AI-powered checks generate comments by default
+      const isAICheck = type === 'ai' || type === 'claude-code';
+
+      if (!schema || schema === '') {
+        // No schema specified - only AI checks generate comments by default
+        // Other types (github, command, http, etc.) without schema are for orchestration
+        shouldPostComment = isAICheck;
+      } else if (typeof schema === 'string') {
+        // String schema - check if it's a known plain text schema OR has a text field
+        if (schema === 'text' || schema === 'plain') {
+          shouldPostComment = true;
+        } else {
+          // Load the schema and check if it has a text field
+          shouldPostComment = await this.schemaHasTextField(schema);
+        }
+      } else if (typeof schema === 'object') {
+        // Custom inline schema object - check if it has a "text" field in properties
+        shouldPostComment = await this.schemaHasTextField(schema);
+      }
+
+      if (shouldPostComment) {
+        filtered.push(r);
+      }
+    }
+
+    return filtered;
+  }
+
   async postReviewComment(
     owner: string,
     repo: string,
@@ -186,37 +277,7 @@ export class PRReviewer {
       // AI checks (ai, claude-code) generate comments by default
       // Other types need explicit comment-generating schemas
       const filteredResults = options.config
-        ? checkResults.filter(r => {
-            const cfg = options.config!.checks?.[r.checkName];
-            const type = cfg?.type || 'ai'; // Default to 'ai' if not specified
-            const schema = cfg?.schema;
-
-            // Determine if this check should generate a comment
-            // Include checks with:
-            // 1. type: 'ai' or 'claude-code' with no schema or comment-generating schemas
-            // 2. Other types ONLY if they have explicit comment-generating schemas
-            let shouldPostComment = false;
-
-            // AI-powered checks generate comments by default
-            const isAICheck = type === 'ai' || type === 'claude-code';
-
-            if (!schema || schema === '') {
-              // No schema specified - only AI checks generate comments by default
-              // Other types (github, command, http, etc.) without schema are for orchestration
-              shouldPostComment = isAICheck;
-            } else if (typeof schema === 'string') {
-              // String schema - check for known comment-generating schemas
-              shouldPostComment =
-                schema === 'text' || schema === 'plain' || schema === 'code-review';
-            } else if (typeof schema === 'object') {
-              // Custom inline schema object - check if it has a "text" field in properties
-              const schemaObj = schema as Record<string, unknown>;
-              const properties = schemaObj.properties as Record<string, unknown> | undefined;
-              shouldPostComment = !!(properties && 'text' in properties);
-            }
-
-            return shouldPostComment;
-          })
+        ? await this.filterCommentGeneratingChecks(checkResults, options.config)
         : checkResults;
 
       // If nothing to report after filtering, skip this group
