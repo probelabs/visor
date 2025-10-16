@@ -45,19 +45,13 @@ export async function loadConfig(
   if (typeof configOrPath === 'object' && configOrPath !== null) {
     cm.validateConfig(configOrPath, options?.strict ?? false);
 
-    // Apply defaults by loading default config and merging
-    const defaultConfig = await cm.findAndLoadConfig().catch(() => ({
+    // Apply lightweight defaults without expensive file system operations
+    const defaultConfig: Partial<VisorConfig> = {
       version: '1.0',
       checks: {},
       max_parallelism: 3,
-      output: {
-        pr_comment: {
-          format: 'markdown',
-          group_by: 'check',
-          collapse: true,
-        },
-      },
-    }));
+      fail_fast: false,
+    };
 
     return {
       ...defaultConfig,
