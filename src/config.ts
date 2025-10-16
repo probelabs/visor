@@ -360,8 +360,10 @@ export class ConfigManager {
 
   /**
    * Validate configuration against schema
+   * @param config The config to validate
+   * @param strict If true, treat warnings as errors (default: false)
    */
-  private validateConfig(config: Partial<VisorConfig>): void {
+  public validateConfig(config: Partial<VisorConfig>, strict = false): void {
     const errors: ConfigValidationError[] = [];
     const warnings: ConfigValidationError[] = [];
 
@@ -516,11 +518,17 @@ export class ConfigManager {
       this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
     }
 
+    // In strict mode, treat warnings as errors
+    if (strict && warnings.length > 0) {
+      errors.push(...warnings);
+    }
+
     if (errors.length > 0) {
       throw new Error(errors[0].message);
     }
-    // Emit warnings (do not block execution)
-    if (warnings.length > 0) {
+
+    // Emit warnings (do not block execution) - only in non-strict mode
+    if (!strict && warnings.length > 0) {
       for (const w of warnings) {
         logger.warn(`⚠️  Config warning [${w.field}]: ${w.message}`);
       }

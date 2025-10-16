@@ -25,12 +25,53 @@ export interface RunOptions extends VisorOptions {
   checks?: string[]; // default: all checks from config
   timeoutMs?: number;
   output?: { format?: 'table' | 'json' | 'markdown' | 'sarif' };
+  /** Strict mode: treat config warnings (like unknown keys) as errors (default: false) */
+  strictValidation?: boolean;
 }
 
-/** Load a Visor config from path, or discover defaults if path is omitted. */
-export async function loadConfig(configPath?: string): Promise<VisorConfig> {
+/**
+ * Load and validate a Visor config.
+ * @param configOrPath - Config object, file path, or omit to discover defaults
+ * @param options - Validation options
+ * @returns Validated config with defaults applied
+ */
+export async function loadConfig(
+  configOrPath?: string | Partial<VisorConfig>,
+  options?: { strict?: boolean }
+): Promise<VisorConfig> {
   const cm = new ConfigManager();
-  if (configPath) return cm.loadConfig(configPath);
+
+  // If it's an object, validate and return with defaults
+  if (typeof configOrPath === 'object' && configOrPath !== null) {
+    cm.validateConfig(configOrPath, options?.strict ?? false);
+
+    // Apply defaults by loading default config and merging
+    const defaultConfig = await cm.findAndLoadConfig().catch(() => ({
+      version: '1.0',
+      checks: {},
+      max_parallelism: 3,
+      output: {
+        pr_comment: {
+          format: 'markdown',
+          group_by: 'check',
+          collapse: true
+        }
+      }
+    }));
+
+    return {
+      ...defaultConfig,
+      ...configOrPath,
+      checks: configOrPath.checks || {}
+    } as VisorConfig;
+  }
+
+  // If it's a string, load from file
+  if (typeof configOrPath === 'string') {
+    return cm.loadConfig(configOrPath);
+  }
+
+  // Otherwise discover default config file
   return cm.findAndLoadConfig();
 }
 
@@ -65,11 +106,18 @@ export function resolveChecks(checkIds: string[], config: VisorConfig | undefine
  */
 export async function runChecks(opts: RunOptions = {}): Promise<AnalysisResult> {
   const cm = new ConfigManager();
-  const config: VisorConfig = opts.config
-    ? opts.config
-    : opts.configPath
-      ? await cm.loadConfig(opts.configPath)
-      : await cm.findAndLoadConfig();
+  let config: VisorConfig;
+
+  if (opts.config) {
+    // Validate manually constructed config
+    // In strict mode, unknown keys are treated as errors
+    cm.validateConfig(opts.config, opts.strictValidation ?? false);
+    config = opts.config;
+  } else if (opts.configPath) {
+    config = await cm.loadConfig(opts.configPath);
+  } else {
+    config = await cm.findAndLoadConfig();
+  }
 
   const checks =
     opts.checks && opts.checks.length > 0
