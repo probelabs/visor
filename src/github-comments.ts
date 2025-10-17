@@ -1,6 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from './logger';
+import { generateFooter } from './footer';
 
 export interface Comment {
   id: number;
@@ -174,18 +175,18 @@ export class CommentManager {
   public formatCommentWithMetadata(content: string, metadata: CommentMetadata): string {
     const { commentId, lastUpdated, triggeredBy, commitSha } = metadata;
 
-    const commitInfo = commitSha ? ` | Commit: ${commitSha.substring(0, 7)}` : '';
+    const footer = generateFooter({
+      includeMetadata: {
+        lastUpdated,
+        triggeredBy,
+        commitSha,
+      },
+    });
 
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
----
-
-*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*
-
-*Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
-
-💡 **TIP:** You can chat with Visor using \`/visor ask <your question>\`
+${footer}
 <!-- /visor-comment-id:${commentId} -->`;
   }
 
