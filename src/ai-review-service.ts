@@ -6,6 +6,7 @@ import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
 import { initializeTracer } from './utils/tracer-init';
+import { processDiffWithOutline } from './utils/diff-processor';
 
 /**
  * Helper function to log debug messages using the centralized logger
@@ -155,7 +156,7 @@ export class AIReviewService {
     prInfo: PRInfo,
     customPrompt: string,
     schema?: string | Record<string, unknown>,
-    _checkName?: string,
+    checkName?: string,
     sessionId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
@@ -226,7 +227,7 @@ export class AIReviewService {
         prompt,
         schema,
         debugInfo,
-        _checkName,
+        checkName,
         sessionId
       );
       const processingTime = Date.now() - startTime;
@@ -428,16 +429,16 @@ export class AIReviewService {
     prInfo: PRInfo,
     customInstructions: string,
     schema?: string | Record<string, unknown>,
-    options?: { skipPRContext?: boolean }
+    options?: { skipPRContext?: boolean; checkName?: string }
   ): Promise<string> {
     // When reusing sessions, skip PR context to avoid sending duplicate diff data
     const skipPRContext = options?.skipPRContext === true;
 
-    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo);
-    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
-
     // Check if we're using the code-review schema
     const isCodeReviewSchema = schema === 'code-review';
+
+    const prContext = skipPRContext ? '' : await this.formatPRContext(prInfo, isCodeReviewSchema);
+    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Issue context - no code analysis needed
@@ -547,7 +548,7 @@ ${prContext}
   /**
    * Format PR or Issue context for the AI using XML structure
    */
-  private formatPRContext(prInfo: PRInfo): string {
+  private async formatPRContext(prInfo: PRInfo, isCodeReviewSchema?: boolean): Promise<string> {
     // Check if this is an issue (not a PR)
     const prContextInfo = prInfo as PRInfo & {
       isPRContext?: boolean;
@@ -680,9 +681,17 @@ ${this.escapeXml(prInfo.body)}
       ).comments;
       if (issueComments && issueComments.length > 0) {
         // Filter out the triggering comment from history if present
-        const historicalComments = triggeringComment
+        let historicalComments = triggeringComment
           ? issueComments.filter(c => c.id !== triggeringComment.id)
           : issueComments;
+
+        // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
+        // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+        if (isCodeReviewSchema) {
+          historicalComments = historicalComments.filter(
+            c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+          );
+        }
 
         if (historicalComments.length > 0) {
           context += `
@@ -735,26 +744,34 @@ ${this.escapeXml(prInfo.body)}
     if (includeCodeContext) {
       // Add full diff if available (for complete PR review)
       if (prInfo.fullDiff) {
+        // Process the diff with outline-diff format for better structure
+        const processedFullDiff = await processDiffWithOutline(prInfo.fullDiff);
         context += `
-  <!-- Complete unified diff showing all changes in the pull request -->
+  <!-- Complete unified diff showing all changes in the pull request (processed with outline-diff) -->
   <full_diff>
-${this.escapeXml(prInfo.fullDiff)}
+${this.escapeXml(processedFullDiff)}
   </full_diff>`;
       }
 
       // Add incremental commit diff if available (for new commit analysis)
       if (prInfo.isIncremental) {
         if (prInfo.commitDiff && prInfo.commitDiff.length > 0) {
+          // Process the commit diff with outline-diff format for better structure
+          const processedCommitDiff = await processDiffWithOutline(prInfo.commitDiff);
           context += `
-  <!-- Diff of only the latest commit for incremental analysis -->
+  <!-- Diff of only the latest commit for incremental analysis (processed with outline-diff) -->
   <commit_diff>
-${this.escapeXml(prInfo.commitDiff)}
+${this.escapeXml(processedCommitDiff)}
   </commit_diff>`;
         } else {
+          // Process the fallback full diff with outline-diff format
+          const processedFallbackDiff = prInfo.fullDiff
+            ? await processDiffWithOutline(prInfo.fullDiff)
+            : '';
           context += `
-  <!-- Commit diff could not be retrieved - falling back to full diff analysis -->
+  <!-- Commit diff could not be retrieved - falling back to full diff analysis (processed with outline-diff) -->
   <commit_diff>
-${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
+${this.escapeXml(processedFallbackDiff)}
   </commit_diff>`;
         }
       }
@@ -808,9 +825,17 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     ).comments;
     if (prComments && prComments.length > 0) {
       // Filter out the triggering comment from history if present
-      const historicalComments = triggeringComment
+      let historicalComments = triggeringComment
         ? prComments.filter(c => c.id !== triggeringComment.id)
         : prComments;
+
+      // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
+      // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+      if (isCodeReviewSchema) {
+        historicalComments = historicalComments.filter(
+          c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+        );
+      }
 
       if (historicalComments.length > 0) {
         context += `

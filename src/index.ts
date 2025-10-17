@@ -15,6 +15,7 @@ import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { ReactionManager } from './github-reactions';
+import { generateFooter, hasVisorFooter } from './footer';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App or token authentication
@@ -723,8 +724,8 @@ async function handleIssueEvent(
       // Only post if there's actual content (not just empty checks)
       if (commentBody.trim()) {
         // Only add footer if not already present (to avoid duplicates)
-        if (!commentBody.includes('*Powered by [Visor](')) {
-          commentBody += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+        if (!hasVisorFooter(commentBody)) {
+          commentBody += `\n${generateFooter()}`;
         }
 
         // Post comment to the issue
@@ -780,9 +781,7 @@ async function handleIssueComment(
 
   const hasVisorMarkers =
     comment.body &&
-    (comment.body.includes('<!-- visor-comment-id:') ||
-      comment.body.includes('*Powered by [Visor](https://probelabs.com/visor)') ||
-      comment.body.includes('*Powered by [Visor](https://github.com/probelabs/visor)'));
+    (comment.body.includes('<!-- visor-comment-id:') || hasVisorFooter(comment.body));
 
   if (isVisorBot || hasVisorMarkers) {
     console.log(
@@ -876,8 +875,7 @@ async function handleIssueComment(
           `**Additions:** +${statusPrInfo.totalAdditions}\n` +
           `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
           `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
-          `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `\n${generateFooter()}`;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -893,8 +891,7 @@ async function handleIssueComment(
           `**State:** ${issue.state || 'open'}\n` +
           `**Comments:** ${issue.comments || 0}\n` +
           `**Created:** ${issue.created_at || 'unknown'}\n` +
-          `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `\n${generateFooter()}`;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -1011,7 +1008,7 @@ async function handleIssueComment(
             owner,
             repo,
             issue_number: prNumber,
-            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n${generateFooter()}`,
           });
           return;
         }

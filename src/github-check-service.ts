@@ -5,6 +5,7 @@
 import { Octokit } from '@octokit/rest';
 import { FailureConditionResult } from './types/config';
 import { ReviewIssue } from './reviewer';
+import { generateFooter } from './footer';
 
 export interface CheckRunOptions {
   owner: string;
@@ -368,11 +369,7 @@ export class GitHubCheckService {
 
     // Footer
     sections.push('');
-    sections.push('---');
-    sections.push('');
-    sections.push(
-      '*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*'
-    );
+    sections.push(generateFooter());
 
     return sections.join('\n');
   }

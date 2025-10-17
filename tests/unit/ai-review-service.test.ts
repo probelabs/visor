@@ -423,62 +423,208 @@ describe('AIReviewService', () => {
       };
     });
 
-    it('should include diffs when includeCodeContext is true', () => {
+    it('should include diffs when includeCodeContext is true', async () => {
       (mockPRInfo as any).includeCodeContext = true;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
       expect(context).not.toContain('Code diffs excluded');
     });
 
-    it('should exclude diffs when includeCodeContext is false', () => {
+    it('should exclude diffs when includeCodeContext is false', async () => {
       (mockPRInfo as any).includeCodeContext = false;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).not.toContain('<full_diff>');
       expect(context).not.toContain('--- test.ts');
       expect(context).toContain('Code diffs excluded to reduce token usage');
     });
 
-    it('should always include diffs when isPRContext is true', () => {
+    it('should always include diffs when isPRContext is true', async () => {
       (mockPRInfo as any).includeCodeContext = false;
       (mockPRInfo as any).isPRContext = true;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       // Even though includeCodeContext is false, PR context should include diffs
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
     });
 
-    it('should include diffs by default when no flags are set', () => {
+    it('should include diffs by default when no flags are set', async () => {
       // No includeCodeContext flag set - should default to true
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
     });
 
-    it('should handle incremental diff when available', () => {
+    it('should handle incremental diff when available', async () => {
       (mockPRInfo as any).includeCodeContext = true;
       (mockPRInfo as any).isIncremental = true;
       (mockPRInfo as any).commitDiff =
         '--- a/test.ts\n+++ b/test.ts\n@@ -2 +2 @@\n-line2\n+line2-modified';
 
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<commit_diff>');
       expect(context).toContain('line2-modified');
     });
 
-    it('should always include files_summary regardless of includeCodeContext', () => {
+    it('should always include files_summary regardless of includeCodeContext', async () => {
       (mockPRInfo as any).includeCodeContext = false;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<files_summary>');
       expect(context).toContain('<filename>test.ts</filename>');
       expect(context).toContain('<additions>10</additions>');
       expect(context).toContain('<deletions>5</deletions>');
+    });
+  });
+
+  describe('Comment Filtering for Code Review', () => {
+    it('should filter out previous Visor code-review comments when schema is "code-review"', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [
+          {
+            filename: 'test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            patch: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+            status: 'modified',
+          },
+        ],
+        totalAdditions: 10,
+        totalDeletions: 5,
+        fullDiff: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment from a user',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nPrevious review results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+          {
+            id: 3,
+            author: 'user2',
+            body: 'Another user comment',
+            createdAt: '2024-01-01T12:00:00Z',
+            updatedAt: '2024-01-01T12:00:00Z',
+          },
+          {
+            id: 4,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-245-review -->\n## Review Update\nUpdated review...',
+            createdAt: '2024-01-01T13:00:00Z',
+            updatedAt: '2024-01-01T13:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Pass true to indicate code-review schema
+      const context = await (service as any).formatPRContext(prInfoWithComments, true);
+
+      // Should include regular user comments
+      expect(context).toContain('Regular comment from a user');
+      expect(context).toContain('Another user comment');
+
+      // Should NOT include Visor code-review comments
+      expect(context).not.toContain('Previous review results');
+      expect(context).not.toContain('Updated review');
+      expect(context).not.toContain('pr-review-244-review');
+      expect(context).not.toContain('pr-review-245-review');
+    });
+
+    it('should include all comments when schema is not "code-review"', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nReview results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Pass false to indicate non-code-review schema
+      const context = await (service as any).formatPRContext(prInfoWithComments, false);
+
+      // Should include all comments for non-code-review checks
+      expect(context).toContain('Regular comment');
+      expect(context).toContain('Review results');
+    });
+
+    it('should include all comments when schema parameter is not provided', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nReview results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Don't pass schema parameter (undefined)
+      const context = await (service as any).formatPRContext(prInfoWithComments);
+
+      // Should include all comments when schema not specified
+      expect(context).toContain('Regular comment');
+      expect(context).toContain('Review results');
     });
   });
 });
