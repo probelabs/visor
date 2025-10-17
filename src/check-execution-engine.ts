@@ -452,12 +452,114 @@ export class CheckExecutionEngine {
       template: checkConfig.template,
       timestamp: Date.now(),
     }));
-    const enriched = { ...result, issues: enrichedIssues } as ReviewSummary;
+    let enriched = { ...result, issues: enrichedIssues } as ReviewSummary;
 
     // Track output history for loop/goto scenarios
     const enrichedWithOutput = enriched as ReviewSummary & { output?: unknown };
     if (enrichedWithOutput.output !== undefined) {
       this.trackOutputHistory(checkId, enrichedWithOutput.output);
+    }
+
+    // Handle forEach iteration for this check if it returned an array
+    if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
+      const forEachItems = enrichedWithOutput.output;
+      if (debug) {
+        log(`🔧 Debug: forEach check '${checkId}' returned ${forEachItems.length} items`);
+      }
+
+      // Store the array output with forEach metadata
+      const forEachResult = {
+        ...enriched,
+        forEachItems,
+        forEachItemResults: forEachItems.map((item, idx) => ({
+          issues: [],
+          output: item,
+        })),
+      };
+      enriched = forEachResult as ReviewSummary;
+
+      // Find checks that depend on this forEach check
+      const dependentChecks = Object.keys(config?.checks || {}).filter(name => {
+        const cfg = config?.checks?.[name];
+        return cfg?.depends_on?.includes(checkId);
+      });
+
+      if (debug && dependentChecks.length > 0) {
+        log(
+          `🔧 Debug: forEach check '${checkId}' has ${dependentChecks.length} dependents: ${dependentChecks.join(', ')}`
+        );
+      }
+
+      // Execute each dependent check once per forEach item
+      for (const depCheckName of dependentChecks) {
+        const depCheckConfig = config?.checks?.[depCheckName];
+        if (!depCheckConfig) continue;
+
+        // Skip if dependent already executed
+        if (resultsMap?.has(depCheckName)) continue;
+
+        if (debug) {
+          log(
+            `🔧 Debug: Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`
+          );
+        }
+
+        const depResults: ReviewSummary[] = [];
+
+        // Execute once per forEach item
+        for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
+          const item = forEachItems[itemIndex];
+
+          // Create isolated dependency results with this specific item
+          const itemDependencyResults = new Map(dependencyResults);
+
+          // Unwrap forEach parent to provide just this item
+          const itemResult: ReviewSummary & { output?: unknown } = {
+            issues: [],
+            output: item,
+          };
+          itemDependencyResults.set(checkId, itemResult);
+
+          // Execute the dependent check with this item's context
+          const itemContext = {
+            ...context,
+            dependencyResults: itemDependencyResults,
+          };
+
+          try {
+            const depResult = await this.executeCheckInline(depCheckName, event, itemContext);
+            depResults.push(depResult);
+          } catch (error) {
+            // Store error result for this iteration
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const errorIssue: ReviewIssue = {
+              file: '',
+              line: 0,
+              ruleId: `${depCheckName}/forEach/iteration_error`,
+              message: `forEach iteration ${itemIndex + 1} failed: ${errorMsg}`,
+              severity: 'error',
+              category: 'logic',
+            };
+            depResults.push({
+              issues: [errorIssue],
+            });
+          }
+        }
+
+        // Aggregate results from all iterations
+        const aggregatedResult: ReviewSummary = {
+          issues: depResults.flatMap(r => r.issues || []),
+        };
+
+        // Store in results map
+        resultsMap?.set(depCheckName, aggregatedResult);
+
+        if (debug) {
+          log(
+            `🔧 Debug: Completed forEach dependent '${depCheckName}' with ${depResults.length} iterations`
+          );
+        }
+      }
     }
 
     // Store result in results map
