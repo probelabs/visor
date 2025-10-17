@@ -156,7 +156,7 @@ export class AIReviewService {
     prInfo: PRInfo,
     customPrompt: string,
     schema?: string | Record<string, unknown>,
-    _checkName?: string,
+    checkName?: string,
     sessionId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
@@ -227,7 +227,7 @@ export class AIReviewService {
         prompt,
         schema,
         debugInfo,
-        _checkName,
+        checkName,
         sessionId
       );
       const processingTime = Date.now() - startTime;
@@ -429,16 +429,16 @@ export class AIReviewService {
     prInfo: PRInfo,
     customInstructions: string,
     schema?: string | Record<string, unknown>,
-    options?: { skipPRContext?: boolean }
+    options?: { skipPRContext?: boolean; checkName?: string }
   ): Promise<string> {
     // When reusing sessions, skip PR context to avoid sending duplicate diff data
     const skipPRContext = options?.skipPRContext === true;
 
-    const prContext = skipPRContext ? '' : await this.formatPRContext(prInfo);
-    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
-
     // Check if we're using the code-review schema
     const isCodeReviewSchema = schema === 'code-review';
+
+    const prContext = skipPRContext ? '' : await this.formatPRContext(prInfo, isCodeReviewSchema);
+    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Issue context - no code analysis needed
@@ -548,7 +548,7 @@ ${prContext}
   /**
    * Format PR or Issue context for the AI using XML structure
    */
-  private async formatPRContext(prInfo: PRInfo): Promise<string> {
+  private async formatPRContext(prInfo: PRInfo, isCodeReviewSchema?: boolean): Promise<string> {
     // Check if this is an issue (not a PR)
     const prContextInfo = prInfo as PRInfo & {
       isPRContext?: boolean;
@@ -681,9 +681,17 @@ ${this.escapeXml(prInfo.body)}
       ).comments;
       if (issueComments && issueComments.length > 0) {
         // Filter out the triggering comment from history if present
-        const historicalComments = triggeringComment
+        let historicalComments = triggeringComment
           ? issueComments.filter(c => c.id !== triggeringComment.id)
           : issueComments;
+
+        // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
+        // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+        if (isCodeReviewSchema) {
+          historicalComments = historicalComments.filter(
+            c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+          );
+        }
 
         if (historicalComments.length > 0) {
           context += `
@@ -817,9 +825,17 @@ ${this.escapeXml(processedFallbackDiff)}
     ).comments;
     if (prComments && prComments.length > 0) {
       // Filter out the triggering comment from history if present
-      const historicalComments = triggeringComment
+      let historicalComments = triggeringComment
         ? prComments.filter(c => c.id !== triggeringComment.id)
         : prComments;
+
+      // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
+      // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+      if (isCodeReviewSchema) {
+        historicalComments = historicalComments.filter(
+          c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+        );
+      }
 
       if (historicalComments.length > 0) {
         context += `
