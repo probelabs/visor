@@ -544,24 +544,38 @@ checks:
       env.ENABLE_FACT_VALIDATION === 'true' &&
       (outputs['issue-assistant'] || outputs['comment-assistant'])
     prompt: |
-      Extract all verifiable factual claims from the assistant's response.
+      Extract ALL verifiable factual claims from the assistant's response. Be thorough and extract every specific detail that can be verified.
 
       Response to analyze:
       ```
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
 
-      Focus on specific, verifiable claims such as:
-      - File names, paths, and locations
-      - Feature capabilities and functionality
-      - Command syntax and options
-      - Configuration settings and values
-      - API endpoints and interfaces
+      Extract EVERY claim about:
+      - File names, paths, directories, and line numbers
+      - Code locations (e.g., "line 2672", "function X", "class Y")
+      - Configuration variables, settings, and their values
+      - Feature capabilities (what is/isn't supported)
+      - Command names, syntax, options, and flags
+      - API endpoints, methods, and interfaces
+      - Environment variables and their usage
+      - Function names, parameters, return types
+      - Version numbers, dependencies, package names
+      - Default values, constants, thresholds
+      - Error messages, status codes
+      - File formats, schemas, data structures
 
-      Do not include:
-      - Opinions or recommendations
-      - General statements or descriptions
-      - Subjective assessments
+      IMPORTANT:
+      - Extract even small details - if the assistant mentions a specific line number, config value, or file name, extract it
+      - Each claim should be atomic (one fact per object)
+      - If the assistant says "X is Y", extract it as a fact
+      - If the assistant points to a specific location, extract it
+      - Better to extract too many facts than too few
+
+      Do NOT extract:
+      - Recommendations or suggestions (e.g., "you should change X")
+      - Opinions or subjective assessments
+      - Vague statements without specific details
 
     forEach: true
 
