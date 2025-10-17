@@ -366,6 +366,20 @@ checks:
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
+        {% if memory.has("fact_validation_issues", "fact-validation") %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
+        {% for issue in issues %}
+        - **{{ issue.claim }}**: {{ issue.evidence }}
+          {% if issue.correction %}
+          ✏️  Correction: {{ issue.correction }}
+          {% endif %}
+        {% endfor %}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
+
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
         - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
         - `intent`: must be "issue_triage" for this flow.
@@ -401,6 +415,20 @@ checks:
     command: "visor"
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
+
+        {% if memory.has("fact_validation_issues", "fact-validation") %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
+        {% for issue in issues %}
+        - **{{ issue.claim }}**: {{ issue.evidence }}
+          {% if issue.correction %}
+          ✏️  Correction: {{ issue.correction }}
+          {% endif %}
+        {% endfor %}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
 
         Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
         - `text`: a concise, helpful markdown reply to the latest comment.
@@ -604,54 +632,6 @@ checks:
           ? 'All facts validated successfully ✅'
           : 'Found ' + invalid.length + ' invalid and ' + lowConfidence.length + ' low-confidence facts ⚠️'
       };
-
-  # Post verified response if all facts are valid
-  post-verified-response:
-    type: github
-    tags: [github]
-    depends_on: [extract-facts]
-    on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true' && memory.get('all_facts_valid', 'fact-validation') === true"
-    op: comment.create
-    body: |
-      {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
-
-  # Post warning if validation failed after retries
-  post-unverified-warning:
-    type: github
-    tags: [github]
-    depends_on: [extract-facts]
-    on: [issue_opened, issue_comment]
-    if: |
-      env.ENABLE_FACT_VALIDATION === 'true' &&
-      memory.get('all_facts_valid', 'fact-validation') === false &&
-      memory.get('fact_validation_attempt', 'fact-validation') >= 1
-    op: comment.create
-    body: |
-      ⚠️  **Fact Validation Warning**
-
-      I attempted to respond to your {{ event.name == 'issue_opened' ? 'issue' : 'comment' }},
-      but could not verify all factual claims after {{ "fact_validation_attempt" | memory_get: "fact-validation" }} validation attempts.
-
-      **Issues Found:**
-      {% assign invalid = "invalid_facts" | memory_get: "fact-validation" %}
-      {% for fact in invalid %}
-      - **{{ fact.claim }}**: {{ fact.evidence }}
-        {% if fact.correction %}
-        - ✏️  Correction: {{ fact.correction }}
-        {% endif %}
-      {% endfor %}
-
-      {% assign lowConf = "low_confidence_facts" | memory_get: "fact-validation" %}
-      {% if lowConf.size > 0 %}
-
-      **Low Confidence Facts:**
-      {% for fact in lowConf %}
-      - **{{ fact.claim }}**: {{ fact.evidence }}
-      {% endfor %}
-      {% endif %}
-
-      **Recommendation:** A human team member should review this to provide accurate information.
 
   # Retrigger noop removed — comment-assistant schedules overview directly
 
