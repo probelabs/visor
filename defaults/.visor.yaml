@@ -370,6 +370,11 @@ checks:
         {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
+        <previous_response>
+        {{ outputs.history['issue-assistant'][-1].text }}
+        </previous_response>
+
+        **Validation Errors Found:**
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
         {% for issue in issues %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
@@ -423,6 +428,11 @@ checks:
         {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
+        <previous_response>
+        {{ outputs.history['comment-assistant'][-1].text }}
+        </previous_response>
+
+        **Validation Errors Found:**
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
         {% for issue in issues %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
@@ -541,16 +551,17 @@ checks:
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
 
-      Return a JSON array of fact objects. Each fact should have:
-      - id: unique identifier (fact-1, fact-2, etc.)
-      - category: type of claim (Configuration, Feature, Documentation, etc.)
-      - claim: the exact factual statement
-      - verifiable: true if this can be verified against the codebase
+      Focus on specific, verifiable claims such as:
+      - File names, paths, and locations
+      - Feature capabilities and functionality
+      - Command syntax and options
+      - Configuration settings and values
+      - API endpoints and interfaces
 
-      Only include claims that are specific and verifiable (file names, feature capabilities, command syntax, etc.).
-      Do not include opinions, recommendations, or general statements.
-
-      Return ONLY the JSON array, no other text.
+      Do not include:
+      - Opinions or recommendations
+      - General statements or descriptions
+      - Subjective assessments
 
     forEach: true
 
@@ -613,18 +624,14 @@ checks:
 
       **Claim:** {{ outputs['extract-facts'].claim }}
       **Category:** {{ outputs['extract-facts'].category }}
+      **Fact ID:** {{ outputs['extract-facts'].id }}
 
       Use code search and file reading tools to verify if this claim is accurate.
 
-      Return a JSON object with:
-      - fact_id: "{{ outputs['extract-facts'].id }}"
-      - claim: the original claim
-      - is_valid: true/false
-      - confidence: "high", "medium", or "low"
-      - evidence: what you found in the codebase
-      - correction: if invalid, provide the correct information
-
-      Return ONLY the JSON object, no other text.
+      Provide:
+      - Evidence of what you found in the codebase
+      - Confidence level (high/medium/low) in your validation
+      - If the claim is incorrect, provide the accurate information as a correction
 
   # Aggregate all validation results
   aggregate-validations:
