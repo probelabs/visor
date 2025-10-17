@@ -578,7 +578,6 @@ export class FailureConditionEvaluator {
         memory: memoryAccessor,
         // Legacy compatibility variables
         issues,
-        suggestions,
         metadata,
         criticalIssues,
         errorIssues,
