@@ -155,14 +155,14 @@ export class AIReviewService {
     prInfo: PRInfo,
     customPrompt: string,
     schema?: string | Record<string, unknown>,
-    _checkName?: string,
+    checkName?: string,
     sessionId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, { checkName });
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -226,7 +226,7 @@ export class AIReviewService {
         prompt,
         schema,
         debugInfo,
-        _checkName,
+        checkName,
         sessionId
       );
       const processingTime = Date.now() - startTime;
@@ -295,6 +295,7 @@ export class AIReviewService {
     // When reusing session, skip PR context since it's already in the conversation history
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
       skipPRContext: true,
+      checkName,
     });
 
     // Determine which agent to use based on session mode
@@ -428,12 +429,12 @@ export class AIReviewService {
     prInfo: PRInfo,
     customInstructions: string,
     schema?: string | Record<string, unknown>,
-    options?: { skipPRContext?: boolean }
+    options?: { skipPRContext?: boolean; checkName?: string }
   ): Promise<string> {
     // When reusing sessions, skip PR context to avoid sending duplicate diff data
     const skipPRContext = options?.skipPRContext === true;
 
-    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo);
+    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo, options?.checkName);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     // Check if we're using the code-review schema
@@ -547,7 +548,7 @@ ${prContext}
   /**
    * Format PR or Issue context for the AI using XML structure
    */
-  private formatPRContext(prInfo: PRInfo): string {
+  private formatPRContext(prInfo: PRInfo, checkName?: string): string {
     // Check if this is an issue (not a PR)
     const prContextInfo = prInfo as PRInfo & {
       isPRContext?: boolean;
@@ -680,9 +681,17 @@ ${this.escapeXml(prInfo.body)}
       ).comments;
       if (issueComments && issueComments.length > 0) {
         // Filter out the triggering comment from history if present
-        const historicalComments = triggeringComment
+        let historicalComments = triggeringComment
           ? issueComments.filter(c => c.id !== triggeringComment.id)
           : issueComments;
+
+        // For code-review checks, filter out previous Visor code-review comments to avoid self-bias
+        // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+        if (checkName && checkName.includes('code-review')) {
+          historicalComments = historicalComments.filter(
+            c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+          );
+        }
 
         if (historicalComments.length > 0) {
           context += `
@@ -808,9 +817,17 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
     ).comments;
     if (prComments && prComments.length > 0) {
       // Filter out the triggering comment from history if present
-      const historicalComments = triggeringComment
+      let historicalComments = triggeringComment
         ? prComments.filter(c => c.id !== triggeringComment.id)
         : prComments;
+
+      // For code-review checks, filter out previous Visor code-review comments to avoid self-bias
+      // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+      if (checkName && checkName.includes('code-review')) {
+        historicalComments = historicalComments.filter(
+          c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+        );
+      }
 
       if (historicalComments.length > 0) {
         context += `
