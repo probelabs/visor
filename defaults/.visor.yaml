@@ -408,7 +408,7 @@ checks:
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
     on_success:
-      run: [init-fact-validation]
+      goto: init-fact-validation
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -450,13 +450,24 @@ checks:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      run: [init-fact-validation]
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
-      goto_event: pr_updated
+        const enableFactValidation = env.ENABLE_FACT_VALIDATION === 'true';
+
+        // Priority 1: Fact validation (if enabled)
+        if (enableFactValidation) {
+          return { check: 'init-fact-validation', event: 'issue_comment' };
+        }
+
+        // Priority 2: Re-trigger if requested
+        if (isComment && allowed && intent === 'comment_retrigger') {
+          return { check: 'overview', event: 'pr_updated' };
+        }
+
+        // No routing
+        return null;
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
