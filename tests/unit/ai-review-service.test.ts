@@ -483,7 +483,7 @@ describe('AIReviewService', () => {
   });
 
   describe('Comment Filtering for Code Review', () => {
-    it('should filter out previous Visor code-review comments when check name includes "code-review"', () => {
+    it('should filter out previous Visor code-review comments when schema is "code-review"', () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -537,7 +537,8 @@ describe('AIReviewService', () => {
       };
 
       const service = new AIReviewService();
-      const context = (service as any).formatPRContext(prInfoWithComments, 'code-review');
+      // Pass true to indicate code-review schema
+      const context = (service as any).formatPRContext(prInfoWithComments, true);
 
       // Should include regular user comments
       expect(context).toContain('Regular comment from a user');
@@ -550,7 +551,7 @@ describe('AIReviewService', () => {
       expect(context).not.toContain('pr-review-245-review');
     });
 
-    it('should include all comments when check name does not include "code-review"', () => {
+    it('should include all comments when schema is not "code-review"', () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -580,14 +581,15 @@ describe('AIReviewService', () => {
       };
 
       const service = new AIReviewService();
-      const context = (service as any).formatPRContext(prInfoWithComments, 'security-check');
+      // Pass false to indicate non-code-review schema
+      const context = (service as any).formatPRContext(prInfoWithComments, false);
 
       // Should include all comments for non-code-review checks
       expect(context).toContain('Regular comment');
       expect(context).toContain('Review results');
     });
 
-    it('should include all comments when no check name is provided', () => {
+    it('should include all comments when schema parameter is not provided', () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -617,9 +619,10 @@ describe('AIReviewService', () => {
       };
 
       const service = new AIReviewService();
+      // Don't pass schema parameter (undefined)
       const context = (service as any).formatPRContext(prInfoWithComments);
 
-      // Should include all comments when no check name specified
+      // Should include all comments when schema not specified
       expect(context).toContain('Regular comment');
       expect(context).toContain('Review results');
     });

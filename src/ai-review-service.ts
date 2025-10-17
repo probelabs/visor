@@ -162,7 +162,7 @@ export class AIReviewService {
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, { checkName });
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -295,7 +295,6 @@ export class AIReviewService {
     // When reusing session, skip PR context since it's already in the conversation history
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
       skipPRContext: true,
-      checkName,
     });
 
     // Determine which agent to use based on session mode
@@ -434,11 +433,11 @@ export class AIReviewService {
     // When reusing sessions, skip PR context to avoid sending duplicate diff data
     const skipPRContext = options?.skipPRContext === true;
 
-    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo, options?.checkName);
-    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
-
     // Check if we're using the code-review schema
     const isCodeReviewSchema = schema === 'code-review';
+
+    const prContext = skipPRContext ? '' : this.formatPRContext(prInfo, isCodeReviewSchema);
+    const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Issue context - no code analysis needed
@@ -548,7 +547,7 @@ ${prContext}
   /**
    * Format PR or Issue context for the AI using XML structure
    */
-  private formatPRContext(prInfo: PRInfo, checkName?: string): string {
+  private formatPRContext(prInfo: PRInfo, isCodeReviewSchema?: boolean): string {
     // Check if this is an issue (not a PR)
     const prContextInfo = prInfo as PRInfo & {
       isPRContext?: boolean;
@@ -685,9 +684,9 @@ ${this.escapeXml(prInfo.body)}
           ? issueComments.filter(c => c.id !== triggeringComment.id)
           : issueComments;
 
-        // For code-review checks, filter out previous Visor code-review comments to avoid self-bias
+        // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
         // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
-        if (checkName && checkName.includes('code-review')) {
+        if (isCodeReviewSchema) {
           historicalComments = historicalComments.filter(
             c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
           );
@@ -821,9 +820,9 @@ ${prInfo.fullDiff ? this.escapeXml(prInfo.fullDiff) : ''}
         ? prComments.filter(c => c.id !== triggeringComment.id)
         : prComments;
 
-      // For code-review checks, filter out previous Visor code-review comments to avoid self-bias
+      // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
       // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
-      if (checkName && checkName.includes('code-review')) {
+      if (isCodeReviewSchema) {
         historicalComments = historicalComments.filter(
           c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
         );
