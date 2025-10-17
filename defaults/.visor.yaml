@@ -310,9 +310,13 @@ checks:
 
         Response style:
         - Professional and welcoming
-        - Actionable guidance and clear next steps
-        - Ask clarifying questions when information is missing
-        - Use markdown formatting; include code snippets where useful
+        - Start by acknowledging what you understand from the issue report
+        - Clearly state what you're confident about based on the information provided
+        - Identify what is unclear or missing, and explicitly ask follow-up questions to help with debugging
+        - When information is incomplete, ask specific questions that would help diagnose the issue
+        - Provide actionable guidance and clear next steps
+        - Use natural markdown formatting; include code snippets where useful
+        - Be honest about what you know and what you don't know
         - NEVER make promises about timelines, release dates, or team commitments
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
