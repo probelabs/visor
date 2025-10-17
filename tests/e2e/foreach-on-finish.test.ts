@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { execSync, execFileSync } from 'child_process';
+import { execSync } from 'child_process';
 
 /**
  * E2E Test: forEach with on_finish hook
@@ -25,7 +25,7 @@ describe('E2E: forEach with on_finish', () => {
     if (originalCwd) {
       try {
         process.chdir(originalCwd);
-      } catch (e) {
+      } catch {
         // Ignore errors
       }
     }
@@ -57,10 +57,7 @@ describe('E2E: forEach with on_finish', () => {
       shell: true,
     };
     try {
-      const out = execSync(
-        shellCmd,
-        finalOptions
-      ) as unknown as string | Buffer;
+      const out = execSync(shellCmd, finalOptions) as unknown as string | Buffer;
       return typeof out === 'string' ? out : (out as Buffer).toString('utf-8');
     } catch (error: any) {
       // When command fails, still return output

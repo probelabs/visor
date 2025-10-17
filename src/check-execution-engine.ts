@@ -300,8 +300,7 @@ export class CheckExecutionEngine {
   ): Promise<ReviewSummary> {
     const { config, prInfo, resultsMap, dependencyResults, sessionInfo, debug, eventOverride } =
       context;
-    const log = (msg: string) =>
-      (config?.output?.pr_comment ? console.error : console.log)(msg);
+    const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
 
     // Find the check configuration
     const checkConfig = config?.checks?.[checkId];
@@ -479,8 +478,7 @@ export class CheckExecutionEngine {
     prInfo: PRInfo,
     debug: boolean
   ): Promise<void> {
-    const log = (msg: string) =>
-      (config?.output?.pr_comment ? console.error : console.log)(msg);
+    const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
 
     // Find all checks with forEach: true and on_finish configured
     const forEachChecksWithOnFinish: Array<{
@@ -504,9 +502,7 @@ export class CheckExecutionEngine {
     }
 
     if (debug) {
-      log(
-        `🎯 Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`
-      );
+      log(`🎯 Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
     }
 
     // Process each forEach check's on_finish hook
@@ -521,8 +517,7 @@ export class CheckExecutionEngine {
         // Skip if the forEach check returned empty array
         const forEachItems = forEachResult.forEachItems || [];
         if (forEachItems.length === 0) {
-          if (debug)
-            log(`⏭  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
+          if (debug) log(`⏭  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
           continue;
         }
 
@@ -537,10 +532,7 @@ export class CheckExecutionEngine {
         // Verify all dependents have completed
         const allDependentsCompleted = dependents.every(dep => results.has(dep));
         if (!allDependentsCompleted) {
-          if (debug)
-            log(
-              `⚠️ Not all dependents of "${checkName}" completed, skipping on_finish`
-            );
+          if (debug) log(`⚠️ Not all dependents of "${checkName}" completed, skipping on_finish`);
           continue;
         }
 
@@ -561,9 +553,8 @@ export class CheckExecutionEngine {
               ).length
             : forEachItems.length,
           failed: forEachResult.forEachItemResults
-            ? forEachResult.forEachItemResults.filter(
-                r => r && r.issues && r.issues.length > 0
-              ).length
+            ? forEachResult.forEachItemResults.filter(r => r && r.issues && r.issues.length > 0)
+                .length
             : 0,
           items: forEachItems,
         };
@@ -624,7 +615,9 @@ export class CheckExecutionEngine {
 
         // Execute on_finish.run checks sequentially
         if (onFinish.run && onFinish.run.length > 0) {
-          logger.info(`▶ on_finish.run: executing [${onFinish.run.join(', ')}] for "${checkName}"`);
+          logger.info(
+            `▶ on_finish.run: executing [${onFinish.run.join(', ')}] for "${checkName}"`
+          );
 
           try {
             for (const runCheckId of onFinish.run) {
@@ -692,7 +685,9 @@ export class CheckExecutionEngine {
               log(`🔧 Debug: on_finish.goto_js evaluated → ${this.redact(gotoTarget)}`);
             }
 
-            logger.info(`✓ on_finish.goto_js: evaluated to '${gotoTarget || 'null'}' for "${checkName}"`);
+            logger.info(
+              `✓ on_finish.goto_js: evaluated to '${gotoTarget || 'null'}' for "${checkName}"`
+            );
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             logger.error(`✗ on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
@@ -740,7 +735,9 @@ export class CheckExecutionEngine {
             logger.info(`  Event override: ${onFinish.goto_event || '(none)'}`);
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-            logger.error(`✗ on_finish: routing failed for "${checkName}" → "${gotoTarget}": ${errorMsg}`);
+            logger.error(
+              `✗ on_finish: routing failed for "${checkName}" → "${gotoTarget}": ${errorMsg}`
+            );
             if (error instanceof Error && error.stack) {
               logger.debug(`Stack trace: ${error.stack}`);
             }
@@ -4503,13 +4500,7 @@ export class CheckExecutionEngine {
 
     // Handle on_finish hooks for forEach checks after ALL dependents complete
     if (!shouldStopExecution) {
-      await this.handleOnFinishHooks(
-        config,
-        dependencyGraph,
-        results,
-        prInfo,
-        debug || false
-      );
+      await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
     }
 
     // Cleanup sessions BEFORE printing summary to avoid mixing debug logs with table output
