@@ -513,7 +513,7 @@ checks:
     type: ai
     group: fact-validation
     schema: plain
-    depends_on: [init-fact-validation]
+    depends_on: [init-fact-validation, issue-assistant, comment-assistant]
     on: [issue_opened, issue_comment]
     if: |
       env.ENABLE_FACT_VALIDATION === 'true' &&
