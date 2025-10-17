@@ -2813,21 +2813,44 @@ export class CheckExecutionEngine {
     ) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
 
-      // Check if any checks in this level require session reuse - if so, force sequential execution
+      // Check for session reuse conflicts - only force sequential execution when there are actual conflicts
       const checksInLevel = executionGroup.parallel;
-      const hasSessionReuseInLevel = checksInLevel.some(checkName =>
-        sessionReuseChecks.has(checkName)
-      );
+
+      // Group checks by their session parent
+      const sessionReuseGroups = new Map<string, string[]>();
+      checksInLevel.forEach(checkName => {
+        if (sessionReuseChecks.has(checkName)) {
+          const parentCheckName = sessionProviders.get(checkName);
+          if (parentCheckName) {
+            if (!sessionReuseGroups.has(parentCheckName)) {
+              sessionReuseGroups.set(parentCheckName, []);
+            }
+            sessionReuseGroups.get(parentCheckName)!.push(checkName);
+          }
+        }
+      });
+
+      // Only force sequential execution if multiple checks share the same session parent
+      const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values())
+        .some(group => group.length > 1);
 
       let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
-      if (hasSessionReuseInLevel) {
-        // Force sequential execution when session reuse is involved
+      if (hasConflictingSessionReuse) {
+        // Force sequential execution when there are actual session conflicts
         actualParallelism = 1;
         if (debug) {
+          const conflictingGroups = Array.from(sessionReuseGroups.entries())
+            .filter(([_, checks]) => checks.length > 1)
+            .map(([parent, checks]) => `${parent} -> [${checks.join(', ')}]`)
+            .join('; ');
           log(
-            `🔄 Debug: Level ${executionGroup.level} contains session reuse checks - forcing sequential execution (parallelism: 1)`
+            `🔄 Debug: Level ${executionGroup.level} has session conflicts (${conflictingGroups}) - forcing sequential execution (parallelism: 1)`
           );
         }
+      } else if (sessionReuseGroups.size > 0 && debug) {
+        log(
+          `✅ Debug: Level ${executionGroup.level} has session reuse but no conflicts - allowing parallel execution`
+        );
       }
 
       if (debug) {
