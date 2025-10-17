@@ -60,7 +60,6 @@ The context object available to all JavaScript expressions (evaluated in a secur
 {
   // Check results
   issues: Issue[],           // Array of found issues
-  suggestions: string[],     // Array of suggestions
 
   // Aggregated metadata
   metadata: {
@@ -90,9 +89,6 @@ The context object available to all JavaScript expressions (evaluated in a secur
 - `hasIssueWith(issues, field, value)` - Check if any issue has field matching value
 - `countIssues(issues, field, value)` - Count issues with field matching value
 - `hasFileWith(issues, text)` - Check if any issue file path contains text
-
-### Suggestion Analysis
-- `hasSuggestion(suggestions, text)` - Check if any suggestion contains text
 
 ## Example Use Cases
 
