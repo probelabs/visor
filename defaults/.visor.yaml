@@ -510,7 +510,24 @@ checks:
   extract-facts:
     type: ai
     group: fact-validation
-    schema: plain
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique identifier for the fact (e.g., fact-1, fact-2)
+          category:
+            type: string
+            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
+          claim:
+            type: string
+            description: The exact factual statement being made
+          verifiable:
+            type: boolean
+            description: Whether this claim can be verified against the codebase
+        required: [id, category, claim, verifiable]
     depends_on: [init-fact-validation]
     on: [issue_opened, issue_comment]
     if: |
@@ -565,7 +582,29 @@ checks:
   validate-fact:
     type: ai
     group: fact-validation
-    schema: plain
+    schema:
+      type: object
+      properties:
+        fact_id:
+          type: string
+          description: ID of the fact being validated
+        claim:
+          type: string
+          description: The original claim being validated
+        is_valid:
+          type: boolean
+          description: Whether the claim is accurate
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence level in the validation
+        evidence:
+          type: string
+          description: Evidence found in the codebase supporting the validation
+        correction:
+          type: string
+          description: If invalid, the correct information (optional)
+      required: [fact_id, claim, is_valid, confidence, evidence]
     depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
