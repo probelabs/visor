@@ -2831,8 +2831,9 @@ export class CheckExecutionEngine {
       });
 
       // Only force sequential execution if multiple checks share the same session parent
-      const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values())
-        .some(group => group.length > 1);
+      const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values()).some(
+        group => group.length > 1
+      );
 
       let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
       if (hasConflictingSessionReuse) {
