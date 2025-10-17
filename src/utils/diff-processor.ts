@@ -10,21 +10,42 @@ export async function processDiffWithOutline(diffContent: string): Promise<strin
     return diffContent;
   }
 
+  // Temporarily disable outline-diff processing to avoid CI issues
+  // TODO: Re-enable once probe SDK binary caching issue is fixed
+  // See PROBE_BINARY_CACHE_ISSUE.md for details
+  if (process.env.ENABLE_OUTLINE_DIFF !== '1') {
+    return diffContent;
+  }
+
   try {
     // Set PROBE_PATH to use the bundled binary with outline-diff support
     // The SDK by default may download an older binary that doesn't support outline-diff
     const originalProbePath = process.env.PROBE_PATH;
-    const probeBinaryPath = path.join(
-      __dirname,
-      '../..',
-      'node_modules/@probelabs/probe/bin/probe-binary'
-    );
+
+    // Try multiple possible locations for the probe binary
+    // When bundled with ncc, __dirname may not be reliable
+    const fs = require('fs');
+    const possiblePaths = [
+      // Relative to current working directory (most common in production)
+      path.join(process.cwd(), 'node_modules/@probelabs/probe/bin/probe-binary'),
+      // Relative to __dirname (for unbundled development)
+      path.join(__dirname, '../..', 'node_modules/@probelabs/probe/bin/probe-binary'),
+      // Relative to dist directory (for bundled CLI)
+      path.join(__dirname, 'node_modules/@probelabs/probe/bin/probe-binary'),
+    ];
+
+    let probeBinaryPath: string | undefined;
+    for (const candidatePath of possiblePaths) {
+      if (fs.existsSync(candidatePath)) {
+        probeBinaryPath = candidatePath;
+        break;
+      }
+    }
 
     // Only process if binary exists, otherwise fall back to original diff
-    const fs = require('fs');
-    if (!fs.existsSync(probeBinaryPath)) {
+    if (!probeBinaryPath) {
       if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-        console.error('Probe binary not found at:', probeBinaryPath);
+        console.error('Probe binary not found. Tried:', possiblePaths);
       }
       return diffContent;
     }
@@ -33,11 +54,18 @@ export async function processDiffWithOutline(diffContent: string): Promise<strin
 
     // Use extract with content parameter (can be string or Buffer)
     // The TypeScript types haven't been updated yet, but the runtime supports it
-    const result = await (extract as any)({
+    // Add timeout to avoid hanging
+    const extractPromise = (extract as any)({
       content: diffContent,
       format: 'outline-diff',
       allowTests: true, // Allow test files and test code blocks in extraction results
     });
+
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Extract timeout after 30s')), 30000);
+    });
+
+    const result = await Promise.race([extractPromise, timeoutPromise]);
 
     // Restore original PROBE_PATH
     if (originalProbePath !== undefined) {
