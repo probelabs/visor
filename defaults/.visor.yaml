@@ -544,38 +544,36 @@ checks:
       env.ENABLE_FACT_VALIDATION === 'true' &&
       (outputs['issue-assistant'] || outputs['comment-assistant'])
     prompt: |
-      Extract ALL verifiable factual claims from the assistant's response. Be thorough and extract every specific detail that can be verified.
+      Extract all verifiable factual claims from the assistant's response. Focus on concepts, features, and specific assertions that can be verified against the codebase.
 
       Response to analyze:
       ```
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
 
-      Extract EVERY claim about:
-      - File names, paths, directories, and line numbers
-      - Code locations (e.g., "line 2672", "function X", "class Y")
-      - Configuration variables, settings, and their values
-      - Feature capabilities (what is/isn't supported)
-      - Command names, syntax, options, and flags
-      - API endpoints, methods, and interfaces
-      - Environment variables and their usage
-      - Function names, parameters, return types
-      - Version numbers, dependencies, package names
-      - Default values, constants, thresholds
-      - Error messages, status codes
-      - File formats, schemas, data structures
+      Extract claims about:
+      - Configuration variables and their values (e.g., "max_parallelism is set to 4")
+      - Feature capabilities (what is/isn't supported, how features work)
+      - File paths and locations mentioned
+      - Function/class names and their behavior
+      - Command syntax and available options
+      - API endpoints and their methods
+      - Environment variables and usage
+      - Default values and constants
+      - Data structures and schemas
+      - Dependencies and version requirements
 
-      IMPORTANT:
-      - Extract even small details - if the assistant mentions a specific line number, config value, or file name, extract it
-      - Each claim should be atomic (one fact per object)
-      - If the assistant says "X is Y", extract it as a fact
-      - If the assistant points to a specific location, extract it
-      - Better to extract too many facts than too few
+      Guidelines:
+      - Focus on meaningful concepts, not every minor detail
+      - Group related information (e.g., "default is 3 at lines 2672 and 4589" = one fact)
+      - Each fact should represent a testable assertion about the code
+      - Extract claims about what exists, what values are set, how things work
+      - Err on the side of extracting more rather than less
 
       Do NOT extract:
-      - Recommendations or suggestions (e.g., "you should change X")
-      - Opinions or subjective assessments
-      - Vague statements without specific details
+      - Recommendations (e.g., "you should change X to Y")
+      - Opinions or preferences
+      - General explanations without specific claims
 
     forEach: true
 
