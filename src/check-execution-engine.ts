@@ -539,9 +539,12 @@ export class CheckExecutionEngine {
           itemDependencyResults.set(checkId, itemResult);
 
           // Execute the dependent check with this item's context
+          // IMPORTANT: Pass itemDependencyResults as BOTH dependencyResults AND resultsMap
+          // so the unwrapped forEach item is used everywhere
           const itemContext = {
             ...context,
             dependencyResults: itemDependencyResults,
+            resultsMap: itemDependencyResults, // Override resultsMap with per-item context
           };
 
           try {
