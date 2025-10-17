@@ -407,6 +407,8 @@ checks:
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
+    on_success:
+      run: [init-fact-validation]
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -448,6 +450,7 @@ checks:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
+      run: [init-fact-validation]
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
@@ -513,7 +516,7 @@ checks:
     type: ai
     group: fact-validation
     schema: plain
-    depends_on: [init-fact-validation, issue-assistant, comment-assistant]
+    depends_on: [init-fact-validation]
     on: [issue_opened, issue_comment]
     if: |
       env.ENABLE_FACT_VALIDATION === 'true' &&
