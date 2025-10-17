@@ -9,7 +9,7 @@ class CustomCheckProvider {
   name = 'custom';
   async run(input) {
     // ... implement your logic
-    return { issues: [], suggestions: [] };
+    return { issues: [] };
   }
 }
 ```

@@ -75,9 +75,6 @@ failure_conditions:
   # Multiple file types analysis
   critical_files_affected: "hasFileWith(issues, '.ts') || hasFileWith(issues, '.js') && hasIssueWith(issues, 'severity', 'critical')"
 
-  # Suggestion-based conditions
-  missing_tests: "hasSuggestion(suggestions, 'test coverage')"
-
   # Complex metadata-based conditions
   large_change_with_issues: "metadata.totalIssues > 5 && debug && debug.processingTime > 30000"
 

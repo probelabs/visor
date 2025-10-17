@@ -65,9 +65,6 @@ export interface FailureConditionContext {
       replacement?: string;
     }>;
 
-    /** Array of suggestions from the check */
-    suggestions?: string[];
-
     /** Any additional fields provided by the check/schema */
     [key: string]: unknown;
   };

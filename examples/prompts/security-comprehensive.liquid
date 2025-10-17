@@ -54,10 +54,6 @@ Previous security scan found {{ outputs.security.totalIssues }} issues:
 {% endfor %}
 {% endif %}
 
-### Previous Recommendations:
-{% for suggestion in outputs.security.suggestions %}
-- {{ suggestion }}
-{% endfor %}
 {% else %}
 No previous security analysis available - performing fresh security review.
 {% endif %}

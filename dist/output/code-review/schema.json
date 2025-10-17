@@ -56,29 +56,6 @@
           }
         }
       }
-    },
-    "suggestions": {
-      "type": "array",
-      "description": "General suggestions for the entire changeset",
-      "items": {
-        "type": "string"
-      }
-    },
-    "metrics": {
-      "type": "object",
-      "description": "Optional metrics about the review",
-      "properties": {
-        "filesAnalyzed": {
-          "type": "integer"
-        },
-        "linesAnalyzed": {
-          "type": "integer"
-        },
-        "executionTime": {
-          "type": "number",
-          "description": "Time in milliseconds"
-        }
-      }
     }
   }
 }
