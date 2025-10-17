@@ -483,9 +483,11 @@ checks:
     type: ai
     group: fact-validation
     schema: plain
-    depends_on: [issue-assistant, comment-assistant, init-fact-validation]
+    depends_on: [init-fact-validation]
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    if: |
+      env.ENABLE_FACT_VALIDATION === 'true' &&
+      (outputs['issue-assistant'] || outputs['comment-assistant'])
     prompt: |
       Extract all verifiable factual claims from the assistant's response.
 
@@ -505,7 +507,6 @@ checks:
 
       Return ONLY the JSON array, no other text.
 
-    output_format: json
     forEach: true
 
     # After all facts are validated, aggregate results and decide next action
@@ -530,7 +531,7 @@ checks:
         log('🔄 Facts invalid, retrying assistant with correction context');
         memory.increment('fact_validation_attempt', 1, 'fact-validation');
         return 'extract-facts';
-      goto_event: "{{ event.name }}"
+      goto_event: issue_comment
 
   # Validate each extracted fact
   validate-fact:
@@ -557,8 +558,6 @@ checks:
       - correction: if invalid, provide the correct information
 
       Return ONLY the JSON object, no other text.
-
-    output_format: json
 
   # Aggregate all validation results
   aggregate-validations:
