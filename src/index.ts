@@ -724,7 +724,7 @@ async function handleIssueEvent(
       if (commentBody.trim()) {
         // Only add footer if not already present (to avoid duplicates)
         if (!commentBody.includes('*Powered by [Visor](')) {
-          commentBody += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          commentBody += `\n---\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*\n\n💡 **TIP:** You can chat with Visor using \`/visor ask <your question>\``;
         }
 
         // Post comment to the issue
@@ -877,7 +877,8 @@ async function handleIssueComment(
           `**Deletions:** -${statusPrInfo.totalDeletions}\n` +
           `**Base:** ${statusPrInfo.base} → **Head:** ${statusPrInfo.head}\n\n` +
           `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*\n\n` +
+          `💡 **TIP:** You can chat with Visor using \`/visor ask <your question>\``;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -894,7 +895,8 @@ async function handleIssueComment(
           `**Comments:** ${issue.comments || 0}\n` +
           `**Created:** ${issue.created_at || 'unknown'}\n` +
           `\n---\n\n` +
-          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+          `*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*\n\n` +
+          `💡 **TIP:** You can chat with Visor using \`/visor ask <your question>\``;
 
         await octokit.rest.issues.createComment({
           owner,
@@ -1011,7 +1013,7 @@ async function handleIssueComment(
             owner,
             repo,
             issue_number: prNumber,
-            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`,
+            body: `⚠️ No checks are configured to run for ${isPullRequest ? 'PR' : 'issue'} comments with command /${command.type}\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*\n\n💡 **TIP:** You can chat with Visor using \`/visor ask <your question>\``,
           });
           return;
         }

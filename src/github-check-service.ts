@@ -373,6 +373,8 @@ export class GitHubCheckService {
     sections.push(
       '*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*'
     );
+    sections.push('');
+    sections.push('💡 **TIP:** You can chat with Visor using `/visor ask <your question>`');
 
     return sections.join('\n');
   }
