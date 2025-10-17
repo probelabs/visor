@@ -481,4 +481,150 @@ describe('AIReviewService', () => {
       expect(context).toContain('<deletions>5</deletions>');
     });
   });
+
+  describe('Comment Filtering for Code Review', () => {
+    it('should filter out previous Visor code-review comments when schema is "code-review"', () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [
+          {
+            filename: 'test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            patch: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+            status: 'modified',
+          },
+        ],
+        totalAdditions: 10,
+        totalDeletions: 5,
+        fullDiff: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment from a user',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nPrevious review results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+          {
+            id: 3,
+            author: 'user2',
+            body: 'Another user comment',
+            createdAt: '2024-01-01T12:00:00Z',
+            updatedAt: '2024-01-01T12:00:00Z',
+          },
+          {
+            id: 4,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-245-review -->\n## Review Update\nUpdated review...',
+            createdAt: '2024-01-01T13:00:00Z',
+            updatedAt: '2024-01-01T13:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Pass true to indicate code-review schema
+      const context = (service as any).formatPRContext(prInfoWithComments, true);
+
+      // Should include regular user comments
+      expect(context).toContain('Regular comment from a user');
+      expect(context).toContain('Another user comment');
+
+      // Should NOT include Visor code-review comments
+      expect(context).not.toContain('Previous review results');
+      expect(context).not.toContain('Updated review');
+      expect(context).not.toContain('pr-review-244-review');
+      expect(context).not.toContain('pr-review-245-review');
+    });
+
+    it('should include all comments when schema is not "code-review"', () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nReview results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Pass false to indicate non-code-review schema
+      const context = (service as any).formatPRContext(prInfoWithComments, false);
+
+      // Should include all comments for non-code-review checks
+      expect(context).toContain('Regular comment');
+      expect(context).toContain('Review results');
+    });
+
+    it('should include all comments when schema parameter is not provided', () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Code Review\nReview results...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Don't pass schema parameter (undefined)
+      const context = (service as any).formatPRContext(prInfoWithComments);
+
+      // Should include all comments when schema not specified
+      expect(context).toContain('Regular comment');
+      expect(context).toContain('Review results');
+    });
+  });
 });
