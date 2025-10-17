@@ -366,7 +366,8 @@ checks:
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
-        {% if memory.has("fact_validation_issues", "fact-validation") %}
+        {% assign has_issues = "fact_validation_issues" | memory_has: "fact-validation" %}
+        {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
@@ -416,7 +417,8 @@ checks:
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
-        {% if memory.has("fact_validation_issues", "fact-validation") %}
+        {% assign has_issues = "fact_validation_issues" | memory_has: "fact-validation" %}
+        {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
