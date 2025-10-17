@@ -224,9 +224,9 @@ describe('on_finish Validation', () => {
       // memory.get(), memory.set(), memory.increment() should be available
 
       const memoryExample = {
-        get: (key: string, namespace: string) => 0,
-        set: (key: string, value: any, namespace: string) => {},
-        increment: (key: string, by: number, namespace: string) => {},
+        get: (_key: string, _namespace: string) => 0,
+        set: (_key: string, _value: any, _namespace: string) => {},
+        increment: (_key: string, _by: number, _namespace: string) => {},
       };
 
       // Expected: memory helpers available for state management
