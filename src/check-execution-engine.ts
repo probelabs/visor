@@ -471,7 +471,7 @@ export class CheckExecutionEngine {
       const forEachResult = {
         ...enriched,
         forEachItems,
-        forEachItemResults: forEachItems.map((item, idx) => ({
+        forEachItemResults: forEachItems.map(item => ({
           issues: [],
           output: item,
         })),
