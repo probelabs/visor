@@ -498,6 +498,16 @@ export class CheckExecutionEngine {
         // Skip if dependent already executed
         if (resultsMap?.has(depCheckName)) continue;
 
+        // Skip if no items to iterate over
+        if (forEachItems.length === 0) {
+          if (debug) {
+            log(`🔧 Debug: Skipping forEach dependent '${depCheckName}' - no items to iterate`);
+          }
+          // Store empty result
+          resultsMap?.set(depCheckName, { issues: [] });
+          continue;
+        }
+
         if (debug) {
           log(
             `🔧 Debug: Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`
@@ -511,7 +521,15 @@ export class CheckExecutionEngine {
           const item = forEachItems[itemIndex];
 
           // Create isolated dependency results with this specific item
-          const itemDependencyResults = new Map(dependencyResults);
+          // Start with ALL results from resultsMap (includes siblings like comment-assistant)
+          const itemDependencyResults = new Map<string, ReviewSummary>();
+          for (const [key, value] of resultsMap?.entries() || []) {
+            itemDependencyResults.set(key, value);
+          }
+          // Also add from dependencyResults (immediate dependencies)
+          for (const [key, value] of dependencyResults.entries()) {
+            itemDependencyResults.set(key, value);
+          }
 
           // Unwrap forEach parent to provide just this item
           const itemResult: ReviewSummary & { output?: unknown } = {
