@@ -370,6 +370,11 @@ checks:
         {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
+        <previous_response>
+        {{ outputs.history['issue-assistant'][-1].text }}
+        </previous_response>
+
+        **Validation Errors Found:**
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
         {% for issue in issues %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
@@ -407,6 +412,8 @@ checks:
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
+    on_success:
+      goto: init-fact-validation
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -421,6 +428,11 @@ checks:
         {% if has_issues %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
+        <previous_response>
+        {{ outputs.history['comment-assistant'][-1].text }}
+        </previous_response>
+
+        **Validation Errors Found:**
         {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
         {% for issue in issues %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
@@ -448,12 +460,8 @@ checks:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      goto_js: |
-        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
-        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
-        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
-      goto_event: pr_updated
+      goto: init-fact-validation
+      goto_event: issue_comment
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
@@ -512,30 +520,60 @@ checks:
   extract-facts:
     type: ai
     group: fact-validation
-    schema: plain
-    depends_on: [init-fact-validation, issue-assistant, comment-assistant]
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique identifier for the fact (e.g., fact-1, fact-2)
+          category:
+            type: string
+            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
+          claim:
+            type: string
+            description: The exact factual statement being made
+          verifiable:
+            type: boolean
+            description: Whether this claim can be verified against the codebase
+        required: [id, category, claim, verifiable]
+    depends_on: [init-fact-validation]
     on: [issue_opened, issue_comment]
     if: |
       env.ENABLE_FACT_VALIDATION === 'true' &&
       (outputs['issue-assistant'] || outputs['comment-assistant'])
     prompt: |
-      Extract all verifiable factual claims from the assistant's response.
+      Extract all verifiable factual claims from the assistant's response. Focus on concepts, features, and specific assertions that can be verified against the codebase.
 
       Response to analyze:
       ```
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
 
-      Return a JSON array of fact objects. Each fact should have:
-      - id: unique identifier (fact-1, fact-2, etc.)
-      - category: type of claim (Configuration, Feature, Documentation, etc.)
-      - claim: the exact factual statement
-      - verifiable: true if this can be verified against the codebase
+      Extract claims about:
+      - Configuration variables and their values (e.g., "max_parallelism is set to 4")
+      - Feature capabilities (what is/isn't supported, how features work)
+      - File paths and locations mentioned
+      - Function/class names and their behavior
+      - Command syntax and available options
+      - API endpoints and their methods
+      - Environment variables and usage
+      - Default values and constants
+      - Data structures and schemas
+      - Dependencies and version requirements
 
-      Only include claims that are specific and verifiable (file names, feature capabilities, command syntax, etc.).
-      Do not include opinions, recommendations, or general statements.
+      Guidelines:
+      - Focus on meaningful concepts, not every minor detail
+      - Group related information (e.g., "default is 3 at lines 2672 and 4589" = one fact)
+      - Each fact should represent a testable assertion about the code
+      - Extract claims about what exists, what values are set, how things work
+      - Err on the side of extracting more rather than less
 
-      Return ONLY the JSON array, no other text.
+      Do NOT extract:
+      - Recommendations (e.g., "you should change X to Y")
+      - Opinions or preferences
+      - General explanations without specific claims
 
     forEach: true
 
@@ -567,7 +605,29 @@ checks:
   validate-fact:
     type: ai
     group: fact-validation
-    schema: plain
+    schema:
+      type: object
+      properties:
+        fact_id:
+          type: string
+          description: ID of the fact being validated
+        claim:
+          type: string
+          description: The original claim being validated
+        is_valid:
+          type: boolean
+          description: Whether the claim is accurate
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence level in the validation
+        evidence:
+          type: string
+          description: Evidence found in the codebase supporting the validation
+        correction:
+          type: string
+          description: If invalid, the correct information (optional)
+      required: [fact_id, claim, is_valid, confidence, evidence]
     depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
@@ -576,18 +636,14 @@ checks:
 
       **Claim:** {{ outputs['extract-facts'].claim }}
       **Category:** {{ outputs['extract-facts'].category }}
+      **Fact ID:** {{ outputs['extract-facts'].id }}
 
       Use code search and file reading tools to verify if this claim is accurate.
 
-      Return a JSON object with:
-      - fact_id: "{{ outputs['extract-facts'].id }}"
-      - claim: the original claim
-      - is_valid: true/false
-      - confidence: "high", "medium", or "low"
-      - evidence: what you found in the codebase
-      - correction: if invalid, provide the correct information
-
-      Return ONLY the JSON object, no other text.
+      Provide:
+      - Evidence of what you found in the codebase
+      - Confidence level (high/medium/low) in your validation
+      - If the claim is incorrect, provide the accurate information as a correction
 
   # Aggregate all validation results
   aggregate-validations:
