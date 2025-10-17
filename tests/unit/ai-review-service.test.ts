@@ -423,57 +423,57 @@ describe('AIReviewService', () => {
       };
     });
 
-    it('should include diffs when includeCodeContext is true', () => {
+    it('should include diffs when includeCodeContext is true', async () => {
       (mockPRInfo as any).includeCodeContext = true;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
       expect(context).not.toContain('Code diffs excluded');
     });
 
-    it('should exclude diffs when includeCodeContext is false', () => {
+    it('should exclude diffs when includeCodeContext is false', async () => {
       (mockPRInfo as any).includeCodeContext = false;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).not.toContain('<full_diff>');
       expect(context).not.toContain('--- test.ts');
       expect(context).toContain('Code diffs excluded to reduce token usage');
     });
 
-    it('should always include diffs when isPRContext is true', () => {
+    it('should always include diffs when isPRContext is true', async () => {
       (mockPRInfo as any).includeCodeContext = false;
       (mockPRInfo as any).isPRContext = true;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       // Even though includeCodeContext is false, PR context should include diffs
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
     });
 
-    it('should include diffs by default when no flags are set', () => {
+    it('should include diffs by default when no flags are set', async () => {
       // No includeCodeContext flag set - should default to true
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<full_diff>');
       expect(context).toContain('--- test.ts');
     });
 
-    it('should handle incremental diff when available', () => {
+    it('should handle incremental diff when available', async () => {
       (mockPRInfo as any).includeCodeContext = true;
       (mockPRInfo as any).isIncremental = true;
       (mockPRInfo as any).commitDiff =
         '--- a/test.ts\n+++ b/test.ts\n@@ -2 +2 @@\n-line2\n+line2-modified';
 
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<commit_diff>');
       expect(context).toContain('line2-modified');
     });
 
-    it('should always include files_summary regardless of includeCodeContext', () => {
+    it('should always include files_summary regardless of includeCodeContext', async () => {
       (mockPRInfo as any).includeCodeContext = false;
-      const context = (service as any).formatPRContext(mockPRInfo);
+      const context = await (service as any).formatPRContext(mockPRInfo);
 
       expect(context).toContain('<files_summary>');
       expect(context).toContain('<filename>test.ts</filename>');
@@ -483,7 +483,7 @@ describe('AIReviewService', () => {
   });
 
   describe('Comment Filtering for Code Review', () => {
-    it('should filter out previous Visor code-review comments when schema is "code-review"', () => {
+    it('should filter out previous Visor code-review comments when schema is "code-review"', async () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -538,7 +538,7 @@ describe('AIReviewService', () => {
 
       const service = new AIReviewService();
       // Pass true to indicate code-review schema
-      const context = (service as any).formatPRContext(prInfoWithComments, true);
+      const context = await (service as any).formatPRContext(prInfoWithComments, true);
 
       // Should include regular user comments
       expect(context).toContain('Regular comment from a user');
@@ -551,7 +551,7 @@ describe('AIReviewService', () => {
       expect(context).not.toContain('pr-review-245-review');
     });
 
-    it('should include all comments when schema is not "code-review"', () => {
+    it('should include all comments when schema is not "code-review"', async () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -582,14 +582,14 @@ describe('AIReviewService', () => {
 
       const service = new AIReviewService();
       // Pass false to indicate non-code-review schema
-      const context = (service as any).formatPRContext(prInfoWithComments, false);
+      const context = await (service as any).formatPRContext(prInfoWithComments, false);
 
       // Should include all comments for non-code-review checks
       expect(context).toContain('Regular comment');
       expect(context).toContain('Review results');
     });
 
-    it('should include all comments when schema parameter is not provided', () => {
+    it('should include all comments when schema parameter is not provided', async () => {
       const prInfoWithComments: PRInfo = {
         number: 123,
         title: 'Test PR',
@@ -620,7 +620,7 @@ describe('AIReviewService', () => {
 
       const service = new AIReviewService();
       // Don't pass schema parameter (undefined)
-      const context = (service as any).formatPRContext(prInfoWithComments);
+      const context = await (service as any).formatPRContext(prInfoWithComments);
 
       // Should include all comments when schema not specified
       expect(context).toContain('Regular comment');
