@@ -10,13 +10,6 @@ export async function processDiffWithOutline(diffContent: string): Promise<strin
     return diffContent;
   }
 
-  // Temporarily disable outline-diff processing to avoid CI issues
-  // TODO: Re-enable once probe SDK binary caching issue is fixed
-  // See PROBE_BINARY_CACHE_ISSUE.md for details
-  if (process.env.ENABLE_OUTLINE_DIFF !== '1') {
-    return diffContent;
-  }
-
   try {
     // Set PROBE_PATH to use the bundled binary with outline-diff support
     // The SDK by default may download an older binary that doesn't support outline-diff
