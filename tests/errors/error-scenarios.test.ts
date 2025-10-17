@@ -512,14 +512,11 @@ describe('Error Scenarios & Recovery Testing', () => {
 
           console.log(`    Review completed despite potential AI issues`);
           console.log(`    Issues found: ${(review.issues || []).length}`);
-          console.log(`    Suggestions: ${(review.suggestions || []).length}`);
 
           // Should provide reasonable fallback behavior
           expect(review.issues).toBeDefined();
           expect(Array.isArray(review.issues)).toBe(true);
           expect((review.issues || []).length).toBeGreaterThanOrEqual(0);
-          expect(review.suggestions).toBeDefined();
-          expect(Array.isArray(review.suggestions)).toBe(true);
         } catch (error: any) {
           console.log(`    AI service error handled: ${error.message}`);
           // Should handle AI service errors gracefully
@@ -567,8 +564,6 @@ describe('Error Scenarios & Recovery Testing', () => {
         expect(review).toBeDefined();
         expect(review.issues).toBeDefined();
         expect(Array.isArray(review.issues)).toBe(true);
-        expect(review.suggestions).toBeDefined();
-        expect(Array.isArray(review.suggestions)).toBe(true);
       } catch (error: any) {
         console.log(`  Expected error for malformed PR data: ${error.message}`);
         // Should provide clear error messages for malformed data

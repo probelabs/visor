@@ -504,11 +504,6 @@ export class FailureConditionEvaluator {
         return issues.some(issue => (issue as { file?: string }).file?.includes(pattern));
       };
 
-      const hasSuggestion = (suggestions: string[], text: string): boolean => {
-        if (!Array.isArray(suggestions)) return false;
-        return suggestions.some(s => s.toLowerCase().includes(text.toLowerCase()));
-      };
-
       // Backward compatibility aliases
       const hasIssueWith = hasIssue;
       const hasFileWith = hasFileMatching;
@@ -528,7 +523,6 @@ export class FailureConditionEvaluator {
       // Extract context variables
       const output = context.output || {};
       const issues = output.issues || [];
-      const suggestions: string[] = [];
 
       // Backward compatibility: provide metadata for transition period
       // TODO: Remove after all configurations are updated
@@ -613,7 +607,6 @@ export class FailureConditionEvaluator {
         hasIssue,
         countIssues,
         hasFileMatching,
-        hasSuggestion,
         hasIssueWith,
         hasFileWith,
         // Permission helpers
