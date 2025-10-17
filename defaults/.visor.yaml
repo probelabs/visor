@@ -340,6 +340,11 @@ checks:
         - Never suggest rerun/disable unless asked explicitly.
         - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
         - Stay technical, direct, and specific; add code snippets or links when helpful.
+        - When answering questions, acknowledge what you can answer confidently based on the context provided
+        - If you need more information to provide a complete answer, ask specific follow-up questions
+        - Be honest when you don't know something or can't find the answer in the available context
+        - If the question requires information not available in the PR/issue context, clearly state what's missing
+        - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
       goto_js: |
