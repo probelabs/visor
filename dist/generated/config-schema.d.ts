@@ -369,6 +369,10 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Enable debug mode";
                 };
+                readonly skip_code_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
+                };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers configuration";

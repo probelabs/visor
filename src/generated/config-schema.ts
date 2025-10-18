@@ -417,6 +417,10 @@ export const configSchema = {
           type: 'boolean',
           description: 'Enable debug mode',
         },
+        skip_code_context: {
+          type: 'boolean',
+          description: 'Skip adding code context (diffs, files, PR info) to the prompt',
+        },
         mcpServers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers configuration',
