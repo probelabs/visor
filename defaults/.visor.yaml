@@ -572,15 +572,26 @@ checks:
       Guidelines:
       - Extract claims AS STATED in the response (don't verify or investigate)
       - Focus on specific, testable assertions
-      - Group related information (e.g., "default is 3 at lines 2672 and 4589" = one fact)
-      - Each fact should be atomic and verifiable against code
-      - Err on the side of extracting more rather than less
+      - Each claim MUST be self-contained with ALL necessary context
+      - Include file paths, line numbers, values in the claim itself
+      - AVOID duplicates - if same fact appears multiple times, extract it once
+      - Group related info when it's the SAME fact (e.g., "value is 3 at lines 100 and 200")
+      - Each fact should be atomic and independently verifiable
+
+      Example of GOOD claims:
+      - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
+      - "Configuration file defaults/.visor.yaml sets max_parallelism to 4 at line 11"
+
+      Example of BAD claims (missing context):
+      - "Default is 3" (missing: default of what? where?)
+      - "Code has hardcoded value" (missing: what value? where? which file?)
 
       Do NOT extract:
       - Recommendations (e.g., "you should change X to Y")
       - Opinions or preferences (e.g., "this is better than")
       - General explanations without specific claims
       - Your own knowledge - only extract what's IN the response
+      - Duplicate facts (same claim stated multiple ways)
 
       Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
 

@@ -463,8 +463,10 @@ export class CheckExecutionEngine {
     // Handle forEach iteration for this check if it returned an array
     if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
       const forEachItems = enrichedWithOutput.output;
+      // Always log forEach detection (not just in debug mode) for visibility
+      log(`🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration`);
       if (debug) {
-        log(`🔧 Debug: forEach check '${checkId}' returned ${forEachItems.length} items`);
+        log(`🔧 Debug: forEach item preview: ${JSON.stringify(forEachItems[0] || {}).substring(0, 200)}`);
       }
 
       // Store the array output with forEach metadata
@@ -484,10 +486,13 @@ export class CheckExecutionEngine {
         return cfg?.depends_on?.includes(checkId);
       });
 
-      if (debug && dependentChecks.length > 0) {
+      // Always log dependents for visibility
+      if (dependentChecks.length > 0) {
         log(
-          `🔧 Debug: forEach check '${checkId}' has ${dependentChecks.length} dependents: ${dependentChecks.join(', ')}`
+          `🔄 forEach check '${checkId}' has ${dependentChecks.length} dependents: ${dependentChecks.join(', ')}`
         );
+      } else {
+        log(`⚠️  forEach check '${checkId}' has NO dependents - nothing to iterate`);
       }
 
       // Execute each dependent check once per forEach item
@@ -508,17 +513,17 @@ export class CheckExecutionEngine {
           continue;
         }
 
-        if (debug) {
-          log(
-            `🔧 Debug: Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`
-          );
-        }
+        // Always log iteration start
+        log(
+          `🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`
+        );
 
         const depResults: ReviewSummary[] = [];
 
         // Execute once per forEach item
         for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
           const item = forEachItems[itemIndex];
+          log(`  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}'`);
 
           // Create isolated dependency results with this specific item
           // Start with ALL results from resultsMap (includes siblings like comment-assistant)
