@@ -278,7 +278,7 @@ export class CLI {
     }
 
     // Validate event type
-    if (options.event && !(this.validEvents as readonly string[]).includes(options.event as string)) {
+    if (options.event && !this.validEvents.includes(options.event as EventTrigger | 'all')) {
       throw new Error(
         `Invalid event type: ${options.event}. Available options: ${this.validEvents.join(', ')}`
       );

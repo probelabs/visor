@@ -246,7 +246,17 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should validate event type against allowed values', () => {
-      const validEvents = ['pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment', 'manual', 'schedule', 'webhook_received', 'all'];
+      const validEvents = [
+        'pr_opened',
+        'pr_updated',
+        'pr_closed',
+        'issue_opened',
+        'issue_comment',
+        'manual',
+        'schedule',
+        'webhook_received',
+        'all',
+      ];
       validEvents.forEach(event => {
         expect(() => cli.parseArgs(['--event', event])).not.toThrow();
       });
