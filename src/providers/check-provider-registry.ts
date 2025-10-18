@@ -9,6 +9,7 @@ import { GitHubOpsProvider } from './github-ops-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 import { CommandCheckProvider } from './command-check-provider';
 import { MemoryCheckProvider } from './memory-check-provider';
+import { McpCheckProvider } from './mcp-check-provider';
 
 /**
  * Registry for managing check providers
@@ -53,6 +54,17 @@ export class CheckProviderRegistry {
     } catch (error) {
       console.error(
         `Warning: Failed to register ClaudeCodeCheckProvider: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+
+    // Try to register McpCheckProvider - it may fail if dependencies are missing
+    try {
+      this.register(new McpCheckProvider());
+    } catch (error) {
+      console.error(
+        `Warning: Failed to register McpCheckProvider: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
