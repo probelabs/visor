@@ -22,6 +22,21 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
 /**
+ * Valid event triggers for checks
+ * Exported as a constant to serve as the single source of truth for event validation
+ */
+export const VALID_EVENT_TRIGGERS: readonly EventTrigger[] = [
+  'pr_opened',
+  'pr_updated',
+  'pr_closed',
+  'issue_opened',
+  'issue_comment',
+  'manual',
+  'schedule',
+  'webhook_received',
+] as const;
+
+/**
  * Configuration manager for Visor
  */
 export class ConfigManager {
@@ -38,16 +53,7 @@ export class ConfigManager {
     'memory',
     'github',
   ];
-  private validEventTriggers: EventTrigger[] = [
-    'pr_opened',
-    'pr_updated',
-    'pr_closed',
-    'issue_opened',
-    'issue_comment',
-    'manual',
-    'schedule',
-    'webhook_received',
-  ];
+  private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity', 'group'];
 

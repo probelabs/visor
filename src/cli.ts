@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import { CliOptions, CheckType, OutputFormat } from './types/cli';
+import { EventTrigger } from './types/config';
+import { VALID_EVENT_TRIGGERS } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -10,6 +12,12 @@ export class CLI {
   private program: Command;
   private validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
   private validOutputs: OutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
+  // Valid events: all core EventTrigger types plus 'all' for CLI-only usage
+  // Reuses VALID_EVENT_TRIGGERS from config.ts as the single source of truth
+  private validEvents: ReadonlyArray<EventTrigger | 'all'> = [
+    ...VALID_EVENT_TRIGGERS,
+    'all', // CLI-specific: run checks regardless of event triggers
+  ] as const;
 
   constructor() {
     this.program = new Command();
@@ -196,6 +204,8 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        analyzeBranchDiff: options.analyzeBranchDiff,
+        event: options.event,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -261,6 +271,13 @@ export class CLI {
         );
       }
     }
+
+    // Validate event type
+    if (options.event && !this.validEvents.includes(options.event as EventTrigger | 'all')) {
+      throw new Error(
+        `Invalid event type: ${options.event}. Available options: ${this.validEvents.join(', ')}`
+      );
+    }
   }
 
   /**
@@ -303,6 +320,10 @@ export class CLI {
       .option(
         '--analyze-branch-diff',
         'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+      )
+      .option(
+        '--event <type>',
+        'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .addHelpText('after', this.getExamplesText());
