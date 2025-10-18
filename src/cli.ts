@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { CliOptions, CheckType, OutputFormat } from './types/cli';
+import { EventTrigger } from './types/config';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -10,7 +11,18 @@ export class CLI {
   private program: Command;
   private validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
   private validOutputs: OutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
-  private validEvents: string[] = ['pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment', 'manual', 'schedule', 'webhook_received', 'all'];
+  // Valid events: all core EventTrigger types plus 'all' for CLI-only usage
+  private validEvents: ReadonlyArray<EventTrigger | 'all'> = [
+    'pr_opened',
+    'pr_updated',
+    'pr_closed',
+    'issue_opened',
+    'issue_comment',
+    'manual',
+    'schedule',
+    'webhook_received',
+    'all', // CLI-specific: run checks regardless of event triggers
+  ] as const;
 
   constructor() {
     this.program = new Command();
@@ -266,7 +278,7 @@ export class CLI {
     }
 
     // Validate event type
-    if (options.event && !this.validEvents.includes(options.event as string)) {
+    if (options.event && !(this.validEvents as readonly string[]).includes(options.event as string)) {
       throw new Error(
         `Invalid event type: ${options.event}. Available options: ${this.validEvents.join(', ')}`
       );
