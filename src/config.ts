@@ -59,11 +59,16 @@ export class ConfigManager {
     const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
 
     try {
-      if (!fs.existsSync(configPath)) {
+      // Resolve relative paths to absolute paths based on current working directory
+      const resolvedPath = path.isAbsolute(configPath)
+        ? configPath
+        : path.resolve(process.cwd(), configPath);
+
+      if (!fs.existsSync(resolvedPath)) {
         throw new Error(`Configuration file not found: ${configPath}`);
       }
 
-      const configContent = fs.readFileSync(configPath, 'utf8');
+      const configContent = fs.readFileSync(resolvedPath, 'utf8');
       let parsedConfig: Partial<VisorConfig>;
 
       try {
@@ -80,7 +85,7 @@ export class ConfigManager {
       // Handle extends directive if present
       if (parsedConfig.extends) {
         const loaderOptions: ConfigLoaderOptions = {
-          baseDir: path.dirname(configPath),
+          baseDir: path.dirname(resolvedPath),
           allowRemote: this.isRemoteExtendsAllowed(),
           maxDepth: 10,
           allowedRemotePatterns,
