@@ -247,6 +247,8 @@ export interface AIProviderConfig {
   timeout?: number;
   /** Enable debug mode */
   debug?: boolean;
+  /** Skip adding code context (diffs, files, PR info) to the prompt */
+  skip_code_context?: boolean;
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
 }

@@ -543,37 +543,46 @@ checks:
     if: |
       env.ENABLE_FACT_VALIDATION === 'true' &&
       (outputs['issue-assistant'] || outputs['comment-assistant'])
+    ai:
+      skip_code_context: true
     prompt: |
-      Extract all verifiable factual claims from the assistant's response. Focus on concepts, features, and specific assertions that can be verified against the codebase.
+      Your task is to EXTRACT factual claims from the assistant's response below.
 
-      Response to analyze:
+      IMPORTANT: Do NOT investigate, verify, or validate any facts. Simply identify and list them.
+      Do NOT use any tools or search the codebase. Just read the response and extract claims.
+
+      Assistant's response to analyze:
       ```
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
 
-      Extract claims about:
-      - Configuration variables and their values (e.g., "max_parallelism is set to 4")
+      Extract verifiable factual claims about:
+      - Configuration variables and their values (e.g., "max_parallelism defaults to 4")
       - Feature capabilities (what is/isn't supported, how features work)
-      - File paths and locations mentioned
+      - File paths and locations mentioned (e.g., "config is in src/config.ts")
       - Function/class names and their behavior
       - Command syntax and available options
       - API endpoints and their methods
       - Environment variables and usage
       - Default values and constants
+      - Line numbers or code locations mentioned
       - Data structures and schemas
       - Dependencies and version requirements
 
       Guidelines:
-      - Focus on meaningful concepts, not every minor detail
+      - Extract claims AS STATED in the response (don't verify or investigate)
+      - Focus on specific, testable assertions
       - Group related information (e.g., "default is 3 at lines 2672 and 4589" = one fact)
-      - Each fact should represent a testable assertion about the code
-      - Extract claims about what exists, what values are set, how things work
+      - Each fact should be atomic and verifiable against code
       - Err on the side of extracting more rather than less
 
       Do NOT extract:
       - Recommendations (e.g., "you should change X to Y")
-      - Opinions or preferences
+      - Opinions or preferences (e.g., "this is better than")
       - General explanations without specific claims
+      - Your own knowledge - only extract what's IN the response
+
+      Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
 
     forEach: true
 

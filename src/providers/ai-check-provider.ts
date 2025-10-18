@@ -461,6 +461,10 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
       }
+      if (config.ai.skip_code_context !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
+      }
     }
 
     // Check-level AI model and provider (top-level properties)
@@ -518,10 +522,12 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Process prompt with Liquid templates and file loading
+    // Skip event context (PR diffs, files, etc.) if requested
+    const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
     const processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
-      config.eventContext,
+      eventContext,
       _dependencyResults
     );
 
