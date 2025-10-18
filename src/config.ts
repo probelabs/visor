@@ -34,6 +34,7 @@ export class ConfigManager {
     'http_client',
     'noop',
     'log',
+    'memory',
     'github',
   ];
   private validEventTriggers: EventTrigger[] = [
