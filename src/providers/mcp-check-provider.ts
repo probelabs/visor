@@ -94,9 +94,7 @@ export class McpCheckProvider extends CheckProvider {
         return false;
       }
     } else {
-      logger.error(
-        `Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', or 'http'`
-      );
+      logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', or 'http'`);
       return false;
     }
 
@@ -642,8 +640,7 @@ export class McpCheckProvider extends CheckProvider {
     const endLine = this.toNumber(data.endLine || data.end_line || data.stopLine);
     const suggestion = this.toTrimmedString(data.suggestion);
     const replacement = this.toTrimmedString(data.replacement);
-    const ruleId =
-      this.toTrimmedString(data.ruleId || data.rule || data.id || data.check) || 'mcp';
+    const ruleId = this.toTrimmedString(data.ruleId || data.rule || data.id || data.check) || 'mcp';
 
     return {
       file,
@@ -711,9 +708,6 @@ export class McpCheckProvider extends CheckProvider {
   }
 
   getRequirements(): string[] {
-    return [
-      'MCP method name specified',
-      'Transport configuration (stdio: command, sse/http: url)',
-    ];
+    return ['MCP method name specified', 'Transport configuration (stdio: command, sse/http: url)'];
   }
 }

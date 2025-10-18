@@ -258,7 +258,8 @@ describe('MCP Provider E2E Tests with Probe', () => {
         command: 'npx',
         args: ['-y', '@probelabs/probe', 'mcp'],
         method: 'search_code',
-        argsTransform: '{ "path": "{{ pr.base }}", "query": "{{ outputs["prev-check"].searchTerm }}" }',
+        argsTransform:
+          '{ "path": "{{ pr.base }}", "query": "{{ outputs["prev-check"].searchTerm }}" }',
         timeout: 120,
       };
 
