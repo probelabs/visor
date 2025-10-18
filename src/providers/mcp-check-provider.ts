@@ -372,21 +372,15 @@ export class McpCheckProvider extends CheckProvider {
   }
 
   /**
-   * Execute MCP method using stdio transport
+   * Generic method to execute MCP method with any transport
    */
-  private async executeStdioMethod(
+  private async executeWithTransport(
+    transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport,
     config: McpCheckConfig,
     methodArgs: Record<string, unknown>,
-    timeout: number
+    timeout: number,
+    transportName: string
   ): Promise<unknown> {
-    // Create transport
-    const transport = new StdioClientTransport({
-      command: config.command!,
-      args: config.args,
-      env: config.env,
-      cwd: config.workingDirectory,
-    });
-
     // Create client
     const client = new Client(
       {
@@ -414,163 +408,10 @@ export class McpCheckProvider extends CheckProvider {
         }
       }
 
-      logger.debug(`Connected to MCP server via stdio: ${config.command}`);
+      logger.debug(`Connected to MCP server via ${transportName}`);
 
-      // List available tools (for debugging)
-      try {
-        const toolsResult = await client.listTools();
-        logger.debug(`Available MCP tools: ${JSON.stringify(toolsResult?.tools || [])}`);
-      } catch (error) {
-        logger.debug(`Could not list MCP tools: ${error}`);
-      }
-
-      // Call the tool
-      const result = await Promise.race([
-        client.callTool({
-          name: config.method,
-          arguments: methodArgs,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout')), timeout)),
-      ]);
-
-      logger.debug(`MCP method result: ${JSON.stringify(result)}`);
-
-      return result;
-    } finally {
-      try {
-        await client.close();
-      } catch (error) {
-        logger.debug(`Error closing MCP client: ${error}`);
-      }
-    }
-  }
-
-  /**
-   * Execute MCP method using SSE transport
-   */
-  private async executeSseMethod(
-    config: McpCheckConfig,
-    methodArgs: Record<string, unknown>,
-    timeout: number
-  ): Promise<unknown> {
-    // Create transport with optional headers
-    const requestInit: RequestInit = {};
-    if (config.headers) {
-      requestInit.headers = config.headers;
-    }
-
-    const transport = new SSEClientTransport(new URL(config.url!), {
-      requestInit,
-    });
-
-    // Create client
-    const client = new Client(
-      {
-        name: 'visor-mcp-client',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {},
-      }
-    );
-
-    try {
-      // Connect with timeout
-      let timeoutId: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          client.connect(transport),
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
-          }),
-        ]);
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      }
-
-      logger.debug(`Connected to MCP server via SSE: ${config.url}`);
-
-      // List available tools (for debugging)
-      try {
-        const toolsResult = await client.listTools();
-        logger.debug(`Available MCP tools: ${JSON.stringify(toolsResult?.tools || [])}`);
-      } catch (error) {
-        logger.debug(`Could not list MCP tools: ${error}`);
-      }
-
-      // Call the tool
-      const result = await Promise.race([
-        client.callTool({
-          name: config.method,
-          arguments: methodArgs,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout')), timeout)),
-      ]);
-
-      logger.debug(`MCP method result: ${JSON.stringify(result)}`);
-
-      return result;
-    } finally {
-      try {
-        await client.close();
-      } catch (error) {
-        logger.debug(`Error closing MCP client: ${error}`);
-      }
-    }
-  }
-
-  /**
-   * Execute MCP method using Streamable HTTP transport
-   */
-  private async executeHttpMethod(
-    config: McpCheckConfig,
-    methodArgs: Record<string, unknown>,
-    timeout: number
-  ): Promise<unknown> {
-    // Create transport with optional headers
-    const requestInit: RequestInit = {};
-    if (config.headers) {
-      requestInit.headers = config.headers;
-    }
-
-    const transport = new StreamableHTTPClientTransport(new URL(config.url!), {
-      requestInit,
-      sessionId: config.sessionId,
-    });
-
-    // Create client
-    const client = new Client(
-      {
-        name: 'visor-mcp-client',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {},
-      }
-    );
-
-    try {
-      // Connect with timeout
-      let timeoutId: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          client.connect(transport),
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
-          }),
-        ]);
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      }
-
-      logger.debug(`Connected to MCP server via Streamable HTTP: ${config.url}`);
-
-      // Log session ID if assigned by server
-      if (transport.sessionId) {
+      // Log session ID for HTTP transport
+      if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
         logger.debug(`MCP Session ID: ${transport.sessionId}`);
       }
 
@@ -582,18 +423,26 @@ export class McpCheckProvider extends CheckProvider {
         logger.debug(`Could not list MCP tools: ${error}`);
       }
 
-      // Call the tool
-      const result = await Promise.race([
-        client.callTool({
-          name: config.method,
-          arguments: methodArgs,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout')), timeout)),
-      ]);
+      // Call the tool with timeout
+      let callTimeoutId: NodeJS.Timeout | undefined;
+      try {
+        const result = await Promise.race([
+          client.callTool({
+            name: config.method,
+            arguments: methodArgs,
+          }),
+          new Promise((_, reject) => {
+            callTimeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
+          }),
+        ]);
 
-      logger.debug(`MCP method result: ${JSON.stringify(result)}`);
-
-      return result;
+        logger.debug(`MCP method result: ${JSON.stringify(result)}`);
+        return result;
+      } finally {
+        if (callTimeoutId) {
+          clearTimeout(callTimeoutId);
+        }
+      }
     } finally {
       try {
         await client.close();
@@ -601,6 +450,77 @@ export class McpCheckProvider extends CheckProvider {
         logger.debug(`Error closing MCP client: ${error}`);
       }
     }
+  }
+
+  /**
+   * Execute MCP method using stdio transport
+   */
+  private async executeStdioMethod(
+    config: McpCheckConfig,
+    methodArgs: Record<string, unknown>,
+    timeout: number
+  ): Promise<unknown> {
+    const transport = new StdioClientTransport({
+      command: config.command!,
+      args: config.args,
+      env: config.env,
+      cwd: config.workingDirectory,
+    });
+
+    return this.executeWithTransport(
+      transport,
+      config,
+      methodArgs,
+      timeout,
+      `stdio: ${config.command}`
+    );
+  }
+
+  /**
+   * Execute MCP method using SSE transport
+   */
+  private async executeSseMethod(
+    config: McpCheckConfig,
+    methodArgs: Record<string, unknown>,
+    timeout: number
+  ): Promise<unknown> {
+    const requestInit: RequestInit = {};
+    if (config.headers) {
+      requestInit.headers = config.headers;
+    }
+
+    const transport = new SSEClientTransport(new URL(config.url!), {
+      requestInit,
+    });
+
+    return this.executeWithTransport(transport, config, methodArgs, timeout, `SSE: ${config.url}`);
+  }
+
+  /**
+   * Execute MCP method using Streamable HTTP transport
+   */
+  private async executeHttpMethod(
+    config: McpCheckConfig,
+    methodArgs: Record<string, unknown>,
+    timeout: number
+  ): Promise<unknown> {
+    const requestInit: RequestInit = {};
+    if (config.headers) {
+      requestInit.headers = config.headers;
+    }
+
+    const transport = new StreamableHTTPClientTransport(new URL(config.url!), {
+      requestInit,
+      sessionId: config.sessionId,
+    });
+
+    return this.executeWithTransport(
+      transport,
+      config,
+      methodArgs,
+      timeout,
+      `Streamable HTTP: ${config.url}`
+    );
   }
 
   /**
