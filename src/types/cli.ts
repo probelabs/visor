@@ -1,3 +1,5 @@
+import { EventTrigger } from './config';
+
 /**
  * Valid check types that can be performed by Visor
  */
@@ -46,8 +48,8 @@ export interface CliOptions {
   outputFile?: string;
   /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
   analyzeBranchDiff?: boolean;
-  /** Simulate GitHub event type for event-based filtering */
-  event?: string;
+  /** Simulate GitHub event type for event-based filtering ('all' runs checks regardless of event triggers) */
+  event?: EventTrigger | 'all';
 }
 
 /**
