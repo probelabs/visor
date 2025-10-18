@@ -58,14 +58,14 @@ export class ConfigManager {
   ): Promise<VisorConfig> {
     const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
 
-    try {
-      // Resolve relative paths to absolute paths based on current working directory
-      const resolvedPath = path.isAbsolute(configPath)
-        ? configPath
-        : path.resolve(process.cwd(), configPath);
+    // Resolve relative paths to absolute paths based on current working directory
+    const resolvedPath = path.isAbsolute(configPath)
+      ? configPath
+      : path.resolve(process.cwd(), configPath);
 
+    try {
       if (!fs.existsSync(resolvedPath)) {
-        throw new Error(`Configuration file not found: ${configPath}`);
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
       }
 
       const configContent = fs.readFileSync(resolvedPath, 'utf8');
@@ -75,7 +75,7 @@ export class ConfigManager {
         parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
       } catch (yamlError) {
         const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
-        throw new Error(`Invalid YAML syntax in ${configPath}: ${errorMessage}`);
+        throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
       }
 
       if (!parsedConfig || typeof parsedConfig !== 'object') {
@@ -140,12 +140,12 @@ export class ConfigManager {
         }
         // Add more context for generic errors
         if (error.message.includes('ENOENT')) {
-          throw new Error(`Configuration file not found: ${configPath}`);
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
         }
         if (error.message.includes('EPERM')) {
-          throw new Error(`Permission denied reading configuration file: ${configPath}`);
+          throw new Error(`Permission denied reading configuration file: ${resolvedPath}`);
         }
-        throw new Error(`Failed to read configuration file ${configPath}: ${error.message}`);
+        throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
       }
       throw error;
     }
