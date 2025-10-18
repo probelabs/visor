@@ -1,5 +1,4 @@
 import { McpCheckProvider } from '../../src/providers/mcp-check-provider';
-import { PRInfo } from '../../src/pr-analyzer';
 
 describe('MCP Check Provider', () => {
   let provider: McpCheckProvider;
@@ -184,27 +183,6 @@ describe('MCP Check Provider', () => {
   });
 
   describe('execute with mock data', () => {
-    const mockPRInfo: PRInfo = {
-      number: 123,
-      title: 'Test PR',
-      body: 'Test PR body',
-      author: 'testuser',
-      head: 'feature-branch',
-      base: 'main',
-      files: [
-        {
-          filename: 'src/test.ts',
-          status: 'modified',
-          additions: 10,
-          deletions: 5,
-          changes: 15,
-          patch: '@@ -1,5 +1,10 @@\n+new code',
-        },
-      ],
-      totalAdditions: 10,
-      totalDeletions: 5,
-    };
-
     it('should handle timeout configuration', async () => {
       const config = {
         type: 'mcp',

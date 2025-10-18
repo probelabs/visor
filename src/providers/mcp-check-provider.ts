@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import Sandbox from '@nyariv/sandboxjs';
 
 /**
  * MCP Check Provider Configuration
@@ -49,6 +50,7 @@ export interface McpCheckConfig extends CheckProviderConfig {
  */
 export class McpCheckProvider extends CheckProvider {
   private liquid: Liquid;
+  private sandbox?: Sandbox;
 
   constructor() {
     super();
@@ -56,6 +58,80 @@ export class McpCheckProvider extends CheckProvider {
       cache: false,
       strictFilters: false,
       strictVariables: false,
+    });
+  }
+
+  /**
+   * Create a secure sandbox for JavaScript execution
+   */
+  private createSecureSandbox(): Sandbox {
+    const log = (...args: unknown[]) => {
+      logger.debug(`[transform_js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
+    };
+
+    const globals = {
+      ...Sandbox.SAFE_GLOBALS,
+      Math,
+      JSON,
+      console: {
+        log,
+      },
+    };
+
+    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
+
+    // Allow array methods
+    const arrayMethods = new Set([
+      'some',
+      'every',
+      'filter',
+      'map',
+      'reduce',
+      'find',
+      'includes',
+      'indexOf',
+      'length',
+      'slice',
+      'concat',
+      'join',
+      'push',
+      'pop',
+      'shift',
+      'unshift',
+      'sort',
+      'reverse',
+      'flat',
+      'flatMap',
+    ]);
+    prototypeWhitelist.set(Array.prototype, arrayMethods);
+
+    // Allow string methods
+    const stringMethods = new Set([
+      'toLowerCase',
+      'toUpperCase',
+      'includes',
+      'indexOf',
+      'startsWith',
+      'endsWith',
+      'slice',
+      'substring',
+      'length',
+      'trim',
+      'split',
+      'replace',
+      'match',
+      'padStart',
+      'padEnd',
+    ]);
+    prototypeWhitelist.set(String.prototype, stringMethods);
+
+    // Allow object methods
+    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf', 'keys', 'values']);
+    prototypeWhitelist.set(Object.prototype, objectMethods);
+
+    return new Sandbox({
+      globals,
+      prototypeWhitelist,
     });
   }
 
@@ -88,9 +164,31 @@ export class McpCheckProvider extends CheckProvider {
         logger.error('MCP stdio transport requires a command');
         return false;
       }
+
+      // Basic command injection prevention - check for shell metacharacters
+      // Allow common safe commands like 'npx', 'node', 'python', etc.
+      if (/[;&|`$(){}[\]]/.test(cfg.command)) {
+        logger.error('MCP stdio command contains potentially unsafe characters');
+        return false;
+      }
     } else if (transport === 'sse' || transport === 'http') {
       if (!cfg.url || typeof cfg.url !== 'string') {
         logger.error(`MCP ${transport} transport requires a URL`);
+        return false;
+      }
+
+      // Validate URL format
+      try {
+        const parsedUrl = new URL(cfg.url);
+        // Only allow http and https protocols
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          logger.error(
+            `Invalid URL protocol for MCP ${transport} transport: ${parsedUrl.protocol}. Only http: and https: are allowed.`
+          );
+          return false;
+        }
+      } catch {
+        logger.error(`Invalid URL format for MCP ${transport} transport: ${cfg.url}`);
         return false;
       }
     } else {
@@ -183,25 +281,25 @@ export class McpCheckProvider extends CheckProvider {
         }
       }
 
-      // Apply JavaScript transform
+      // Apply JavaScript transform using secure sandbox
       if (cfg.transform_js) {
         try {
-          // Use Function constructor for safe evaluation
-          const transformFn = new Function(
-            'output',
-            'pr',
-            'files',
-            'outputs',
-            'env',
-            `return (${cfg.transform_js})`
-          );
-          finalOutput = transformFn(
-            finalOutput,
-            templateContext.pr,
-            templateContext.files,
-            templateContext.outputs,
-            templateContext.env
-          );
+          if (!this.sandbox) {
+            this.sandbox = this.createSecureSandbox();
+          }
+
+          // Build scope with all context variables
+          const scope = {
+            output: finalOutput,
+            pr: templateContext.pr,
+            files: templateContext.files,
+            outputs: templateContext.outputs,
+            env: templateContext.env,
+          };
+
+          // Compile and execute the transform in sandboxed environment
+          const exec = this.sandbox.compile(`return (${cfg.transform_js});`);
+          finalOutput = exec(scope).run();
         } catch (error) {
           logger.error(`Failed to apply JavaScript transform: ${error}`);
           return {
@@ -302,12 +400,19 @@ export class McpCheckProvider extends CheckProvider {
 
     try {
       // Connect with timeout
-      await Promise.race([
-        client.connect(transport),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timeout')), timeout)
-        ),
-      ]);
+      let timeoutId: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
 
       logger.debug(`Connected to MCP server via stdio: ${config.command}`);
 
@@ -371,12 +476,19 @@ export class McpCheckProvider extends CheckProvider {
 
     try {
       // Connect with timeout
-      await Promise.race([
-        client.connect(transport),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timeout')), timeout)
-        ),
-      ]);
+      let timeoutId: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
 
       logger.debug(`Connected to MCP server via SSE: ${config.url}`);
 
@@ -441,12 +553,19 @@ export class McpCheckProvider extends CheckProvider {
 
     try {
       // Connect with timeout
-      await Promise.race([
-        client.connect(transport),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timeout')), timeout)
-        ),
-      ]);
+      let timeoutId: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
 
       logger.debug(`Connected to MCP server via Streamable HTTP: ${config.url}`);
 
