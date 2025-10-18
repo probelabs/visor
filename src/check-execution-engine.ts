@@ -464,9 +464,13 @@ export class CheckExecutionEngine {
     if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
       const forEachItems = enrichedWithOutput.output;
       // Always log forEach detection (not just in debug mode) for visibility
-      log(`🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration`);
+      log(
+        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration`
+      );
       if (debug) {
-        log(`🔧 Debug: forEach item preview: ${JSON.stringify(forEachItems[0] || {}).substring(0, 200)}`);
+        log(
+          `🔧 Debug: forEach item preview: ${JSON.stringify(forEachItems[0] || {}).substring(0, 200)}`
+        );
       }
 
       // Store the array output with forEach metadata
@@ -514,9 +518,7 @@ export class CheckExecutionEngine {
         }
 
         // Always log iteration start
-        log(
-          `🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`
-        );
+        log(`🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`);
 
         const depResults: ReviewSummary[] = [];
 

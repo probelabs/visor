@@ -510,8 +510,8 @@ export class AICheckProvider extends CheckProvider {
       Object.assign(mcpServers, config.ai.mcpServers);
     }
 
-    // Pass MCP server config directly to AI service
-    if (Object.keys(mcpServers).length > 0) {
+    // Pass MCP server config directly to AI service (unless tools are disabled)
+    if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
       if (aiConfig.debug) {
@@ -519,6 +519,8 @@ export class AICheckProvider extends CheckProvider {
           `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
         );
       }
+    } else if (config.ai?.disable_tools && aiConfig.debug) {
+      console.error(`🔧 Debug: AI check has tools disabled - MCP servers will not be passed`);
     }
 
     // Process prompt with Liquid templates and file loading

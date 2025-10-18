@@ -373,6 +373,10 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
                 };
+                readonly disable_tools: {
+                    readonly type: "boolean";
+                    readonly description: "Disable MCP tools - AI will only have access to the prompt text";
+                };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers configuration";

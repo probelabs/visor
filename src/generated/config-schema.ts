@@ -421,6 +421,10 @@ export const configSchema = {
           type: 'boolean',
           description: 'Skip adding code context (diffs, files, PR info) to the prompt',
         },
+        disable_tools: {
+          type: 'boolean',
+          description: 'Disable MCP tools - AI will only have access to the prompt text',
+        },
         mcpServers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers configuration',
