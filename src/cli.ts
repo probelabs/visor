@@ -10,6 +10,7 @@ export class CLI {
   private program: Command;
   private validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
   private validOutputs: OutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
+  private validEvents: string[] = ['pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment', 'manual', 'schedule', 'webhook_received', 'all'];
 
   constructor() {
     this.program = new Command();
@@ -196,6 +197,8 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        analyzeBranchDiff: options.analyzeBranchDiff,
+        event: options.event,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -261,6 +264,13 @@ export class CLI {
         );
       }
     }
+
+    // Validate event type
+    if (options.event && !this.validEvents.includes(options.event as string)) {
+      throw new Error(
+        `Invalid event type: ${options.event}. Available options: ${this.validEvents.join(', ')}`
+      );
+    }
   }
 
   /**
@@ -303,6 +313,10 @@ export class CLI {
       .option(
         '--analyze-branch-diff',
         'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+      )
+      .option(
+        '--event <type>',
+        'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .addHelpText('after', this.getExamplesText());
