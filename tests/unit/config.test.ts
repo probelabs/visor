@@ -91,6 +91,37 @@ output:
         'Failed to read configuration file'
       );
     });
+
+    it('should resolve relative paths to absolute paths', async () => {
+      const validConfig = `
+version: "1.0"
+checks:
+  test:
+    type: ai
+    prompt: "Test"
+`;
+
+      // Mock existsSync to check that the resolved path is used
+      mockFs.existsSync.mockImplementation((filePath: any) => {
+        // Should be called with the resolved absolute path
+        return path.isAbsolute(filePath as string);
+      });
+
+      mockFs.readFileSync.mockReturnValue(validConfig);
+
+      // Pass a relative path
+      await configManager.loadConfig('./test-config/.visor.yaml');
+
+      // Verify that existsSync was called with an absolute path
+      expect(mockFs.existsSync).toHaveBeenCalled();
+      const callArg = mockFs.existsSync.mock.calls[0][0] as string;
+      expect(path.isAbsolute(callArg)).toBe(true);
+
+      // Verify that readFileSync was also called with an absolute path
+      expect(mockFs.readFileSync).toHaveBeenCalled();
+      const readCallArg = mockFs.readFileSync.mock.calls[0][0] as string;
+      expect(path.isAbsolute(readCallArg)).toBe(true);
+    });
   });
 
   describe('Schema Validation', () => {
