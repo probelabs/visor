@@ -97,6 +97,7 @@
     "ajv-formats": "^3.0.1",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.0",
+    "dotenv": "^17.2.3",
     "js-yaml": "^4.1.0",
     "liquidjs": "^10.21.1",
     "node-cron": "^3.0.3",
