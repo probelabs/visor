@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npx @probelabs/visor --config .visor.yaml --output json
+      - run: npx -y visor@latest --config .visor.yaml --output json
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npx @probelabs/visor --mode github-actions --config .visor.yaml --output json
+      - run: npx -y visor@latest --mode github-actions --config .visor.yaml --output json
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```

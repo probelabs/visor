@@ -77,7 +77,7 @@ jobs:
         if: success()
         run: |
           echo "🎉 Successfully published @probelabs/visor@${GITHUB_REF#refs/tags/v} to npm!"
-          echo "📦 Install with: npx -y @probelabs/visor"
+          echo "📦 Install with: npx -y visor@latest"
 
   # GitHub Release creation with AI-generated notes
   create-release:
@@ -193,7 +193,7 @@ jobs:
 
             ### Using Visor CLI
             ```bash
-            npx -y @probelabs/visor --check all
+            npx -y visor@latest --check all
             ```
 
             ### Installation Options
@@ -206,7 +206,7 @@ jobs:
 
             **NPX (No installation)**
             ```bash
-            npx -y @probelabs/visor --check security --output json
+            npx -y visor@latest --check security --output json
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

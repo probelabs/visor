@@ -75,7 +75,7 @@ Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
 
 - One‑off run
   ```bash
-  npx @probelabs/visor --check all --output table
+  npx -y visor@latest --check all --output table
   ```
 - Project dev dependency
   ```bash
@@ -210,7 +210,7 @@ Start with the defaults, iterate locally, and commit a shared `.visor.yaml` for 
 
 Example:
 ```bash
-npx @probelabs/visor --check all --debug
+npx -y visor@latest --check all --debug
 ```
 
 Learn more: [docs/dev-playbook.md](docs/dev-playbook.md)
@@ -308,10 +308,10 @@ Examples:
 
 ```bash
 # Local/CI CLI
-npx @probelabs/visor --config .visor.yaml --check all --output json
+npx -y visor@latest --config .visor.yaml --check all --output json
 
 # GitHub Actions behavior from any shell/CI
-npx @probelabs/visor --mode github-actions --config .visor.yaml --check all
+npx -y visor@latest --mode github-actions --config .visor.yaml --check all
 ```
 
 GitHub Action usage:

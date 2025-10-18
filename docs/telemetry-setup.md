@@ -111,7 +111,7 @@ service:
     export VISOR_TELEMETRY_SINK=otlp
     export OTEL_EXPORTER_OTLP_ENDPOINT=${{ secrets.OTEL_ENDPOINT }}
     export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${{ secrets.OTEL_TOKEN }}"
-    npx -y @probelabs/visor --config ./.visor.yaml --output json
+    npx -y visor@latest --config ./.visor.yaml --output json
 ```
 
 Troubleshooting:

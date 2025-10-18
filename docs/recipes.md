@@ -12,7 +12,7 @@ checks:
 
 - Fast local pre-commit hook (Husky)
 ```bash
-npx husky add .husky/pre-commit "npx @probelabs/visor --tags local,fast --output table || exit 1"
+npx husky add .husky/pre-commit "npx -y visor@latest --tags local,fast --output table || exit 1"
 ```
 
 - More examples

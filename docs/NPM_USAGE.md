@@ -5,7 +5,7 @@
 Run Visor directly using npx:
 
 ```bash
-npx -y @probelabs/visor --help
+npx -y visor@latest --help
 ```
 
 ## Global Installation
@@ -46,13 +46,13 @@ Add to your package.json scripts:
 ### Validate configuration
 ```bash
 # Validate config in current directory (searches for .visor.yaml)
-npx -y @probelabs/visor validate
+npx -y visor@latest validate
 
 # Validate specific config file
-npx -y @probelabs/visor validate --config .visor.yaml
+npx -y visor@latest validate --config .visor.yaml
 
 # Validate before committing
-npx -y @probelabs/visor validate --config examples/my-config.yaml
+npx -y visor@latest validate --config examples/my-config.yaml
 ```
 
 The `validate` command checks your configuration for:
@@ -65,27 +65,27 @@ It provides detailed error messages with helpful hints to fix issues.
 
 ### Run all checks
 ```bash
-npx -y @probelabs/visor --check all
+npx -y visor@latest --check all
 ```
 
 ### Security check with JSON output
 ```bash
-npx -y @probelabs/visor --check security --output json
+npx -y visor@latest --check security --output json
 ```
 
 ### Multiple checks with custom config
 ```bash
-npx -y @probelabs/visor --check performance --check architecture --config .visor.yaml
+npx -y visor@latest --check performance --check architecture --config .visor.yaml
 ```
 
 ### Generate SARIF report for CI/CD
 ```bash
-npx -y @probelabs/visor --check security --output sarif --output-file results.sarif
+npx -y visor@latest --check security --output sarif --output-file results.sarif
 ```
 
 ### Save JSON to a file (recommended)
 ```bash
-npx -y @probelabs/visor --check all --output json --output-file visor-results.json
+npx -y visor@latest --check all --output json --output-file visor-results.json
 ```
 
 ## Configuration
@@ -127,7 +127,7 @@ Add to your GitHub Actions workflow:
 
 ```yaml
 - name: Run Visor Code Review
-  run: npx -y @probelabs/visor --check all --output markdown
+  run: npx -y visor@latest --check all --output markdown
   env:
     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
