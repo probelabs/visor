@@ -32,10 +32,10 @@ Tip: If you prefer zero install, you can still run:
 `npx reveal-md workshop/slides.md -w`
 
 Labs quicklinks (using npx):
-- Basic: `npx -y @probelabs/visor --config workshop/labs/lab-01-basic.yaml --tags local,fast --output table`
-- Command: `npx -y @probelabs/visor --config workshop/labs/lab-02-command.yaml --check unit-tests --output markdown`
-- Debug: `npx -y @probelabs/visor --config workshop/labs/lab-03-debug.yaml --check debug-check --output markdown --debug`
-- Planner (mock provider): `npx -y @probelabs/visor --config workshop/labs/lab-04-planner.yaml --output markdown`
+- Basic: `npx -y @probelabs/visor@latest --config workshop/labs/lab-01-basic.yaml --tags local,fast --output table`
+- Command: `npx -y @probelabs/visor@latest --config workshop/labs/lab-02-command.yaml --check unit-tests --output markdown`
+- Debug: `npx -y @probelabs/visor@latest --config workshop/labs/lab-03-debug.yaml --check debug-check --output markdown --debug`
+- Planner (mock provider): `npx -y @probelabs/visor@latest --config workshop/labs/lab-04-planner.yaml --output markdown`
 
 Notes on AI providers
 - If your shell exports real AI keys (e.g., `GOOGLE_API_KEY`), Visor will auto‑select that provider and make network calls.
@@ -43,5 +43,5 @@ Notes on AI providers
 
 ```bash
 env -u GOOGLE_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
-npx -y @probelabs/visor --config workshop/labs/lab-04-planner.yaml --output markdown
+npx -y @probelabs/visor@latest --config workshop/labs/lab-04-planner.yaml --output markdown
 ```

@@ -252,16 +252,16 @@ Run the examples directly from the repo root:
 
 ```bash
 # Basic retry + goto ancestor
-npx -y @probelabs/visor --config examples/routing-basic.yaml --output table
+npx -y @probelabs/visor@latest --config examples/routing-basic.yaml --output table
 
 # on_success: run notify and jump back once to re-run unit-tests
-npx -y @probelabs/visor --config examples/routing-on-success.yaml --output table
+npx -y @probelabs/visor@latest --config examples/routing-on-success.yaml --output table
 
 # forEach remediation: mark missing items then retry
-npx -y @probelabs/visor --config examples/routing-foreach.yaml --output table
+npx -y @probelabs/visor@latest --config examples/routing-foreach.yaml --output table
 
 # Dynamic routing with *_js hooks
-npx -y @probelabs/visor --config examples/routing-dynamic-js.yaml --output table
+npx -y @probelabs/visor@latest --config examples/routing-dynamic-js.yaml --output table
 ```
 
 Notes:

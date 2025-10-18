@@ -197,7 +197,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
 
-**CLI:** `npx -y @probelabs/visor --output table`
+**CLI:** `npx -y @probelabs/visor@latest --output table`
 
 </div>
 
@@ -231,17 +231,17 @@ Everything works immediately after installation with sensible defaults. Customiz
 
 **1) Run defaults locally (all checks):**
 ```bash
-npx -y @probelabs/visor --output table --debug
+npx -y @probelabs/visor@latest --output table --debug
 ```
 
 **2) Try JSON output to a file:**
 ```bash
-npx -y @probelabs/visor --check security --output json --output-file visor-results.json
+npx -y @probelabs/visor@latest --check security --output json --output-file visor-results.json
 ```
 
 **3) Filter by tags (fast/local):**
 ```bash
-npx -y @probelabs/visor --tags local,fast --max-parallelism 5
+npx -y @probelabs/visor@latest --tags local,fast --max-parallelism 5
 ```
 
 </div>
@@ -356,10 +356,10 @@ checks:
 **Run specific tags:**
 ```bash
 # Fast local checks only
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # Comprehensive checks
-npx -y @probelabs/visor --tags comprehensive
+npx -y @probelabs/visor@latest --tags comprehensive
 ```
 
 **Common tag patterns:** `local`, `fast`, `comprehensive`, `security`, `ci`, `manual`
@@ -565,7 +565,7 @@ checks:
 Run only the `overview` and `security` checks:
 
 ```bash
-npx -y @probelabs/visor --check overview,security --output table
+npx -y @probelabs/visor@latest --check overview,security --output table
 ```
 
 Add `--debug` to see dependency decisions and timing.
@@ -636,7 +636,7 @@ checks:
 - GitHub annotations at file:line:column
 - Grouped comments prevent PR spam
 
-**Run specific checks:** `npx @probelabs/visor --check security,performance`
+**Run specific checks:** `npx -y @probelabs/visor@latest --check security,performance`
 
 </div>
 
@@ -727,10 +727,10 @@ checks:
 **Usage:**
 ```bash
 # Local development - fast checks with debug logging
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # CI environment - comprehensive checks with notifications
-npx -y @probelabs/visor --tags ci,comprehensive
+npx -y @probelabs/visor@latest --tags ci,comprehensive
 ```
 
 </div>
@@ -898,7 +898,7 @@ checks:
 Open `workshop/labs/lab-01-basic.yaml` and run:
 
 ```bash
-npx -y @probelabs/visor --config workshop/labs/lab-01-basic.yaml \
+npx -y @probelabs/visor@latest --config workshop/labs/lab-01-basic.yaml \
   --tags local,fast --output table
 ```
 
@@ -1171,7 +1171,7 @@ checks:
 # Generate release notes
 TAG_NAME=v1.0.0 GIT_LOG="$(git log --oneline -n 20)" \
 GIT_DIFF_STAT="$(git diff --stat HEAD~20..HEAD)" \
-npx -y @probelabs/visor --check release-notes --output markdown \
+npx -y @probelabs/visor@latest --check release-notes --output markdown \
   --output-file release-notes.md
 
 # Create GitHub release with generated notes
@@ -1250,16 +1250,16 @@ Try the example configs:
 
 ```bash
 # HTTP integration
-npx -y @probelabs/visor --config examples/http-integration-config.yaml \
+npx -y @probelabs/visor@latest --config examples/http-integration-config.yaml \
   --check github-webhook --output table
 
 # Cron webhook
-npx -y @probelabs/visor --config examples/cron-webhook-config.yaml \
+npx -y @probelabs/visor@latest --config examples/cron-webhook-config.yaml \
   --output table
 
 # Jira integration
 JIRA_ISSUE=PROJ-123 JIRA_TOKEN=xxx \
-npx -y @probelabs/visor --config examples/jira-simple-example.yaml \
+npx -y @probelabs/visor@latest --config examples/jira-simple-example.yaml \
   --output markdown
 ```
 
@@ -1276,7 +1276,7 @@ Simulate a release notes generation:
 ```bash
 TAG_NAME=v1.0.0 GIT_LOG="$(git log --oneline -n 20)" \
 GIT_DIFF_STAT="$(git diff --stat HEAD~20..HEAD)" \
-npx -y @probelabs/visor --config defaults/.visor.yaml \
+npx -y @probelabs/visor@latest --config defaults/.visor.yaml \
   --check release-notes --output markdown
 ```
 
@@ -1372,7 +1372,7 @@ checks:
 Run the foreach example and observe dependency propagation:
 
 ```bash
-npx -y @probelabs/visor --config examples/forEach-example.yaml \
+npx -y @probelabs/visor@latest --config examples/forEach-example.yaml \
   --output table --debug
 ```
 
@@ -1394,7 +1394,7 @@ Tools and techniques for debugging Visor workflows
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```bash
-npx -y @probelabs/visor --check security --debug
+npx -y @probelabs/visor@latest --check security --debug
 ```
 
 **Shows:**
@@ -1464,11 +1464,11 @@ checks:
 
 ```bash
 # JSON output for processing
-npx -y @probelabs/visor --check security \
+npx -y @probelabs/visor@latest --check security \
   --output json --output-file results.json
 
 # SARIF for GitHub Code Scanning
-npx -y @probelabs/visor --check security \
+npx -y @probelabs/visor@latest --check security \
   --output sarif --output-file results.sarif
 
 # Then analyze or upload
@@ -1520,7 +1520,7 @@ npx -y @probelabs/probe agent "Review error handling in src/api/"
 Run the debug example config:
 
 ```bash
-npx -y @probelabs/visor --config workshop/labs/lab-03-debug.yaml \
+npx -y @probelabs/visor@latest --config workshop/labs/lab-03-debug.yaml \
   --check debug-check --output markdown --debug
 ```
 
@@ -1724,7 +1724,7 @@ checks:
 
 **Run with mock provider:**
 ```bash
-npx -y @probelabs/visor \
+npx -y @probelabs/visor@latest \
   --config workshop/labs/lab-04-planner.yaml \
   --output markdown --debug
 ```
@@ -1732,7 +1732,7 @@ npx -y @probelabs/visor \
 **With custom task:**
 ```bash
 TASK_DESC="Add caching to HTTP client" \
-  npx -y @probelabs/visor \
+  npx -y @probelabs/visor@latest \
   --config workshop/labs/lab-04-planner.yaml \
   --output markdown
 ```
@@ -1741,7 +1741,7 @@ TASK_DESC="Add caching to HTTP client" \
 
 Note:
 For offline demos, unset AI keys to force mock provider:
-`env -u GOOGLE_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY npx -y @probelabs/visor ...`
+`env -u GOOGLE_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY npx -y @probelabs/visor@latest ...`
 
 ---
 
@@ -1751,20 +1751,20 @@ For offline demos, unset AI keys to force mock provider:
 
 ```bash
 # Run all checks from current config
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 
 # Filter by tags
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # JSON/SARIF outputs
-npx -y @probelabs/visor --check security --output json --output-file results.json
-npx -y @probelabs/visor --check security --output sarif --output-file results.sarif
+npx -y @probelabs/visor@latest --check security --output json --output-file results.json
+npx -y @probelabs/visor@latest --check security --output sarif --output-file results.sarif
 
 # Use a specific config
-npx -y @probelabs/visor --config workshop/labs/lab-01-basic.yaml --tags local,fast
+npx -y @probelabs/visor@latest --config workshop/labs/lab-01-basic.yaml --tags local,fast
 
 # Debugging
-npx -y @probelabs/visor --debug
+npx -y @probelabs/visor@latest --debug
 ```
 
 </div>
@@ -1870,7 +1870,7 @@ https://github.com/TykTechnologies/tyk/blob/master/.visor.yaml
 **1. Run with defaults:**
 ```bash
 # No config needed - uses built-in defaults
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 ```
 
 **2. Clone and customize:**
@@ -1945,7 +1945,7 @@ checks:
 
 **🚀 Get Started:**
 ```bash
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 ```
 
 </div>

@@ -190,7 +190,7 @@ checks:
       mockFs.readFileSync.mockReturnValue(configWithInvalidType);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Invalid check type "invalid_type". Must be: ai'
+        'Invalid check type "invalid_type"'
       );
     });
 

@@ -111,10 +111,9 @@ service:
     export VISOR_TELEMETRY_SINK=otlp
     export OTEL_EXPORTER_OTLP_ENDPOINT=${{ secrets.OTEL_ENDPOINT }}
     export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${{ secrets.OTEL_TOKEN }}"
-    npx -y @probelabs/visor --config ./.visor.yaml --output json
+    npx -y @probelabs/visor@latest --config ./.visor.yaml --output json
 ```
 
 Troubleshooting:
 - No spans? Check `VISOR_TELEMETRY_ENABLED`, `VISOR_TELEMETRY_SINK`, and that optional deps resolved in the environment.
 - Huge mermaid outputs? Consider adding a soft length cap in Visor or pre-truncating in templates.
-

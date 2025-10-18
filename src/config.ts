@@ -32,8 +32,10 @@ export class ConfigManager {
     'http',
     'http_input',
     'http_client',
+    'memory',
     'noop',
     'log',
+    'memory',
     'github',
   ];
   private validEventTriggers: EventTrigger[] = [

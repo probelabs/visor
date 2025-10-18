@@ -5,7 +5,7 @@
 Run Visor directly using npx:
 
 ```bash
-npx -y @probelabs/visor --help
+npx -y @probelabs/visor@latest --help
 ```
 
 ## Global Installation
@@ -65,27 +65,27 @@ It provides detailed error messages with helpful hints to fix issues.
 
 ### Run all checks
 ```bash
-npx -y @probelabs/visor --check all
+npx -y @probelabs/visor@latest --check all
 ```
 
 ### Security check with JSON output
 ```bash
-npx -y @probelabs/visor --check security --output json
+npx -y @probelabs/visor@latest --check security --output json
 ```
 
 ### Multiple checks with custom config
 ```bash
-npx -y @probelabs/visor --check performance --check architecture --config .visor.yaml
+npx -y @probelabs/visor@latest --check performance --check architecture --config .visor.yaml
 ```
 
 ### Generate SARIF report for CI/CD
 ```bash
-npx -y @probelabs/visor --check security --output sarif --output-file results.sarif
+npx -y @probelabs/visor@latest --check security --output sarif --output-file results.sarif
 ```
 
 ### Save JSON to a file (recommended)
 ```bash
-npx -y @probelabs/visor --check all --output json --output-file visor-results.json
+npx -y @probelabs/visor@latest --check all --output json --output-file visor-results.json
 ```
 
 ## Configuration
@@ -127,7 +127,7 @@ Add to your GitHub Actions workflow:
 
 ```yaml
 - name: Run Visor Code Review
-  run: npx -y @probelabs/visor --check all --output markdown
+  run: npx -y @probelabs/visor@latest --check all --output markdown
   env:
     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
