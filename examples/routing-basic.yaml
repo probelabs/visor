@@ -9,7 +9,7 @@ routing:
         max: 1
         backoff: { mode: exponential, delay_ms: 400 }
 
-checks:
+steps:
   setup-env:
     type: command
     exec: "echo '[setup] preparing environment'"

@@ -4,7 +4,7 @@ version: "1.0"
 ai_provider: mock
 max_parallelism: 3
 
-checks:
+steps:
   classify-task:
     type: ai
     group: planning

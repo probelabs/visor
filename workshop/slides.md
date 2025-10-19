@@ -197,7 +197,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
 
-**CLI:** `npx -y @probelabs/visor --output table`
+**CLI:** `npx -y @probelabs/visor@latest --output table`
 
 </div>
 
@@ -231,17 +231,17 @@ Everything works immediately after installation with sensible defaults. Customiz
 
 **1) Run defaults locally (all checks):**
 ```bash
-npx -y @probelabs/visor --output table --debug
+npx -y @probelabs/visor@latest --output table --debug
 ```
 
 **2) Try JSON output to a file:**
 ```bash
-npx -y @probelabs/visor --check security --output json --output-file visor-results.json
+npx -y @probelabs/visor@latest --check security --output json --output-file visor-results.json
 ```
 
 **3) Filter by tags (fast/local):**
 ```bash
-npx -y @probelabs/visor --tags local,fast --max-parallelism 5
+npx -y @probelabs/visor@latest --tags local,fast --max-parallelism 5
 ```
 
 </div>
@@ -264,7 +264,7 @@ The building blocks of Visor configuration
 A **check** is a single unit of work in your workflow:
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     prompt: "Find security vulnerabilities"
@@ -290,7 +290,7 @@ checks:
 **Provider** determines how a check executes:
 
 ```yaml
-checks:
+steps:
   ai-review:    { type: ai }        # AI analysis (Probe)
   run-tests:    { type: command }   # Shell command
   notify-slack: { type: http }      # HTTP webhook
@@ -315,7 +315,7 @@ checks:
 **`depends_on`** defines check execution order:
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     # Runs first (no dependencies)
@@ -343,7 +343,7 @@ checks:
 **Tags** organize checks for selective execution:
 
 ```yaml
-checks:
+steps:
   quick-security:
     type: ai
     tags: [local, fast, security]
@@ -356,10 +356,10 @@ checks:
 **Run specific tags:**
 ```bash
 # Fast local checks only
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # Comprehensive checks
-npx -y @probelabs/visor --tags comprehensive
+npx -y @probelabs/visor@latest --tags comprehensive
 ```
 
 **Common tag patterns:** `local`, `fast`, `comprehensive`, `security`, `ci`, `manual`
@@ -375,7 +375,7 @@ npx -y @probelabs/visor --tags comprehensive
 **Schema** defines output structure (JSON Schema):
 
 ```yaml
-checks:
+steps:
   custom-check:
     type: ai
     schema:
@@ -389,7 +389,7 @@ checks:
 
 **Special `code-review` schema:**
 ```yaml
-checks:
+steps:
   security:
     schema: code-review  # Required for GitHub annotations
 ```
@@ -407,7 +407,7 @@ checks:
 **Groups** organize GitHub PR comments:
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     group: overview  # Posted as separate comment
@@ -434,7 +434,7 @@ checks:
 
 **`on`** — Control when checks run based on GitHub events:
 ```yaml
-checks:
+steps:
   quick-review:
     type: ai
     on: [pull_request_opened, pull_request_synchronize]
@@ -472,7 +472,7 @@ checks:
 
 **`if`** — Run check conditionally:
 ```yaml
-checks:
+steps:
   large-pr-review:
     type: ai
     if: "{{ files | size }} > 10"  # Only if >10 files changed
@@ -481,7 +481,7 @@ checks:
 
 **`fail_if`** — Fail based on condition:
 ```yaml
-checks:
+steps:
   security-gate:
     type: ai
     fail_if: "{{ outputs['security'] | size }} > 0"  # Fail if issues found
@@ -503,7 +503,7 @@ checks:
 
 ```yaml
 # defaults/.visor.yaml (excerpt)
-checks:
+steps:
   overview:
     type: ai
     schema: plain
@@ -565,7 +565,7 @@ checks:
 Run only the `overview` and `security` checks:
 
 ```bash
-npx -y @probelabs/visor --check overview,security --output table
+npx -y @probelabs/visor@latest --check overview,security --output table
 ```
 
 Add `--debug` to see dependency decisions and timing.
@@ -587,7 +587,7 @@ Native GitHub integration with check runs and inline annotations
 **The `code-review` schema enables GitHub annotations:**
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     schema: code-review  # Required for GitHub check runs
@@ -636,7 +636,7 @@ checks:
 - GitHub annotations at file:line:column
 - Grouped comments prevent PR spam
 
-**Run specific checks:** `npx @probelabs/visor --check security,performance`
+**Run specific checks:** `npx -y @probelabs/visor@latest --check security,performance`
 
 </div>
 
@@ -699,7 +699,7 @@ Start from defaults, extend for your repo’s needs.
 **Tags organize checks for different environments and scenarios:**
 
 ```yaml
-checks:
+steps:
   debug-pr:
     type: logger
     tags: [local, fast]
@@ -727,10 +727,10 @@ checks:
 **Usage:**
 ```bash
 # Local development - fast checks with debug logging
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # CI environment - comprehensive checks with notifications
-npx -y @probelabs/visor --tags ci,comprehensive
+npx -y @probelabs/visor@latest --tags ci,comprehensive
 ```
 
 </div>
@@ -744,7 +744,7 @@ npx -y @probelabs/visor --tags ci,comprehensive
 **Dependencies control execution order and data flow:**
 
 ```yaml
-checks:
+steps:
   # Phase 1: Run in parallel (no dependencies)
   security:
     type: ai
@@ -792,26 +792,26 @@ checks:
 
 **AI prompts:**
 ```yaml
-checks:
+steps:
   inline:  { type: ai, prompt: "Review {{ files | size }} files in {{ pr.title }}" }
   file:    { type: ai, prompt: ./prompts/security.liquid }
 ```
 
 **Command execution:**
 ```yaml
-checks:
+steps:
   test:    { type: command, exec: "npm test -- {{ files | map: 'filename' | join: ' ' }}" }
 ```
 
 **Logger messages:**
 ```yaml
-checks:
+steps:
   debug:   { type: logger, message: "PR #{{ pr.number }}: {{ files | json }}" }
 ```
 
 **HTTP bodies:**
 ```yaml
-checks:
+steps:
   slack:   { type: http, body: '{"text": "{{ pr.title }}: {{ outputs.security | size }} issues"}' }
 ```
 
@@ -826,7 +826,7 @@ checks:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   security-scan:
     type: ai
     schema: code-review  # Special schema for GitHub annotations
@@ -861,7 +861,7 @@ checks:
 # .visor.yaml — customize defaults for your project
 extends: defaults  # Inherit default checks and configuration
 
-checks:
+steps:
   # Disable a default check
   style:
     enabled: false
@@ -898,7 +898,7 @@ checks:
 Open `workshop/labs/lab-01-basic.yaml` and run:
 
 ```bash
-npx -y @probelabs/visor --config workshop/labs/lab-01-basic.yaml \
+npx -y @probelabs/visor@latest --config workshop/labs/lab-01-basic.yaml \
   --tags local,fast --output table
 ```
 
@@ -956,7 +956,7 @@ When you use `type: ai`, Visor runs **Probe** — a specialized AI agent for cod
 
 **Example:**
 ```yaml
-checks:
+steps:
   security:
     type: ai  # Runs Probe agent
     prompt: "Find security vulnerabilities"
@@ -976,7 +976,7 @@ checks:
 
 **Custom schema:**
 ```yaml
-checks:
+steps:
   list-files:
     type: ai
     schema:
@@ -991,7 +991,7 @@ checks:
 
 **Special `code-review` schema (GitHub integration):**
 ```yaml
-checks:
+steps:
   security:
     type: ai
     schema: code-review  # Required for GitHub check runs & annotations
@@ -1039,7 +1039,7 @@ checks:
 **Example:** Same config, automatic adaptation
 
 ```yaml
-checks:
+steps:
   security:
     schema: code-review
     # GitHub Actions: check run + annotations
@@ -1095,7 +1095,7 @@ checks:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   large-pr-review:
     type: ai
     if: "{{ files | size }} > 10"  # Only run if >10 files changed
@@ -1155,7 +1155,7 @@ checks:
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   release-notes:
     type: ai
     on: [manual]  # Trigger manually or in release workflow
@@ -1171,7 +1171,7 @@ checks:
 # Generate release notes
 TAG_NAME=v1.0.0 GIT_LOG="$(git log --oneline -n 20)" \
 GIT_DIFF_STAT="$(git diff --stat HEAD~20..HEAD)" \
-npx -y @probelabs/visor --check release-notes --output markdown \
+npx -y @probelabs/visor@latest --check release-notes --output markdown \
   --output-file release-notes.md
 
 # Create GitHub release with generated notes
@@ -1187,7 +1187,7 @@ gh release create v1.0.0 --notes-file release-notes.md
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   weekly-security-audit:
     type: ai
     schema: code-review
@@ -1216,7 +1216,7 @@ on:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   github-webhook:
     type: http
     method: POST
@@ -1250,16 +1250,16 @@ Try the example configs:
 
 ```bash
 # HTTP integration
-npx -y @probelabs/visor --config examples/http-integration-config.yaml \
+npx -y @probelabs/visor@latest --config examples/http-integration-config.yaml \
   --check github-webhook --output table
 
 # Cron webhook
-npx -y @probelabs/visor --config examples/cron-webhook-config.yaml \
+npx -y @probelabs/visor@latest --config examples/cron-webhook-config.yaml \
   --output table
 
 # Jira integration
 JIRA_ISSUE=PROJ-123 JIRA_TOKEN=xxx \
-npx -y @probelabs/visor --config examples/jira-simple-example.yaml \
+npx -y @probelabs/visor@latest --config examples/jira-simple-example.yaml \
   --output markdown
 ```
 
@@ -1276,7 +1276,7 @@ Simulate a release notes generation:
 ```bash
 TAG_NAME=v1.0.0 GIT_LOG="$(git log --oneline -n 20)" \
 GIT_DIFF_STAT="$(git diff --stat HEAD~20..HEAD)" \
-npx -y @probelabs/visor --config defaults/.visor.yaml \
+npx -y @probelabs/visor@latest --config defaults/.visor.yaml \
   --check release-notes --output markdown
 ```
 
@@ -1298,7 +1298,7 @@ Use `forEach` and loop patterns for multi-target checks
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   # Step 1: Output an array (forEach: true)
   get-changed-js-files:
     type: command
@@ -1330,7 +1330,7 @@ checks:
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   # AI outputs array of security-sensitive files
   list-security-concerns:
     type: ai
@@ -1372,7 +1372,7 @@ checks:
 Run the foreach example and observe dependency propagation:
 
 ```bash
-npx -y @probelabs/visor --config examples/forEach-example.yaml \
+npx -y @probelabs/visor@latest --config examples/forEach-example.yaml \
   --output table --debug
 ```
 
@@ -1394,7 +1394,7 @@ Tools and techniques for debugging Visor workflows
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```bash
-npx -y @probelabs/visor --check security --debug
+npx -y @probelabs/visor@latest --check security --debug
 ```
 
 **Shows:**
@@ -1415,7 +1415,7 @@ npx -y @probelabs/visor --check security --debug
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   conditional-check:
     type: ai
     if: |
@@ -1438,7 +1438,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: logger
     message: |
@@ -1464,11 +1464,11 @@ checks:
 
 ```bash
 # JSON output for processing
-npx -y @probelabs/visor --check security \
+npx -y @probelabs/visor@latest --check security \
   --output json --output-file results.json
 
 # SARIF for GitHub Code Scanning
-npx -y @probelabs/visor --check security \
+npx -y @probelabs/visor@latest --check security \
   --output sarif --output-file results.sarif
 
 # Then analyze or upload
@@ -1520,7 +1520,7 @@ npx -y @probelabs/probe agent "Review error handling in src/api/"
 Run the debug example config:
 
 ```bash
-npx -y @probelabs/visor --config workshop/labs/lab-03-debug.yaml \
+npx -y @probelabs/visor@latest --config workshop/labs/lab-03-debug.yaml \
   --check debug-check --output markdown --debug
 ```
 
@@ -1541,7 +1541,7 @@ All available provider types with use cases
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   security-review:
     type: ai
     schema: code-review
@@ -1568,7 +1568,7 @@ checks:
 MCP (Model Context Protocol) gives AI access to external tools and data:
 
 ```yaml
-checks:
+steps:
   ticket-and-customer-review:
     type: ai
     ai_mcp_servers:
@@ -1607,7 +1607,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   run-tests:
     type: command
     exec: "npm test --silent"
@@ -1637,7 +1637,7 @@ checks:
 
 **HTTP (send output to webhook):**
 ```yaml
-checks:
+steps:
   notify-slack:
     type: http
     method: POST
@@ -1648,7 +1648,7 @@ checks:
 
 **HTTP Client (fetch data from API):**
 ```yaml
-checks:
+steps:
   get-jira-status:
     type: http_client
     url: "https://jira.company.com/api/issue/{{ env.JIRA_ISSUE }}"
@@ -1669,7 +1669,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   debug-context:
     type: logger
     message: |
@@ -1693,7 +1693,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   wait-for-all:
     type: noop
     depends_on: [security, performance, quality]
@@ -1724,7 +1724,7 @@ checks:
 
 **Run with mock provider:**
 ```bash
-npx -y @probelabs/visor \
+npx -y @probelabs/visor@latest \
   --config workshop/labs/lab-04-planner.yaml \
   --output markdown --debug
 ```
@@ -1732,7 +1732,7 @@ npx -y @probelabs/visor \
 **With custom task:**
 ```bash
 TASK_DESC="Add caching to HTTP client" \
-  npx -y @probelabs/visor \
+  npx -y @probelabs/visor@latest \
   --config workshop/labs/lab-04-planner.yaml \
   --output markdown
 ```
@@ -1741,7 +1741,7 @@ TASK_DESC="Add caching to HTTP client" \
 
 Note:
 For offline demos, unset AI keys to force mock provider:
-`env -u GOOGLE_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY npx -y @probelabs/visor ...`
+`env -u GOOGLE_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY npx -y @probelabs/visor@latest ...`
 
 ---
 
@@ -1751,20 +1751,20 @@ For offline demos, unset AI keys to force mock provider:
 
 ```bash
 # Run all checks from current config
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 
 # Filter by tags
-npx -y @probelabs/visor --tags local,fast
+npx -y @probelabs/visor@latest --tags local,fast
 
 # JSON/SARIF outputs
-npx -y @probelabs/visor --check security --output json --output-file results.json
-npx -y @probelabs/visor --check security --output sarif --output-file results.sarif
+npx -y @probelabs/visor@latest --check security --output json --output-file results.json
+npx -y @probelabs/visor@latest --check security --output sarif --output-file results.sarif
 
 # Use a specific config
-npx -y @probelabs/visor --config workshop/labs/lab-01-basic.yaml --tags local,fast
+npx -y @probelabs/visor@latest --config workshop/labs/lab-01-basic.yaml --tags local,fast
 
 # Debugging
-npx -y @probelabs/visor --debug
+npx -y @probelabs/visor@latest --debug
 ```
 
 </div>
@@ -1870,7 +1870,7 @@ https://github.com/TykTechnologies/tyk/blob/master/.visor.yaml
 **1. Run with defaults:**
 ```bash
 # No config needed - uses built-in defaults
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 ```
 
 **2. Clone and customize:**
@@ -1898,7 +1898,7 @@ echo "extends: defaults" > .visor.yaml
 
 **1. Auto-labeling issues & PRs:**
 ```yaml
-checks:
+steps:
   auto-label:
     type: ai
     prompt: |
@@ -1909,7 +1909,7 @@ checks:
 
 **2. Auto-fix simple issues with `implement` tool:**
 ```yaml
-checks:
+steps:
   auto-fix:
     type: ai
     tools: [implement, run_tests]  # AI can edit code and run tests
@@ -1945,7 +1945,7 @@ checks:
 
 **🚀 Get Started:**
 ```bash
-npx -y @probelabs/visor --output table
+npx -y @probelabs/visor@latest --output table
 ```
 
 </div>

@@ -10,7 +10,7 @@ Visor pairs JSON Schemas (data shape) with Liquid templates (rendering) so outpu
 ### Quick Example
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     group: code-review
@@ -31,7 +31,7 @@ checks:
 ### Grouping
 
 ```yaml
-checks:
+steps:
   security:   { group: code-review }
   performance:{ group: code-review }
   overview:   { group: summary }
@@ -45,7 +45,7 @@ schemas:
   custom-metrics:
     file: ./schemas/metrics.json
 
-checks:
+steps:
   metrics:
     schema: custom-metrics
     group: metrics

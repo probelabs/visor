@@ -25,10 +25,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Build package (skip pre/post scripts)
         run: npm run build --ignore-scripts
@@ -78,10 +84,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Build (first to ensure dist/ exists)
         run: npm run build --ignore-scripts

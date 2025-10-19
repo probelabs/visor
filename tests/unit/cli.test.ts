@@ -239,6 +239,62 @@ describe('CLI Argument Parser', () => {
     });
   });
 
+  describe('Event Type Flags', () => {
+    it('should parse --event flag with valid event type', () => {
+      const result = cli.parseArgs(['--event', 'pr_opened']);
+      expect(result.event).toBe('pr_opened');
+    });
+
+    it('should validate event type against allowed values', () => {
+      const validEvents = [
+        'pr_opened',
+        'pr_updated',
+        'pr_closed',
+        'issue_opened',
+        'issue_comment',
+        'manual',
+        'schedule',
+        'webhook_received',
+        'all',
+      ];
+      validEvents.forEach(event => {
+        expect(() => cli.parseArgs(['--event', event])).not.toThrow();
+      });
+    });
+
+    it('should throw error for invalid event type', () => {
+      expect(() => cli.parseArgs(['--event', 'invalid_event'])).toThrow(
+        'Invalid event type: invalid_event'
+      );
+    });
+
+    it('should include available event types in error message', () => {
+      try {
+        cli.parseArgs(['--event', 'invalid']);
+      } catch (error) {
+        expect(error instanceof Error).toBe(true);
+        expect((error as Error).message).toContain('Available options:');
+        expect((error as Error).message).toContain('pr_opened');
+        expect((error as Error).message).toContain('pr_updated');
+        expect((error as Error).message).toContain('all');
+      }
+    });
+
+    it('should handle --event with other arguments', () => {
+      const result = cli.parseArgs([
+        '--check',
+        'security',
+        '--event',
+        'pr_updated',
+        '--output',
+        'json',
+      ]);
+      expect(result.event).toBe('pr_updated');
+      expect(result.checks).toEqual(['security']);
+      expect(result.output).toBe('json');
+    });
+  });
+
   describe('Integration with Configuration', () => {
     it('should return parsed options in expected format', () => {
       const result = cli.parseArgs(['--check', 'performance', '--output', 'json']);

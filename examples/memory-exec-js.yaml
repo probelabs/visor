@@ -9,21 +9,21 @@ memory:
   storage: memory
   namespace: default
 
-checks:
+steps:
   # Simulate multiple validation checks
   check-security:
     type: command
-    exec: echo '{"issues": 3, "severity": "high"}'
+    exec: 'echo ''{"issues": 3, "severity": "high"}'''
     transform_js: "JSON.parse(output.trim())"
 
   check-performance:
     type: command
-    exec: echo '{"issues": 7, "severity": "medium"}'
+    exec: 'echo ''{"issues": 7, "severity": "medium"}'''
     transform_js: "JSON.parse(output.trim())"
 
   check-style:
     type: command
-    exec: echo '{"issues": 15, "severity": "low"}'
+    exec: 'echo ''{"issues": 15, "severity": "low"}'''
     transform_js: "JSON.parse(output.trim())"
 
   # Use exec_js to aggregate and analyze results

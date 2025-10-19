@@ -16,7 +16,7 @@ ai_mcp_servers:
       JIRA_EMAIL: "${JIRA_EMAIL}"
       JIRA_API_TOKEN: "${JIRA_API_TOKEN}"
 
-checks:
+steps:
   # Main workflow: JQL → Pick → Analyze → Label
   jira_issue_analysis_workflow:
     type: ai

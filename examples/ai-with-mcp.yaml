@@ -14,7 +14,7 @@ ai_mcp_servers:
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/project"]
 
-checks:
+steps:
   # Example 1: Uses global MCP servers (inherits probe and filesystem)
   basic_security_review:
     type: ai

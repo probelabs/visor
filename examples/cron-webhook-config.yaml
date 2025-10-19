@@ -23,7 +23,7 @@ http_server:
     - path: "/ci-complete"
       name: "ci-webhook"
 
-checks:
+steps:
   # Scheduled nightly security scan
   nightly-security-scan:
     type: ai

@@ -68,7 +68,7 @@ describe('Failure Conditions Integration', () => {
     it('should load failure conditions from configuration', () => {
       expect(mockConfig.failure_conditions).toBeDefined();
       expect(mockConfig.failure_conditions?.critical_blocker).toBe('metadata.criticalIssues > 0');
-      expect(mockConfig.checks.security.failure_conditions).toBeDefined();
+      expect(mockConfig.checks!.security.failure_conditions).toBeDefined();
     });
 
     it('should handle missing failure conditions gracefully', () => {
@@ -77,14 +77,14 @@ describe('Failure Conditions Integration', () => {
         failure_conditions: undefined,
         checks: {
           security: {
-            ...mockConfig.checks.security,
+            ...mockConfig.checks!.security,
             failure_conditions: undefined,
           },
         },
       };
 
       expect(configWithoutConditions.failure_conditions).toBeUndefined();
-      expect(configWithoutConditions.checks.security.failure_conditions).toBeUndefined();
+      expect(configWithoutConditions.checks!.security.failure_conditions).toBeUndefined();
     });
   });
 
@@ -192,7 +192,7 @@ describe('Failure Conditions Integration', () => {
         },
         checks: {
           security: {
-            ...mockConfig.checks.security,
+            ...mockConfig.checks!.security,
             failure_conditions: {
               quality_gate: 'metadata.totalIssues > 3', // Override with stricter limit
             },

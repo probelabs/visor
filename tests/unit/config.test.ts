@@ -91,6 +91,37 @@ output:
         'Failed to read configuration file'
       );
     });
+
+    it('should resolve relative paths to absolute paths', async () => {
+      const validConfig = `
+version: "1.0"
+checks:
+  test:
+    type: ai
+    prompt: "Test"
+`;
+
+      // Mock existsSync to check that the resolved path is used
+      mockFs.existsSync.mockImplementation((filePath: any) => {
+        // Should be called with the resolved absolute path
+        return path.isAbsolute(filePath as string);
+      });
+
+      mockFs.readFileSync.mockReturnValue(validConfig);
+
+      // Pass a relative path
+      await configManager.loadConfig('./test-config/.visor.yaml');
+
+      // Verify that existsSync was called with an absolute path
+      expect(mockFs.existsSync).toHaveBeenCalled();
+      const callArg = mockFs.existsSync.mock.calls[0][0] as string;
+      expect(path.isAbsolute(callArg)).toBe(true);
+
+      // Verify that readFileSync was also called with an absolute path
+      expect(mockFs.readFileSync).toHaveBeenCalled();
+      const readCallArg = mockFs.readFileSync.mock.calls[0][0] as string;
+      expect(path.isAbsolute(readCallArg)).toBe(true);
+    });
   });
 
   describe('Schema Validation', () => {
@@ -122,7 +153,7 @@ output:
       mockFs.readFileSync.mockReturnValue(configWithoutChecks);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Missing required field: checks'
+        'either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
       );
     });
 
@@ -141,8 +172,8 @@ checks:
       const config = await configManager.loadConfig('/path/to/config.yaml');
 
       // Should not throw - type defaults to 'ai'
-      expect(config.checks.performance.type).toBe('ai');
-      expect(config.checks.performance.prompt).toBe('Type defaults to ai');
+      expect(config.checks!.performance.type).toBe('ai');
+      expect(config.checks!.performance.prompt).toBe('Type defaults to ai');
     });
 
     it('should validate check type values', async () => {
@@ -159,7 +190,7 @@ checks:
       mockFs.readFileSync.mockReturnValue(configWithInvalidType);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Invalid check type "invalid_type". Must be: ai'
+        'Invalid check type "invalid_type"'
       );
     });
 
@@ -434,9 +465,9 @@ output:
 
       const config = await configManager.loadConfig('/path/to/complex.yaml');
 
-      expect(config.checks.performance.prompt).toContain('N+1 database queries');
-      expect(config.checks.security.prompt).toContain('SQL injection');
-      expect(config.checks.architecture.prompt).toContain('SOLID principles');
+      expect(config.checks!.performance.prompt).toContain('N+1 database queries');
+      expect(config.checks!.security.prompt).toContain('SQL injection');
+      expect(config.checks!.architecture.prompt).toContain('SOLID principles');
       expect(config.output.pr_comment.format).toBe('markdown');
       expect(config.output.pr_comment.collapse).toBe(false);
     });

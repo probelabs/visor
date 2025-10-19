@@ -20,7 +20,7 @@ ai_mcp_servers:
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
 
-checks:
+steps:
   security_review:
     type: ai
     prompt: "Review code using available MCP tools"
@@ -40,7 +40,7 @@ For Claude Code checks, use `claude_code.mcpServers` (provider‑specific) inste
 Override global MCP servers for specific checks:
 
 ```yaml
-checks:
+steps:
   performance_review:
     type: ai
     prompt: "Analyze performance using specialized tools"
@@ -65,7 +65,7 @@ checks:
 Most specific level - overrides both global and check-level:
 
 ```yaml
-checks:
+steps:
   comprehensive_review:
     type: ai
     prompt: "Comprehensive analysis with specific tools"
@@ -84,7 +84,7 @@ checks:
 When using the `claude-code` provider, configure MCP servers under `claude_code.mcpServers`:
 
 ```yaml
-checks:
+steps:
   claude_with_mcp:
     type: claude-code
     prompt: "Analyze code complexity and architecture"

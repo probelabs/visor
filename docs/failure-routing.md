@@ -17,7 +17,7 @@ Retry + goto on failure:
 ```yaml
 version: "2.0"
 routing: { max_loops: 5 }
-checks:
+steps:
   setup: { type: command, exec: "echo setup" }
   build:
     type: command
@@ -32,7 +32,7 @@ checks:
 
 on_success jump-back once + post-steps:
 ```yaml
-checks:
+steps:
   unit: { type: command, exec: "echo unit" }
   build:
     type: command
@@ -49,7 +49,7 @@ checks:
 
 forEach remediation with retry:
 ```yaml
-checks:
+steps:
   list: { type: command, exec: "echo '[\\"a\\",\\"b\\"]'", forEach: true }
   mark: { type: command, depends_on: [list], exec: "touch .m_{{ outputs.list }}" }
   process:
@@ -106,7 +106,7 @@ Key points:
 Example: After `security` succeeds, jump back to `overview` and re-run `security`, evaluating both as if a PR update happened:
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     on: [pr_opened, pr_updated]
@@ -123,7 +123,7 @@ checks:
 Dynamic variant (only jump on first success):
 
 ```yaml
-checks:
+steps:
   quality:
     type: ai
     depends_on: [overview]

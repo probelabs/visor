@@ -175,7 +175,7 @@ strict-review:
 Run different levels of security scanning based on trust level:
 
 ```yaml
-checks:
+steps:
   # Quick scan for trusted members
   security-quick:
     type: command
@@ -200,7 +200,7 @@ checks:
 Block changes to sensitive files from non-members:
 
 ```yaml
-checks:
+steps:
   protect-sensitive:
     type: command
     exec: echo "Checking sensitive files..."
@@ -219,7 +219,7 @@ checks:
 Automatically approve PRs from trusted contributors when checks pass:
 
 ```yaml
-checks:
+steps:
   tests:
     type: command
     exec: npm test
@@ -247,7 +247,7 @@ checks:
 Create a welcoming experience for first-time contributors:
 
 ```yaml
-checks:
+steps:
   welcome-first-timer:
     type: command
     exec: |
@@ -275,7 +275,7 @@ checks:
 Require different levels of review based on changes and author:
 
 ```yaml
-checks:
+steps:
   require-review:
     type: command
     exec: gh pr review --request-changes
@@ -296,7 +296,7 @@ checks:
 Control who can deploy to different environments:
 
 ```yaml
-checks:
+steps:
   deploy-staging:
     type: command
     exec: ./scripts/deploy.sh staging
@@ -320,7 +320,7 @@ checks:
 Save CI resources by skipping checks for trusted contributors:
 
 ```yaml
-checks:
+steps:
   expensive-integration-tests:
     type: command
     exec: npm run test:integration
@@ -339,7 +339,7 @@ checks:
 Permission filters are also available in Liquid templates for prompts, commands, and messages:
 
 ```yaml
-checks:
+steps:
   # Customize AI prompts based on author permission
   code-review:
     type: ai
@@ -467,7 +467,7 @@ fail_if: |
 Add comments to explain permission logic:
 
 ```yaml
-checks:
+steps:
   deploy:
     type: command
     exec: ./deploy.sh
@@ -515,7 +515,7 @@ debug-permissions:
 Provide clear messages when permission checks fail:
 
 ```yaml
-checks:
+steps:
   check-permissions:
     type: command
     exec: echo "Permission check"
@@ -540,7 +540,7 @@ Here's a complete example showing how to use author permissions in a real workfl
 ```yaml
 version: "1.0"
 
-checks:
+steps:
   # 1. Welcome new contributors
   welcome:
     type: command

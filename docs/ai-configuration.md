@@ -83,7 +83,7 @@ Configure a default AI provider in `.visor.yaml`:
 ai_provider: bedrock  # or google, anthropic, openai
 ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Optional, uses default if not specified
 
-checks:
+steps:
   security-review:
     type: ai
     prompt: "Analyze code for security vulnerabilities"
@@ -95,7 +95,7 @@ Override the provider for specific checks:
 
 ```yaml
 # Use different providers for different checks
-checks:
+steps:
   security-review:
     type: ai
     ai_provider: bedrock
@@ -132,7 +132,7 @@ env:
   AWS_REGION: us-east-1
   # AWS credentials should be set as environment variables, not in config
 
-checks:
+steps:
   comprehensive-review:
     type: ai
     ai_provider: bedrock

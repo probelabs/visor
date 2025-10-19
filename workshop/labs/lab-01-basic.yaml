@@ -3,7 +3,7 @@ version: "1.0"
 # Minimal, fast feedback config to try locally
 max_parallelism: 2
 
-checks:
+steps:
   overview:
     type: ai
     group: overview

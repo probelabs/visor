@@ -41,7 +41,7 @@ The `log()` function is available in JavaScript expressions for debugging:
 #### In `if` Conditions
 
 ```yaml
-checks:
+steps:
   analyze-bugs:
     type: ai
     depends_on: [fetch-tickets]
@@ -56,7 +56,7 @@ checks:
 #### In `fail_if` Conditions
 
 ```yaml
-checks:
+steps:
   security-check:
     type: ai
     prompt: "Check for security issues"
@@ -69,7 +69,7 @@ checks:
 #### In `transform_js`
 
 ```yaml
-checks:
+steps:
   process-data:
     type: command
     exec: curl -s https://api.example.com/data
@@ -112,7 +112,7 @@ The `log()` function prefixes output with 🔍 for easy identification:
 The `json` filter is invaluable for inspecting data structures:
 
 ```yaml
-checks:
+steps:
   debug-template:
     type: log
     message: |
@@ -155,7 +155,7 @@ Nested value: {{ outputs["complex-check"]["data"]["nested"]["value"] | default: 
 The `logger` check type is designed for debugging workflows:
 
 ```yaml
-checks:
+steps:
   debug-dependencies:
     type: logger
     depends_on: [fetch-data, process-data]
@@ -191,7 +191,7 @@ checks:
 ### 1. Debugging forEach Iterations
 
 ```yaml
-checks:
+steps:
   fetch-items:
     type: command
     exec: echo '[{"id":1,"name":"A"},{"id":2,"name":"B"}]'
@@ -217,7 +217,7 @@ checks:
 **Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts, giving you direct access to the array. This makes it easier to work with the data:
 
 ```yaml
-checks:
+steps:
   analyze-tickets:
     type: command
     depends_on: [fetch-tickets]
@@ -231,7 +231,7 @@ checks:
 ### 2. Debugging Conditional Execution
 
 ```yaml
-checks:
+steps:
   conditional-check:
     type: command
     exec: echo "test"
@@ -251,7 +251,7 @@ checks:
 ### 3. Debugging Transform Chains
 
 ```yaml
-checks:
+steps:
   fetch-raw:
     type: command
     exec: curl -s https://api.example.com/data
@@ -279,7 +279,7 @@ checks:
 ### 4. Debugging AI Prompts
 
 ```yaml
-checks:
+steps:
   debug-ai-context:
     type: logger
     depends_on: [fetch-context]
@@ -307,7 +307,7 @@ checks:
 When `outputs` access fails, debug the structure:
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: command
     depends_on: [previous-check]
@@ -350,7 +350,7 @@ transform_js: |
 ### 3. Debug Environment Variables
 
 ```yaml
-checks:
+steps:
   debug-env:
     type: logger
     message: |
@@ -368,7 +368,7 @@ checks:
 ### 4. Debug File Patterns
 
 ```yaml
-checks:
+steps:
   debug-files:
     type: command
     exec: echo "checking files"
@@ -386,7 +386,7 @@ checks:
 ### 5. Debug Schema Validation
 
 ```yaml
-checks:
+steps:
   validate-output:
     type: command
     exec: echo '{"items":[1,2,3]}'
@@ -442,13 +442,13 @@ export DEBUG_DEPS=1
 
 ```yaml
 # Wrong - check has no dependencies
-checks:
+steps:
   my-check:
     type: command
     exec: echo "{{ outputs.other }}"  # Error: outputs is undefined
 
 # Correct - add depends_on
-checks:
+steps:
   my-check:
     type: command
     depends_on: [other]
@@ -511,7 +511,7 @@ From highest to lowest privilege:
 Check if author has **at least** the specified permission level (>= logic):
 
 ```yaml
-checks:
+steps:
   # Run security scan for external contributors only
   security-scan:
     type: command
@@ -530,7 +530,7 @@ checks:
 Boolean checks for specific or hierarchical permission levels:
 
 ```yaml
-checks:
+steps:
   # Different workflows based on permission
   code-review:
     type: ai
@@ -560,7 +560,7 @@ checks:
 Check if author is a first-time contributor:
 
 ```yaml
-checks:
+steps:
   welcome-message:
     type: command
     exec: gh pr comment --body "Welcome to the project!"
@@ -584,7 +584,7 @@ When running locally (not in GitHub Actions):
 #### Conditional Security Scanning
 
 ```yaml
-checks:
+steps:
   # Run expensive security scan only for external contributors
   deep-security-scan:
     type: command
@@ -601,7 +601,7 @@ checks:
 #### Require Reviews Based on Permission
 
 ```yaml
-checks:
+steps:
   require-approval:
     type: command
     exec: gh pr review --request-changes
@@ -615,7 +615,7 @@ checks:
 #### Auto-merge for Trusted Contributors
 
 ```yaml
-checks:
+steps:
   auto-merge:
     type: command
     depends_on: [tests, lint, security-scan]

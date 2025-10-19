@@ -41,7 +41,7 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(commandErrors.length).toBeGreaterThan(0);
 
       // Check execution stats - should show partial success
-      const processStats = result.executionStatistics?.checks.find(
+      const processStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-items'
       );
       expect(processStats).toBeDefined();
@@ -116,7 +116,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(true);
 
       // dependent-check should be skipped
-      const stats = result.executionStatistics?.checks.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(true);
       expect(stats?.skipReason).toBe('dependency_failed');
     });
@@ -157,7 +159,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(false);
 
       // dependent-check should NOT be skipped
-      const stats = result.executionStatistics?.checks.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(false);
     });
 
@@ -198,7 +202,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(true);
 
       // dependent-check should NOT be skipped; it should execute for the successful items (item1 and item3)
-      const stats = result.executionStatistics?.checks.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(false);
       expect(stats?.totalRuns || 0).toBeGreaterThanOrEqual(2);
     });
@@ -239,13 +245,13 @@ describe('forEach Failure and Dependency Skip', () => {
       });
 
       // level-2-check should be skipped
-      const level2Stats = result.executionStatistics?.checks.find(
+      const level2Stats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'level-2-check'
       );
       expect(level2Stats?.skipped).toBe(true);
 
       // level-3-check should also be skipped
-      const level3Stats = result.executionStatistics?.checks.find(
+      const level3Stats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'level-3-check'
       );
       expect(level3Stats?.skipped).toBe(true);

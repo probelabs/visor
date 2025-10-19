@@ -1,0 +1,301 @@
+version: "1.0"
+
+# Real-World MCP Provider Examples
+# Production-ready workflows using actual MCP servers
+
+steps:
+  # =============================================================================
+  # Example 1: Security Scanning with Semgrep
+  # Detect security vulnerabilities in changed code
+  # =============================================================================
+  semgrep-security-scan:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@semgrep/mcp"]
+    method: scan
+    methodArgs:
+      paths: "{{ files | map: 'filename' | json }}"
+      rules: ["security", "owasp-top-10"]
+    tags: ["security", "fast"]
+
+  # =============================================================================
+  # Example 2: GitHub Repository Analysis
+  # Fetch PR context and compare with related issues
+  # =============================================================================
+  fetch-related-issues:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    method: search_issues
+    methodArgs:
+      query: "{{ pr.title | split: ' ' | slice: 0, 3 | join: ' ' }}"
+      state: "open"
+    transform_js: |
+      // Find duplicate or related issues
+      output.items
+        .filter(issue => issue.number !== pr.number)
+        .slice(0, 5)
+        .map(issue => ({
+          file: 'github',
+          line: 0,
+          message: `Related issue #${issue.number}: ${issue.title}`,
+          severity: 'info',
+          category: 'documentation',
+          ruleId: 'duplicate-check'
+        }))
+
+  # =============================================================================
+  # Example 3: Web Scraping for Documentation Validation
+  # Check if external URLs in docs are still valid
+  # =============================================================================
+  validate-external-links:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-puppeteer"]
+    method: navigate
+    # Only run on markdown/doc files
+    if: "files.some(f => f.filename.endsWith('.md'))"
+    argsTransform: |
+      {
+        "url": "{{ files | map: 'filename' | first }}",
+        "waitUntil": "networkidle2"
+      }
+    transform_js: |
+      // Check for broken links
+      if (output.statusCode && output.statusCode >= 400) {
+        return [{
+          file: 'documentation',
+          line: 0,
+          message: `Broken external link detected: ${output.url} (${output.statusCode})`,
+          severity: 'warning',
+          category: 'documentation',
+          ruleId: 'broken-link'
+        }];
+      }
+      return [];
+
+  # =============================================================================
+  # Example 4: Database Schema Validation with Postgres
+  # Verify migrations don't break existing schema
+  # =============================================================================
+  check-schema-migrations:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-postgres"]
+    # Only run if SQL files changed
+    if: "files.some(f => f.filename.includes('migrations/'))"
+    method: query
+    methodArgs:
+      query: "SELECT * FROM information_schema.tables WHERE table_schema = 'public'"
+    transform_js: |
+      // Validate that critical tables still exist
+      const criticalTables = ['users', 'sessions', 'payments'];
+      const existingTables = output.rows.map(r => r.table_name);
+      const missing = criticalTables.filter(t => !existingTables.includes(t));
+
+      return missing.map(table => ({
+        file: 'database',
+        line: 0,
+        message: `Critical table '${table}' is missing after migration`,
+        severity: 'error',
+        category: 'logic',
+        ruleId: 'schema-validation'
+      }));
+
+  # =============================================================================
+  # Example 5: File System Access for License Checking
+  # Ensure all source files have proper license headers
+  # =============================================================================
+  check-license-headers:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    method: read_file
+    forEach:
+      items: "{{ files | map: 'filename' | json }}"
+      itemVar: filepath
+    methodArgs:
+      path: "{{ filepath }}"
+    transform_js: |
+      // Check for license header in source files
+      const content = output.content || '';
+      const hasLicense = content.includes('Copyright') || content.includes('SPDX-License');
+
+      if (!hasLicense && filepath.match(/\.(ts|js|py|go)$/)) {
+        return [{
+          file: filepath,
+          line: 1,
+          message: 'Missing license header',
+          severity: 'warning',
+          category: 'documentation',
+          ruleId: 'license-header',
+          suggestion: 'Add SPDX-License-Identifier comment at the top of the file'
+        }];
+      }
+      return [];
+
+  # =============================================================================
+  # Example 6: Slack Notification for High-Severity Issues
+  # Post summary to Slack when critical issues found
+  # =============================================================================
+  count-critical-issues:
+    type: logger
+    depends_on: [semgrep-security-scan]
+    message: "Found {{ outputs['semgrep-security-scan'].issues | size }} security issues"
+
+  notify-slack:
+    type: mcp
+    depends_on: [count-critical-issues]
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-slack"]
+    # Only notify if critical issues found
+    if: "outputs['semgrep-security-scan']?.issues?.filter(i => i.severity === 'error').length > 0"
+    method: post_message
+    argsTransform: |
+      {
+        "channel": "#security-alerts",
+        "text": "🚨 Security Alert: PR #{{ pr.number }} has {{ outputs['semgrep-security-scan'].issues | where: 'severity', 'error' | size }} critical security issues"
+      }
+
+  # =============================================================================
+  # Example 7: Git History Analysis
+  # Check if sensitive files were modified by unauthorized users
+  # =============================================================================
+  check-sensitive-file-changes:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-git", "."]
+    method: log
+    # Only check if sensitive files changed
+    if: "files.some(f => f.filename.match(/(env|secret|key|password)/))"
+    methodArgs:
+      path: "{{ files | map: 'filename' | first }}"
+      maxCount: 10
+    transform_js: |
+      // Warn if sensitive files modified by external contributor
+      const sensitiveFiles = files.filter(f => f.filename.match(/(env|secret|key|password)/));
+
+      return sensitiveFiles.map(file => ({
+        file: file.filename,
+        line: 0,
+        message: `Sensitive file modified. Please review carefully: ${pr.author}`,
+        severity: 'warning',
+        category: 'security',
+        ruleId: 'sensitive-file-change'
+      }));
+
+  # =============================================================================
+  # Example 8: Firecrawl for Scraping Documentation
+  # Fetch and validate API documentation references
+  # =============================================================================
+  validate-api-docs:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@mendable/firecrawl-mcp"]
+    # Only run on API-related changes
+    if: "files.some(f => f.filename.includes('api/') || f.filename.includes('swagger'))"
+    method: scrape
+    methodArgs:
+      url: "https://api-docs.example.com/latest"
+      formats: ["markdown"]
+    transform_js: |
+      // Check if documented endpoints match code changes
+      const endpoints = output.markdown?.match(/\/api\/v\d+\/\w+/g) || [];
+
+      return [{
+        file: 'api-documentation',
+        line: 0,
+        message: `Found ${endpoints.length} documented API endpoints`,
+        severity: 'info',
+        category: 'documentation',
+        ruleId: 'api-docs-sync'
+      }];
+
+  # =============================================================================
+  # Example 9: Jira Integration for Ticket Validation
+  # Ensure PR references valid Jira ticket
+  # =============================================================================
+  validate-jira-ticket:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@atlassian/mcp-server-jira"]
+    method: get_issue
+    argsTransform: |
+      {
+        "issueKey": "{{ pr.title | split: ' ' | first | upcase }}"
+      }
+    transform_js: |
+      // Validate PR is linked to a valid Jira ticket
+      if (output.error || !output.fields) {
+        return [{
+          file: 'jira',
+          line: 0,
+          message: 'PR title must start with valid Jira ticket number (e.g., PROJ-123)',
+          severity: 'error',
+          category: 'documentation',
+          ruleId: 'jira-ticket-required'
+        }];
+      }
+
+      // Check if ticket is in correct status
+      if (output.fields.status?.name !== 'In Progress') {
+        return [{
+          file: 'jira',
+          line: 0,
+          message: `Jira ticket ${output.key} is in '${output.fields.status.name}' status, expected 'In Progress'`,
+          severity: 'warning',
+          category: 'documentation',
+          ruleId: 'jira-status-check'
+        }];
+      }
+
+      return [];
+
+  # =============================================================================
+  # Example 10: Brave Search for CVE Checking
+  # Search for known vulnerabilities in dependencies
+  # =============================================================================
+  check-dependency-cves:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    # Only run if package files changed
+    if: "files.some(f => f.filename.match(/package\\.json|requirements\\.txt|go\\.mod/))"
+    method: search
+    argsTransform: |
+      {
+        "query": "CVE {{ pr.title | split: ' ' | join: ' ' }} vulnerability"
+      }
+    transform_js: |
+      // Parse search results for CVE mentions
+      const cvePattern = /CVE-\d{4}-\d{4,7}/g;
+      const results = output.web?.results || [];
+      const cves = new Set();
+
+      results.forEach(result => {
+        const matches = result.description?.match(cvePattern) || [];
+        matches.forEach(cve => cves.add(cve));
+      });
+
+      if (cves.size > 0) {
+        return [{
+          file: 'dependencies',
+          line: 0,
+          message: `Potential CVEs found: ${Array.from(cves).join(', ')}. Please review dependencies.`,
+          severity: 'warning',
+          category: 'security',
+          ruleId: 'cve-check'
+        }];
+      }
+
+      return [];
