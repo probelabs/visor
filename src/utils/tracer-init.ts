@@ -2,19 +2,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SimpleTelemetry, SimpleAppTracer } from '@probelabs/probe';
 
-// Type stubs for removed probe exports (now using SimpleTelemetry)
-type TelemetryConfig = any;
-type AppTracer = any;
-
 /**
  * Safely initialize a tracer for ProbeAgent with proper path sanitization
- * Uses full OpenTelemetry integration for hierarchical span relationships
+ * Uses SimpleTelemetry for lightweight tracing
  * This prevents path traversal vulnerabilities by sanitizing the checkName
  */
 export async function initializeTracer(
   sessionId: string,
   checkName?: string
-): Promise<{ tracer: any; telemetryConfig: any; filePath: string } | null> {
+): Promise<{ tracer: unknown; telemetryConfig: unknown; filePath: string } | null> {
   try {
     // Use SimpleTelemetry (probe no longer exports full OpenTelemetry classes)
     if (SimpleTelemetry && SimpleAppTracer) {
@@ -64,8 +60,8 @@ export async function initializeTracer(
 
       // Return with SimpleTelemetry
       return {
-        tracer: tracer as any,
-        telemetryConfig: telemetry as any,
+        tracer,
+        telemetryConfig: telemetry,
         filePath: traceFilePath,
       };
     }

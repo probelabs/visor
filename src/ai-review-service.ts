@@ -1,10 +1,6 @@
 import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
-
-// Type stubs for removed probe exports (now using SimpleTelemetry)
-type TelemetryConfig = any;
-type AppTracer = any;
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
@@ -22,8 +18,8 @@ function log(...args: unknown[]): void {
  * Extended ProbeAgent interface that includes tracing properties
  */
 interface TracedProbeAgent extends ProbeAgent {
-  tracer?: AppTracer;
-  _telemetryConfig?: TelemetryConfig;
+  tracer?: unknown; // SimpleTelemetry tracer (probe removed AppTracer)
+  _telemetryConfig?: unknown; // SimpleTelemetry config (probe removed TelemetryConfig)
   _traceFilePath?: string;
 }
 
@@ -31,8 +27,8 @@ interface TracedProbeAgent extends ProbeAgent {
  * Extended ProbeAgentOptions interface that includes tracing properties
  */
 interface TracedProbeAgentOptions extends ProbeAgentOptions {
-  tracer?: AppTracer;
-  _telemetryConfig?: TelemetryConfig;
+  tracer?: unknown; // SimpleTelemetry tracer
+  _telemetryConfig?: unknown; // SimpleTelemetry config
   _traceFilePath?: string;
 }
 
@@ -1305,9 +1301,9 @@ ${this.escapeXml(processedFallbackDiff)}
       };
 
       // Enable tracing in debug mode for better diagnostics
-      // This uses OpenTelemetry for proper hierarchical span relationships
+      // This uses SimpleTelemetry for lightweight tracing
       let traceFilePath = '';
-      let telemetryConfig: TelemetryConfig | null = null;
+      let telemetryConfig: unknown = null;
       if (this.config.debug) {
         const tracerResult = await initializeTracer(sessionId, _checkName);
         if (tracerResult) {
@@ -1503,7 +1499,7 @@ ${this.escapeXml(processedFallbackDiff)}
       // Wrap the agent.answer() call in a span for hierarchical tracing
       // This creates a parent span that will contain all ProbeAgent's child spans
       let response: string;
-      const tracer = options.tracer;
+      const tracer = options.tracer as { withSpan?: (name: string, fn: () => Promise<string>, attrs?: Record<string, unknown>) => Promise<string> };
       if (tracer && typeof tracer.withSpan === 'function') {
         response = await tracer.withSpan(
           'visor.ai_check',
@@ -1639,18 +1635,22 @@ ${this.escapeXml(processedFallbackDiff)}
       }
 
       // Finalize and save trace if enabled
-      // Properly flush and shutdown OpenTelemetry to ensure all spans are exported
+      // Properly flush and shutdown telemetry to ensure all spans are exported
       if (traceFilePath && telemetryConfig) {
         try {
+          // Cast telemetryConfig to have optional methods
+          const telemetry = telemetryConfig as { flush?: () => Promise<void>; shutdown?: () => Promise<void> };
+          const tracerWithMethods = tracer as { flush?: () => Promise<void>; shutdown?: () => Promise<void> };
+
           // First flush the tracer to export pending spans
-          if (tracer && typeof tracer.flush === 'function') {
-            await tracer.flush();
+          if (tracerWithMethods && typeof tracerWithMethods.flush === 'function') {
+            await tracerWithMethods.flush();
             log(`🔄 Flushed tracer spans`);
           }
 
           // Then shutdown the telemetry config to finalize all exporters
-          if (telemetryConfig && typeof telemetryConfig.shutdown === 'function') {
-            await telemetryConfig.shutdown();
+          if (telemetry && typeof telemetry.shutdown === 'function') {
+            await telemetry.shutdown();
             log(`📊 OpenTelemetry trace saved to: ${traceFilePath}`);
 
             // In GitHub Actions, also log file size for verification
@@ -1663,9 +1663,9 @@ ${this.escapeXml(processedFallbackDiff)}
                 );
               }
             }
-          } else if (tracer && typeof tracer.shutdown === 'function') {
+          } else if (tracerWithMethods && typeof tracerWithMethods.shutdown === 'function') {
             // Fallback for SimpleTelemetry
-            await tracer.shutdown();
+            await tracerWithMethods.shutdown();
             log(`📊 Trace saved to: ${traceFilePath}`);
           }
         } catch (exportError) {
