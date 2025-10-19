@@ -47,8 +47,8 @@ describe('Forward-run stats isolation', () => {
     );
 
     // Stats should be present for both checks
-    const parent = statistics.checks.find(c => c.checkName === 'comment-assistant');
-    const child = statistics.checks.find(c => c.checkName === 'overview');
+    const parent = statistics.checks!.find(c => c.checkName === 'comment-assistant');
+    const child = statistics.checks!.find(c => c.checkName === 'overview');
     expect(parent).toBeDefined();
     expect(child).toBeDefined();
 

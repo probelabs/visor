@@ -24,7 +24,7 @@ forEach: no items from "fetch-tickets", skipping check...
 ## Example
 
 ```yaml
-checks:
+steps:
   fetch-tickets:
     type: command
     exec: echo '{"tickets": []}'
@@ -45,7 +45,7 @@ checks:
 When a check has `forEach: true`, each iteration's output is tracked in `outputs.history`. After processing multiple items, `outputs.history['check-name']` will contain an array with one entry per iteration.
 
 ```yaml
-checks:
+steps:
   process-items:
     type: memory
     depends_on: [fetch-tickets]

@@ -2,7 +2,7 @@ version: "1.0"
 # Example demonstrating the transform feature in Visor checks
 # Transform allows you to reshape command output using Liquid templates
 
-checks:
+steps:
   # Example 1: Extract specific key from JSON output
   get-package-version:
     type: command

@@ -11,7 +11,7 @@ memory:
   format: json
   auto_save: true
 
-checks:
+steps:
   # Initialize error collection
   init-errors:
     type: memory

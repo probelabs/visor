@@ -197,7 +197,7 @@ visor --tags comprehensive --exclude-tags security,critical
 Run checks based on file changes:
 
 ```yaml
-checks:
+steps:
   frontend-checks:
     tags: ["frontend", "conditional"]
     on: [pr_opened]
@@ -212,7 +212,7 @@ checks:
 ### Pattern 3: Dependency Chains with Tags
 
 ```yaml
-checks:
+steps:
   quick-scan:
     tags: ["local", "fast"]
 

@@ -44,7 +44,7 @@ describe('Execution Statistics Integration Tests', () => {
       // process-each-item: 6 runs (3 items × 2 categories)
       expect(result.executionStatistics?.totalExecutions).toBeGreaterThanOrEqual(3);
 
-      const processItemStats = result.executionStatistics?.checks.find(
+      const processItemStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-each-item'
       );
       expect(processItemStats).toBeDefined();
@@ -76,7 +76,7 @@ describe('Execution Statistics Integration Tests', () => {
         workingDirectory: process.cwd(),
       });
 
-      const processStats = result.executionStatistics?.checks.find(
+      const processStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-even-only'
       );
       expect(processStats).toBeDefined();
@@ -123,7 +123,7 @@ describe('Execution Statistics Integration Tests', () => {
       expect(result.executionStatistics?.totalChecksConfigured).toBe(4);
       expect(result.executionStatistics?.skippedChecks).toBeGreaterThan(0);
 
-      const skippedStats = result.executionStatistics?.checks.find(
+      const skippedStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'conditional-2'
       );
       expect(skippedStats?.skipped).toBe(true);
@@ -154,7 +154,7 @@ describe('Execution Statistics Integration Tests', () => {
         workingDirectory: process.cwd(),
       });
 
-      const timedStats = result.executionStatistics?.checks.find(
+      const timedStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'timed-process'
       );
       expect(timedStats).toBeDefined();
@@ -185,7 +185,7 @@ describe('Execution Statistics Integration Tests', () => {
         workingDirectory: process.cwd(),
       });
 
-      const errorStats = result.executionStatistics?.checks.find(
+      const errorStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'error-check'
       );
       expect(errorStats).toBeDefined();
@@ -308,13 +308,13 @@ describe('Execution Statistics Integration Tests', () => {
       // Command failures produce issues AND are counted as failed executions
       expect(result.executionStatistics?.failedExecutions).toBe(1);
 
-      const failStats = result.executionStatistics?.checks.find(c => c.checkName === 'will-fail');
+      const failStats = result.executionStatistics?.checks!.find(c => c.checkName === 'will-fail');
       expect(failStats?.issuesFound).toBeGreaterThan(0);
       expect(failStats?.failedRuns).toBe(1);
       expect(failStats?.successfulRuns).toBe(0);
 
       // The dependent check might be skipped or not executed at all
-      const notRunStats = result.executionStatistics?.checks.find(
+      const notRunStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'will-not-run'
       );
       // It may be skipped or not tracked at all depending on fail-fast behavior
@@ -350,9 +350,9 @@ describe('Execution Statistics Integration Tests', () => {
       });
 
       // Only checks matching the tag filter should be in statistics
-      expect(result.executionStatistics?.checks.length).toBeGreaterThan(0);
+      expect(result.executionStatistics?.checks!.length).toBeGreaterThan(0);
 
-      const taggedStats = result.executionStatistics?.checks.find(
+      const taggedStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'tagged-check'
       );
       expect(taggedStats).toBeDefined();

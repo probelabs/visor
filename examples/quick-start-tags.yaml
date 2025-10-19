@@ -4,7 +4,7 @@
 version: "1.0"
 
 # Define your checks with appropriate tags
-checks:
+steps:
   # Fast check for local development
   quick-review:
     type: ai

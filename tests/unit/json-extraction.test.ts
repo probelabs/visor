@@ -35,7 +35,7 @@ echo '{"items": ["a", "b", "c"]}'`,
     });
 
     // Should successfully process all 3 items
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'process-items');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'process-items');
     expect(stats?.totalRuns).toBe(3);
     expect(stats?.successfulRuns).toBe(3);
     expect(stats?.failedRuns).toBe(0);
@@ -64,7 +64,7 @@ echo '{"items": ["a", "b", "c"]}'`,
       workingDirectory: process.cwd(),
     });
 
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'process-items');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'process-items');
     expect(stats?.totalRuns).toBe(2);
     expect(stats?.successfulRuns).toBe(2);
   });
@@ -94,7 +94,7 @@ echo '{"data": {"tickets": [{"id": 1}, {"id": 2}]}}'`,
       workingDirectory: process.cwd(),
     });
 
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'check-id');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'check-id');
     expect(stats?.totalRuns).toBe(2);
     expect(stats?.successfulRuns).toBe(2);
   });
@@ -126,7 +126,7 @@ echo '["value1", "value2"]'`,
       workingDirectory: process.cwd(),
     });
 
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'use-values');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'use-values');
     expect(stats?.totalRuns).toBe(2);
   });
 
@@ -149,7 +149,7 @@ echo '["value1", "value2"]'`,
     });
 
     // When forEach is set but no array output, it should handle gracefully
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'no-json');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'no-json');
     expect(stats).toBeDefined();
   });
 
@@ -177,7 +177,7 @@ echo '[1, 2, 3, 4, 5]'`,
       workingDirectory: process.cwd(),
     });
 
-    const stats = result.executionStatistics?.checks.find(c => c.checkName === 'process-numbers');
+    const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'process-numbers');
     expect(stats?.totalRuns).toBe(5);
     expect(stats?.successfulRuns).toBe(5);
   });
@@ -214,14 +214,14 @@ echo '{"query":"project = \\"TT\\"","totalTickets":3,"tickets":[{"key":"TT-1","s
     });
 
     // Should extract 3 tickets from the JSON despite DEBUG lines
-    const fetchStats = result.executionStatistics?.checks.find(
+    const fetchStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'fetch-tickets'
     );
     expect(fetchStats?.totalRuns).toBe(1);
     expect(fetchStats?.successfulRuns).toBe(1);
 
     // Should process all 3 tickets - this is the key assertion
-    const analyzeStats = result.executionStatistics?.checks.find(
+    const analyzeStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'analyze-ticket'
     );
     expect(analyzeStats?.totalRuns).toBe(3);

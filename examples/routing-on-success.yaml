@@ -4,7 +4,7 @@ version: "2.0"
 routing:
   max_loops: 5
 
-checks:
+steps:
   unit-tests:
     type: command
     exec: "echo '[unit] ok'"

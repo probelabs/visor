@@ -13,7 +13,7 @@ ai_provider: google  # or anthropic, openai
 ai_model: gemini-1.5-flash  # or claude-3-opus, gpt-4
 
 # Check definitions with comprehensive tagging
-checks:
+steps:
   # ============================================
   # SECURITY CHECKS
   # ============================================

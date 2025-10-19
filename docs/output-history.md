@@ -40,7 +40,7 @@ outputs.history['check-name']  // Array of ALL previous values from this check
 Track a counter through multiple goto iterations:
 
 ```yaml
-checks:
+steps:
   counter:
     type: memory
     operation: exec_js
@@ -76,7 +76,7 @@ checks:
 Track all retry attempts:
 
 ```yaml
-checks:
+steps:
   attempt-counter:
     type: memory
     operation: exec_js
@@ -115,7 +115,7 @@ checks:
 Track all forEach iterations:
 
 ```yaml
-checks:
+steps:
   generate-items:
     type: memory
     operation: exec_js
@@ -165,7 +165,7 @@ checks:
 Compare current value with previous:
 
 ```yaml
-checks:
+steps:
   monitor-metric:
     type: command
     exec: 'curl -s https://api.example.com/metrics | jq .cpu_usage'
@@ -208,7 +208,7 @@ checks:
 Build up results over iterations:
 
 ```yaml
-checks:
+steps:
   fetch-page:
     type: memory
     operation: exec_js
@@ -298,7 +298,7 @@ Last: {{ outputs.history.counter | last }}
 In shell commands:
 
 ```yaml
-checks:
+steps:
   show-history:
     type: command
     depends_on: [counter]
@@ -330,7 +330,7 @@ Failed executions that throw errors are NOT added to history. Only successful ou
 Each forEach iteration is tracked separately:
 
 ```yaml
-checks:
+steps:
   process-items:
     forEach: true
     operation: exec_js

@@ -2,7 +2,7 @@ version: "1.0"
 # Example demonstrating the forEach flag in Visor checks
 # forEach allows a check to output an array, and dependent checks will run once for each item
 
-checks:
+steps:
   # Step 1: Get a list of JSON files (outputs an array)
   list-json-files:
     type: command

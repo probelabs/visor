@@ -14,7 +14,7 @@ Visor supports tagging checks to create flexible execution profiles. This lets y
 # .visor.yaml
 version: "1.0"
 
-checks:
+steps:
   # Fast, local security check
   security-quick:
     type: ai
@@ -192,7 +192,7 @@ jobs:
 When using tags with dependencies, Visor intelligently handles missing dependencies:
 
 ```yaml
-checks:
+steps:
   data-validation:
     type: ai
     prompt: "Validate data structures"

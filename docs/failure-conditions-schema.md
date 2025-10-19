@@ -40,7 +40,7 @@ failure_conditions:
     message: "Too many code quality issues - consider additional review"
     severity: "info"
 
-checks:
+steps:
   security:
     type: ai
     prompt: "Analyze for security vulnerabilities..."
@@ -108,7 +108,7 @@ The enhanced system maintains full backward compatibility:
 ```yaml
 # Legacy format (still supported)
 version: "1.0"
-checks:
+steps:
   security:
     type: ai
     prompt: "Security analysis..."
@@ -119,7 +119,7 @@ version: "1.0"
 failure_conditions:
   default_critical: "metadata.criticalIssues > 0"
 
-checks:
+steps:
   security:
     type: ai
     prompt: "Security analysis..."
@@ -140,7 +140,7 @@ failure_conditions:
 
 ### Step 2: Add Check-Specific Conditions
 ```yaml
-checks:
+steps:
   security:
     # existing configuration...
     failure_conditions:

@@ -153,7 +153,7 @@ output:
       mockFs.readFileSync.mockReturnValue(configWithoutChecks);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Missing required field: checks'
+        'either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
       );
     });
 
@@ -172,8 +172,8 @@ checks:
       const config = await configManager.loadConfig('/path/to/config.yaml');
 
       // Should not throw - type defaults to 'ai'
-      expect(config.checks.performance.type).toBe('ai');
-      expect(config.checks.performance.prompt).toBe('Type defaults to ai');
+      expect(config.checks!.performance.type).toBe('ai');
+      expect(config.checks!.performance.prompt).toBe('Type defaults to ai');
     });
 
     it('should validate check type values', async () => {
@@ -465,9 +465,9 @@ output:
 
       const config = await configManager.loadConfig('/path/to/complex.yaml');
 
-      expect(config.checks.performance.prompt).toContain('N+1 database queries');
-      expect(config.checks.security.prompt).toContain('SQL injection');
-      expect(config.checks.architecture.prompt).toContain('SOLID principles');
+      expect(config.checks!.performance.prompt).toContain('N+1 database queries');
+      expect(config.checks!.security.prompt).toContain('SQL injection');
+      expect(config.checks!.architecture.prompt).toContain('SOLID principles');
       expect(config.output.pr_comment.format).toBe('markdown');
       expect(config.output.pr_comment.collapse).toBe(false);
     });

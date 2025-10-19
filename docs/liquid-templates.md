@@ -205,7 +205,7 @@ echo '{{ pr | json }}' | jq .
 When you see `[Object]` in your templates, use the `json` filter:
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: log
     message: |
@@ -233,7 +233,7 @@ checks:
 ### Safe Command Execution
 
 ```yaml
-checks:
+steps:
   analyze-with-tool:
     type: command
     exec: |
@@ -248,7 +248,7 @@ checks:
 ### Transform Responses
 
 ```yaml
-checks:
+steps:
   http-webhook:
     type: http_input
     transform: |
@@ -291,7 +291,7 @@ Environment: {{ env | json }}
 When using `transform_js` or conditions (`if`, `fail_if`), use the `log()` function:
 
 ```yaml
-checks:
+steps:
   my-check:
     type: command
     exec: curl -s https://api.example.com/data

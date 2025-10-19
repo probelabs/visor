@@ -5,7 +5,7 @@ The `command` provider executes shell commands and captures their output for pro
 ## Basic Usage
 
 ```yaml
-checks:
+steps:
   my-command-check:
     type: command
     exec: "npm test"
@@ -47,7 +47,7 @@ Visor automatically parses command stdout when it contains valid JSON and expose
 Examples:
 
 ```yaml
-checks:
+steps:
   fetch-tickets:
     type: command
     exec: |
@@ -70,7 +70,7 @@ If the command prints plain text (not JSON), `output` behaves as a normal string
 ### Basic Command Execution
 
 ```yaml
-checks:
+steps:
   lint:
     type: command
     exec: "npm run lint"
@@ -83,7 +83,7 @@ checks:
 Commands that output JSON will be automatically parsed:
 
 ```yaml
-checks:
+steps:
   security-audit:
     type: command
     exec: "npm audit --json"
@@ -95,7 +95,7 @@ checks:
 The `exec` field fully supports Liquid templating for dynamic command generation. Templates are processed before command execution.
 
 ```yaml
-checks:
+steps:
   branch-check:
     type: command
     exec: "git diff {{ pr.base }}..{{ pr.branch }} --stat"
@@ -118,7 +118,7 @@ Available template variables:
 Access outputs from other checks:
 
 ```yaml
-checks:
+steps:
   get-version:
     type: command
     exec: "node -p 'require(\"./package.json\").version'"
@@ -134,7 +134,7 @@ checks:
 Transform command output using Liquid templates (see [Liquid Templates Guide](./liquid-templates.md) for full reference):
 
 ```yaml
-checks:
+steps:
   test-coverage:
     type: command
     exec: "npm test -- --coverage --json"
@@ -150,7 +150,7 @@ checks:
 You can read file content directly in your command templates:
 
 ```yaml
-checks:
+steps:
   check-config:
     type: command
     exec: |
@@ -172,7 +172,7 @@ checks:
 Transform command output using JavaScript expressions (evaluated in secure sandbox):
 
 ```yaml
-checks:
+steps:
   # Extract specific fields using JavaScript
   extract-vulnerabilities:
     type: command
@@ -221,7 +221,7 @@ checks:
 
 **Debugging JavaScript transforms:**
 ```yaml
-checks:
+steps:
   debug-transform:
     type: command
     exec: "echo '{\"items\":[1,2,3]}'"
@@ -240,7 +240,7 @@ You can use environment variables in three ways:
 
 #### 1. Shell Variable Expansion (Recommended for defaults)
 ```yaml
-checks:
+steps:
   jira-query:
     type: command
     exec: |
@@ -253,7 +253,7 @@ checks:
 
 #### 2. Liquid Templates
 ```yaml
-checks:
+steps:
   api-check:
     type: command
     exec: |
@@ -262,7 +262,7 @@ checks:
 
 #### 3. Custom Environment Variables
 ```yaml
-checks:
+steps:
   integration-test:
     type: command
     exec: "npm run test:integration"
@@ -279,7 +279,7 @@ checks:
 Run a command for each item in a collection:
 
 ```yaml
-checks:
+steps:
   validate-files:
     type: command
     exec: "jsonlint {{ item }}"
@@ -293,7 +293,7 @@ checks:
 Run checks only under certain conditions:
 
 ```yaml
-checks:
+steps:
   deploy-check:
     type: command
     exec: "npm run deploy:dry-run"
@@ -307,7 +307,7 @@ checks:
 Configure longer timeouts for commands that take more time:
 
 ```yaml
-checks:
+steps:
   build-project:
     type: command
     exec: "npm run build"
@@ -332,7 +332,7 @@ checks:
 A comprehensive example combining multiple features:
 
 ```yaml
-checks:
+steps:
   # First, get dependencies that need updating
   outdated-deps:
     type: command
@@ -396,7 +396,7 @@ Example error output:
 #### ❌ DANGEROUS - Command Injection Vulnerable
 ```yaml
 # DON'T DO THIS - PR title could contain malicious commands
-checks:
+steps:
   bad-example:
     type: command
     exec: "echo 'Reviewing: {{ pr.title }}'"  # VULNERABLE!
@@ -406,7 +406,7 @@ checks:
 
 #### ✅ SAFE - Properly Escaped
 ```yaml
-checks:
+steps:
   # Option 1: Use Liquid filters to escape
   safe-echo:
     type: command
@@ -440,7 +440,7 @@ checks:
 
 #### Handling File Paths
 ```yaml
-checks:
+steps:
   # DANGEROUS - file names could contain special characters
   bad-lint:
     type: command
@@ -457,7 +457,7 @@ checks:
 
 #### Working with Branch Names
 ```yaml
-checks:
+steps:
   # DANGEROUS
   bad-branch:
     type: command
@@ -516,7 +516,7 @@ checks:
 The command provider works well with other providers:
 
 ```yaml
-checks:
+steps:
   # Run tests first
   test:
     type: command

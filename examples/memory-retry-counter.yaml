@@ -9,7 +9,7 @@ memory:
   storage: memory  # In-memory storage (not persistent)
   namespace: default
 
-checks:
+steps:
   # Initialize retry counter
   init-retry:
     type: memory

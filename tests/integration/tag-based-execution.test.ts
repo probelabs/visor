@@ -84,7 +84,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -119,7 +119,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -153,7 +153,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -189,7 +189,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -221,7 +221,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -257,7 +257,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -298,7 +298,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const fastResult = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -331,7 +331,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results: comprehensiveResults } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -363,7 +363,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
@@ -384,7 +384,7 @@ describe('Tag-Based Execution Integration', () => {
 
       const { results } = await engine.executeGroupedChecks(
         mockPRInfo,
-        Object.keys(config.checks),
+        Object.keys(config.checks!),
         30000,
         config,
         'json',
