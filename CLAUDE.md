@@ -53,6 +53,7 @@ Visor is an AI-powered code review tool for GitHub Pull Requests that can run as
 **Provider System:**
 - `src/providers/` - Pluggable check provider architecture
   - `ai-check-provider.ts` - AI-powered analysis (Gemini, Claude, OpenAI)
+  - `mcp-check-provider.ts` - Direct MCP tool execution via stdio/SSE/HTTP
   - `claude-code-check-provider.ts` - Claude Code SDK integration with MCP tools
   - `tool-check-provider.ts` - Integration with external tools
   - `command-check-provider.ts` - Execute shell commands
@@ -74,11 +75,12 @@ Visor is an AI-powered code review tool for GitHub Pull Requests that can run as
 1. **Dual Operation Modes**: GitHub Action and CLI tool with shared core logic
 2. **Pluggable Providers**: Extensible system for different analysis types
 3. **AI Integration**: Multi-provider AI support including Claude Code SDK
-4. **Claude Code Provider**: Advanced AI with MCP tools, subagents, and streaming
-5. **Incremental Analysis**: Smart PR updates that analyze only new commits
-6. **Comment Management**: Unique comment IDs prevent duplicate reviews
-7. **Multiple Output Formats**: table, json, markdown, sarif
-8. **MCP Protocol Support**: Custom tools and external server integration
+4. **MCP Provider**: Direct MCP tool execution with stdio, SSE, and HTTP transports
+5. **Claude Code Provider**: Advanced AI with MCP tools, subagents, and streaming
+6. **Incremental Analysis**: Smart PR updates that analyze only new commits
+7. **Comment Management**: Unique comment IDs prevent duplicate reviews
+8. **Multiple Output Formats**: table, json, markdown, sarif
+9. **MCP Protocol Support**: Custom tools and external server integration
 
 ### Configuration System
 

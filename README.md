@@ -130,7 +130,7 @@ Additional guides:
 - Schema – JSON shape checks return (e.g., `code-review`).
 - Template – renders results (tables/markdown).
 - Group – which comment a check is posted into.
-- Provider – how a check runs (`ai`, `http`, `http_client`, `command`, `log`, `github`, `claude-code`).
+- Provider – how a check runs (`ai`, `mcp`, `http`, `http_client`, `command`, `log`, `github`, `claude-code`).
 - Dependencies – `depends_on` controls order; independents run in parallel.
 - Tags – label checks (`fast`, `local`, `comprehensive`) and filter with `--tags`.
 - Events – PRs, issues, `/review` comments, webhooks, or cron schedules.
@@ -188,11 +188,11 @@ Visor is a general SDLC automation framework:
 - Config‑first: One `.visor.yaml` defines checks, prompts, schemas, and templates — no hidden logic.
 - Structured outputs: JSON Schema validation drives deterministic rendering, annotations, and SARIF.
 - Orchestrated pipelines: Dependencies, parallelism, and tag‑based profiles; run in Actions or any CI.
-- Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI, AWS Bedrock — plus MCP tools and Claude Code SDK.
+- Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI, AWS Bedrock — plus MCP tools, standalone MCP provider, and Claude Code SDK.
 - Author permissions: Built-in functions to customize workflows based on contributor trust level (owner, member, collaborator, etc).
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
-- Extensible providers: `ai`, `http`, `http_client`, `log`, `command`, `github`, `claude-code` — or add your own.
+- Extensible providers: `ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code` — or add your own.
 - Security by default: GitHub App support, scoped tokens, remote‑extends allowlist, opt‑in network usage.
 - Observability & control: JSON/SARIF outputs, fail‑fast and timeouts, parallelism and cost control.
 
@@ -622,10 +622,11 @@ Learn more: [docs/http.md](docs/http.md)
 
 ## 🔧 Pluggable Architecture
 
-Mix providers (`ai`, `http`, `http_client`, `log`, `command`, `claude-code`) or add your own.
+Mix providers (`ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code`) or add your own.
 
 - **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
-- **MCP Tools**: Leverage the Model Context Protocol for external tools - [docs/mcp.md](docs/mcp.md)
+- **MCP Provider**: Call MCP tools directly via stdio, SSE, or HTTP transports - [docs/mcp-provider.md](docs/mcp-provider.md)
+- **MCP Tools for AI**: Enhance AI providers with MCP context - [docs/mcp.md](docs/mcp.md)
 - **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)
 
 ## 🎯 GitHub Action Reference
