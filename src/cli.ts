@@ -4,6 +4,8 @@ import { EventTrigger } from './types/config';
 import { VALID_EVENT_TRIGGERS } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
+// Import version from package.json to avoid hardcoding
+const packageJson = require('../package.json');
 
 /**
  * CLI argument parser and command handler
@@ -368,8 +370,8 @@ export class CLI {
       // Continue to fallback
     }
 
-    // Fallback to the actual current version in package.json
-    return '0.1.42';
+    // Fallback to the version from package.json (set during release via git tag)
+    return packageJson.version || 'unknown';
   }
 
   /**

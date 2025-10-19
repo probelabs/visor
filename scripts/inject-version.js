@@ -2,10 +2,30 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-// Read Visor package.json version
-const packageJson = require('../package.json');
-const version = packageJson.version;
+// Try to get version from git tag first (for CI builds triggered by tags)
+let version;
+try {
+  // Check if we're on a tag
+  const gitTag = execSync('git describe --exact-match --tags HEAD 2>/dev/null', {
+    encoding: 'utf8',
+  }).trim();
+
+  if (gitTag && gitTag.startsWith('v')) {
+    version = gitTag.substring(1); // Remove 'v' prefix
+    console.log(`🏷️  Using version from git tag: ${version}`);
+  }
+} catch {
+  // Not on a tag, fall back to package.json
+}
+
+// Fallback to package.json version
+if (!version) {
+  const packageJson = require('../package.json');
+  version = packageJson.version;
+  console.log(`📦 Using version from package.json: ${version}`);
+}
 
 // Try to read Probe version from installed dependency
 let probeVersion = 'unknown';
