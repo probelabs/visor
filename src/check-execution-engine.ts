@@ -33,8 +33,6 @@ import { trace, context as otContext } from '@opentelemetry/api';
 import {
   captureForEachState,
   captureStateSnapshot,
-  captureCheckInputContext,
-  captureCheckOutput,
 } from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {
@@ -855,7 +853,7 @@ export class CheckExecutionEngine {
           continue;
         }
         return res;
-      } catch (err) {
+      } catch {
         // Failure path
         if (!onFail) {
           throw err; // no routing policy
@@ -2932,7 +2930,7 @@ export class CheckExecutionEngine {
                   if (span) {
                     captureForEachState(span, forEachItems, itemIndex, item);
                   }
-                } catch (err) {
+                } catch {
                   // Ignore telemetry errors
                 }
 
@@ -4005,7 +4003,7 @@ export class CheckExecutionEngine {
               const memoryData = await memoryStore.getAll();
               captureStateSnapshot(span, checkName, allOutputs, memoryData);
             }
-          } catch (err) {
+          } catch {
             // Ignore telemetry errors
           }
         } else {

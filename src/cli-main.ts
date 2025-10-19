@@ -16,8 +16,6 @@ import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withActiveSpan } from './telemetry/trace-helpers';
 import { DebugVisualizerServer } from './debug-visualizer/ws-server';
-import { DebugSpanExporter } from './debug-visualizer/debug-span-exporter';
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import open from 'open';
 
 /**
