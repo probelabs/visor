@@ -23,12 +23,9 @@ jobs:
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install dependencies
         run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
           rm -rf node_modules package-lock.json
           npm install
 
