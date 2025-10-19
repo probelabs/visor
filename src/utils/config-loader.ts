@@ -295,11 +295,14 @@ export class ConfigLoader {
       // Always log to stderr to avoid contaminating formatted output
       console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
-      const config = yaml.load(content) as Partial<VisorConfig>;
+      let config = yaml.load(content) as Partial<VisorConfig>;
 
       if (!config || typeof config !== 'object') {
         throw new Error('Invalid default configuration');
       }
+
+      // Normalize 'checks' and 'steps' for backward compatibility
+      config = this.normalizeStepsAndChecks(config);
 
       // Default configs shouldn't have extends, but handle it just in case
       if (config.extends) {
@@ -472,5 +475,25 @@ export class ConfigLoader {
   public reset(): void {
     this.loadedConfigs.clear();
     this.clearCache();
+  }
+
+  /**
+   * Normalize 'checks' and 'steps' keys for backward compatibility
+   * Ensures both keys are present and contain the same data
+   */
+  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
+    // If both are present, 'steps' takes precedence
+    if (config.steps && config.checks) {
+      // Use steps as the source of truth
+      config.checks = config.steps;
+    } else if (config.steps && !config.checks) {
+      // Copy steps to checks for internal compatibility
+      config.checks = config.steps;
+    } else if (config.checks && !config.steps) {
+      // Copy checks to steps for forward compatibility
+      config.steps = config.checks;
+    }
+
+    return config;
   }
 }
