@@ -1,12 +1,11 @@
 import { ProbeAgent } from '@probelabs/probe';
-import type { AppTracer, TelemetryConfig } from '@probelabs/probe';
 
 /**
  * Extended ProbeAgent interface that includes tracing properties
  */
 interface TracedProbeAgent extends ProbeAgent {
-  tracer?: AppTracer;
-  _telemetryConfig?: TelemetryConfig;
+  tracer?: any; // AppTracer removed from probe
+  _telemetryConfig?: any; // TelemetryConfig removed from probe
   _traceFilePath?: string;
 }
 

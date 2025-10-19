@@ -1,6 +1,10 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { TelemetryConfig, AppTracer, SimpleTelemetry, SimpleAppTracer } from '@probelabs/probe';
+import { SimpleTelemetry, SimpleAppTracer } from '@probelabs/probe';
+
+// Type stubs for removed probe exports (now using SimpleTelemetry)
+type TelemetryConfig = any;
+type AppTracer = any;
 
 /**
  * Safely initialize a tracer for ProbeAgent with proper path sanitization
@@ -10,78 +14,10 @@ import { TelemetryConfig, AppTracer, SimpleTelemetry, SimpleAppTracer } from '@p
 export async function initializeTracer(
   sessionId: string,
   checkName?: string
-): Promise<{ tracer: AppTracer; telemetryConfig: TelemetryConfig; filePath: string } | null> {
+): Promise<{ tracer: any; telemetryConfig: any; filePath: string } | null> {
   try {
-    // Try to use full OpenTelemetry integration first (provides proper span hierarchy)
-    if (TelemetryConfig && AppTracer) {
-      // SECURITY: Sanitize checkName to prevent path traversal attacks
-      // Use path.basename to strip any directory traversal characters (../, etc.)
-      const sanitizedCheckName = checkName ? path.basename(checkName) : 'check';
-
-      // Create trace file path in debug-artifacts directory
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const traceDir = process.env.GITHUB_WORKSPACE
-        ? path.join(process.env.GITHUB_WORKSPACE, 'debug-artifacts')
-        : path.join(process.cwd(), 'debug-artifacts');
-
-      // Create traces directory if it doesn't exist
-      if (!fs.existsSync(traceDir)) {
-        fs.mkdirSync(traceDir, { recursive: true });
-      }
-
-      // SECURITY: Use path.join to safely construct the path
-      // This ensures the final path is within traceDir
-      const traceFilePath = path.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
-
-      // SECURITY: Verify the resolved path is within the intended directory
-      const resolvedTracePath = path.resolve(traceFilePath);
-      const resolvedTraceDir = path.resolve(traceDir);
-      if (!resolvedTracePath.startsWith(resolvedTraceDir)) {
-        console.error(
-          `⚠️ Security: Attempted path traversal detected. Check name: ${checkName}, resolved path: ${resolvedTracePath}`
-        );
-        return null;
-      }
-
-      // Initialize OpenTelemetry with file exporter
-      // This provides proper span hierarchy and parent-child relationships
-      const telemetryConfig = new TelemetryConfig({
-        serviceName: 'visor-ai',
-        serviceVersion: '1.0.0',
-        enableFile: true,
-        filePath: traceFilePath,
-        enableConsole: false, // Disable console to reduce noise
-        enableRemote: false, // Can be enabled via OTEL_EXPORTER_OTLP_ENDPOINT env var
-      });
-
-      // Initialize the OpenTelemetry SDK
-      telemetryConfig.initialize();
-
-      // Create the AppTracer with session ID for consistent tracing
-      const tracer = new AppTracer(telemetryConfig, sessionId);
-
-      console.error(`📊 OpenTelemetry tracing enabled for visor-ai, saving to: ${traceFilePath}`);
-      console.error(
-        `🌲 Trace spans will show hierarchical relationships between visor checks and probe agent operations`
-      );
-
-      // If in GitHub Actions, log the path for artifact upload
-      if (process.env.GITHUB_ACTIONS) {
-        console.log(
-          `::notice title=AI Trace::OpenTelemetry trace will be saved to ${traceFilePath}`
-        );
-        console.log(`::set-output name=trace-path::${traceFilePath}`);
-      }
-
-      return { tracer, telemetryConfig, filePath: traceFilePath };
-    }
-
-    // Fallback to SimpleTelemetry if full OpenTelemetry is not available
+    // Use SimpleTelemetry (probe no longer exports full OpenTelemetry classes)
     if (SimpleTelemetry && SimpleAppTracer) {
-      console.warn(
-        '⚠️ Using SimpleTelemetry fallback - hierarchical span relationships may not be available'
-      );
-
       // SECURITY: Sanitize checkName to prevent path traversal attacks
       const sanitizedCheckName = checkName ? path.basename(checkName) : 'check';
 
@@ -126,10 +62,10 @@ export async function initializeTracer(
         console.log(`::set-output name=trace-path::${traceFilePath}`);
       }
 
-      // Return with proper typing for SimpleTelemetry
+      // Return with SimpleTelemetry
       return {
-        tracer: tracer as any as AppTracer,
-        telemetryConfig: telemetry as any as TelemetryConfig,
+        tracer: tracer as any,
+        telemetryConfig: telemetry as any,
         filePath: traceFilePath,
       };
     }

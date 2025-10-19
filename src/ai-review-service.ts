@@ -1,7 +1,10 @@
 import { ProbeAgent } from '@probelabs/probe';
 import type { ProbeAgentOptions } from '@probelabs/probe';
-import type { AppTracer, TelemetryConfig } from '@probelabs/probe';
 import { PRInfo } from './pr-analyzer';
+
+// Type stubs for removed probe exports (now using SimpleTelemetry)
+type TelemetryConfig = any;
+type AppTracer = any;
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
