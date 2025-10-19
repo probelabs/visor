@@ -32,14 +32,14 @@ describe('forEach Empty Array Skip', () => {
     });
 
     // fetch-tickets should complete successfully with empty array
-    const fetchStats = result.executionStatistics?.checks.find(
+    const fetchStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'fetch-tickets'
     );
     expect(fetchStats).toBeDefined();
     expect(fetchStats?.skipped).toBe(false);
 
     // process-ticket should NOT be executed (no runs)
-    const processStats = result.executionStatistics?.checks.find(
+    const processStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'process-ticket'
     );
     expect(processStats).toBeDefined();
@@ -79,19 +79,19 @@ describe('forEach Empty Array Skip', () => {
     });
 
     // fetch-tickets should complete
-    const fetchStats = result.executionStatistics?.checks.find(
+    const fetchStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'fetch-tickets'
     );
     expect(fetchStats?.skipped).toBe(false);
 
     // process-ticket should NOT run (0 runs)
-    const processStats = result.executionStatistics?.checks.find(
+    const processStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'process-ticket'
     );
     expect(processStats?.totalRuns).toBe(0);
 
     // notify-ticket should also NOT run because process-ticket returned empty
-    const notifyStats = result.executionStatistics?.checks.find(
+    const notifyStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'notify-ticket'
     );
     expect(notifyStats?.totalRuns).toBe(0);
@@ -122,11 +122,11 @@ describe('forEach Empty Array Skip', () => {
     });
 
     // fetch-data should complete
-    const fetchStats = result.executionStatistics?.checks.find(c => c.checkName === 'fetch-data');
+    const fetchStats = result.executionStatistics?.checks!.find(c => c.checkName === 'fetch-data');
     expect(fetchStats?.skipped).toBe(false);
 
     // process-data should NOT run
-    const processStats = result.executionStatistics?.checks.find(
+    const processStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'process-data'
     );
     expect(processStats?.totalRuns).toBe(0);
@@ -156,13 +156,13 @@ describe('forEach Empty Array Skip', () => {
     });
 
     // fetch-tickets should complete
-    const fetchStats = result.executionStatistics?.checks.find(
+    const fetchStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'fetch-tickets'
     );
     expect(fetchStats?.skipped).toBe(false);
 
     // process-ticket SHOULD run 2 times (once per ticket)
-    const processStats = result.executionStatistics?.checks.find(
+    const processStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'process-ticket'
     );
     expect(processStats?.totalRuns).toBe(2);

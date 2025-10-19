@@ -31,7 +31,7 @@ http_server:
           "priority": "{{ webhook.issue.fields.priority.name }}"
         }
 
-checks:
+steps:
   # === GitHub Push Pipeline ===
 
   # Receive GitHub push events

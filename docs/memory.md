@@ -52,7 +52,7 @@ memory:
   # Auto-save after operations (default: true if storage: file)
   auto_save: true
 
-checks:
+steps:
   # ... your checks
 ```
 
@@ -61,7 +61,7 @@ checks:
 Each memory check requires:
 
 ```yaml
-checks:
+steps:
   my-memory-check:
     type: memory
 
@@ -98,7 +98,7 @@ checks:
 Retrieve a value from memory.
 
 ```yaml
-checks:
+steps:
   get-counter:
     type: memory
     operation: get
@@ -112,7 +112,7 @@ Returns the value, or `undefined` if the key doesn't exist.
 Set or override a value in memory.
 
 ```yaml
-checks:
+steps:
   set-counter:
     type: memory
     operation: set
@@ -125,7 +125,7 @@ checks:
 Append a value to an array. Creates a new array if the key doesn't exist.
 
 ```yaml
-checks:
+steps:
   append-error:
     type: memory
     operation: append
@@ -138,7 +138,7 @@ checks:
 Increment a numeric value. Creates a new counter starting at 0 if the key doesn't exist.
 
 ```yaml
-checks:
+steps:
   # Increment by 1 (default)
   increment-counter:
     type: memory
@@ -174,7 +174,7 @@ Returns the new value after increment. Throws an error if the existing value is 
 Delete a key from memory.
 
 ```yaml
-checks:
+steps:
   delete-temp:
     type: memory
     operation: delete
@@ -188,7 +188,7 @@ Returns `true` if deleted, `false` if key didn't exist.
 Clear all keys in a namespace.
 
 ```yaml
-checks:
+steps:
   clear-all:
     type: memory
     operation: clear
@@ -201,7 +201,7 @@ checks:
 List all keys in a namespace.
 
 ```yaml
-checks:
+steps:
   list-keys:
     type: memory
     operation: list
@@ -216,7 +216,7 @@ Returns an array of key names.
 Execute custom JavaScript with full memory access. This operation allows complex logic, loops, conditionals, and direct manipulation of memory state.
 
 ```yaml
-checks:
+steps:
   complex-logic:
     type: memory
     operation: exec_js
@@ -273,7 +273,7 @@ If not specified, the global `memory.namespace` setting is used (defaults to "de
 memory:
   namespace: production
 
-checks:
+steps:
   set-counter:
     type: memory
     operation: set
@@ -287,7 +287,7 @@ checks:
 Override the namespace for specific checks:
 
 ```yaml
-checks:
+steps:
   set-prod:
     type: memory
     operation: set
@@ -384,7 +384,7 @@ production,counter,"100",number
 Use `memory_get`, `memory_has`, and `memory_list` filters:
 
 ```yaml
-checks:
+steps:
   log-status:
     type: log
     message: |
@@ -398,7 +398,7 @@ checks:
 The `memory` object is available in `value_js`, `transform_js`, `fail_if`, etc.:
 
 ```yaml
-checks:
+steps:
   increment:
     type: memory
     operation: set
@@ -419,7 +419,7 @@ checks:
 ### Access Dependency Outputs
 
 ```yaml
-checks:
+steps:
   run-test:
     type: command
     exec: npm test
@@ -435,7 +435,7 @@ checks:
 ### Access PR Information
 
 ```yaml
-checks:
+steps:
   store-pr-number:
     type: memory
     operation: set
@@ -451,7 +451,7 @@ checks:
 memory:
   storage: memory
 
-checks:
+steps:
   init-retry:
     type: memory
     operation: set
@@ -481,7 +481,7 @@ memory:
   storage: file
   file: ./errors.json
 
-checks:
+steps:
   init-errors:
     type: memory
     operation: set
@@ -517,7 +517,7 @@ memory:
   storage: file
   file: ./workflow.json
 
-checks:
+steps:
   init-state:
     type: memory
     operation: set
@@ -560,7 +560,7 @@ memory:
   file: ./memory.json
   namespace: production
 
-checks:
+steps:
   # Production counter
   prod-init:
     type: memory
@@ -588,7 +588,7 @@ checks:
 ### Dynamic Value Computation
 
 ```yaml
-checks:
+steps:
   calculate-score:
     type: memory
     operation: set
@@ -611,7 +611,7 @@ checks:
 memory:
   storage: memory
 
-checks:
+steps:
   # Collect test results
   run-tests:
     type: command
@@ -730,7 +730,7 @@ checks:
 Always initialize memory values before using them:
 
 ```yaml
-checks:
+steps:
   init:
     type: memory
     operation: set
@@ -766,7 +766,7 @@ key: temp
 Clear temporary data when the workflow completes:
 
 ```yaml
-checks:
+steps:
   cleanup:
     type: memory
     operation: clear
@@ -794,7 +794,7 @@ For collecting multiple values, use `append` instead of manual array management:
 
 ```yaml
 # Good
-checks:
+steps:
   collect-error:
     type: memory
     operation: append
@@ -802,7 +802,7 @@ checks:
     value: "{{ error_message }}"
 
 # Avoid
-checks:
+steps:
   collect-error-manual:
     type: memory
     operation: set
@@ -834,7 +834,7 @@ Add comments documenting the memory keys your workflow uses:
 # - errors: string[] - Collected error messages
 # - workflow_state: string - Current state (pending|running|complete)
 
-checks:
+steps:
   # ...
 ```
 
@@ -846,7 +846,7 @@ If `memory.get()` returns `undefined`, the key may not be initialized:
 
 ```yaml
 # Add initialization
-checks:
+steps:
   init:
     type: memory
     operation: set
@@ -882,7 +882,7 @@ memory.get('counter')  // Uses global memory.namespace
 Ensure dependencies are set correctly:
 
 ```yaml
-checks:
+steps:
   update:
     type: memory
     operation: set

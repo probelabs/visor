@@ -7,7 +7,7 @@ project: claude-code-example
 language: typescript
 
 # Claude Code checks with various configurations
-checks:
+steps:
   # Basic Claude Code analysis
   claude_security_review:
     type: claude-code

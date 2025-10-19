@@ -194,7 +194,7 @@ Full `executionStatistics` object included in JSON output with all tracked data:
 
 **Config:**
 ```yaml
-checks:
+steps:
   list-files:
     type: command
     exec: echo '["a.json", "b.json", "c.json"]'
@@ -238,7 +238,7 @@ Check Details:
 
 **Config:**
 ```yaml
-checks:
+steps:
   production-deploy:
     type: command
     exec: ./deploy.sh

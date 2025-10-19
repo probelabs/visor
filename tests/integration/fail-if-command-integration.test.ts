@@ -59,7 +59,7 @@ describe('fail_if with command provider (integration)', () => {
     expect(hasFailIf).toBe(true);
 
     const stats = result.executionStatistics!;
-    const logStats = stats.checks.find(c => c.checkName === 'log-results');
+    const logStats = stats.checks!.find(c => c.checkName === 'log-results');
     expect(logStats).toBeDefined();
     expect(logStats!.skipped).toBe(true);
   });

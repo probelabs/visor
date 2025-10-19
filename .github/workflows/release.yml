@@ -35,10 +35,16 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Run tests
         run: npm test
@@ -95,11 +101,16 @@ jobs:
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20'
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies and build
         run: |
-          npm ci
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
           npm run build
 
       - name: Set version variables
@@ -228,10 +239,16 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Build package
         run: npm run build

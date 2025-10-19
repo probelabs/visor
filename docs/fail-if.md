@@ -7,7 +7,7 @@ Visor lets you declare simple expressions that fail a check when they evaluate t
 - Per check:
 
 ```yaml
-checks:
+steps:
   analyze-bug:
     type: ai
     schema: ./schemas/ticket-analysis.json
@@ -51,7 +51,7 @@ Only direct dependencies gate execution. Transitive checks are gated through the
 Fail when AI (custom schema) reports an error:
 
 ```yaml
-checks:
+steps:
   analyze-bug:
     type: ai
     schema: ./schemas/ticket-analysis.json
@@ -71,7 +71,7 @@ fail_if: outputs["fetch-tickets"].error
 Fail on text output pattern:
 
 ```yaml
-checks:
+steps:
   lint:
     type: command
     exec: run-linter

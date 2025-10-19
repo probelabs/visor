@@ -4,7 +4,7 @@
 version: "1.0"
 
 # Example 1: Simple session reuse for follow-up analysis
-checks:
+steps:
   # Initial security analysis - creates a new AI session
   security-analysis:
     type: ai

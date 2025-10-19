@@ -10,7 +10,7 @@ Visor supports defining dependencies between checks using `depends_on`. This ena
 
 ```yaml
 version: "1.0"
-checks:
+steps:
   security:
     type: ai
     group: code-review
@@ -57,7 +57,7 @@ checks:
 
 #### Diamond Dependency
 ```yaml
-checks:
+steps:
   foundation: { type: ai, group: base, schema: code-review, prompt: "Base analysis" }
   branch_a:   { type: ai, group: code-review, schema: code-review, depends_on: [foundation] }
   branch_b:   { type: ai, group: code-review, schema: code-review, depends_on: [foundation] }
@@ -66,7 +66,7 @@ checks:
 
 #### Multiple Independent Chains
 ```yaml
-checks:
+steps:
   security_basic:     { type: ai, group: security,    schema: code-review }
   security_advanced:  { type: ai, group: security,    schema: code-review, depends_on: [security_basic] }
   performance_basic:  { type: ai, group: performance, schema: code-review }

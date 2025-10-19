@@ -63,12 +63,12 @@ describe('Timeout behavior integration', () => {
     expect(result.executionStatistics).toBeDefined();
     const stats = result.executionStatistics!;
 
-    const fetchStats = stats.checks.find(c => c.checkName === 'fetch-tickets');
+    const fetchStats = stats.checks!.find(c => c.checkName === 'fetch-tickets');
     expect(fetchStats).toBeDefined();
     expect(fetchStats!.failedRuns).toBe(1);
     expect(fetchStats!.successfulRuns).toBe(0);
 
-    const analyzeStats = stats.checks.find(c => c.checkName === 'analyze-bug');
+    const analyzeStats = stats.checks!.find(c => c.checkName === 'analyze-bug');
     expect(analyzeStats).toBeDefined();
     expect(analyzeStats!.skipped).toBe(true);
     expect(analyzeStats!.skipReason).toBe('dependency_failed');

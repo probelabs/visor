@@ -22,6 +22,21 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
 /**
+ * Valid event triggers for checks
+ * Exported as a constant to serve as the single source of truth for event validation
+ */
+export const VALID_EVENT_TRIGGERS: readonly EventTrigger[] = [
+  'pr_opened',
+  'pr_updated',
+  'pr_closed',
+  'issue_opened',
+  'issue_comment',
+  'manual',
+  'schedule',
+  'webhook_received',
+] as const;
+
+/**
  * Configuration manager for Visor
  */
 export class ConfigManager {
@@ -32,20 +47,13 @@ export class ConfigManager {
     'http',
     'http_input',
     'http_client',
+    'memory',
     'noop',
     'log',
+    'memory',
     'github',
   ];
-  private validEventTriggers: EventTrigger[] = [
-    'pr_opened',
-    'pr_updated',
-    'pr_closed',
-    'issue_opened',
-    'issue_comment',
-    'manual',
-    'schedule',
-    'webhook_received',
-  ];
+  private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity', 'group'];
 
@@ -58,19 +66,24 @@ export class ConfigManager {
   ): Promise<VisorConfig> {
     const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
 
+    // Resolve relative paths to absolute paths based on current working directory
+    const resolvedPath = path.isAbsolute(configPath)
+      ? configPath
+      : path.resolve(process.cwd(), configPath);
+
     try {
-      if (!fs.existsSync(configPath)) {
-        throw new Error(`Configuration file not found: ${configPath}`);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
       }
 
-      const configContent = fs.readFileSync(configPath, 'utf8');
+      const configContent = fs.readFileSync(resolvedPath, 'utf8');
       let parsedConfig: Partial<VisorConfig>;
 
       try {
         parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
       } catch (yamlError) {
         const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
-        throw new Error(`Invalid YAML syntax in ${configPath}: ${errorMessage}`);
+        throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
       }
 
       if (!parsedConfig || typeof parsedConfig !== 'object') {
@@ -80,7 +93,7 @@ export class ConfigManager {
       // Handle extends directive if present
       if (parsedConfig.extends) {
         const loaderOptions: ConfigLoaderOptions = {
-          baseDir: path.dirname(configPath),
+          baseDir: path.dirname(resolvedPath),
           allowRemote: this.isRemoteExtendsAllowed(),
           maxDepth: 10,
           allowedRemotePatterns,
@@ -111,6 +124,9 @@ export class ConfigManager {
         parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
 
+      // Normalize 'checks' and 'steps' - support both keys for backward compatibility
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+
       if (validate) {
         this.validateConfig(parsedConfig);
       }
@@ -135,12 +151,12 @@ export class ConfigManager {
         }
         // Add more context for generic errors
         if (error.message.includes('ENOENT')) {
-          throw new Error(`Configuration file not found: ${configPath}`);
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
         }
         if (error.message.includes('EPERM')) {
-          throw new Error(`Permission denied reading configuration file: ${configPath}`);
+          throw new Error(`Permission denied reading configuration file: ${resolvedPath}`);
         }
-        throw new Error(`Failed to read configuration file ${configPath}: ${error.message}`);
+        throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
       }
       throw error;
     }
@@ -200,7 +216,8 @@ export class ConfigManager {
   public async getDefaultConfig(): Promise<VisorConfig> {
     return {
       version: '1.0',
-      checks: {},
+      steps: {},
+      checks: {}, // Keep for backward compatibility
       max_parallelism: 3,
       output: {
         pr_comment: {
@@ -254,11 +271,14 @@ export class ConfigManager {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
-        const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+        let parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
 
         if (!parsedConfig || typeof parsedConfig !== 'object') {
           return null;
         }
+
+        // Normalize 'checks' and 'steps' for backward compatibility
+        parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
 
         // Validate and merge with defaults
         this.validateConfig(parsedConfig);
@@ -299,6 +319,26 @@ export class ConfigManager {
     }
 
     return null;
+  }
+
+  /**
+   * Normalize 'checks' and 'steps' keys for backward compatibility
+   * Ensures both keys are present and contain the same data
+   */
+  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
+    // If both are present, 'steps' takes precedence
+    if (config.steps && config.checks) {
+      // Use steps as the source of truth
+      config.checks = config.steps;
+    } else if (config.steps && !config.checks) {
+      // Copy steps to checks for internal compatibility
+      config.checks = config.steps;
+    } else if (config.checks && !config.steps) {
+      // Copy checks to steps for forward compatibility
+      config.steps = config.checks;
+    }
+
+    return config;
   }
 
   /**
@@ -381,14 +421,20 @@ export class ConfigManager {
 
     // Unknown key warnings are produced by Ajv using the pre-generated schema.
 
-    if (!config.checks) {
+    // Validate that either 'checks' or 'steps' is present
+    if (!config.checks && !config.steps) {
       errors.push({
-        field: 'checks',
-        message: 'Missing required field: checks',
+        field: 'checks/steps',
+        message:
+          'Missing required field: either "checks" or "steps" must be defined. "steps" is recommended for new configurations.',
       });
-    } else {
+    }
+
+    // Use normalized checks for validation (both should be present after normalization)
+    const checksToValidate = config.checks || config.steps;
+    if (checksToValidate) {
       // Validate each check configuration
-      for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+      for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
         // Default type to 'ai' if not specified
         if (!checkConfig.type) {
           checkConfig.type = 'ai';

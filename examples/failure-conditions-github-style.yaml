@@ -20,7 +20,7 @@ failure_conditions:
     message: "Security checks must have zero issues"
     severity: error
 
-checks:
+steps:
   # Security check with GitHub Actions-style conditions
   security-scan:
     type: ai

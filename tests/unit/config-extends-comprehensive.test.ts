@@ -59,7 +59,7 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
 
       // Verify that we have checks from both default and extended config
       expect(loadedConfig.checks).toBeDefined();
-      const checkNames = Object.keys(loadedConfig.checks);
+      const checkNames = Object.keys(loadedConfig.checks!);
 
       // Should have original checks from default config
       expect(checkNames).toContain('security');
@@ -71,7 +71,7 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
       expect(checkNames).toContain('database-migration');
 
       // Verify security check has merged prompt (original + appended)
-      const securityCheck = loadedConfig.checks.security;
+      const securityCheck = loadedConfig.checks!.security;
       expect(securityCheck).toBeDefined();
       expect(securityCheck.prompt).toContain('SQL injection and XSS vulnerabilities');
       // The original prompt should still be there (from default config)
@@ -81,14 +81,14 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
       expect('appendPrompt' in securityCheck).toBe(false);
 
       // Verify new check with direct prompt
-      const reactCheck = loadedConfig.checks['custom-react-check'];
+      const reactCheck = loadedConfig.checks!['custom-react-check'];
       expect(reactCheck).toBeDefined();
       expect(reactCheck.prompt).toBe(
         'Analyze React components for best practices and performance issues.'
       );
 
       // Verify new check where appendPrompt becomes prompt (no parent)
-      const dbCheck = loadedConfig.checks['database-migration'];
+      const dbCheck = loadedConfig.checks!['database-migration'];
       expect(dbCheck).toBeDefined();
       expect(dbCheck.prompt).toBe('Verify database migration scripts are safe and reversible.');
       expect('appendPrompt' in dbCheck).toBe(false);
@@ -161,14 +161,14 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
 
       // Verify all checks are present
       expect(loadedConfig.checks).toBeDefined();
-      const checkNames = Object.keys(loadedConfig.checks);
+      const checkNames = Object.keys(loadedConfig.checks!);
       expect(checkNames).toContain('security');
       expect(checkNames).toContain('performance');
       expect(checkNames).toContain('team-specific');
       expect(checkNames).toContain('project-feature');
 
       // Verify security check has all appended prompts combined
-      const securityCheck = loadedConfig.checks.security;
+      const securityCheck = loadedConfig.checks!.security;
       expect(securityCheck.prompt).toContain('Basic security check');
       expect(securityCheck.prompt).toContain('Follow OWASP guidelines');
       expect(securityCheck.prompt).toContain('Check for project-specific security patterns');
@@ -181,7 +181,7 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
       expect(securityCheck.on).toEqual(['pr_opened', 'pr_updated', 'manual']);
 
       // Verify performance check is unchanged from base
-      expect(loadedConfig.checks.performance.prompt).toBe('Check performance');
+      expect(loadedConfig.checks!.performance.prompt).toBe('Check performance');
     });
   });
 
@@ -219,7 +219,7 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
       // When child has both prompt and appendPrompt, prompt should override parent
       // and appendPrompt should be appended to the new prompt
       expect(merged.checks?.test?.prompt).toBe('Child prompt\n\nAdditional instructions');
-      expect(merged.checks?.test && 'appendPrompt' in merged.checks.test).toBe(false);
+      expect(merged.checks?.test && 'appendPrompt' in merged.checks!.test).toBe(false);
     });
 
     it('should handle new check with only appendPrompt', () => {
@@ -241,7 +241,7 @@ describe('Comprehensive Config Extends with appendPrompt', () => {
 
       // appendPrompt should become prompt when there's no parent
       expect(merged.checks?.newCheck?.prompt).toBe('This becomes the prompt');
-      expect(merged.checks?.newCheck && 'appendPrompt' in merged.checks.newCheck).toBe(false);
+      expect(merged.checks?.newCheck && 'appendPrompt' in merged.checks!.newCheck).toBe(false);
     });
 
     it('should merge check fields correctly', () => {

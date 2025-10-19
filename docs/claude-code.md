@@ -13,7 +13,7 @@ Visor includes advanced integration with Claude Code SDK, providing powerful AI-
 ### Configuration
 
 ```yaml
-checks:
+steps:
   claude_comprehensive:
     type: claude-code
     prompt: "Perform a comprehensive security and performance review"

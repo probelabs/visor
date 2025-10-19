@@ -3,7 +3,7 @@ version: "1.0"
 # Example configuration showing how to use if conditions to control check execution
 # The if condition determines whether a check should run based on context
 
-checks:
+steps:
   # Run only on main branch
   production-check:
     type: ai

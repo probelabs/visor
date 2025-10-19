@@ -83,7 +83,7 @@ export function resolveChecks(checkIds: string[], config: VisorConfig | undefine
       throw new Error(`Circular dependency detected involving check: ${id} (path: ${cycle})`);
     }
     visiting.add(id);
-    const deps = config.checks[id]?.depends_on || [];
+    const deps = config.checks![id]?.depends_on || [];
     for (const d of deps) dfs(d, [...stack, id]);
     if (!result.includes(id)) result.push(id);
     visiting.delete(id);

@@ -34,7 +34,7 @@ version: "1.0"
 ai_provider: bedrock
 ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Default Bedrock model
 
-checks:
+steps:
   # Basic check using global Bedrock settings
   security-analysis:
     type: ai

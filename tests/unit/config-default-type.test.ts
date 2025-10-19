@@ -47,9 +47,9 @@ describe('Default Check Type Behavior', () => {
     const loadedConfig = await configManager.loadConfig(configPath);
 
     // Check that the type defaulted to 'ai'
-    expect(loadedConfig.checks['test-check'].type).toBe('ai');
+    expect(loadedConfig.checks!['test-check'].type).toBe('ai');
     // Check that explicitly set type is preserved
-    expect(loadedConfig.checks['another-check'].type).toBe('command');
+    expect(loadedConfig.checks!['another-check'].type).toBe('command');
   });
 
   it('should default to "ai" when merging configs without type', () => {
@@ -118,11 +118,11 @@ describe('Default Check Type Behavior', () => {
     );
 
     // Both checks should exist
-    expect(loadedConfig.checks['base-check']).toBeDefined();
-    expect(loadedConfig.checks['extended-check']).toBeDefined();
+    expect(loadedConfig.checks!['base-check']).toBeDefined();
+    expect(loadedConfig.checks!['extended-check']).toBeDefined();
 
     // Extended check should default to 'ai' type
-    expect(loadedConfig.checks['extended-check'].type).toBe('ai');
+    expect(loadedConfig.checks!['extended-check'].type).toBe('ai');
   });
 
   it('should work with minimal config (just prompt and on)', async () => {
@@ -144,9 +144,9 @@ describe('Default Check Type Behavior', () => {
     const loadedConfig = await configManager.loadConfig(configPath);
 
     // Should have defaulted to 'ai' type
-    expect(loadedConfig.checks['simple-check'].type).toBe('ai');
+    expect(loadedConfig.checks!['simple-check'].type).toBe('ai');
     // Should have the prompt
-    expect(loadedConfig.checks['simple-check'].prompt).toBe('Just a simple prompt');
+    expect(loadedConfig.checks!['simple-check'].prompt).toBe('Just a simple prompt');
   });
 
   it('should keep on field undefined when not specified', async () => {
@@ -173,9 +173,9 @@ describe('Default Check Type Behavior', () => {
     const loadedConfig = await configManager.loadConfig(configPath);
 
     // Check that the on field is undefined (not defaulted)
-    expect(loadedConfig.checks['test-check'].on).toBeUndefined();
+    expect(loadedConfig.checks!['test-check'].on).toBeUndefined();
     // Check that explicitly set on is preserved
-    expect(loadedConfig.checks['another-check'].on).toEqual(['pr_opened']);
+    expect(loadedConfig.checks!['another-check'].on).toEqual(['pr_opened']);
   });
 
   it('should handle both type and on not specified', async () => {
@@ -197,9 +197,9 @@ describe('Default Check Type Behavior', () => {
     const loadedConfig = await configManager.loadConfig(configPath);
 
     // Check that type defaults to 'ai' but 'on' remains undefined
-    expect(loadedConfig.checks['minimal-check'].type).toBe('ai');
-    expect(loadedConfig.checks['minimal-check'].on).toBeUndefined();
-    expect(loadedConfig.checks['minimal-check'].prompt).toBe('Minimal check prompt');
+    expect(loadedConfig.checks!['minimal-check'].type).toBe('ai');
+    expect(loadedConfig.checks!['minimal-check'].on).toBeUndefined();
+    expect(loadedConfig.checks!['minimal-check'].prompt).toBe('Minimal check prompt');
   });
 
   it('should handle appendPrompt without type specified', async () => {
@@ -239,13 +239,13 @@ describe('Default Check Type Behavior', () => {
     );
 
     // Security check should maintain 'ai' type
-    expect(loadedConfig.checks.security.type).toBe('ai');
+    expect(loadedConfig.checks!.security.type).toBe('ai');
     // Should have merged prompts
-    expect(loadedConfig.checks.security.prompt).toContain('Security analysis');
-    expect(loadedConfig.checks.security.prompt).toContain('Also check for XSS');
+    expect(loadedConfig.checks!.security.prompt).toContain('Security analysis');
+    expect(loadedConfig.checks!.security.prompt).toContain('Also check for XSS');
 
     // New check should default to 'ai'
-    expect(loadedConfig.checks['new-check'].type).toBe('ai');
-    expect(loadedConfig.checks['new-check'].prompt).toBe('This becomes the prompt');
+    expect(loadedConfig.checks!['new-check'].type).toBe('ai');
+    expect(loadedConfig.checks!['new-check'].prompt).toBe('This becomes the prompt');
   });
 });

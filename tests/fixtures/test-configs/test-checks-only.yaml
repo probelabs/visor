@@ -1,0 +1,10 @@
+version: '1.0'
+checks:
+  test-check:
+    type: ai
+    prompt: Test prompt
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

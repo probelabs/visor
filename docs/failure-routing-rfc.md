@@ -36,7 +36,7 @@ routing:
           mode: fixed        # fixed|exponential
           delay_ms: 2000     # initial delay in milliseconds
 
-checks:
+steps:
   setup-env:
     type: command
     exec: "npm ci"

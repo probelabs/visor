@@ -20,7 +20,7 @@ ai_mcp_servers:
       JIRA_EMAIL: "${JIRA_EMAIL}"              # your-email@company.com
       JIRA_API_TOKEN: "${JIRA_API_TOKEN}"      # Your Jira API token
 
-checks:
+steps:
   # Step 1: Query and analyze high-priority bugs
   analyze_priority_bugs:
     type: ai

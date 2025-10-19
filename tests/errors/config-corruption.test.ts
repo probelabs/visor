@@ -52,9 +52,10 @@ describe('Configuration Corruption & Recovery Tests', () => {
         } catch (error) {
           console.log(`    Error: ${(error as Error).message}`);
 
-          // Should provide clear error message
+          // Should provide clear error message with resolved absolute path
           expect((error as Error).message).toContain('Configuration file not found');
-          expect((error as Error).message).toContain(configPath);
+          // Error message should contain resolved absolute path for better debugging
+          expect((error as Error).message).toMatch(/\/.*\.(yaml|yml)$/);
         }
       }
     });

@@ -64,7 +64,7 @@ describe('Goto + goto_event forward-run integration', () => {
     expect(allChecks).toContain('comment-assistant');
 
     // Stats include the forward-run children
-    const statNames = statistics.checks.map(s => s.checkName).sort();
+    const statNames = statistics.checks!.map(s => s.checkName).sort();
     expect(statNames).toEqual(['comment-assistant', 'overview', 'quality'].sort());
   });
 });

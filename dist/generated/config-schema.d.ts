@@ -20,9 +20,13 @@ export declare const configSchema: {
                     }];
                     readonly description: "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\"";
                 };
+                readonly steps: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
+                    readonly description: "Step configurations (recommended)";
+                };
                 readonly checks: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
-                    readonly description: "Check configurations";
+                    readonly description: "Check configurations (legacy, use 'steps' instead) - always populated after normalization";
                 };
                 readonly output: {
                     readonly $ref: "#/definitions/OutputConfig";
@@ -77,7 +81,7 @@ export declare const configSchema: {
                     readonly description: "Optional routing defaults for retry/goto/run policies";
                 };
             };
-            readonly required: readonly ["version", "checks", "output"];
+            readonly required: readonly ["version", "output"];
             readonly additionalProperties: false;
             readonly description: "Main Visor configuration";
             readonly patternProperties: {
@@ -318,6 +322,23 @@ export declare const configSchema: {
                     }];
                     readonly description: "Values for GitHub operations (can be array or single value)";
                 };
+                readonly transport: {
+                    readonly type: "string";
+                    readonly enum: readonly ["stdio", "sse", "http"];
+                    readonly description: "Transport type for MCP: stdio (default), sse (legacy), or http (streamable HTTP)";
+                };
+                readonly methodArgs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Arguments to pass to the MCP method (supports Liquid templates)";
+                };
+                readonly argsTransform: {
+                    readonly type: "string";
+                    readonly description: "Transform template for method arguments (Liquid)";
+                };
+                readonly sessionId: {
+                    readonly type: "string";
+                    readonly description: "Session ID for HTTP transport (optional, server may generate one)";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Configuration for a single check";
@@ -327,7 +348,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code"];
+            readonly enum: readonly ["ai", "command", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,string>': {
