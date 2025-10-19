@@ -1499,7 +1499,13 @@ ${this.escapeXml(processedFallbackDiff)}
       // Wrap the agent.answer() call in a span for hierarchical tracing
       // This creates a parent span that will contain all ProbeAgent's child spans
       let response: string;
-      const tracer = options.tracer as { withSpan?: (name: string, fn: () => Promise<string>, attrs?: Record<string, unknown>) => Promise<string> };
+      const tracer = options.tracer as {
+        withSpan?: (
+          name: string,
+          fn: () => Promise<string>,
+          attrs?: Record<string, unknown>
+        ) => Promise<string>;
+      };
       if (tracer && typeof tracer.withSpan === 'function') {
         response = await tracer.withSpan(
           'visor.ai_check',
@@ -1639,8 +1645,14 @@ ${this.escapeXml(processedFallbackDiff)}
       if (traceFilePath && telemetryConfig) {
         try {
           // Cast telemetryConfig to have optional methods
-          const telemetry = telemetryConfig as { flush?: () => Promise<void>; shutdown?: () => Promise<void> };
-          const tracerWithMethods = tracer as { flush?: () => Promise<void>; shutdown?: () => Promise<void> };
+          const telemetry = telemetryConfig as {
+            flush?: () => Promise<void>;
+            shutdown?: () => Promise<void>;
+          };
+          const tracerWithMethods = tracer as {
+            flush?: () => Promise<void>;
+            shutdown?: () => Promise<void>;
+          };
 
           // First flush the tracer to export pending spans
           if (tracerWithMethods && typeof tracerWithMethods.flush === 'function') {
