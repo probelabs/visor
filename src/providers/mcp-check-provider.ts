@@ -63,6 +63,9 @@ export class McpCheckProvider extends CheckProvider {
 
   /**
    * Create a secure sandbox for JavaScript execution
+   * - Uses Sandbox.SAFE_GLOBALS which excludes: Function, eval, require, process, etc.
+   * - Only allows explicitly whitelisted prototype methods
+   * - No access to filesystem, network, or system resources
    */
   private createSecureSandbox(): Sandbox {
     const log = (...args: unknown[]) => {
@@ -70,7 +73,7 @@ export class McpCheckProvider extends CheckProvider {
     };
 
     const globals = {
-      ...Sandbox.SAFE_GLOBALS,
+      ...Sandbox.SAFE_GLOBALS, // Excludes Function, eval, require, process, etc.
       Math,
       JSON,
       console: {
@@ -105,7 +108,7 @@ export class McpCheckProvider extends CheckProvider {
     ]);
     prototypeWhitelist.set(Array.prototype, arrayMethods);
 
-    // Allow string methods
+    // Allow safe string methods (replace is for string manipulation, not code execution)
     const stringMethods = new Set([
       'toLowerCase',
       'toUpperCase',
@@ -118,7 +121,7 @@ export class McpCheckProvider extends CheckProvider {
       'length',
       'trim',
       'split',
-      'replace',
+      'replace', // String.prototype.replace for text manipulation (e.g., "hello".replace("h", "H"))
       'match',
       'padStart',
       'padEnd',
