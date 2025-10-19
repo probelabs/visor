@@ -1239,7 +1239,7 @@ export class CheckExecutionEngine {
 
     // If we have a config with individual check definitions, prefer dependency-aware execution
     // even for a single check, so provider types other than 'ai' work consistently.
-    const allConfigured = config?.checks ? checks.every(name => !!config.checks[name]) : false;
+    const allConfigured = config?.checks ? checks.every(name => !!config.checks![name]) : false;
     if (allConfigured) {
       if (debug) {
         logFn(
@@ -1451,11 +1451,11 @@ export class CheckExecutionEngine {
 
     // If we have a config with individual check definitions, use dependency-aware execution
     const hasDependencies = checks.some(checkName => {
-      const checkConfig = config.checks[checkName];
+      const checkConfig = config.checks![checkName];
       return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
     });
     const hasRouting = checks.some(checkName => {
-      const c = config.checks[checkName];
+      const c = config.checks![checkName];
       return Boolean(c?.on_success || c?.on_fail);
     });
 
@@ -1521,7 +1521,7 @@ export class CheckExecutionEngine {
       throw new Error(`No configuration found for check: ${checkName}`);
     }
 
-    const checkConfig = config.checks[checkName];
+    const checkConfig = config.checks![checkName];
     const providerType = checkConfig.type || 'ai';
     const provider = this.providerRegistry.getProviderOrThrow(providerType);
     this.setProviderWebhookContext(provider);
@@ -2212,7 +2212,7 @@ export class CheckExecutionEngine {
     const sessionProviders = new Map<string, string>(); // checkName -> parent session provider
 
     for (const checkName of checks) {
-      const checkConfig = config.checks[checkName];
+      const checkConfig = config.checks![checkName];
       if (checkConfig) {
         dependencies[checkName] = checkConfig.depends_on || [];
 
@@ -2264,7 +2264,7 @@ export class CheckExecutionEngine {
       if (!config?.checks) return rootChecks;
       const set = new Set<string>(rootChecks);
       const visit = (name: string) => {
-        const cfg = config.checks[name];
+        const cfg = config.checks![name];
         if (!cfg || !cfg.depends_on) return;
         for (const dep of cfg.depends_on) {
           if (!set.has(dep)) {
@@ -2281,7 +2281,7 @@ export class CheckExecutionEngine {
 
     // Rebuild dependencies map for the expanded set
     for (const checkName of checks) {
-      const checkConfig = config.checks[checkName];
+      const checkConfig = config.checks![checkName];
       dependencies[checkName] = checkConfig?.depends_on || [];
     }
 
@@ -2372,7 +2372,7 @@ export class CheckExecutionEngine {
           if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
           return { checkName, error: null, result: results.get(checkName)! };
         }
-        const checkConfig = config.checks[checkName];
+        const checkConfig = config.checks![checkName];
         if (!checkConfig) {
           return {
             checkName,
@@ -2500,7 +2500,7 @@ export class CheckExecutionEngine {
                 );
               });
               // As a fallback, evaluate fail_if on the dependency result now
-              if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+              if (!hasFatalFailure && config && (config.fail_if || config.checks![depId]?.fail_if)) {
                 try {
                   hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
                 } catch {}
@@ -2684,7 +2684,7 @@ export class CheckExecutionEngine {
                 });
 
                 for (const childName of children) {
-                  const childCfg = config.checks[childName];
+                  const childCfg = config.checks![childName];
                   const childProviderType = childCfg.type || 'ai';
                   const childProv = this.providerRegistry.getProviderOrThrow(childProviderType);
                   this.setProviderWebhookContext(childProv);
@@ -2984,7 +2984,7 @@ export class CheckExecutionEngine {
                     if (
                       !hasFatalDepFailure &&
                       config &&
-                      (config.fail_if || config.checks[depId]?.fail_if)
+                      (config.fail_if || config.checks![depId]?.fail_if)
                     ) {
                       try {
                         const depFailures = await this.evaluateFailureConditions(
@@ -3163,7 +3163,7 @@ export class CheckExecutionEngine {
                   let progressed = false;
                   for (const node of descendantSet) {
                     if (perItemDone.has(node)) continue;
-                    const nodeCfg = config.checks[node];
+                    const nodeCfg = config.checks![node];
                     if (!nodeCfg) continue;
                     const deps = dependencies[node] || [];
 
@@ -3397,7 +3397,7 @@ export class CheckExecutionEngine {
                 if (hadFatalByIssues) return true;
                 // 2) Fail_if based fatality evaluated directly on the parent per-item result
                 try {
-                  if (config && (config.fail_if || config.checks[parent]?.fail_if)) {
+                  if (config && (config.fail_if || config.checks![parent]?.fail_if)) {
                     // If output is a string, try parsing JSON (full or tail) to honor fail_if semantics
                     let rForEval: ReviewSummary = r;
                     const rawOut = (r as any)?.output;
@@ -3606,7 +3606,7 @@ export class CheckExecutionEngine {
 
               // Finalize inline descendant aggregations to full results, so later levels skip them
               for (const [childName, agg] of inlineAgg.entries()) {
-                const childCfg = config.checks[childName];
+                const childCfg = config.checks![childName];
                 const childEnrichedIssues = (agg.issues || []).map(issue => ({
                   ...issue,
                   checkName: childName,
@@ -3873,7 +3873,7 @@ export class CheckExecutionEngine {
       for (let i = 0; i < levelResults.length; i++) {
         const checkName = levelChecksList[i];
         const result = levelResults[i];
-        const checkConfig = config.checks[checkName];
+        const checkConfig = config.checks![checkName];
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
@@ -4096,7 +4096,7 @@ export class CheckExecutionEngine {
 
     // Create individual check task functions
     const checkTaskFunctions = checks.map(checkName => async () => {
-      const checkConfig = config.checks[checkName];
+      const checkConfig = config.checks![checkName];
       if (!checkConfig) {
         log(`🔧 Debug: No config found for check: ${checkName}`);
         return {
@@ -4250,7 +4250,7 @@ export class CheckExecutionEngine {
       throw new Error(`No configuration found for check: ${checkName}`);
     }
 
-    const checkConfig = config.checks[checkName];
+    const checkConfig = config.checks![checkName];
     const provider = this.providerRegistry.getProviderOrThrow('ai');
     this.setProviderWebhookContext(provider);
 
@@ -4908,7 +4908,7 @@ export class CheckExecutionEngine {
       return [];
     }
 
-    const checkConfig = config.checks[checkName];
+    const checkConfig = config.checks![checkName];
     const checkSchema =
       typeof checkConfig?.schema === 'object' ? 'custom' : checkConfig?.schema || '';
     const checkGroup = checkConfig?.group || '';
@@ -5397,7 +5397,7 @@ export class CheckExecutionEngine {
 
       const filteredChecks: string[] = [];
       for (const checkName of checks) {
-        const checkConfig = config.checks[checkName];
+        const checkConfig = config.checks![checkName];
         if (!checkConfig) {
           filteredChecks.push(checkName);
           continue;
@@ -5434,7 +5434,7 @@ export class CheckExecutionEngine {
 
       const filteredChecks: string[] = [];
       for (const checkName of checks) {
-        const checkConfig = config.checks[checkName];
+        const checkConfig = config.checks![checkName];
         if (!checkConfig) {
           filteredChecks.push(checkName);
           continue;

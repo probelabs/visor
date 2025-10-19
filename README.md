@@ -56,7 +56,7 @@ jobs:
 
 ```yaml
 version: "1.0"
-checks:
+steps:  # or 'checks' (legacy, both work identically)
   security:
     type: ai
     schema: code-review

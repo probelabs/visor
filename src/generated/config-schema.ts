@@ -26,9 +26,14 @@ export const configSchema = {
           description:
             'Extends from other configurations - can be file path, HTTP(S) URL, or "default"',
         },
+        steps: {
+          $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
+          description: 'Step configurations (recommended)',
+        },
         checks: {
           $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
-          description: 'Check configurations',
+          description:
+            "Check configurations (legacy, use 'steps' instead) - always populated after normalization",
         },
         output: {
           $ref: '#/definitions/OutputConfig',
@@ -83,7 +88,7 @@ export const configSchema = {
           description: 'Optional routing defaults for retry/goto/run policies',
         },
       },
-      required: ['version', 'checks', 'output'],
+      required: ['version', 'output'],
       additionalProperties: false,
       description: 'Main Visor configuration',
       patternProperties: {

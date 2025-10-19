@@ -1,6 +1,8 @@
 ## ⚙️ Configuration & Extends
 
-Use `.visor.yaml` to add/override checks in your repo and extend shared configurations. Visor's merge logic makes it flexible for teams and orgs.
+Use `.visor.yaml` to add/override workflow steps in your repo and extend shared configurations. Visor's merge logic makes it flexible for teams and orgs.
+
+> **Note on Terminology**: Visor now uses `steps:` instead of `checks:` in configuration files to better reflect its workflow orchestration capabilities. Both keys work identically for backward compatibility, but `steps:` is recommended for new configurations.
 
 ### Validating Configuration
 
@@ -63,7 +65,7 @@ ai_provider: anthropic  # or google, openai, bedrock
 ai_model: claude-3-sonnet
 ai_temperature: 0.2
 
-checks:
+steps:
   performance-review:
     type: ai
     ai:
@@ -74,7 +76,7 @@ checks:
 
   security-review:
     type: ai
-    ai_provider: bedrock  # Use AWS Bedrock for this check
+    ai_provider: bedrock  # Use AWS Bedrock for this step
     ai_model: anthropic.claude-sonnet-4-20250514-v1:0
     prompt: "Analyze code for security vulnerabilities"
 ```
@@ -95,7 +97,7 @@ env:
   AWS_REGION: "${{ env.AWS_REGION }}"
   SLACK_WEBHOOK: "${{ env.SLACK_WEBHOOK }}"
 
-checks:
+steps:
   custom-notify:
     type: http
     url: "https://hooks.slack.com/services/..."
@@ -105,7 +107,7 @@ checks:
     env:
       SLACK_WEBHOOK: "${{ env.SLACK_WEBHOOK }}"
 
-  custom-ai-check:
+  custom-ai-step:
     type: ai
     ai_provider: anthropic
     ai_model: claude-3-opus
@@ -126,7 +128,7 @@ env:
   NODE_ENV: "${{ env.NODE_ENV }}"
   FEATURE_FLAGS: "${FEATURE_FLAGS}"
 
-checks:
+steps:
   example:
     type: ai
     prompt: |

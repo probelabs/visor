@@ -33,7 +33,7 @@ describe('Execution Statistics', () => {
       expect(result.executionStatistics?.failedExecutions).toBe(0);
       expect(result.executionStatistics?.skippedChecks).toBe(0);
 
-      const checkStats = result.executionStatistics?.checks.find(c => c.checkName === 'test-check');
+      const checkStats = result.executionStatistics?.checks!.find(c => c.checkName === 'test-check');
       expect(checkStats).toBeDefined();
       expect(checkStats?.totalRuns).toBe(1);
       expect(checkStats?.successfulRuns).toBe(1);
@@ -69,7 +69,7 @@ describe('Execution Statistics', () => {
       // list-items runs once, process-item runs 3 times (forEach)
       expect(result.executionStatistics?.totalExecutions).toBe(4);
 
-      const processItemStats = result.executionStatistics?.checks.find(
+      const processItemStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-item'
       );
       expect(processItemStats).toBeDefined();
@@ -100,7 +100,7 @@ describe('Execution Statistics', () => {
       expect(result.executionStatistics?.totalExecutions).toBe(0);
       expect(result.executionStatistics?.skippedChecks).toBe(1);
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'conditional-check'
       );
       expect(checkStats).toBeDefined();
@@ -131,7 +131,7 @@ describe('Execution Statistics', () => {
       expect(result.executionStatistics?.successfulExecutions).toBe(0);
       expect(result.executionStatistics?.failedExecutions).toBe(1);
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'failing-check'
       );
       expect(checkStats).toBeDefined();
@@ -158,7 +158,7 @@ describe('Execution Statistics', () => {
         workingDirectory: process.cwd(),
       });
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'output-check'
       );
       expect(checkStats).toBeDefined();
@@ -182,7 +182,7 @@ describe('Execution Statistics', () => {
         workingDirectory: process.cwd(),
       });
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'timed-check'
       );
       expect(checkStats).toBeDefined();
@@ -222,7 +222,7 @@ describe('Execution Statistics', () => {
       expect(result.executionStatistics?.skippedChecks).toBeGreaterThan(0);
 
       // fail-check should have issues and be marked as failed
-      const failStats = result.executionStatistics?.checks.find(c => c.checkName === 'fail-check');
+      const failStats = result.executionStatistics?.checks!.find(c => c.checkName === 'fail-check');
       expect(failStats?.issuesFound).toBeGreaterThan(0);
       expect(failStats?.failedRuns).toBe(1);
       expect(failStats?.successfulRuns).toBe(0);
@@ -277,7 +277,7 @@ describe('Execution Statistics', () => {
         workingDirectory: process.cwd(),
       });
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-many'
       );
       expect(checkStats).toBeDefined();
@@ -306,7 +306,7 @@ describe('Execution Statistics', () => {
         workingDirectory: process.cwd(),
       });
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'review-check'
       );
       expect(checkStats).toBeDefined();
@@ -343,7 +343,7 @@ describe('Execution Statistics', () => {
         workingDirectory: process.cwd(),
       });
 
-      const checkStats = result.executionStatistics?.checks.find(
+      const checkStats = result.executionStatistics?.checks!.find(
         c => c.checkName === 'process-with-failures'
       );
       expect(checkStats).toBeDefined();

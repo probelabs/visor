@@ -108,7 +108,7 @@ describe('fail_if with AI custom schema (integration)', () => {
 
     // Dependent must be skipped
     const stats = result.executionStatistics!;
-    const logStats = stats.checks.find(c => c.checkName === 'log-results');
+    const logStats = stats.checks!.find(c => c.checkName === 'log-results');
     expect(logStats).toBeDefined();
     expect(logStats!.skipped).toBe(true);
 

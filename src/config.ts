@@ -124,6 +124,9 @@ export class ConfigManager {
         parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
 
+      // Normalize 'checks' and 'steps' - support both keys for backward compatibility
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+
       if (validate) {
         this.validateConfig(parsedConfig);
       }
@@ -213,7 +216,8 @@ export class ConfigManager {
   public async getDefaultConfig(): Promise<VisorConfig> {
     return {
       version: '1.0',
-      checks: {},
+      steps: {},
+      checks: {}, // Keep for backward compatibility
       max_parallelism: 3,
       output: {
         pr_comment: {
@@ -315,6 +319,26 @@ export class ConfigManager {
   }
 
   /**
+   * Normalize 'checks' and 'steps' keys for backward compatibility
+   * Ensures both keys are present and contain the same data
+   */
+  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
+    // If both are present, 'steps' takes precedence
+    if (config.steps && config.checks) {
+      // Use steps as the source of truth
+      config.checks = config.steps;
+    } else if (config.steps && !config.checks) {
+      // Copy steps to checks for internal compatibility
+      config.checks = config.steps;
+    } else if (config.checks && !config.steps) {
+      // Copy checks to steps for forward compatibility
+      config.steps = config.checks;
+    }
+
+    return config;
+  }
+
+  /**
    * Merge configuration with CLI options
    */
   public mergeWithCliOptions(config: Partial<VisorConfig>, cliOptions: CliOptions): MergedConfig {
@@ -394,12 +418,16 @@ export class ConfigManager {
 
     // Unknown key warnings are produced by Ajv using the pre-generated schema.
 
-    if (!config.checks) {
+    // Validate that either 'checks' or 'steps' is present
+    if (!config.checks && !config.steps) {
       errors.push({
-        field: 'checks',
-        message: 'Missing required field: checks',
+        field: 'checks/steps',
+        message: 'Missing required field: either "checks" or "steps" must be defined',
       });
-    } else {
+    }
+
+    // Use checks for validation (normalization ensures both are present if either exists)
+    if (config.checks) {
       // Validate each check configuration
       for (const [checkName, checkConfig] of Object.entries(config.checks)) {
         // Default type to 'ai' if not specified

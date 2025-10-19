@@ -58,7 +58,7 @@ describe('Output History Integration Tests', () => {
     expect(result.reviewSummary.issues?.length || 0).toBe(0);
     expect(result.executionStatistics).toBeDefined();
 
-    const verifyStats = result.executionStatistics?.checks.find(
+    const verifyStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'verify-history'
     );
     expect(verifyStats).toBeDefined();
@@ -129,7 +129,7 @@ describe('Output History Integration Tests', () => {
     // Should succeed without errors
     expect(result.executionStatistics).toBeDefined();
 
-    const verifyStats = result.executionStatistics?.checks.find(
+    const verifyStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'verify-final'
     );
     expect(verifyStats).toBeDefined();

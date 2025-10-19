@@ -654,8 +654,10 @@ export interface VisorConfig {
   version: string;
   /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
   extends?: string | string[];
-  /** Check configurations */
-  checks: Record<string, CheckConfig>;
+  /** Step configurations (recommended) */
+  steps?: Record<string, CheckConfig>;
+  /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */
+  checks?: Record<string, CheckConfig>;
   /** Output configuration */
   output: OutputConfig;
   /** HTTP server configuration for receiving webhooks */

@@ -67,7 +67,7 @@ describe('Config Extends in GitHub Action Context', () => {
       expect(loadedConfig).toBeDefined();
       expect(loadedConfig.checks).toBeDefined();
 
-      const checkNames = Object.keys(loadedConfig.checks);
+      const checkNames = Object.keys(loadedConfig.checks!);
       console.log('Loaded checks:', checkNames);
 
       // Should have default checks
@@ -81,13 +81,13 @@ describe('Config Extends in GitHub Action Context', () => {
       expect(checkNames).toContain('custom-check-2');
 
       // Verify the security check has the merged prompt
-      const securityCheck = loadedConfig.checks.security;
+      const securityCheck = loadedConfig.checks!.security;
       expect(securityCheck).toBeDefined();
       expect(securityCheck.prompt).toContain('specific security patterns');
 
       // Verify custom checks are properly configured
-      expect(loadedConfig.checks['custom-check-1'].prompt).toBe('Custom analysis for our project');
-      expect(loadedConfig.checks['custom-check-2'].exec).toBe('npm run custom-lint');
+      expect(loadedConfig.checks!['custom-check-1'].prompt).toBe('Custom analysis for our project');
+      expect(loadedConfig.checks!['custom-check-2'].exec).toBe('npm run custom-lint');
 
       // Now simulate the event filtering that happens in handleEvent
       const eventType = 'pr_updated'; // Common GitHub event
@@ -145,9 +145,9 @@ describe('Config Extends in GitHub Action Context', () => {
 
       // Should find and load the config with extends
       expect(loadedConfig.checks).toBeDefined();
-      expect(Object.keys(loadedConfig.checks)).toContain('test-check');
+      expect(Object.keys(loadedConfig.checks!)).toContain('test-check');
       // Should also have default checks
-      expect(Object.keys(loadedConfig.checks)).toContain('overview');
+      expect(Object.keys(loadedConfig.checks!)).toContain('overview');
     } finally {
       // Restore original directory
       process.chdir(originalCwd);

@@ -20,9 +20,13 @@ export declare const configSchema: {
                     }];
                     readonly description: "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\"";
                 };
+                readonly steps: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
+                    readonly description: "Step configurations (recommended)";
+                };
                 readonly checks: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
-                    readonly description: "Check configurations";
+                    readonly description: "Check configurations (legacy, use 'steps' instead) - always populated after normalization";
                 };
                 readonly output: {
                     readonly $ref: "#/definitions/OutputConfig";
@@ -77,7 +81,7 @@ export declare const configSchema: {
                     readonly description: "Optional routing defaults for retry/goto/run policies";
                 };
             };
-            readonly required: readonly ["version", "checks", "output"];
+            readonly required: readonly ["version", "output"];
             readonly additionalProperties: false;
             readonly description: "Main Visor configuration";
             readonly patternProperties: {

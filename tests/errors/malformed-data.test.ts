@@ -367,7 +367,7 @@ describe('Malformed Data Handling Tests', () => {
         output: { pr_comment: { format: 'table', group_by: 'check', collapse: true } },
       };
 
-      circularConfig.checks.circularCheck = {
+      circularConfig.checks!.circularCheck = {
         type: 'ai',
         prompt: 'Test',
         on: ['pr_opened'],
@@ -441,7 +441,7 @@ describe('Malformed Data Handling Tests', () => {
           if (options.checks) {
             expect(Array.isArray(options.checks)).toBe(true);
             // Should filter out invalid check types
-            options.checks.forEach(check => {
+            options.checks!.forEach(check => {
               expect(['performance', 'architecture', 'security', 'style', 'all']).toContain(check);
             });
           }
@@ -500,8 +500,8 @@ describe('Malformed Data Handling Tests', () => {
             expect(options.configPath).not.toContain('<script>');
           }
 
-          if (options.checks && options.checks.length > 0) {
-            options.checks.forEach(check => {
+          if (options.checks && options.checks!.length > 0) {
+            options.checks!.forEach(check => {
               console.log(`    Check: ${check}`);
               expect(['performance', 'architecture', 'security', 'style', 'all']).toContain(check);
             });

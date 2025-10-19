@@ -7,13 +7,14 @@ version: "1.0"
 # Global AI provider settings - users should configure their preferred provider
 # For CI testing, use --provider mock CLI flag instead
 
-# Run up to 4 checks in parallel for faster execution
+# Run up to 4 steps in parallel for faster execution
 max_parallelism: 4
 
 # Global fail condition - fail if critical or error severity issues are found
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
 
-checks:
+# Workflow steps (formerly 'checks' - both keys are supported for backward compatibility)
+steps:
   # AI-powered release notes generation - manual execution only for release workflows
   release-notes:
     type: ai
