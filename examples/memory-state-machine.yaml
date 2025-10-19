@@ -11,7 +11,7 @@ memory:
   format: json
   namespace: deployment
 
-checks:
+steps:
   # Initialize workflow state
   init-state:
     type: memory

@@ -8,7 +8,7 @@ Use `reuse_ai_session: true` on dependent checks to continue conversation contex
 - **`append`**: Shares the same conversation thread. All checks append to a single shared history, creating a true multi-turn conversation.
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     prompt: "Analyze code for security vulnerabilities..."

@@ -20,7 +20,7 @@ class CustomCheckProvider {
 Execute AI-powered analysis using Google Gemini, Anthropic Claude, OpenAI, or AWS Bedrock.
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     prompt: "Review for security issues"
@@ -33,7 +33,7 @@ checks:
 Call MCP (Model Context Protocol) tools directly via stdio, SSE, or HTTP transports. Unlike AI provider MCP support, this provider directly invokes MCP tools without an AI model.
 
 ```yaml
-checks:
+steps:
   probe-search:
     type: mcp
     transport: stdio
@@ -50,7 +50,7 @@ checks:
 Execute shell commands with templating and security controls.
 
 ```yaml
-checks:
+steps:
   lint:
     type: command
     exec: npm run lint
@@ -62,7 +62,7 @@ checks:
 Make HTTP requests to external APIs.
 
 ```yaml
-checks:
+steps:
   api-check:
     type: http_client
     url: https://api.example.com/analyze
@@ -76,7 +76,7 @@ checks:
 Send check results to external webhooks.
 
 ```yaml
-checks:
+steps:
   notify:
     type: http
     url: https://webhook.example.com/notify
@@ -89,7 +89,7 @@ checks:
 Log messages for debugging and workflow visibility.
 
 ```yaml
-checks:
+steps:
   debug:
     type: logger
     message: "PR #{{ pr.number }}: {{ fileCount }} files changed"
@@ -101,7 +101,7 @@ checks:
 Interact with GitHub API for labels, comments, and status checks.
 
 ```yaml
-checks:
+steps:
   label-pr:
     type: github
     op: labels.add
@@ -114,7 +114,7 @@ checks:
 Use Claude Code SDK with MCP tools and advanced agent capabilities.
 
 ```yaml
-checks:
+steps:
   claude-analysis:
     type: claude-code
     prompt: "Analyze code architecture"

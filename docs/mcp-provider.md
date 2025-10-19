@@ -20,7 +20,7 @@ The MCP provider supports three transport mechanisms:
 Execute a local command that implements the MCP protocol over standard input/output.
 
 ```yaml
-checks:
+steps:
   probe-analysis:
     type: mcp
     transport: stdio
@@ -44,7 +44,7 @@ checks:
 Connect to an MCP server via SSE (legacy transport).
 
 ```yaml
-checks:
+steps:
   remote-analysis:
     type: mcp
     transport: sse
@@ -65,7 +65,7 @@ checks:
 Connect to an MCP server via modern Streamable HTTP transport.
 
 ```yaml
-checks:
+steps:
   http-tool:
     type: mcp
     transport: http
@@ -92,7 +92,7 @@ checks:
 Provide method arguments directly:
 
 ```yaml
-checks:
+steps:
   search-todos:
     type: mcp
     command: npx
@@ -108,7 +108,7 @@ checks:
 Use Liquid templates to build arguments from PR context:
 
 ```yaml
-checks:
+steps:
   dynamic-search:
     type: mcp
     command: npx
@@ -135,7 +135,7 @@ checks:
 Transform MCP output using Liquid templates:
 
 ```yaml
-checks:
+steps:
   format-results:
     type: mcp
     command: npx
@@ -159,7 +159,7 @@ checks:
 Apply JavaScript transformations in a secure sandbox:
 
 ```yaml
-checks:
+steps:
   js-transform:
     type: mcp
     command: npx
@@ -240,7 +240,7 @@ The `issues` array is extracted and remaining properties are preserved in `outpu
 Use outputs from other checks in MCP arguments:
 
 ```yaml
-checks:
+steps:
   fetch-data:
     type: http_client
     url: https://api.example.com/issues
@@ -313,7 +313,7 @@ See [examples/mcp-provider-example.yaml](../examples/mcp-provider-example.yaml) 
 Detect vulnerabilities in changed code:
 
 ```yaml
-checks:
+steps:
   semgrep-scan:
     type: mcp
     command: npx
@@ -329,7 +329,7 @@ checks:
 Find related or duplicate issues:
 
 ```yaml
-checks:
+steps:
   check-duplicates:
     type: mcp
     command: npx
@@ -355,7 +355,7 @@ checks:
 Verify migrations don't break schema:
 
 ```yaml
-checks:
+steps:
   validate-schema:
     type: mcp
     command: npx
@@ -383,7 +383,7 @@ checks:
 Ensure PR links to valid Jira ticket:
 
 ```yaml
-checks:
+steps:
   jira-check:
     type: mcp
     command: npx
@@ -411,7 +411,7 @@ checks:
 Alert team when critical issues found:
 
 ```yaml
-checks:
+steps:
   notify-security:
     type: mcp
     depends_on: [semgrep-scan]
@@ -431,7 +431,7 @@ checks:
 Check all source files have license headers:
 
 ```yaml
-checks:
+steps:
   check-licenses:
     type: mcp
     command: npx
@@ -464,7 +464,7 @@ checks:
 Validate external documentation links:
 
 ```yaml
-checks:
+steps:
   validate-links:
     type: mcp
     command: npx
@@ -492,7 +492,7 @@ checks:
 Search for known vulnerabilities:
 
 ```yaml
-checks:
+steps:
   check-cves:
     type: mcp
     command: npx

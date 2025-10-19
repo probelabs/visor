@@ -25,7 +25,7 @@ max_parallelism: 3
 fail_fast: false  # Run all checks to get full picture
 
 # Add staging-specific check
-checks:
+steps:
   staging-integration:
     type: command
     group: staging

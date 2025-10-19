@@ -1,6 +1,6 @@
 version: "1.0"
 
-checks:
+steps:
   # Security check using comprehensive liquid template
   security-enhanced:
     type: ai

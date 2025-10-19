@@ -3,7 +3,7 @@
 - Minimal `.visor.yaml` starter
 ```yaml
 version: "1.0"
-checks:
+steps:
   security:
     type: ai
     schema: code-review

@@ -9,7 +9,7 @@ memory:
   storage: memory
   namespace: default
 
-checks:
+steps:
   # Simulate multiple validation checks
   check-security:
     type: command

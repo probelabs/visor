@@ -116,7 +116,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(true);
 
       // dependent-check should be skipped
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(true);
       expect(stats?.skipReason).toBe('dependency_failed');
     });
@@ -157,7 +159,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(false);
 
       // dependent-check should NOT be skipped
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(false);
     });
 
@@ -198,7 +202,9 @@ describe('forEach Failure and Dependency Skip', () => {
       expect(hasExecutionError).toBe(true);
 
       // dependent-check should NOT be skipped; it should execute for the successful items (item1 and item3)
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(false);
       expect(stats?.totalRuns || 0).toBeGreaterThanOrEqual(2);
     });

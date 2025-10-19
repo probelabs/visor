@@ -140,7 +140,7 @@ This is **normal and correct** - it means:
 Checks are configured to run on specific triggers using the `on` field:
 
 ```yaml
-checks:
+steps:
   security-check:
     on: [pr_opened, pr_updated]  # Only runs on PR events
     type: ai
@@ -159,7 +159,7 @@ If `on` is not specified, the check can run on any event type.
 Sometimes you want to “re-run” an ancestor step as if a different event happened (e.g., from an `issue_comment` flow you want to re-execute a PR step under `pr_updated`). Use `goto_event` together with `goto`:
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     on: [pr_opened, pr_updated]

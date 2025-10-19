@@ -11,7 +11,7 @@ memory:
   format: json
   namespace: production  # Default namespace
 
-checks:
+steps:
   # Production environment metrics
   prod-init-counter:
     type: memory

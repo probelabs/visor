@@ -3,7 +3,7 @@ version: "1.0"
 # Real-World MCP Provider Examples
 # Production-ready workflows using actual MCP servers
 
-checks:
+steps:
   # =============================================================================
   # Example 1: Security Scanning with Semgrep
   # Detect security vulnerabilities in changed code

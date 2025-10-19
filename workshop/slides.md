@@ -264,7 +264,7 @@ The building blocks of Visor configuration
 A **check** is a single unit of work in your workflow:
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     prompt: "Find security vulnerabilities"
@@ -290,7 +290,7 @@ checks:
 **Provider** determines how a check executes:
 
 ```yaml
-checks:
+steps:
   ai-review:    { type: ai }        # AI analysis (Probe)
   run-tests:    { type: command }   # Shell command
   notify-slack: { type: http }      # HTTP webhook
@@ -315,7 +315,7 @@ checks:
 **`depends_on`** defines check execution order:
 
 ```yaml
-checks:
+steps:
   security:
     type: ai
     # Runs first (no dependencies)
@@ -343,7 +343,7 @@ checks:
 **Tags** organize checks for selective execution:
 
 ```yaml
-checks:
+steps:
   quick-security:
     type: ai
     tags: [local, fast, security]
@@ -375,7 +375,7 @@ npx -y @probelabs/visor@latest --tags comprehensive
 **Schema** defines output structure (JSON Schema):
 
 ```yaml
-checks:
+steps:
   custom-check:
     type: ai
     schema:
@@ -389,7 +389,7 @@ checks:
 
 **Special `code-review` schema:**
 ```yaml
-checks:
+steps:
   security:
     schema: code-review  # Required for GitHub annotations
 ```
@@ -407,7 +407,7 @@ checks:
 **Groups** organize GitHub PR comments:
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     group: overview  # Posted as separate comment
@@ -434,7 +434,7 @@ checks:
 
 **`on`** — Control when checks run based on GitHub events:
 ```yaml
-checks:
+steps:
   quick-review:
     type: ai
     on: [pull_request_opened, pull_request_synchronize]
@@ -472,7 +472,7 @@ checks:
 
 **`if`** — Run check conditionally:
 ```yaml
-checks:
+steps:
   large-pr-review:
     type: ai
     if: "{{ files | size }} > 10"  # Only if >10 files changed
@@ -481,7 +481,7 @@ checks:
 
 **`fail_if`** — Fail based on condition:
 ```yaml
-checks:
+steps:
   security-gate:
     type: ai
     fail_if: "{{ outputs['security'] | size }} > 0"  # Fail if issues found
@@ -503,7 +503,7 @@ checks:
 
 ```yaml
 # defaults/.visor.yaml (excerpt)
-checks:
+steps:
   overview:
     type: ai
     schema: plain
@@ -587,7 +587,7 @@ Native GitHub integration with check runs and inline annotations
 **The `code-review` schema enables GitHub annotations:**
 
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     schema: code-review  # Required for GitHub check runs
@@ -699,7 +699,7 @@ Start from defaults, extend for your repo’s needs.
 **Tags organize checks for different environments and scenarios:**
 
 ```yaml
-checks:
+steps:
   debug-pr:
     type: logger
     tags: [local, fast]
@@ -744,7 +744,7 @@ npx -y @probelabs/visor@latest --tags ci,comprehensive
 **Dependencies control execution order and data flow:**
 
 ```yaml
-checks:
+steps:
   # Phase 1: Run in parallel (no dependencies)
   security:
     type: ai
@@ -792,26 +792,26 @@ checks:
 
 **AI prompts:**
 ```yaml
-checks:
+steps:
   inline:  { type: ai, prompt: "Review {{ files | size }} files in {{ pr.title }}" }
   file:    { type: ai, prompt: ./prompts/security.liquid }
 ```
 
 **Command execution:**
 ```yaml
-checks:
+steps:
   test:    { type: command, exec: "npm test -- {{ files | map: 'filename' | join: ' ' }}" }
 ```
 
 **Logger messages:**
 ```yaml
-checks:
+steps:
   debug:   { type: logger, message: "PR #{{ pr.number }}: {{ files | json }}" }
 ```
 
 **HTTP bodies:**
 ```yaml
-checks:
+steps:
   slack:   { type: http, body: '{"text": "{{ pr.title }}: {{ outputs.security | size }} issues"}' }
 ```
 
@@ -826,7 +826,7 @@ checks:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   security-scan:
     type: ai
     schema: code-review  # Special schema for GitHub annotations
@@ -861,7 +861,7 @@ checks:
 # .visor.yaml — customize defaults for your project
 extends: defaults  # Inherit default checks and configuration
 
-checks:
+steps:
   # Disable a default check
   style:
     enabled: false
@@ -956,7 +956,7 @@ When you use `type: ai`, Visor runs **Probe** — a specialized AI agent for cod
 
 **Example:**
 ```yaml
-checks:
+steps:
   security:
     type: ai  # Runs Probe agent
     prompt: "Find security vulnerabilities"
@@ -976,7 +976,7 @@ checks:
 
 **Custom schema:**
 ```yaml
-checks:
+steps:
   list-files:
     type: ai
     schema:
@@ -991,7 +991,7 @@ checks:
 
 **Special `code-review` schema (GitHub integration):**
 ```yaml
-checks:
+steps:
   security:
     type: ai
     schema: code-review  # Required for GitHub check runs & annotations
@@ -1039,7 +1039,7 @@ checks:
 **Example:** Same config, automatic adaptation
 
 ```yaml
-checks:
+steps:
   security:
     schema: code-review
     # GitHub Actions: check run + annotations
@@ -1095,7 +1095,7 @@ checks:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   large-pr-review:
     type: ai
     if: "{{ files | size }} > 10"  # Only run if >10 files changed
@@ -1155,7 +1155,7 @@ checks:
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   release-notes:
     type: ai
     on: [manual]  # Trigger manually or in release workflow
@@ -1187,7 +1187,7 @@ gh release create v1.0.0 --notes-file release-notes.md
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   weekly-security-audit:
     type: ai
     schema: code-review
@@ -1216,7 +1216,7 @@ on:
 <div style="font-size: 0.65em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   github-webhook:
     type: http
     method: POST
@@ -1298,7 +1298,7 @@ Use `forEach` and loop patterns for multi-target checks
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   # Step 1: Output an array (forEach: true)
   get-changed-js-files:
     type: command
@@ -1330,7 +1330,7 @@ checks:
 <div style="font-size: 0.62em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   # AI outputs array of security-sensitive files
   list-security-concerns:
     type: ai
@@ -1415,7 +1415,7 @@ npx -y @probelabs/visor@latest --check security --debug
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   conditional-check:
     type: ai
     if: |
@@ -1438,7 +1438,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: logger
     message: |
@@ -1541,7 +1541,7 @@ All available provider types with use cases
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   security-review:
     type: ai
     schema: code-review
@@ -1568,7 +1568,7 @@ checks:
 MCP (Model Context Protocol) gives AI access to external tools and data:
 
 ```yaml
-checks:
+steps:
   ticket-and-customer-review:
     type: ai
     ai_mcp_servers:
@@ -1607,7 +1607,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   run-tests:
     type: command
     exec: "npm test --silent"
@@ -1637,7 +1637,7 @@ checks:
 
 **HTTP (send output to webhook):**
 ```yaml
-checks:
+steps:
   notify-slack:
     type: http
     method: POST
@@ -1648,7 +1648,7 @@ checks:
 
 **HTTP Client (fetch data from API):**
 ```yaml
-checks:
+steps:
   get-jira-status:
     type: http_client
     url: "https://jira.company.com/api/issue/{{ env.JIRA_ISSUE }}"
@@ -1669,7 +1669,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   debug-context:
     type: logger
     message: |
@@ -1693,7 +1693,7 @@ checks:
 <div style="font-size: 0.68em; text-align: left; max-width: 1000px; margin: 0 auto;">
 
 ```yaml
-checks:
+steps:
   wait-for-all:
     type: noop
     depends_on: [security, performance, quality]
@@ -1898,7 +1898,7 @@ echo "extends: defaults" > .visor.yaml
 
 **1. Auto-labeling issues & PRs:**
 ```yaml
-checks:
+steps:
   auto-label:
     type: ai
     prompt: |
@@ -1909,7 +1909,7 @@ checks:
 
 **2. Auto-fix simple issues with `implement` tool:**
 ```yaml
-checks:
+steps:
   auto-fix:
     type: ai
     tools: [implement, run_tests]  # AI can edit code and run tests

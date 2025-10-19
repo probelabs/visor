@@ -39,7 +39,9 @@ describe('Command Check Failure Detection', () => {
       expect(hasExecutionError).toBe(true);
 
       // dependent-check should be skipped
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(true);
       expect(stats?.skipReason).toBe('dependency_failed');
     });
@@ -74,7 +76,9 @@ describe('Command Check Failure Detection', () => {
       expect(hasExecutionError).toBe(false);
 
       // dependent-check should NOT be skipped
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'dependent-check');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
       expect(stats?.skipped).toBe(false);
     });
 
@@ -140,7 +144,9 @@ describe('Command Check Failure Detection', () => {
         workingDirectory: process.cwd(),
       });
 
-      const stats = result.executionStatistics?.checks!.find(c => c.checkName === 'failing-command');
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'failing-command'
+      );
       expect(stats).toBeDefined();
       expect(stats?.totalRuns).toBe(1);
       expect(stats?.failedRuns).toBe(1);

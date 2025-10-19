@@ -33,7 +33,9 @@ describe('Execution Statistics', () => {
       expect(result.executionStatistics?.failedExecutions).toBe(0);
       expect(result.executionStatistics?.skippedChecks).toBe(0);
 
-      const checkStats = result.executionStatistics?.checks!.find(c => c.checkName === 'test-check');
+      const checkStats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'test-check'
+      );
       expect(checkStats).toBeDefined();
       expect(checkStats?.totalRuns).toBe(1);
       expect(checkStats?.successfulRuns).toBe(1);

@@ -39,7 +39,7 @@ output:
     # Custom name prefix for check runs (default: "Visor")
     name_prefix: "Visor AI"
 
-checks:
+steps:
   security-audit:
     type: ai
     prompt: "Review for security vulnerabilities"

@@ -43,7 +43,7 @@ failure_conditions:
 
 ### Check-Specific Conditions
 ```yaml
-checks:
+steps:
   security:
     type: ai
     prompt: "Security analysis..."
@@ -189,7 +189,7 @@ Failure conditions can be used to:
 ### From Basic Configuration
 ```yaml
 # Before
-checks:
+steps:
   security:
     type: ai
     prompt: "Security analysis..."
@@ -199,7 +199,7 @@ checks:
 failure_conditions:
   critical_gate: "metadata.criticalIssues > 0"
 
-checks:
+steps:
   security:
     type: ai
     prompt: "Security analysis..."

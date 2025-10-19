@@ -7,7 +7,7 @@ memory:
   storage: memory
   namespace: default
 
-checks:
+steps:
   # Initialize counters
   init-counters:
     type: memory

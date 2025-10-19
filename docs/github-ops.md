@@ -14,7 +14,7 @@ The `github` provider performs safe, native GitHub operations via Octokit — no
 ## Configuration
 
 ```yaml
-checks:
+steps:
   apply-overview-labels:
     type: github
     group: github
@@ -61,7 +61,7 @@ values:
 ## Creating Comments
 
 ```yaml
-checks:
+steps:
   post-note:
     type: github
     op: comment.create
@@ -73,7 +73,7 @@ checks:
 ## Removing Labels
 
 ```yaml
-checks:
+steps:
   cleanup-labels:
     type: github
     op: labels.remove

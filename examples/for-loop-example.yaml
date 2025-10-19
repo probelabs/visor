@@ -1,7 +1,7 @@
 version: "1.0"
 # Example demonstrating Liquid template for loops in Visor
 
-checks:
+steps:
   # Example 1: Loop through all files in PR
   file-summary:
     type: log

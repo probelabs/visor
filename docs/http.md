@@ -43,7 +43,7 @@ Note: The HTTP server is automatically disabled when running in GitHub Actions t
 Receive data from configured webhook endpoints:
 
 ```yaml
-checks:
+steps:
   github-webhook:
     type: http_input
     endpoint: "/webhook/github"
@@ -59,7 +59,7 @@ checks:
 Send check results to external services:
 
 ```yaml
-checks:
+steps:
   notify-external:
     type: http
     depends_on: [security-check]
@@ -79,7 +79,7 @@ checks:
 Fetch data from external APIs:
 
 ```yaml
-checks:
+steps:
   fetch-config:
     type: http_client
     url: "https://api.example.com/config"
@@ -97,7 +97,7 @@ checks:
 Output debugging information and monitor workflow execution:
 
 ```yaml
-checks:
+steps:
   debug-start:
     type: log
     group: debugging
@@ -131,7 +131,7 @@ checks:
 ### Cron Scheduling
 
 ```yaml
-checks:
+steps:
   nightly-security-scan:
     type: ai
     schedule: "0 3 * * *"  # Every day at 3am
@@ -139,7 +139,7 @@ checks:
 ```
 
 ```yaml
-checks:
+steps:
   weekly-health-check:
     type: http_client
     url: "https://api.example.com/health"
@@ -235,7 +235,7 @@ http_server:
     - path: "/webhook/deployment"
       name: "deployment-trigger"
 
-checks:
+steps:
   # 1. Receive webhook
   deployment-webhook:
     type: http_input

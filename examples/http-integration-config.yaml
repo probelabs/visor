@@ -17,7 +17,7 @@ http_server:
     - path: "/monitoring/health"
       name: "health-checks"
 
-checks:
+steps:
   # === HTTP CLIENT: Fetch data from external APIs ===
 
   # Fetch repository statistics from GitHub API

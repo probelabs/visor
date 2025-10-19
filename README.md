@@ -221,7 +221,7 @@ Run subsets of checks (e.g., `local`, `fast`, `security`) and select them per en
 
 Example:
 ```yaml
-checks:
+steps:
   security-quick:
     type: ai
     prompt: "Quick security scan"
@@ -253,7 +253,7 @@ Learn more: [docs/commands.md](docs/commands.md)
 Customize workflows based on PR author's permission level using built-in functions in JavaScript expressions:
 
 ```yaml
-checks:
+steps:
   # Run security scan only for external contributors
   security-scan:
     type: command
@@ -391,7 +391,7 @@ Define `depends_on` to enforce order; independent checks run in parallel.
 
 Example:
 ```yaml
-checks:
+steps:
   security:   { type: ai }
   performance:{ type: ai, depends_on: [security] }
 ```
@@ -416,7 +416,7 @@ Example (retry + goto on failure):
 version: "2.0"
 routing:
   max_loops: 5
-checks:
+steps:
   setup: { type: command, exec: "echo setup" }
   build:
     type: command
@@ -431,7 +431,7 @@ checks:
 
 Example (on_success jump‑back once):
 ```yaml
-checks:
+steps:
   unit: { type: command, exec: "echo unit" }
   build:
     type: command
@@ -453,7 +453,7 @@ Use the Claude Code SDK as a provider for deeper analysis.
 
 Example:
 ```yaml
-checks:
+steps:
   claude-review:
     type: claude-code
     prompt: "Analyze code complexity"
@@ -471,7 +471,7 @@ Reuse conversation context between dependent AI checks for smarter follow‑ups.
 
 Example:
 ```yaml
-checks:
+steps:
   security: { type: ai }
   remediation:
     type: ai
@@ -492,7 +492,7 @@ Schemas validate outputs; templates render GitHub‑friendly comments.
 
 Example:
 ```yaml
-checks:
+steps:
   security:
     type: ai
     schema: code-review
@@ -507,7 +507,7 @@ Write prompts inline or in files; Liquid variables provide PR context.
 
 Example:
 ```yaml
-checks:
+steps:
   overview:
     type: ai
     prompt: ./prompts/overview.liquid
@@ -566,7 +566,7 @@ Comprehensive debugging tools help troubleshoot configurations and data flows:
 
 **Use `log()` in JavaScript expressions:**
 ```yaml
-checks:
+steps:
   conditional-check:
     if: |
       log("Outputs:", outputs);
@@ -579,7 +579,7 @@ checks:
 
 **Use `json` filter in Liquid templates:**
 ```yaml
-checks:
+steps:
   debug-check:
     type: logger
     message: |
@@ -614,7 +614,7 @@ Receive webhooks, call APIs, and schedule checks.
 Examples:
 ```yaml
 http_server: { enabled: true, port: 8080 }
-checks:
+steps:
   nightly: { type: ai, schedule: "0 2 * * *" }
 ```
 
@@ -679,7 +679,7 @@ Use the native GitHub provider for safe labels and comments without invoking the
 Example — apply overview‑derived labels to a PR:
 
 ```yaml
-checks:
+steps:
   apply-overview-labels:
     type: github
     op: labels.add

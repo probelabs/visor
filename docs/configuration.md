@@ -150,7 +150,7 @@ extends:
   - ./team-standards.yaml     # Team standards
   - ./project-specific.yaml   # Project overrides
 
-checks:
+steps:
   my-custom-check:
     type: ai
     prompt: "Project-specific analysis..."
@@ -164,7 +164,7 @@ version: "1.0"
 ai_provider: openai
 ai_model: gpt-4
 
-checks:
+steps:
   security-scan:
     type: ai
     prompt: "Perform security analysis following OWASP guidelines"
@@ -182,7 +182,7 @@ extends: ./team-config.yaml
 
 ai_model: gpt-4-turbo  # Override team default
 
-checks:
+steps:
   code-quality:
     on: []  # Disable a check
 
@@ -222,7 +222,7 @@ extends: https://raw.githubusercontent.com/myorg/configs/main/base.yaml
 ```yaml
 extends: ./base-config.yaml
 
-checks:
+steps:
   security-review:
     appendPrompt: "Also check for SQL injection and hardcoded secrets"
 ```
@@ -262,7 +262,7 @@ env:
   ANTHROPIC_KEY: "${{ env.ANTHROPIC_API_KEY }}"
   GITHUB_ACCESS_TOKEN: "${{ env.GITHUB_TOKEN }}"
 
-checks:
+steps:
   production-security:
     type: ai
     ai_model: "${{ env.SECURITY_MODEL }}"
@@ -285,7 +285,7 @@ Keys:
 
 Example:
 ```yaml
-checks:
+steps:
   apply-overview-labels:
     type: github
     tags: [github]

@@ -27,7 +27,7 @@ failure_conditions:
     severity: error
     halt_execution: true
 
-checks:
+steps:
   # Security check with complex conditions
   security-comprehensive:
     type: ai

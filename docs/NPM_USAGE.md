@@ -97,7 +97,7 @@ project:
   name: my-project
   language: typescript
 
-checks:
+steps:
   - type: ai
     prompt: security
     

@@ -2500,7 +2500,11 @@ export class CheckExecutionEngine {
                 );
               });
               // As a fallback, evaluate fail_if on the dependency result now
-              if (!hasFatalFailure && config && (config.fail_if || config.checks![depId]?.fail_if)) {
+              if (
+                !hasFatalFailure &&
+                config &&
+                (config.fail_if || config.checks![depId]?.fail_if)
+              ) {
                 try {
                   hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
                 } catch {}

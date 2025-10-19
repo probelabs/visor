@@ -5,7 +5,7 @@ Checks can specify a per‑check timeout. When a timeout is reached, the provide
 ## Configuration
 
 ```yaml
-checks:
+steps:
   fetch-tickets:
     type: command
     timeout: 300  # seconds (command)
@@ -29,7 +29,7 @@ The engine propagates the per‑check timeout into providers in dependency‑awa
 ## Examples
 
 ```yaml
-checks:
+steps:
   fetch:
     type: command
     timeout: 120
