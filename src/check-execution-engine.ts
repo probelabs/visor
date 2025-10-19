@@ -2033,7 +2033,7 @@ export class CheckExecutionEngine {
       if (!sanitizedSchema) {
         throw new Error('Invalid schema name');
       }
-      const templatePath = path.join(__dirname, `../output/${sanitizedSchema}/template.liquid`);
+      const templatePath = path.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
       templateContent = await fs.readFile(templatePath, 'utf-8');
       // Only enrich built-in issue-assistant with event/permission context
       if (sanitizedSchema === 'issue-assistant') {

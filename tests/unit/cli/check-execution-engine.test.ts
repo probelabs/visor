@@ -718,7 +718,7 @@ describe('CheckExecutionEngine', () => {
       const templateContent = 'Built-in template: {{ checkName }}';
       const checkConfig = { schema: 'markdown' };
 
-      mockPath.join.mockReturnValue('/app/src/../output/markdown/template.liquid');
+      mockPath.join.mockReturnValue('/app/src/output/markdown/template.liquid');
       mockFs.readFile.mockResolvedValue(templateContent);
       mockLiquidInstance.parseAndRender.mockResolvedValue('Built-in template: security');
 
@@ -730,10 +730,10 @@ describe('CheckExecutionEngine', () => {
 
       expect(mockPath.join).toHaveBeenCalledWith(
         expect.any(String),
-        '../output/markdown/template.liquid'
+        'output/markdown/template.liquid'
       );
       expect(mockFs.readFile).toHaveBeenCalledWith(
-        '/app/src/../output/markdown/template.liquid',
+        '/app/src/output/markdown/template.liquid',
         'utf-8'
       );
       expect(mockLiquidInstance.parseAndRender).toHaveBeenCalledWith(templateContent, {
@@ -747,7 +747,7 @@ describe('CheckExecutionEngine', () => {
       const templateContent = 'Sanitized template';
       const checkConfig = { schema: 'markdown/../../../etc/passwd' };
 
-      mockPath.join.mockReturnValue('/app/src/../output/markdownetcpasswd/template.liquid');
+      mockPath.join.mockReturnValue('/app/src/output/markdownetcpasswd/template.liquid');
       mockFs.readFile.mockResolvedValue(templateContent);
       mockLiquidInstance.parseAndRender.mockResolvedValue('Sanitized template');
 
@@ -760,7 +760,7 @@ describe('CheckExecutionEngine', () => {
       // Should sanitize to 'markdownetcpasswd' and strip malicious path components like '../'
       expect(mockPath.join).toHaveBeenCalledWith(
         expect.any(String),
-        '../output/markdownetcpasswd/template.liquid'
+        'output/markdownetcpasswd/template.liquid'
       );
       expect(result).toBe('Sanitized template');
     });
@@ -942,7 +942,7 @@ describe('CheckExecutionEngine', () => {
     it('should handle file read errors for built-in schema templates', async () => {
       const checkConfig = { schema: 'nonexistent-schema' };
 
-      mockPath.join.mockReturnValue('/app/src/../output/nonexistent-schema/template.liquid');
+      mockPath.join.mockReturnValue('/app/src/output/nonexistent-schema/template.liquid');
       mockFs.readFile.mockRejectedValue(new Error('Template file not found'));
 
       await expect(
@@ -951,10 +951,10 @@ describe('CheckExecutionEngine', () => {
 
       expect(mockPath.join).toHaveBeenCalledWith(
         expect.any(String),
-        '../output/nonexistent-schema/template.liquid'
+        'output/nonexistent-schema/template.liquid'
       );
       expect(mockFs.readFile).toHaveBeenCalledWith(
-        '/app/src/../output/nonexistent-schema/template.liquid',
+        '/app/src/output/nonexistent-schema/template.liquid',
         'utf-8'
       );
     });
@@ -1073,7 +1073,7 @@ describe('CheckExecutionEngine', () => {
       const templateContent = 'Complex schema template';
       const checkConfig = { schema: 'markdown-v2.1_beta#test' };
 
-      mockPath.join.mockReturnValue('/app/src/../output/markdown-v21betatest/template.liquid');
+      mockPath.join.mockReturnValue('/app/src/output/markdown-v21betatest/template.liquid');
       mockFs.readFile.mockResolvedValue(templateContent);
       mockLiquidInstance.parseAndRender.mockResolvedValue('Complex schema template');
 
@@ -1086,7 +1086,7 @@ describe('CheckExecutionEngine', () => {
       // Should sanitize to 'markdown-v21betatest' removing special characters (. _ #)
       expect(mockPath.join).toHaveBeenCalledWith(
         expect.any(String),
-        '../output/markdown-v21betatest/template.liquid'
+        'output/markdown-v21betatest/template.liquid'
       );
       expect(result).toBe('Complex schema template');
     });
