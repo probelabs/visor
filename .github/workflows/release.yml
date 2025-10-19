@@ -43,6 +43,8 @@ jobs:
           # https://github.com/npm/cli/issues/4828
           rm -rf node_modules package-lock.json
           npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Run tests
         run: npm test
@@ -107,6 +109,8 @@ jobs:
           # https://github.com/npm/cli/issues/4828
           rm -rf node_modules package-lock.json
           npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
           npm run build
 
       - name: Set version variables
@@ -243,6 +247,8 @@ jobs:
           # https://github.com/npm/cli/issues/4828
           rm -rf node_modules package-lock.json
           npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Build package
         run: npm run build
