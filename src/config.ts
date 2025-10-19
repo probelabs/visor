@@ -271,11 +271,14 @@ export class ConfigManager {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
-        const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+        let parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
 
         if (!parsedConfig || typeof parsedConfig !== 'object') {
           return null;
         }
+
+        // Normalize 'checks' and 'steps' for backward compatibility
+        parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
 
         // Validate and merge with defaults
         this.validateConfig(parsedConfig);
