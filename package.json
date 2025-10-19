@@ -31,7 +31,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
     "build": "npm run build:cli && npm run build:sdk",
     "test": "jest",
@@ -100,8 +100,10 @@
     "js-yaml": "^4.1.0",
     "liquidjs": "^10.21.1",
     "node-cron": "^3.0.3",
+    "open": "^9.1.0",
     "simple-git": "^3.28.0",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
@@ -111,6 +113,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.3.0",
     "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
     "@vercel/ncc": "^0.38.4",

@@ -8,6 +8,12 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
+import { trace, context as otContext } from '@opentelemetry/api';
+import {
+  captureCheckInputContext,
+  captureCheckOutput,
+  captureProviderCall,
+} from '../telemetry/state-capture';
 
 /**
  * AI-powered check provider using probe agent
@@ -517,6 +523,36 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
+    // Build template context for state capture
+    const templateContext = {
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+      },
+      files: prInfo.files,
+      outputs: _dependencyResults
+        ? Object.fromEntries(
+            Array.from(_dependencyResults.entries()).map(([checkName, result]) => [
+              checkName,
+              (result as any).output !== undefined ? (result as any).output : result,
+            ])
+          )
+        : {},
+    };
+
+    // Capture input context in active OTEL span
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        captureCheckInputContext(span, templateContext);
+      }
+    } catch (err) {
+      // Ignore telemetry errors
+    }
+
     // Process prompt with Liquid templates and file loading
     const processedPrompt = await this.processPrompt(
       customPrompt,
@@ -585,10 +621,34 @@ export class AICheckProvider extends CheckProvider {
       const issueFilter = new IssueFilter(suppressionEnabled);
       const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
 
-      return {
+      const finalResult = {
         ...result,
         issues: filteredIssues,
       };
+
+      // Capture AI provider call and output in active OTEL span
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          captureProviderCall(
+            span,
+            'ai',
+            {
+              prompt: processedPrompt.substring(0, 500), // Preview only
+              model: aiConfig.model,
+            },
+            {
+              content: JSON.stringify(finalResult).substring(0, 500),
+              tokens: (result as any).usage?.totalTokens,
+            }
+          );
+          captureCheckOutput(span, (finalResult as any).output || finalResult);
+        }
+      } catch (err) {
+        // Ignore telemetry errors
+      }
+
+      return finalResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

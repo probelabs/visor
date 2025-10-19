@@ -1,0 +1,2356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visor Debug Visualizer</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Header */
+    header {
+      background: #252526;
+      padding: 16px 24px;
+      border-bottom: 1px solid #3e3e42;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #cccccc;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .header-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .btn {
+      background: #0e639c;
+      color: white;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+
+    .btn:hover {
+      background: #1177bb;
+    }
+
+    .btn-secondary {
+      background: #3e3e42;
+    }
+
+    .btn-secondary:hover {
+      background: #4e4e52;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .file-info {
+      font-size: 12px;
+      color: #858585;
+    }
+
+    /* Main Content */
+    #main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Config Sidebar */
+    #config-sidebar {
+      width: 800px;
+      background: #1e1e1e;
+      border-right: 1px solid #3e3e42;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #config-sidebar.hidden {
+      display: none;
+    }
+
+    /* Graph Container */
+    #graph-container {
+      flex: 1;
+      position: relative;
+      background: #1e1e1e;
+      overflow: hidden;
+    }
+
+    #graph-svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Inspector Panel */
+    #inspector {
+      width: 400px;
+      background: #252526;
+      border-left: 1px solid #3e3e42;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #inspector.hidden {
+      display: none;
+    }
+
+    .inspector-header {
+      padding: 16px;
+      border-bottom: 1px solid #3e3e42;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .inspector-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #cccccc;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: #858585;
+      cursor: pointer;
+      font-size: 18px;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+    }
+
+    .close-btn:hover {
+      color: #cccccc;
+    }
+
+    .inspector-tabs {
+      display: flex;
+      border-bottom: 1px solid #3e3e42;
+      background: #2d2d30;
+    }
+
+    .tab {
+      padding: 8px 16px;
+      background: none;
+      border: none;
+      color: #858585;
+      cursor: pointer;
+      font-size: 12px;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab:hover {
+      color: #cccccc;
+    }
+
+    .tab.active {
+      color: #ffffff;
+      border-bottom-color: #0e639c;
+    }
+
+    .inspector-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .json-viewer {
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .json-key {
+      color: #9cdcfe;
+    }
+
+    .json-string {
+      color: #ce9178;
+    }
+
+    .json-number {
+      color: #b5cea8;
+    }
+
+    .json-boolean {
+      color: #569cd6;
+    }
+
+    .json-null {
+      color: #569cd6;
+    }
+
+    .info-row {
+      display: flex;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .info-label {
+      color: #858585;
+      min-width: 100px;
+    }
+
+    .info-value {
+      color: #cccccc;
+    }
+
+    /* Legend */
+    .legend {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(37, 37, 38, 0.95);
+      border: 1px solid #3e3e42;
+      border-radius: 4px;
+      padding: 12px 16px;
+      font-size: 12px;
+    }
+
+    .legend-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #cccccc;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      margin-right: 8px;
+    }
+
+    /* Graph Styles */
+    .node {
+      cursor: pointer;
+      stroke: #3e3e42;
+      stroke-width: 2px;
+    }
+
+    .node:hover {
+      stroke: #ffffff;
+      stroke-width: 3px;
+    }
+
+    .node.selected {
+      stroke: #0e639c;
+      stroke-width: 3px;
+    }
+
+    .node-label {
+      font-size: 11px;
+      fill: #cccccc;
+      text-anchor: middle;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .link {
+      stroke: #3e3e42;
+      stroke-width: 1.5px;
+      stroke-opacity: 0.6;
+      fill: none;
+    }
+
+    .link-data-flow {
+      stroke-dasharray: 5, 5;
+      stroke: #569cd6;
+    }
+
+    /* Status Colors */
+    .status-pending { fill: #6e6e6e; }
+    .status-running { fill: #0e639c; }
+    .status-completed { fill: #4ec9b0; }
+    .status-error { fill: #f48771; }
+    .status-skipped { fill: #dcdcaa; }
+
+    /* Loading State */
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+
+    #loading.hidden {
+      display: none;
+    }
+
+    .spinner {
+      border: 3px solid #3e3e42;
+      border-top: 3px solid #0e639c;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Empty State */
+    #empty-state {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: #858585;
+    }
+
+    #empty-state.hidden {
+      display: none;
+    }
+
+    #empty-state h2 {
+      font-size: 18px;
+      margin-bottom: 8px;
+      color: #cccccc;
+    }
+
+    #empty-state p {
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    /* Timeline Controls */
+    #timeline-container {
+      height: 120px;
+      background: #252526;
+      border-top: 1px solid #3e3e42;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 24px;
+    }
+
+    #timeline-container.hidden {
+      display: none;
+    }
+
+    .timeline-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .playback-btn {
+      background: #3e3e42;
+      color: #cccccc;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+      min-width: 36px;
+      height: 36px;
+    }
+
+    .playback-btn:hover {
+      background: #4e4e52;
+    }
+
+    .playback-btn.active {
+      background: #0e639c;
+      color: white;
+    }
+
+    .playback-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .timeline-info {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 12px;
+      color: #858585;
+    }
+
+    .timeline-time {
+      color: #cccccc;
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
+
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .speed-btn {
+      background: #3e3e42;
+      color: #858585;
+      border: none;
+      padding: 4px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .speed-btn.active {
+      background: #0e639c;
+      color: white;
+    }
+
+    /* Timeline Scrubber */
+    .timeline-scrubber {
+      position: relative;
+      height: 40px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .timeline-track {
+      position: absolute;
+      top: 18px;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: #3e3e42;
+      border-radius: 2px;
+    }
+
+    .timeline-progress {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      background: #0e639c;
+      border-radius: 2px;
+      transition: width 0.1s linear;
+    }
+
+    .timeline-handle {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 16px;
+      height: 16px;
+      background: #ffffff;
+      border: 2px solid #0e639c;
+      border-radius: 50%;
+      cursor: grab;
+      transition: left 0.1s linear;
+    }
+
+    .timeline-handle:active {
+      cursor: grabbing;
+    }
+
+    .timeline-events {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .timeline-event-marker {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      pointer-events: all;
+      cursor: pointer;
+    }
+
+    .timeline-event-marker.check-started {
+      background: #569cd6;
+    }
+
+    .timeline-event-marker.check-completed {
+      background: #4ec9b0;
+    }
+
+    .timeline-event-marker.check-failed {
+      background: #f48771;
+    }
+
+    .timeline-event-marker.state-snapshot {
+      background: #dcdcaa;
+      border: 2px solid #858585;
+    }
+
+    /* Snapshot Panel */
+    #snapshot-panel {
+      width: 350px;
+      background: #252526;
+      border-right: 1px solid #3e3e42;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #snapshot-panel.hidden {
+      display: none;
+    }
+
+    .snapshot-header {
+      padding: 16px;
+      border-bottom: 1px solid #3e3e42;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .snapshot-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #cccccc;
+    }
+
+    .snapshot-list {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .snapshot-item {
+      padding: 12px 16px;
+      border-bottom: 1px solid #3e3e42;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .snapshot-item:hover {
+      background: #2d2d30;
+    }
+
+    .snapshot-item.active {
+      background: #094771;
+      border-left: 3px solid #0e639c;
+    }
+
+    .snapshot-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .snapshot-check-id {
+      font-size: 12px;
+      font-weight: 600;
+      color: #cccccc;
+    }
+
+    .snapshot-time {
+      font-size: 11px;
+      color: #858585;
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
+
+    .snapshot-summary {
+      font-size: 11px;
+      color: #858585;
+    }
+
+    /* Diff Viewer */
+    .diff-viewer {
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .diff-added {
+      background: rgba(78, 201, 176, 0.2);
+      color: #4ec9b0;
+    }
+
+    .diff-removed {
+      background: rgba(244, 135, 113, 0.2);
+      color: #f48771;
+    }
+
+    .diff-modified {
+      background: rgba(220, 220, 170, 0.2);
+      color: #dcdcaa;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #1e1e1e;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #3e3e42;
+      border-radius: 5px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4e4e52;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>🔍 Visor Debug Visualizer</h1>
+      <div class="header-controls">
+        <!-- Live Mode Controls -->
+        <div id="live-controls" class="hidden" style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn" id="btn-start-execution" onclick="liveMode.start()">▶ Start Execution</button>
+          <button class="btn btn-secondary hidden" id="btn-pause-execution" onclick="liveMode.pause()">⏸ Pause</button>
+          <button class="btn btn-secondary hidden" id="btn-resume-execution" onclick="liveMode.resume()">▶ Resume</button>
+          <button class="btn btn-secondary hidden" id="btn-stop-execution" onclick="liveMode.stop()">⏹ Stop</button>
+          <button class="btn btn-secondary hidden" id="btn-reset-execution" onclick="liveMode.reset()">🔄 Reset</button>
+          <span id="live-status" style="font-size: 12px; color: #858585; margin-left: 8px;">Waiting to start...</span>
+        </div>
+
+        <span class="file-info" id="file-info">No trace loaded</span>
+        <label for="file-input" class="btn btn-secondary">
+          📂 Load Trace
+        </label>
+        <input type="file" id="file-input" accept=".ndjson,.json">
+      </div>
+    </header>
+
+    <div id="main">
+      <!-- Config Sidebar -->
+      <div id="config-sidebar" class="hidden">
+        <div style="padding: 12px 16px; background: #252526; border-bottom: 1px solid #3e3e42; display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="color: #dcdcaa; font-size: 14px; font-weight: 600;">📋 Configuration Editor</h2>
+          <button id="apply-config-btn" class="btn" style="padding: 4px 12px; font-size: 12px;">Apply Changes</button>
+        </div>
+        <div id="config-editor-container" style="flex: 1; overflow: hidden;"></div>
+        <div style="padding: 8px 16px; background: #252526; border-top: 1px solid #3e3e42; font-size: 11px; color: #858585;">
+          Edit the configuration and click "Apply Changes" to update dynamically.
+        </div>
+      </div>
+
+      <!-- Snapshot Panel -->
+      <div id="snapshot-panel" class="hidden">
+        <div class="snapshot-header">
+          <h2>Snapshots</h2>
+          <button class="close-btn" onclick="toggleSnapshotPanel()">×</button>
+        </div>
+        <div class="snapshot-list" id="snapshot-list">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <div id="graph-container">
+        <svg id="graph-svg"></svg>
+
+        <div id="loading" class="hidden">
+          <div class="spinner"></div>
+          <p>Loading trace...</p>
+        </div>
+
+        <div id="empty-state">
+          <h2>No Trace Loaded</h2>
+          <p>Load a trace file to visualize execution</p>
+          <label for="file-input" class="btn">
+            📂 Load Trace File
+          </label>
+        </div>
+
+        <div id="config-display" class="hidden" style="padding: 40px; max-width: 1200px; margin: 0 auto; color: #cccccc;">
+          <h2 style="color: #dcdcaa; margin-bottom: 24px;">📋 Loaded Configuration</h2>
+          <pre id="config-content" style="background: #1e1e1e; padding: 24px; border-radius: 8px; overflow-x: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.6; border: 1px solid #3e3e42; color: #d4d4d4; white-space: pre-wrap; word-wrap: break-word;"></pre>
+          <p style="color: #858585; margin-top: 16px; font-size: 13px;">Click "Start Execution" to begin analyzing your repository with this configuration.</p>
+        </div>
+
+        <div class="legend">
+          <div class="legend-title">Status</div>
+          <div class="legend-item">
+            <div class="legend-color status-pending"></div>
+            <span>Pending</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color status-running"></div>
+            <span>Running</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color status-completed"></div>
+            <span>Completed</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color status-error"></div>
+            <span>Error</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color status-skipped"></div>
+            <span>Skipped</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="inspector" class="hidden">
+        <div class="inspector-header">
+          <h2 id="inspector-title">Check Details</h2>
+          <button class="close-btn" onclick="closeInspector()">×</button>
+        </div>
+
+        <div class="inspector-tabs">
+          <button class="tab active" onclick="switchTab('overview', event)">Overview</button>
+          <button class="tab" onclick="switchTab('input', event)">Input</button>
+          <button class="tab" onclick="switchTab('output', event)">Output</button>
+          <button class="tab" onclick="switchTab('events', event)">Events</button>
+          <button class="tab" onclick="switchTab('diff', event)">Diff</button>
+          <button class="tab" onclick="switchTab('config', event)">Config</button>
+          <button class="tab" onclick="switchTab('results', event)">Results</button>
+        </div>
+
+        <div class="inspector-content">
+          <div id="tab-overview" class="tab-panel active"></div>
+          <div id="tab-input" class="tab-panel"></div>
+          <div id="tab-output" class="tab-panel"></div>
+          <div id="tab-events" class="tab-panel"></div>
+          <div id="tab-diff" class="tab-panel"></div>
+          <div id="tab-config" class="tab-panel"></div>
+          <div id="tab-results" class="tab-panel"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timeline Container -->
+    <div id="timeline-container" class="hidden">
+      <div class="timeline-controls">
+        <button class="playback-btn" id="btn-first" onclick="timeTravel.seekToStart()" title="First">⏮</button>
+        <button class="playback-btn" id="btn-prev" onclick="timeTravel.stepBackward()" title="Previous">⏪</button>
+        <button class="playback-btn" id="btn-play" onclick="timeTravel.togglePlay()" title="Play/Pause">▶</button>
+        <button class="playback-btn" id="btn-next" onclick="timeTravel.stepForward()" title="Next">⏩</button>
+        <button class="playback-btn" id="btn-last" onclick="timeTravel.seekToEnd()" title="Last">⏭</button>
+
+        <div class="timeline-info">
+          <span>Event <span class="timeline-time" id="current-event">0</span> / <span class="timeline-time" id="total-events">0</span></span>
+          <span class="timeline-time" id="current-time">00:00.000</span>
+        </div>
+
+        <div class="speed-control">
+          <span>Speed:</span>
+          <button class="speed-btn" onclick="timeTravel.setSpeed(0.5)">0.5×</button>
+          <button class="speed-btn active" onclick="timeTravel.setSpeed(1)">1×</button>
+          <button class="speed-btn" onclick="timeTravel.setSpeed(2)">2×</button>
+          <button class="speed-btn" onclick="timeTravel.setSpeed(5)">5×</button>
+        </div>
+
+        <button class="playback-btn" id="btn-snapshots" onclick="toggleSnapshotPanel()" title="Toggle Snapshots">📸</button>
+      </div>
+
+      <div class="timeline-scrubber" id="timeline-scrubber">
+        <div class="timeline-track">
+          <div class="timeline-progress" id="timeline-progress"></div>
+        </div>
+        <div class="timeline-events" id="timeline-events">
+          <!-- Event markers dynamically populated -->
+        </div>
+        <div class="timeline-handle" id="timeline-handle"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ========================================================================
+    // Global State
+    // ========================================================================
+    let currentTrace = null;
+    let selectedNode = null;
+    let simulation = null;
+    let previousSnapshot = null; // For diff view
+
+    // ========================================================================
+    // Trace Parser (Inline version of trace-reader.ts)
+    // ========================================================================
+    async function parseTraceFile(file) {
+      const text = await file.text();
+      const lines = text.trim().split('\n');
+      const spans = [];
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        try {
+          const rawSpan = JSON.parse(line);
+          const span = processRawSpan(rawSpan);
+          spans.push(span);
+        } catch (e) {
+          console.warn('Failed to parse line:', e);
+        }
+      }
+
+      if (spans.length === 0) {
+        throw new Error('No valid spans found in trace file');
+      }
+
+      // Build tree
+      const tree = buildExecutionTree(spans);
+
+      // Extract snapshots
+      const snapshots = extractStateSnapshots(spans);
+
+      // Compute timeline
+      const timeline = computeTimeline(spans);
+
+      // Calculate metadata
+      const sortedSpans = [...spans].sort((a, b) =>
+        compareTimeValues(a.startTime, b.startTime)
+      );
+      const firstSpan = sortedSpans[0];
+      const lastSpan = sortedSpans[sortedSpans.length - 1];
+
+      return {
+        runId: tree.checkId,
+        traceId: firstSpan.traceId,
+        spans,
+        tree,
+        timeline,
+        snapshots,
+        metadata: {
+          startTime: timeValueToISO(firstSpan.startTime),
+          endTime: timeValueToISO(lastSpan.endTime),
+          duration: timeValueToMillis(lastSpan.endTime) - timeValueToMillis(firstSpan.startTime),
+          totalSpans: spans.length,
+          totalSnapshots: snapshots.length
+        }
+      };
+    }
+
+    function processRawSpan(raw) {
+      return {
+        traceId: raw.traceId || '',
+        spanId: raw.spanId || '',
+        parentSpanId: raw.parentSpanId,
+        name: raw.name || 'unknown',
+        startTime: raw.startTime || [0, 0],
+        endTime: raw.endTime || raw.startTime || [0, 0],
+        duration: timeValueToMillis(raw.endTime || raw.startTime) - timeValueToMillis(raw.startTime),
+        attributes: raw.attributes || {},
+        events: (raw.events || []).map(evt => ({
+          name: evt.name || 'unknown',
+          time: evt.time || [0, 0],
+          timestamp: evt.timestamp || timeValueToISO(evt.time || [0, 0]),
+          attributes: evt.attributes || {}
+        })),
+        status: raw.status?.code === 2 ? 'error' : 'ok'
+      };
+    }
+
+    function buildExecutionTree(spans) {
+      const nodeMap = new Map();
+
+      // Create nodes
+      for (const span of spans) {
+        const node = createExecutionNode(span);
+        nodeMap.set(span.spanId, node);
+      }
+
+      // Build relationships
+      let rootNode;
+      for (const span of spans) {
+        const node = nodeMap.get(span.spanId);
+        if (!span.parentSpanId) {
+          rootNode = node;
+        } else {
+          const parent = nodeMap.get(span.parentSpanId);
+          if (parent) {
+            parent.children.push(node);
+          }
+        }
+      }
+
+      return rootNode || {
+        checkId: 'root',
+        type: 'run',
+        status: 'completed',
+        children: Array.from(nodeMap.values()),
+        span: spans[0],
+        state: {}
+      };
+    }
+
+    function createExecutionNode(span) {
+      const attrs = span.attributes;
+      // Extract check ID from span name (e.g., "visor.check.hello" -> "hello")
+      let checkId = attrs['visor.check.id'] || attrs['visor.run.id'];
+      if (!checkId && span.name.startsWith('visor.check.')) {
+        checkId = span.name.replace('visor.check.', '');
+      }
+      if (!checkId) {
+        checkId = span.name === 'visor.run' ? 'visor.run' : span.spanId;
+      }
+
+      let type = 'unknown';
+      if (span.name === 'visor.run') type = 'run';
+      else if (span.name.startsWith('visor.check.')) type = 'check';
+      else if (span.name === 'visor.check') type = 'check';
+      else if (span.name.startsWith('visor.provider.')) type = 'provider';
+
+      let status = 'completed';
+      if (span.status === 'error') status = 'error';
+      else if (attrs['visor.check.skipped']) status = 'skipped';
+
+      const state = {
+        inputContext: parseJSON(attrs['visor.check.input.context']),
+        output: parseJSON(attrs['visor.check.output']),
+        metadata: {
+          type: attrs['visor.check.type'],
+          duration: span.duration,
+          provider: attrs['visor.provider.type']
+        }
+      };
+
+      if (span.status === 'error') {
+        state.errors = [attrs['visor.check.error'] || 'Unknown error'];
+      }
+
+      return { checkId, type, status, children: [], span, state };
+    }
+
+    function extractStateSnapshots(spans) {
+      const snapshots = [];
+      for (const span of spans) {
+        for (const event of span.events) {
+          if (event.name === 'state.snapshot') {
+            const attrs = event.attributes;
+            snapshots.push({
+              checkId: attrs['visor.snapshot.check_id'] || 'unknown',
+              timestamp: attrs['visor.snapshot.timestamp'] || event.timestamp,
+              timestampNanos: event.time,
+              outputs: parseJSON(attrs['visor.snapshot.outputs']) || {},
+              memory: parseJSON(attrs['visor.snapshot.memory']) || {}
+            });
+          }
+        }
+      }
+      snapshots.sort((a, b) => compareTimeValues(a.timestampNanos, b.timestampNanos));
+      return snapshots;
+    }
+
+    function computeTimeline(spans) {
+      const events = [];
+      for (const span of spans) {
+        const checkId = span.attributes['visor.check.id'] || span.spanId;
+
+        events.push({
+          type: 'check.started',
+          checkId,
+          timestamp: timeValueToISO(span.startTime),
+          timestampNanos: span.startTime
+        });
+
+        events.push({
+          type: span.status === 'error' ? 'check.failed' : 'check.completed',
+          checkId,
+          timestamp: timeValueToISO(span.endTime),
+          timestampNanos: span.endTime,
+          duration: span.duration,
+          status: span.status
+        });
+
+        for (const evt of span.events) {
+          events.push({
+            type: evt.name === 'state.snapshot' ? 'state.snapshot' : 'event',
+            checkId,
+            timestamp: evt.timestamp,
+            timestampNanos: evt.time,
+            metadata: { eventName: evt.name, attributes: evt.attributes }
+          });
+        }
+      }
+      events.sort((a, b) => compareTimeValues(a.timestampNanos, b.timestampNanos));
+      return events;
+    }
+
+    // Utility functions
+    function timeValueToMillis(tv) {
+      return tv[0] * 1000 + tv[1] / 1_000_000;
+    }
+
+    function timeValueToISO(tv) {
+      return new Date(timeValueToMillis(tv)).toISOString();
+    }
+
+    function compareTimeValues(a, b) {
+      if (a[0] !== b[0]) return a[0] - b[0];
+      return a[1] - b[1];
+    }
+
+    function parseJSON(str) {
+      if (typeof str !== 'string') return null;
+      try {
+        return JSON.parse(str);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // ========================================================================
+    // File Handling
+    // ========================================================================
+    document.getElementById('file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      showLoading();
+      hideEmptyState();
+
+      try {
+        currentTrace = await parseTraceFile(file);
+        document.getElementById('file-info').textContent =
+          `${file.name} (${currentTrace.metadata.totalSpans} spans, ${currentTrace.metadata.duration.toFixed(0)}ms)`;
+
+        visualizeTrace(currentTrace);
+        timeTravel.init(currentTrace);
+        hideLoading();
+      } catch (error) {
+        alert('Failed to parse trace file: ' + error.message);
+        console.error(error);
+        showEmptyState();
+        hideLoading();
+      }
+    });
+
+    // Check for URL parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    const traceUrl = urlParams.get('trace');
+    if (traceUrl) {
+      loadTraceFromUrl(traceUrl);
+    }
+
+    async function loadTraceFromUrl(url) {
+      showLoading();
+      hideEmptyState();
+
+      try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const file = new File([blob], url.split('/').pop());
+        currentTrace = await parseTraceFile(file);
+
+        document.getElementById('file-info').textContent =
+          `${url.split('/').pop()} (${currentTrace.metadata.totalSpans} spans)`;
+
+        visualizeTrace(currentTrace);
+        timeTravel.init(currentTrace);
+        hideLoading();
+      } catch (error) {
+        alert('Failed to load trace from URL: ' + error.message);
+        console.error(error);
+        showEmptyState();
+        hideLoading();
+      }
+    }
+
+    // ========================================================================
+    // Visualization
+    // ========================================================================
+    // Keep track of graph container
+    let graphContainer = null;
+
+    function visualizeTrace(trace) {
+      const svg = d3.select('#graph-svg');
+      const width = document.getElementById('graph-container').clientWidth;
+      const height = document.getElementById('graph-container').clientHeight;
+
+      // Convert tree to graph nodes and links
+      const { nodes, links } = treeToGraph(trace.tree);
+
+      // Add hierarchy levels for vertical positioning
+      assignHierarchyLevels(trace.tree);
+
+      // Initialize graph container and zoom on first render
+      if (!graphContainer) {
+        svg.selectAll('*').remove(); // Clear only on first render
+        graphContainer = svg.append('g');
+
+        // Add zoom behavior once
+        svg.call(d3.zoom()
+          .scaleExtent([0.1, 4])
+          .on('zoom', (event) => {
+            graphContainer.attr('transform', event.transform);
+          }));
+      }
+
+      // Preserve positions of existing nodes and set initial positions for new ones
+      if (simulation && simulation.nodes().length > 0) {
+        const existingNodes = new Map(simulation.nodes().map(n => [n.id, n]));
+        nodes.forEach(node => {
+          const existing = existingNodes.get(node.id);
+          if (existing) {
+            // Preserve existing node position
+            node.x = existing.x;
+            node.y = existing.y;
+            node.vx = existing.vx;
+            node.vy = existing.vy;
+          } else {
+            // New node - set initial position based on hierarchy to avoid overlap
+            node.x = width / 2 + (Math.random() - 0.5) * 100;
+            node.y = 100 + (node.level || 0) * 200;
+            node.vx = 0;
+            node.vy = 0;
+          }
+        });
+      } else {
+        // First render - initialize all nodes
+        nodes.forEach(node => {
+          node.x = width / 2 + (Math.random() - 0.5) * 100;
+          node.y = 100 + (node.level || 0) * 200;
+          node.vx = 0;
+          node.vy = 0;
+        });
+      }
+
+      // Create or update force simulation
+      if (!simulation || simulation.nodes().length === 0) {
+        // Initial creation
+        simulation = d3.forceSimulation(nodes)
+          .force('link', d3.forceLink(links).id(d => d.id).distance(200).strength(1))
+          .force('charge', d3.forceManyBody().strength(-1000))
+          .force('center', d3.forceCenter(width / 2, height / 2))
+          .force('collision', d3.forceCollide().radius(70).strength(1.5))
+          .force('y', d3.forceY(d => 100 + (d.level || 0) * 200).strength(0.8))
+          .force('x', d3.forceX(width / 2).strength(0.05))
+          .alphaDecay(0.01);
+      } else {
+        // Update existing simulation with new nodes/links
+        simulation.nodes(nodes);
+        simulation.force('link').links(links);
+        simulation.alpha(0.5).restart(); // Reheat simulation to settle new nodes
+      }
+
+      const g = graphContainer;
+
+      // Update links using data join
+      const link = g.selectAll('.link')
+        .data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`)
+        .join(
+          enter => enter.append('path')
+            .attr('class', 'link')
+            .attr('stroke', '#3e3e42')
+            .attr('stroke-width', 2),
+          update => update,
+          exit => exit.remove()
+        );
+
+      // Update nodes using data join
+      const node = g.selectAll('.node')
+        .data(nodes, d => d.id)
+        .join(
+          enter => enter.append('circle')
+            .attr('class', d => `node status-${d.status}`)
+            .attr('r', 25)
+            .attr('stroke', '#252526')
+            .attr('stroke-width', 3)
+            .call(d3.drag()
+              .on('start', dragStarted)
+              .on('drag', dragged)
+              .on('end', dragEnded))
+            .on('click', (event, d) => {
+              event.stopPropagation();
+              selectNode(d);
+            }),
+          update => update
+            .attr('class', d => `node status-${d.status}`),
+          exit => exit.remove()
+        );
+
+      // Update labels using data join
+      const label = g.selectAll('.node-label')
+        .data(nodes, d => d.id)
+        .join(
+          enter => enter.append('text')
+            .attr('class', 'node-label')
+            .attr('dy', 35)
+            .attr('text-anchor', 'middle')
+            .style('pointer-events', 'none')
+            .style('fill', '#d4d4d4')
+            .style('font-size', '12px')
+            .text(d => d.checkId.length > 15 ? d.checkId.substring(0, 12) + '...' : d.checkId),
+          update => update
+            .text(d => d.checkId.length > 15 ? d.checkId.substring(0, 12) + '...' : d.checkId),
+          exit => exit.remove()
+        );
+
+      // Update positions on tick
+      simulation.on('tick', () => {
+        link.attr('d', d => {
+          const dx = d.target.x - d.source.x;
+          const dy = d.target.y - d.source.y;
+          const dr = Math.sqrt(dx * dx + dy * dy);
+          return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+        });
+
+        node
+          .attr('cx', d => d.x)
+          .attr('cy', d => d.y);
+
+        label
+          .attr('x', d => d.x)
+          .attr('y', d => d.y);
+      });
+    }
+
+    function treeToGraph(tree, nodes = [], links = [], parent = null) {
+      const node = {
+        id: tree.checkId,
+        checkId: tree.checkId,
+        type: tree.type,
+        status: tree.status,
+        level: tree.level || 0,
+        data: tree
+      };
+      nodes.push(node);
+
+      if (parent) {
+        links.push({ source: parent.id, target: node.id });
+      }
+
+      for (const child of tree.children) {
+        treeToGraph(child, nodes, links, node);
+      }
+
+      return { nodes, links };
+    }
+
+    // Assign hierarchy levels for vertical layout
+    function assignHierarchyLevels(tree, level = 0) {
+      if (!tree) return;
+      tree.level = level;
+      for (const child of tree.children || []) {
+        assignHierarchyLevels(child, level + 1);
+      }
+    }
+
+    // Drag handlers
+    function dragStarted(event, d) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x;
+      d.fy = d.y;
+    }
+
+    function dragged(event, d) {
+      d.fx = event.x;
+      d.fy = event.y;
+    }
+
+    function dragEnded(event, d) {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null;
+      d.fy = null;
+    }
+
+    // ========================================================================
+    // Inspector
+    // ========================================================================
+    function selectNode(node) {
+      selectedNode = node;
+
+      // Update visual selection
+      d3.selectAll('.node').classed('selected', false);
+      d3.selectAll('.node').filter(d => d.id === node.id).classed('selected', true);
+
+      // Show inspector
+      document.getElementById('inspector').classList.remove('hidden');
+      document.getElementById('inspector-title').textContent = node.checkId;
+
+      // Populate tabs
+      populateOverview(node);
+      populateInput(node);
+      populateOutput(node);
+      populateEvents(node);
+    }
+
+    function closeInspector() {
+      document.getElementById('inspector').classList.add('hidden');
+      d3.selectAll('.node').classed('selected', false);
+      selectedNode = null;
+    }
+
+    function switchTab(tabName, event) {
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+
+      // If called from onclick, highlight the clicked tab
+      if (event && event.target) {
+        event.target.classList.add('active');
+      } else {
+        // If called programmatically, find and highlight the tab by name
+        document.querySelectorAll('.tab').forEach(tab => {
+          if (tab.textContent.toLowerCase() === tabName.toLowerCase()) {
+            tab.classList.add('active');
+          }
+        });
+      }
+
+      // Update tab panels
+      document.querySelectorAll('.tab-panel').forEach(panel => {
+        panel.classList.remove('active');
+      });
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+    }
+
+    function populateOverview(node) {
+      const data = node.data;
+      const html = `
+        <div class="info-row">
+          <span class="info-label">Check ID:</span>
+          <span class="info-value">${data.checkId}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Type:</span>
+          <span class="info-value">${data.type}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Status:</span>
+          <span class="info-value">${data.status}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Duration:</span>
+          <span class="info-value">${data.span.duration.toFixed(2)}ms</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Start Time:</span>
+          <span class="info-value">${timeValueToISO(data.span.startTime)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">End Time:</span>
+          <span class="info-value">${timeValueToISO(data.span.endTime)}</span>
+        </div>
+        ${data.state.metadata?.type ? `
+        <div class="info-row">
+          <span class="info-label">Check Type:</span>
+          <span class="info-value">${data.state.metadata.type}</span>
+        </div>
+        ` : ''}
+        ${data.state.errors ? `
+        <div class="info-row">
+          <span class="info-label">Error:</span>
+          <span class="info-value" style="color: #f48771;">${data.state.errors.join(', ')}</span>
+        </div>
+        ` : ''}
+      `;
+      document.getElementById('tab-overview').innerHTML = html;
+    }
+
+    function populateInput(node) {
+      const input = node.data.state.inputContext;
+      const html = input
+        ? `<div class="json-viewer">${syntaxHighlightJSON(input)}</div>`
+        : '<p style="color: #858585;">No input context available</p>';
+      document.getElementById('tab-input').innerHTML = html;
+    }
+
+    function populateOutput(node) {
+      const output = node.data.state.output;
+      const html = output
+        ? `<div class="json-viewer">${syntaxHighlightJSON(output)}</div>`
+        : '<p style="color: #858585;">No output available</p>';
+      document.getElementById('tab-output').innerHTML = html;
+    }
+
+    function populateEvents(node) {
+      const events = node.data.span.events;
+      if (events.length === 0) {
+        document.getElementById('tab-events').innerHTML = '<p style="color: #858585;">No events</p>';
+        return;
+      }
+
+      const html = events.map(evt => `
+        <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #3e3e42;">
+          <div class="info-row">
+            <span class="info-label">Event:</span>
+            <span class="info-value">${evt.name}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Time:</span>
+            <span class="info-value">${evt.timestamp}</span>
+          </div>
+          ${Object.keys(evt.attributes).length > 0 ? `
+            <div style="margin-top: 8px;">
+              <div class="info-label" style="margin-bottom: 4px;">Attributes:</div>
+              <div class="json-viewer">${syntaxHighlightJSON(evt.attributes)}</div>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+
+      document.getElementById('tab-events').innerHTML = html;
+    }
+
+    function syntaxHighlightJSON(obj) {
+      const json = JSON.stringify(obj, null, 2);
+      return json
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
+          let cls = 'json-number';
+          if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+              cls = 'json-key';
+            } else {
+              cls = 'json-string';
+            }
+          } else if (/true|false/.test(match)) {
+            cls = 'json-boolean';
+          } else if (/null/.test(match)) {
+            cls = 'json-null';
+          }
+          return '<span class="' + cls + '">' + match + '</span>';
+        });
+    }
+
+    // ========================================================================
+    // UI Helpers
+    // ========================================================================
+    function showLoading() {
+      document.getElementById('loading').classList.remove('hidden');
+    }
+
+    function hideLoading() {
+      document.getElementById('loading').classList.add('hidden');
+    }
+
+    function showEmptyState() {
+      document.getElementById('empty-state').classList.remove('hidden');
+    }
+
+    function hideEmptyState() {
+      document.getElementById('empty-state').classList.add('hidden');
+    }
+
+    // ========================================================================
+    // Time-Travel Debugging
+    // ========================================================================
+    const timeTravel = {
+      currentIndex: 0,
+      isPlaying: false,
+      playbackSpeed: 1,
+      playbackInterval: null,
+
+      init(trace) {
+        if (!trace || !trace.timeline || trace.timeline.length === 0) {
+          return;
+        }
+
+        // Show timeline
+        document.getElementById('timeline-container').classList.remove('hidden');
+        document.getElementById('total-events').textContent = trace.timeline.length;
+
+        // Build timeline scrubber
+        this.buildTimelineScrubber(trace.timeline);
+
+        // Populate snapshot panel
+        this.populateSnapshotPanel(trace.snapshots);
+
+        // Seek to start
+        this.seekToIndex(0);
+      },
+
+      buildTimelineScrubber(timeline) {
+        const eventsContainer = document.getElementById('timeline-events');
+        eventsContainer.innerHTML = '';
+
+        if (timeline.length === 0) return;
+
+        const startTime = timeValueToMillis(timeline[0].timestampNanos);
+        const endTime = timeValueToMillis(timeline[timeline.length - 1].timestampNanos);
+        const duration = endTime - startTime;
+
+        timeline.forEach((event, index) => {
+          const eventTime = timeValueToMillis(event.timestampNanos);
+          const position = duration > 0 ? ((eventTime - startTime) / duration) * 100 : 0;
+
+          const marker = document.createElement('div');
+          marker.className = `timeline-event-marker ${event.type.replace('.', '-')}`;
+          marker.style.left = `${position}%`;
+          marker.title = `${event.type} - ${event.checkId}`;
+          marker.onclick = () => this.seekToIndex(index);
+          eventsContainer.appendChild(marker);
+        });
+
+        // Add scrubber click handler
+        const scrubber = document.getElementById('timeline-scrubber');
+        scrubber.onclick = (e) => {
+          const rect = scrubber.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const percent = x / rect.width;
+          const index = Math.floor(percent * timeline.length);
+          this.seekToIndex(Math.max(0, Math.min(timeline.length - 1, index)));
+        };
+
+        // Add drag handler for handle
+        const handle = document.getElementById('timeline-handle');
+        let isDragging = false;
+
+        handle.onmousedown = (e) => {
+          isDragging = true;
+          e.preventDefault();
+        };
+
+        document.onmousemove = (e) => {
+          if (!isDragging) return;
+
+          const rect = scrubber.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const percent = Math.max(0, Math.min(1, x / rect.width));
+          const index = Math.floor(percent * timeline.length);
+          this.seekToIndex(Math.max(0, Math.min(timeline.length - 1, index)));
+        };
+
+        document.onmouseup = () => {
+          isDragging = false;
+        };
+      },
+
+      populateSnapshotPanel(snapshots) {
+        const list = document.getElementById('snapshot-list');
+        list.innerHTML = '';
+
+        if (!snapshots || snapshots.length === 0) {
+          list.innerHTML = '<p style="padding: 16px; color: #858585;">No snapshots available</p>';
+          return;
+        }
+
+        snapshots.forEach((snapshot, index) => {
+          const item = document.createElement('div');
+          item.className = 'snapshot-item';
+          item.onclick = () => this.jumpToSnapshot(snapshot);
+
+          const outputCount = Object.keys(snapshot.outputs || {}).length;
+          const memoryCount = Object.keys(snapshot.memory || {}).length;
+
+          item.innerHTML = `
+            <div class="snapshot-item-header">
+              <span class="snapshot-check-id">${snapshot.checkId}</span>
+              <span class="snapshot-time">${new Date(snapshot.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div class="snapshot-summary">
+              ${outputCount} outputs, ${memoryCount} memory keys
+            </div>
+          `;
+
+          list.appendChild(item);
+        });
+      },
+
+      seekToIndex(index) {
+        if (!currentTrace || !currentTrace.timeline) return;
+
+        this.currentIndex = Math.max(0, Math.min(currentTrace.timeline.length - 1, index));
+        const event = currentTrace.timeline[this.currentIndex];
+
+        // Update UI
+        document.getElementById('current-event').textContent = this.currentIndex + 1;
+
+        const startTime = timeValueToMillis(currentTrace.timeline[0].timestampNanos);
+        const eventTime = timeValueToMillis(event.timestampNanos);
+        const elapsed = eventTime - startTime;
+        const seconds = Math.floor(elapsed / 1000);
+        const millis = Math.floor(elapsed % 1000);
+        document.getElementById('current-time').textContent =
+          `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+
+        // Update scrubber position
+        const percent = currentTrace.timeline.length > 1
+          ? (this.currentIndex / (currentTrace.timeline.length - 1)) * 100
+          : 0;
+        document.getElementById('timeline-handle').style.left = `${percent}%`;
+        document.getElementById('timeline-progress').style.width = `${percent}%`;
+
+        // Apply state at this point in time
+        this.applyStateAtIndex(this.currentIndex);
+      },
+
+      applyStateAtIndex(index) {
+        if (!currentTrace) return;
+
+        // Build execution state up to this point
+        const eventsUpToNow = currentTrace.timeline.slice(0, index + 1);
+        const activeChecks = new Set();
+        const completedChecks = new Set();
+        const failedChecks = new Set();
+
+        for (const event of eventsUpToNow) {
+          if (event.type === 'check.started') {
+            activeChecks.add(event.checkId);
+          } else if (event.type === 'check.completed') {
+            activeChecks.delete(event.checkId);
+            completedChecks.add(event.checkId);
+          } else if (event.type === 'check.failed') {
+            activeChecks.delete(event.checkId);
+            failedChecks.add(event.checkId);
+          }
+        }
+
+        // Update graph node colors to reflect state at this point
+        d3.selectAll('.node').attr('class', d => {
+          const checkId = d.checkId;
+          let status = 'pending';
+
+          if (failedChecks.has(checkId)) {
+            status = 'error';
+          } else if (completedChecks.has(checkId)) {
+            status = 'completed';
+          } else if (activeChecks.has(checkId)) {
+            status = 'running';
+          }
+
+          return `node status-${status}`;
+        });
+
+        // Highlight current event's check
+        const currentEvent = currentTrace.timeline[index];
+        if (currentEvent && currentEvent.checkId) {
+          d3.selectAll('.node')
+            .filter(d => d.checkId === currentEvent.checkId)
+            .classed('selected', true);
+        }
+      },
+
+      togglePlay() {
+        if (this.isPlaying) {
+          this.pause();
+        } else {
+          this.play();
+        }
+      },
+
+      play() {
+        if (!currentTrace || !currentTrace.timeline) return;
+
+        this.isPlaying = true;
+        document.getElementById('btn-play').textContent = '⏸';
+        document.getElementById('btn-play').classList.add('active');
+
+        const baseInterval = 100; // 100ms per event at 1x speed
+        const interval = baseInterval / this.playbackSpeed;
+
+        this.playbackInterval = setInterval(() => {
+          if (this.currentIndex >= currentTrace.timeline.length - 1) {
+            this.pause();
+            return;
+          }
+          this.seekToIndex(this.currentIndex + 1);
+        }, interval);
+      },
+
+      pause() {
+        this.isPlaying = false;
+        document.getElementById('btn-play').textContent = '▶';
+        document.getElementById('btn-play').classList.remove('active');
+
+        if (this.playbackInterval) {
+          clearInterval(this.playbackInterval);
+          this.playbackInterval = null;
+        }
+      },
+
+      stepForward() {
+        if (!currentTrace) return;
+        this.pause();
+        this.seekToIndex(this.currentIndex + 1);
+      },
+
+      stepBackward() {
+        this.pause();
+        this.seekToIndex(this.currentIndex - 1);
+      },
+
+      seekToStart() {
+        this.pause();
+        this.seekToIndex(0);
+      },
+
+      seekToEnd() {
+        if (!currentTrace) return;
+        this.pause();
+        this.seekToIndex(currentTrace.timeline.length - 1);
+      },
+
+      setSpeed(speed) {
+        this.playbackSpeed = speed;
+
+        // Update active speed button
+        document.querySelectorAll('.speed-btn').forEach(btn => {
+          btn.classList.remove('active');
+          if (btn.textContent === `${speed}×`) {
+            btn.classList.add('active');
+          }
+        });
+
+        // Restart playback if playing
+        if (this.isPlaying) {
+          this.pause();
+          this.play();
+        }
+      },
+
+      jumpToSnapshot(snapshot) {
+        if (!currentTrace) return;
+
+        // Find the timeline event for this snapshot
+        const index = currentTrace.timeline.findIndex(
+          evt => evt.type === 'state.snapshot' &&
+                 evt.checkId === snapshot.checkId &&
+                 evt.timestamp === snapshot.timestamp
+        );
+
+        if (index >= 0) {
+          this.seekToIndex(index);
+        }
+
+        // Update snapshot panel active state
+        const items = document.querySelectorAll('.snapshot-item');
+        items.forEach((item, i) => {
+          item.classList.toggle('active',
+            currentTrace.snapshots[i] === snapshot);
+        });
+
+        // Show diff if there's a previous snapshot
+        if (previousSnapshot) {
+          this.showDiff(previousSnapshot, snapshot);
+        }
+        previousSnapshot = snapshot;
+      },
+
+      showDiff(prev, current) {
+        const diffHtml = this.computeDiff(prev.outputs, current.outputs);
+        document.getElementById('tab-diff').innerHTML = diffHtml;
+      },
+
+      computeDiff(prevOutputs, currentOutputs) {
+        const allKeys = new Set([
+          ...Object.keys(prevOutputs || {}),
+          ...Object.keys(currentOutputs || {})
+        ]);
+
+        if (allKeys.size === 0) {
+          return '<p style="color: #858585;">No outputs to compare</p>';
+        }
+
+        const changes = [];
+
+        for (const key of allKeys) {
+          const prevValue = prevOutputs?.[key];
+          const currentValue = currentOutputs?.[key];
+
+          if (prevValue === undefined && currentValue !== undefined) {
+            changes.push({
+              type: 'added',
+              key,
+              value: currentValue
+            });
+          } else if (prevValue !== undefined && currentValue === undefined) {
+            changes.push({
+              type: 'removed',
+              key,
+              value: prevValue
+            });
+          } else if (JSON.stringify(prevValue) !== JSON.stringify(currentValue)) {
+            changes.push({
+              type: 'modified',
+              key,
+              prevValue,
+              currentValue
+            });
+          }
+        }
+
+        if (changes.length === 0) {
+          return '<p style="color: #858585;">No changes detected</p>';
+        }
+
+        let html = '<div class="diff-viewer">';
+        for (const change of changes) {
+          if (change.type === 'added') {
+            html += `<div class="diff-added">+ ${change.key}: ${JSON.stringify(change.value, null, 2)}</div>`;
+          } else if (change.type === 'removed') {
+            html += `<div class="diff-removed">- ${change.key}: ${JSON.stringify(change.value, null, 2)}</div>`;
+          } else if (change.type === 'modified') {
+            html += `<div class="diff-modified">~ ${change.key}:</div>`;
+            html += `<div class="diff-removed">  - ${JSON.stringify(change.prevValue, null, 2)}</div>`;
+            html += `<div class="diff-added">  + ${JSON.stringify(change.currentValue, null, 2)}</div>`;
+          }
+        }
+        html += '</div>';
+        return html;
+      }
+    };
+
+    function toggleSnapshotPanel() {
+      const panel = document.getElementById('snapshot-panel');
+      panel.classList.toggle('hidden');
+      document.getElementById('btn-snapshots').classList.toggle('active');
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (!currentTrace || !currentTrace.timeline) return;
+
+      // Ignore if user is typing in an input
+      if (e.target.tagName === 'INPUT') return;
+
+      switch (e.key) {
+        case ' ': // Space - play/pause
+          e.preventDefault();
+          timeTravel.togglePlay();
+          break;
+        case 'ArrowLeft': // Left arrow - step backward
+          e.preventDefault();
+          timeTravel.stepBackward();
+          break;
+        case 'ArrowRight': // Right arrow - step forward
+          e.preventDefault();
+          timeTravel.stepForward();
+          break;
+        case 'Home': // Home - seek to start
+          e.preventDefault();
+          timeTravel.seekToStart();
+          break;
+        case 'End': // End - seek to end
+          e.preventDefault();
+          timeTravel.seekToEnd();
+          break;
+        case 's': // S - toggle snapshot panel
+          if (!e.ctrlKey && !e.metaKey) {
+            toggleSnapshotPanel();
+          }
+          break;
+      }
+    });
+
+    // ========================================================================
+    // HTTP Polling Live Mode with Execution Control
+    // ========================================================================
+    const liveMode = {
+      isLive: false,
+      isRunning: false,
+      isPaused: false,
+      pollingInterval: null,
+      lastSpanCount: 0,
+      baseUrl: '',
+      configEditor: null,
+      currentConfig: null,
+
+      init(baseUrl) {
+        console.log('[live] Initializing live mode with base URL:', baseUrl);
+        this.isLive = true;
+        this.baseUrl = baseUrl;
+
+        // Show live controls
+        document.getElementById('live-controls').classList.remove('hidden');
+        document.getElementById('file-info').textContent = 'Live Mode - Ready';
+
+        // Load initial config (will hide empty state once loaded)
+        this.loadConfig();
+      },
+
+      async loadConfig() {
+        try {
+          console.log('[live] Fetching config from:', `${this.baseUrl}/api/config`);
+          const response = await fetch(`${this.baseUrl}/api/config`);
+          const data = await response.json();
+          console.log('[live] Loaded config:', data);
+          console.log('[live] Config data exists?', !!data.config);
+          console.log('[live] Config keys:', data.config ? Object.keys(data.config) : 'none');
+
+          if (data.config) {
+            // Store config
+            this.currentConfig = data.config;
+
+            // Initialize Monaco editor
+            this.initializeEditor(data.config);
+
+            // Show config sidebar
+            document.getElementById('config-sidebar').classList.remove('hidden');
+
+            console.log('[live] Config editor initialized successfully');
+          } else {
+            console.warn('[live] No config data received');
+          }
+        } catch (error) {
+          console.error('[live] Failed to load config:', error);
+        }
+      },
+
+      initializeEditor(config) {
+        // Convert config to YAML
+        const yamlText = this.objectToYAML(config, 0);
+
+        // Configure Monaco
+        require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+
+        require(['vs/editor/editor.main'], () => {
+          // Create editor
+          this.configEditor = monaco.editor.create(document.getElementById('config-editor-container'), {
+            value: yamlText,
+            language: 'yaml',
+            theme: 'vs-dark',
+            automaticLayout: true,
+            fontSize: 13,
+            lineNumbers: 'on',
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: 'off',
+            wrappingStrategy: 'advanced',
+            tabSize: 2,
+          });
+
+          console.log('[live] Monaco editor created');
+
+          // Handle apply button
+          document.getElementById('apply-config-btn').onclick = () => this.applyConfigChanges();
+        });
+      },
+
+      async applyConfigChanges() {
+        try {
+          const yamlText = this.configEditor.getValue();
+          console.log('[live] Applying config changes...');
+          console.log('[live] New YAML:', yamlText.substring(0, 200));
+
+          // Parse YAML to JSON (simple conversion - you might want a proper YAML parser)
+          // For now, we'll send the YAML text and let the server handle it
+          const response = await fetch(`${this.baseUrl}/api/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ yaml: yamlText })
+          });
+
+          if (response.ok) {
+            console.log('[live] Config updated successfully');
+            alert('Configuration updated! Changes will apply to the next execution.');
+          } else {
+            console.error('[live] Failed to update config');
+            alert('Failed to update configuration. Check console for details.');
+          }
+        } catch (error) {
+          console.error('[live] Error applying config:', error);
+          alert('Error: ' + error.message);
+        }
+      },
+
+      async start() {
+        if (this.isRunning) return;
+
+        console.log('[live] Sending start signal to server...');
+
+        // Send start signal to server
+        try {
+          const response = await fetch(`${this.baseUrl}/api/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+
+          if (!response.ok) {
+            console.error('[live] Failed to send start signal:', response.statusText);
+            return;
+          }
+
+          console.log('[live] Start signal sent successfully');
+        } catch (error) {
+          console.error('[live] Error sending start signal:', error);
+          return;
+        }
+
+        this.isRunning = true;
+        this.isPaused = false;
+        console.log('[live] Starting execution - beginning HTTP polling');
+
+        // Hide empty state if still visible
+        document.getElementById('empty-state').classList.add('hidden');
+        // Keep config sidebar visible
+
+        // Update UI
+        this.updateStatus('Running...');
+        document.getElementById('btn-start-execution').classList.add('hidden');
+        document.getElementById('btn-pause-execution').classList.remove('hidden');
+        document.getElementById('btn-stop-execution').classList.remove('hidden');
+
+        // Start HTTP polling (every second)
+        this.startPolling();
+      },
+
+      startPolling() {
+        console.log('[live] Starting HTTP polling (1 second interval)');
+
+        // Initial fetch
+        this.pollSpans();
+
+        // Poll every second
+        this.pollingInterval = setInterval(() => {
+          if (!this.isPaused && this.isRunning) {
+            this.pollSpans();
+          }
+        }, 1000);
+      },
+
+      async pollSpans() {
+        try {
+          const response = await fetch(`${this.baseUrl}/api/spans`);
+          const data = await response.json();
+
+          console.log(`[live] Polled ${data.total} total spans (last count: ${this.lastSpanCount})`);
+
+          // Only process if we have new spans
+          if (data.total > this.lastSpanCount) {
+            const newSpans = data.spans.slice(this.lastSpanCount);
+            console.log(`[live] Processing ${newSpans.length} new spans`);
+
+            for (const span of newSpans) {
+              this.handleLiveSpan(span);
+            }
+
+            this.lastSpanCount = data.total;
+          }
+
+          // Also poll for results
+          await this.pollResults();
+        } catch (error) {
+          console.error('[live] Failed to poll spans:', error);
+        }
+      },
+
+      async pollResults() {
+        try {
+          const response = await fetch(`${this.baseUrl}/api/results`);
+          const data = await response.json();
+
+          if (data.results) {
+            console.log('[live] Results received:', data.results);
+            this.displayResults(data.results);
+          }
+        } catch (error) {
+          console.error('[live] Failed to poll results:', error);
+        }
+      },
+
+      displayResults(results) {
+        const resultsTab = document.getElementById('tab-results');
+        if (!resultsTab) return;
+
+        // Build HTML for results
+        let html = '<div style="padding: 16px;">';
+        html += '<h3 style="color: #dcdcaa; margin-bottom: 16px;">Execution Results</h3>';
+
+        // Display each check group
+        for (const [checkName, checkResults] of Object.entries(results)) {
+          html += `<div style="margin-bottom: 24px; border: 1px solid #3e3e42; border-radius: 4px; padding: 16px; background: #1e1e1e;">`;
+          html += `<h4 style="color: #569cd6; margin-bottom: 12px;">📝 ${checkName}</h4>`;
+
+          if (Array.isArray(checkResults)) {
+            for (const result of checkResults) {
+              const statusColor = result.status === 'success' ? '#4ec9b0' :
+                                result.status === 'error' ? '#f48771' : '#dcdcaa';
+              html += `<div style="margin-bottom: 12px; padding: 12px; background: #252526; border-left: 3px solid ${statusColor};">`;
+              html += `<div style="display: flex; justify-content: space-between; margin-bottom: 8px;">`;
+              html += `<strong style="color: ${statusColor};">${result.status?.toUpperCase() || 'UNKNOWN'}</strong>`;
+              if (result.duration) {
+                html += `<span style="color: #858585;">${result.duration}ms</span>`;
+              }
+              html += `</div>`;
+
+              if (result.message) {
+                html += `<div style="color: #cccccc; margin-bottom: 8px;">${this.escapeHtml(result.message)}</div>`;
+              }
+
+              if (result.issues && result.issues.length > 0) {
+                html += `<div style="margin-top: 12px;">`;
+                html += `<strong style="color: #dcdcaa;">Issues (${result.issues.length}):</strong>`;
+                html += `<ul style="margin: 8px 0; padding-left: 20px;">`;
+                for (const issue of result.issues) {
+                  const severityColor = issue.severity === 'critical' ? '#f48771' :
+                                      issue.severity === 'error' ? '#f48771' :
+                                      issue.severity === 'warning' ? '#dcdcaa' : '#858585';
+                  html += `<li style="color: ${severityColor}; margin-bottom: 4px;">`;
+                  html += `[${issue.severity?.toUpperCase() || 'INFO'}] ${this.escapeHtml(issue.title || issue.message || 'No message')}`;
+                  html += `</li>`;
+                }
+                html += `</ul></div>`;
+              }
+
+              html += `</div>`;
+            }
+          }
+
+          html += `</div>`;
+        }
+
+        html += '</div>';
+        resultsTab.innerHTML = html;
+
+        // Auto-switch to results tab after execution completes
+        console.log('[live] Results displayed, total checks:', Object.keys(results).length);
+      },
+
+      escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      },
+
+      stopPolling() {
+        if (this.pollingInterval) {
+          console.log('[live] Stopping HTTP polling');
+          clearInterval(this.pollingInterval);
+          this.pollingInterval = null;
+        }
+      },
+
+      pause() {
+        if (!this.isRunning || this.isPaused) return;
+
+        this.isPaused = true;
+        console.log('[live] Pausing execution');
+
+        // Update UI
+        this.updateStatus('Paused');
+        document.getElementById('btn-pause-execution').classList.add('hidden');
+        document.getElementById('btn-resume-execution').classList.remove('hidden');
+      },
+
+      resume() {
+        if (!this.isPaused) return;
+
+        this.isPaused = false;
+        console.log('[live] Resuming execution');
+
+        // Update UI
+        this.updateStatus('Running...');
+        document.getElementById('btn-resume-execution').classList.add('hidden');
+        document.getElementById('btn-pause-execution').classList.remove('hidden');
+      },
+
+      stop() {
+        if (!this.isRunning) return;
+
+        this.isRunning = false;
+        this.isPaused = false;
+        console.log('[live] Stopping execution');
+
+        // Stop polling
+        this.stopPolling();
+
+        // Update UI
+        this.updateStatus('Stopped');
+        this.showResetButton();
+      },
+
+      reset() {
+        console.log('[live] Resetting execution');
+
+        // Stop polling
+        this.stopPolling();
+
+        // Clear trace
+        currentTrace = null;
+        this.isRunning = false;
+        this.isPaused = false;
+        this.lastSpanCount = 0;
+
+        // Clear visualization
+        const svg = d3.select('#graph-svg');
+        svg.selectAll('*').remove();
+        graphContainer = null; // Reset graph container for fresh start
+        if (simulation) {
+          simulation.stop();
+        }
+
+        // Hide timeline
+        document.getElementById('timeline-container').classList.add('hidden');
+
+        // Reset UI
+        this.updateStatus('Ready - Click Start to begin execution');
+        document.getElementById('btn-reset-execution').classList.add('hidden');
+        document.getElementById('btn-stop-execution').classList.add('hidden');
+        document.getElementById('btn-pause-execution').classList.add('hidden');
+        document.getElementById('btn-resume-execution').classList.add('hidden');
+        document.getElementById('btn-start-execution').classList.remove('hidden');
+      },
+
+      displayConfig(config) {
+        const configPanel = document.getElementById('tab-config');
+        if (!config) {
+          configPanel.innerHTML = '<p style="color: #858585;">No configuration available</p>';
+          return;
+        }
+
+        // Convert config object to readable YAML-like format
+        let configText = '';
+
+        if (typeof config === 'string') {
+          configText = config;
+        } else {
+          // Format as YAML-like text
+          configText = this.objectToYAML(config, 0);
+        }
+
+        configPanel.innerHTML = `
+          <div class="json-viewer" style="padding: 16px;">
+            <h3 style="margin-top: 0; color: #dcdcaa;">Loaded Configuration</h3>
+            <pre style="background: #1e1e1e; padding: 12px; border-radius: 4px; overflow-x: auto;">${configText}</pre>
+          </div>
+        `;
+      },
+
+      objectToYAML(obj, indent = 0) {
+        const spaces = '  '.repeat(indent);
+        let yaml = '';
+
+        for (const [key, value] of Object.entries(obj)) {
+          if (value === null || value === undefined) {
+            yaml += `${spaces}${key}: null\n`;
+          } else if (Array.isArray(value)) {
+            yaml += `${spaces}${key}:\n`;
+            value.forEach(item => {
+              if (typeof item === 'object' && item !== null) {
+                yaml += `${spaces}  -\n`;
+                yaml += this.objectToYAML(item, indent + 2).split('\n').map(line =>
+                  line ? `${spaces}  ${line}` : ''
+                ).join('\n');
+              } else {
+                yaml += `${spaces}  - ${item}\n`;
+              }
+            });
+          } else if (typeof value === 'object') {
+            yaml += `${spaces}${key}:\n`;
+            yaml += this.objectToYAML(value, indent + 1);
+          } else if (typeof value === 'string') {
+            // Quote strings if they contain special characters
+            const needsQuotes = value.includes(':') || value.includes('#') || value.includes('\n');
+            yaml += `${spaces}${key}: ${needsQuotes ? `"${value}"` : value}\n`;
+          } else {
+            yaml += `${spaces}${key}: ${value}\n`;
+          }
+        }
+
+        return yaml;
+      },
+
+      handleLiveSpan(span) {
+        // Add span to current trace
+        if (!currentTrace) {
+          currentTrace = {
+            runId: 'live',
+            traceId: span.traceId,
+            spans: [],
+            tree: null,
+            timeline: [],
+            snapshots: [],
+            metadata: {
+              startTime: new Date().toISOString(),
+              endTime: new Date().toISOString(),
+              duration: 0,
+              totalSpans: 0,
+              totalSnapshots: 0
+            }
+          };
+        }
+
+        currentTrace.spans.push(span);
+
+        // Rebuild tree incrementally
+        currentTrace.tree = buildExecutionTree(currentTrace.spans);
+
+        // Re-visualize with updated data
+        visualizeTrace(currentTrace);
+
+        // Update metadata
+        currentTrace.metadata.totalSpans = currentTrace.spans.length;
+        currentTrace.metadata.endTime = new Date().toISOString();
+
+        this.updateStatus(`Running... (${currentTrace.spans.length} spans)`);
+      },
+
+      handleStateUpdate(data) {
+        // Update node state in real-time
+        console.log('[live] State update for', data.checkId, data.state);
+      },
+
+      updateStatus(text) {
+        document.getElementById('live-status').textContent = text;
+        document.getElementById('file-info').textContent = `Live Mode - ${text}`;
+      },
+
+      showResetButton() {
+        document.getElementById('btn-pause-execution').classList.add('hidden');
+        document.getElementById('btn-resume-execution').classList.add('hidden');
+        document.getElementById('btn-stop-execution').classList.add('hidden');
+        document.getElementById('btn-reset-execution').classList.remove('hidden');
+      }
+    };
+
+    // Check if debug server URL is injected (live mode)
+    console.log('[init] Checking for DEBUG_SERVER_URL:', typeof window.DEBUG_SERVER_URL, window.DEBUG_SERVER_URL);
+    if (typeof window.DEBUG_SERVER_URL !== 'undefined') {
+      console.log('[init] DEBUG_SERVER_URL found, initializing live mode');
+      liveMode.init(window.DEBUG_SERVER_URL);
+    } else {
+      console.log('[init] No DEBUG_SERVER_URL found, not in live mode');
+    }
+  </script>
+</body>
+</html>

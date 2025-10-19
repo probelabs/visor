@@ -61,6 +61,8 @@ export class CLI {
         'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -133,6 +135,8 @@ export class CLI {
           'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
         )
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+        .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -196,6 +200,8 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        debugServer: options.debugServer || false,
+        debugPort: options.debugPort,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -305,6 +311,8 @@ export class CLI {
         'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

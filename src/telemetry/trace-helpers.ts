@@ -10,12 +10,21 @@ export async function withActiveSpan<T>(
   fn: (span: Span) => Promise<T>
 ): Promise<T> {
   const tracer = getTracer();
+  // Check for active parent span BEFORE creating new span
+  const activeCtx = otContext.active();
+  const parentSpan = trace.getSpan(activeCtx);
+  const parentId = parentSpan ? parentSpan.spanContext().spanId : 'NONE';
+  console.log(`[trace] Creating span: ${name} tracer: true parent in context: ${parentId}`);
   return await new Promise<T>((resolve, reject) => {
     const callback = async (span: Span) => {
+      const ctx = span.spanContext();
+      console.log(`[trace] Span callback invoked for: [trace_id=${ctx.traceId} span_id=${ctx.spanId}] ${name} span: true`);
       try {
         const res = await fn(span);
+        console.log('[trace] Span execution completed for:', name);
         resolve(res);
       } catch (err) {
+        console.log('[trace] Span execution errored for:', name, err);
         try {
           if (err instanceof Error) span.recordException(err);
           span.setStatus({ code: SpanStatusCode.ERROR });
@@ -23,15 +32,14 @@ export async function withActiveSpan<T>(
         reject(err);
       } finally {
         try {
+          console.log('[trace] Ending span:', name);
           span.end();
         } catch {}
       }
     };
-    if (attrs) {
-      tracer.startActiveSpan(name, { attributes: attrs as Attributes }, callback);
-    } else {
-      tracer.startActiveSpan(name, callback as (span: Span) => void);
-    }
+    // startActiveSpan should use the current active context to set parent automatically
+    const options = attrs ? { attributes: attrs as Attributes } : {};
+    tracer.startActiveSpan(name, options, callback as any);
   });
 }
 

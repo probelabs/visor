@@ -10,6 +10,12 @@ import {
   detectLocalMode,
   resolveAssociationFromEvent,
 } from '../utils/author-permissions';
+import { trace, context as otContext } from '@opentelemetry/api';
+import {
+  captureCheckInputContext,
+  captureCheckOutput,
+  captureTransformJS,
+} from '../telemetry/state-capture';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -100,6 +106,16 @@ export class CommandCheckProvider extends CheckProvider {
     logger.debug(
       `🔧 Debug: Template outputs keys: ${Object.keys(templateContext.outputs || {}).join(', ')}`
     );
+
+    // Capture input context in active OTEL span
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        captureCheckInputContext(span, templateContext);
+      }
+    } catch (err) {
+      // Ignore telemetry errors
+    }
 
     try {
       // Render the command with Liquid templates if needed
@@ -834,6 +850,19 @@ ${bodyWithReturn}
         ...(content ? { content } : {}),
         ...promoted,
       } as ReviewSummary;
+
+      // Capture output and transform details in active OTEL span
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          captureCheckOutput(span, outputForDependents);
+          if (transformJs && output !== finalOutput) {
+            captureTransformJS(span, transformJs, output, finalOutput);
+          }
+        }
+      } catch (err) {
+        // Ignore telemetry errors
+      }
 
       // Attach raw transform object only when transform_js was used (avoid polluting plain command outputs)
       try {

@@ -12,6 +12,10 @@ import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withActiveSpan } from './telemetry/trace-helpers';
+import { DebugVisualizerServer } from './debug-visualizer/ws-server';
+import { DebugSpanExporter } from './debug-visualizer/debug-span-exporter';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import open from 'open';
 
 /**
  * Handle the validate subcommand
@@ -88,6 +92,9 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
+  // Declare debugServer at function scope so it's accessible in catch/finally blocks
+  let debugServer: DebugVisualizerServer | null = null;
+
   try {
     const cli = new CLI();
     const configManager = new ConfigManager();
@@ -156,7 +163,7 @@ export async function main(): Promise<void> {
       // If anything goes wrong reading versions, do not block execution
     }
 
-    // Load configuration
+    // Load configuration FIRST (before starting debug server)
     let config;
     if (options.configPath) {
       try {
@@ -201,6 +208,37 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Start debug server if requested (AFTER config is loaded)
+    if (options.debugServer) {
+      const port = options.debugPort || 3456;
+
+      console.log(`🔍 Starting debug visualizer on port ${port}...`);
+
+      debugServer = new DebugVisualizerServer();
+      await debugServer.start(port);
+
+      // Set config on server BEFORE opening browser
+      debugServer.setConfig(config);
+
+      // Force JSON output when debug server is active
+      options.output = 'json';
+      process.env.VISOR_OUTPUT_FORMAT = 'json';
+      logger.configure({
+        outputFormat: 'json',
+        debug: options.debug,
+        verbose: options.verbose,
+        quiet: true, // Suppress console output when debug server is active
+      });
+
+      console.log(`✅ Debug visualizer running at http://localhost:${port}`);
+      console.log(`   Opening browser...`);
+
+      // Open browser
+      await open(`http://localhost:${port}`);
+
+      console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
+    }
+
     // Initialize telemetry (env or config)
     if ((config as any)?.telemetry) {
       const t = (config as any).telemetry as {
@@ -210,15 +248,20 @@ export async function main(): Promise<void> {
         tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
       };
       await initTelemetry({
-        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' ? true : !!t?.enabled,
+        // Enable if: env var is true, OR config enables it, OR debugServer is active
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled || !!debugServer,
         sink:
           (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
         file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
         autoInstrument: !!t?.tracing?.auto_instrumentations,
         traceReport: !!t?.tracing?.trace_report?.enabled,
+        debugServer: debugServer || undefined,
       });
     } else {
-      await initTelemetry();
+      await initTelemetry({
+        enabled: !!debugServer, // Explicitly enable when debugServer is active
+        debugServer: debugServer || undefined,
+      });
     }
     // Ensure a single NDJSON fallback file per run (for serverless/file sink)
     try {
@@ -270,11 +313,15 @@ export async function main(): Promise<void> {
     const logFn = (msg: string) => logger.info(msg);
 
     // Determine if we should include code context (diffs)
+    // Skip code context when debug server is active (not needed for debugging)
     // In CLI mode (local), we do smart detection. PR mode always includes context.
     const isPRContext = false; // This is CLI mode, not GitHub Action
     let includeCodeContext = false;
 
-    if (isPRContext) {
+    if (options.debugServer) {
+      // Skip code context analysis when debug server is active
+      includeCodeContext = false;
+    } else if (isPRContext) {
       // ALWAYS include full context in PR/GitHub Action mode
       includeCodeContext = true;
       logFn('📝 Code context: ENABLED (PR context - always included)');
@@ -300,15 +347,20 @@ export async function main(): Promise<void> {
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
 
     // Determine if we should analyze branch diff
+    // Skip git diff analysis when debug server is active (not needed for debugging execution flow)
     // Auto-enable when: --analyze-branch-diff flag OR code-review schema detected
     const hasCodeReviewSchema = checksToRun.some(
       check => config.checks?.[check]?.schema === 'code-review'
     );
-    const analyzeBranchDiff = options.analyzeBranchDiff || hasCodeReviewSchema;
+    const analyzeBranchDiff = options.debugServer
+      ? false  // Skip git diff when debug server is active
+      : (options.analyzeBranchDiff || hasCodeReviewSchema);
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
     try {
-      logger.step('Analyzing repository');
+      if (!options.debugServer) {
+        logger.step('Analyzing repository');
+      }
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff);
     } catch (error) {
       logger.error(
@@ -400,6 +452,13 @@ export async function main(): Promise<void> {
       logger.verbose(
         `🎯 Event filtering: DISABLED (running all checks regardless of event triggers)`
       );
+    }
+
+    // Wait for user to click "Start" if debug server is running
+    if (debugServer) {
+      await debugServer.waitForStartSignal();
+      // Clear spans from previous run before starting new execution
+      debugServer.clearSpans();
     }
 
     // Execute checks with proper parameters
@@ -519,6 +578,17 @@ export async function main(): Promise<void> {
       output = OutputFormatters.formatAsTable(analysisResult, { showDetails: true });
     }
 
+    // Send results to debug server if active
+    if (debugServer) {
+      try {
+        const resultsData = JSON.parse(output);
+        debugServer.setResults(resultsData);
+        console.log('✅ Results sent to debug visualizer');
+      } catch (parseErr) {
+        console.error('Failed to parse results for debug server:', parseErr);
+      }
+    }
+
     // Emit or save output
     if (options.outputFile) {
       try {
@@ -532,7 +602,8 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
-    } else {
+    } else if (!debugServer) {
+      // Only print to console if debug server is not active
       console.log(output);
     }
 
@@ -601,6 +672,25 @@ export async function main(): Promise<void> {
         }
       }
     } catch {}
+    // If debug server is running, keep the process alive for re-runs
+    if (debugServer) {
+      // Don't clear spans - let the UI display them first
+      // Spans will be cleared on next execution start
+      // debugServer.clearSpans();
+
+      console.log('✅ Execution completed. Debug server still running at http://localhost:' + debugServer.getPort());
+      console.log('   Press Ctrl+C to exit');
+
+      // Flush telemetry but don't shut down
+      try {
+        await flushNdjson();
+      } catch {}
+
+      // Keep process alive and return without exiting
+      return;
+    }
+
+    // Normal exit path (no debug server)
     try {
       await flushNdjson();
     } catch {}
@@ -646,6 +736,26 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
+
+    // If debug server is running, keep it alive even after error
+    if (debugServer) {
+      // Don't clear spans - let the UI display them first
+      // Spans will be cleared on next execution start
+      // debugServer.clearSpans();
+
+      console.log('⚠️  Execution failed. Debug server still running at http://localhost:' + debugServer.getPort());
+      console.log('   Press Ctrl+C to exit');
+
+      // Flush telemetry but don't shut down
+      try {
+        await shutdownTelemetry();
+      } catch {}
+
+      // Keep process alive and return without exiting
+      return;
+    }
+
+    // Normal error exit path (no debug server)
     try {
       await shutdownTelemetry();
     } catch {}

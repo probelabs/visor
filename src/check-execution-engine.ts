@@ -27,8 +27,15 @@ import {
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
-import { addEvent } from './telemetry/trace-helpers';
+import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
+import { trace, context as otContext } from '@opentelemetry/api';
+import {
+  captureForEachState,
+  captureStateSnapshot,
+  captureCheckInputContext,
+  captureCheckOutput,
+} from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -588,7 +595,20 @@ export class CheckExecutionEngine {
             'visor.provider.type': providerConfig.type || 'ai',
           });
         } catch {}
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+
+        // Execute check within a span for telemetry
+        const res = await withActiveSpan(
+          `visor.check.${checkName}`,
+          {
+            'visor.check.id': checkName,
+            'visor.check.type': providerConfig.type || 'ai',
+            'visor.check.attempt': attempt,
+          },
+          async () => {
+            return await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+          }
+        );
+
         try {
           currentRouteOutput = (res as any)?.output;
         } catch {}
@@ -2901,6 +2921,17 @@ export class CheckExecutionEngine {
                     []
                   );
                 } catch {}
+
+                // Capture forEach state in active OTEL span
+                try {
+                  const span = trace.getSpan(otContext.active());
+                  if (span) {
+                    captureForEachState(span, forEachItems, itemIndex, item);
+                  }
+                } catch (err) {
+                  // Ignore telemetry errors
+                }
+
                 // Create modified dependency results with current item
                 // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
                 const forEachDependencyResults = new Map<string, ReviewSummary>();
@@ -3955,6 +3986,24 @@ export class CheckExecutionEngine {
           }
 
           results.set(checkName, reviewResult);
+
+          // Capture state snapshot after check completion
+          try {
+            const span = trace.getSpan(otContext.active());
+            if (span) {
+              const allOutputs: Record<string, unknown> = {};
+              results.forEach((result, name) => {
+                if ((result as any).output !== undefined) {
+                  allOutputs[name] = (result as any).output;
+                }
+              });
+              const memoryStore = MemoryStore.getInstance();
+              const memoryData = await memoryStore.getAll();
+              captureStateSnapshot(span, checkName, allOutputs, memoryData);
+            }
+          } catch (err) {
+            // Ignore telemetry errors
+          }
         } else {
           // Store error result for dependency tracking
           const errorSummary: ReviewSummary = {

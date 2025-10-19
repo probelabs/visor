@@ -48,6 +48,10 @@ export interface CliOptions {
   analyzeBranchDiff?: boolean;
   /** Simulate GitHub event type for event-based filtering */
   event?: string;
+  /** Enable debug visualizer server for live debugging */
+  debugServer?: boolean;
+  /** Port for debug visualizer server (default: 3456) */
+  debugPort?: number;
 }
 
 /**
