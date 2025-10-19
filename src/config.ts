@@ -425,14 +425,16 @@ export class ConfigManager {
     if (!config.checks && !config.steps) {
       errors.push({
         field: 'checks/steps',
-        message: 'Missing required field: either "checks" or "steps" must be defined',
+        message:
+          'Missing required field: either "checks" or "steps" must be defined. "steps" is recommended for new configurations.',
       });
     }
 
-    // Use checks for validation (normalization ensures both are present if either exists)
-    if (config.checks) {
+    // Use normalized checks for validation (both should be present after normalization)
+    const checksToValidate = config.checks || config.steps;
+    if (checksToValidate) {
       // Validate each check configuration
-      for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+      for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
         // Default type to 'ai' if not specified
         if (!checkConfig.type) {
           checkConfig.type = 'ai';

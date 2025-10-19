@@ -153,7 +153,7 @@ output:
       mockFs.readFileSync.mockReturnValue(configWithoutChecks);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'either "checks" or "steps" must be defined'
+        'either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
       );
     });
 

@@ -147,7 +147,7 @@ describe('Config - Steps/Checks Backward Compatibility', () => {
       fs.writeFileSync(configPath, yaml.dump(configContent));
 
       await expect(configManager.loadConfig(configPath)).rejects.toThrow(
-        'either "checks" or "steps" must be defined'
+        'either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
       );
     });
   });
