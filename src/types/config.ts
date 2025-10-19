@@ -191,7 +191,8 @@ export type ConfigCheckType =
   | 'log'
   | 'memory'
   | 'github'
-  | 'claude-code';
+  | 'claude-code'
+  | 'mcp';
 
 /**
  * Valid event triggers for checks
@@ -402,6 +403,17 @@ export interface CheckConfig {
   op?: string;
   /** Values for GitHub operations (can be array or single value) */
   values?: string[] | string;
+  /**
+   * MCP provider specific options (optional, only used when type === 'mcp').
+   */
+  /** Transport type for MCP: stdio (default), sse (legacy), or http (streamable HTTP) */
+  transport?: 'stdio' | 'sse' | 'http';
+  /** Arguments to pass to the MCP method (supports Liquid templates) */
+  methodArgs?: Record<string, unknown>;
+  /** Transform template for method arguments (Liquid) */
+  argsTransform?: string;
+  /** Session ID for HTTP transport (optional, server may generate one) */
+  sessionId?: string;
 }
 
 /**

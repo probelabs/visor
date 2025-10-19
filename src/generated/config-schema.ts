@@ -345,6 +345,24 @@ export const configSchema = {
           ],
           description: 'Values for GitHub operations (can be array or single value)',
         },
+        transport: {
+          type: 'string',
+          enum: ['stdio', 'sse', 'http'],
+          description:
+            'Transport type for MCP: stdio (default), sse (legacy), or http (streamable HTTP)',
+        },
+        methodArgs: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Arguments to pass to the MCP method (supports Liquid templates)',
+        },
+        argsTransform: {
+          type: 'string',
+          description: 'Transform template for method arguments (Liquid)',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'Session ID for HTTP transport (optional, server may generate one)',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',
@@ -365,6 +383,7 @@ export const configSchema = {
         'memory',
         'github',
         'claude-code',
+        'mcp',
       ],
       description: 'Valid check types in configuration',
     },
