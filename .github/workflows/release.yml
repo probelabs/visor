@@ -38,7 +38,11 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Run tests
         run: npm test
@@ -99,7 +103,10 @@ jobs:
 
       - name: Install dependencies and build
         run: |
-          npm ci
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
           npm run build
 
       - name: Set version variables
@@ -231,7 +238,11 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Workaround for npm bug with rollup optional dependencies
+          # https://github.com/npm/cli/issues/4828
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Build package
         run: npm run build
