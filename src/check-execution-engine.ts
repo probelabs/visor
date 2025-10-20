@@ -19,13 +19,9 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
-<<<<<<< HEAD
 import { ExecutionJournal, ScopePath, ContextView } from './snapshot-store';
-import { VisorConfig, OnFailConfig, OnSuccessConfig, OnFinishConfig } from './types/config';
-=======
 import { createSecureSandbox, compileAndRun } from './utils/sandbox';
-import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
->>>>>>> origin/main
+import { VisorConfig, OnFailConfig, OnSuccessConfig, OnFinishConfig } from './types/config';
 import {
   createPermissionHelpers,
   detectLocalMode,
@@ -1206,7 +1202,6 @@ export class CheckExecutionEngine {
           ),
           event: eventObj,
         };
-<<<<<<< HEAD
         const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code = `${prelude}\n${expr}`;
         const result = compileAndRun<unknown>(
@@ -1216,17 +1211,6 @@ export class CheckExecutionEngine {
           { injectLog: false, wrapFunction: true }
         );
         const res = Array.isArray(result) ? result : result ? [result] : [];
-=======
-        const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
-        const code = `${prelude}\n${expr}`;
-        const result = compileAndRun<unknown>(
-          sandbox,
-          code,
-          { scope },
-          { injectLog: false, wrapFunction: true }
-        );
-        const res = Array.isArray(result) ? result : result ? [result] : [];
->>>>>>> origin/main
         if (debug) {
           log(`🔧 Debug: run_js evaluated → [${this.redact(res)}]`);
         }
@@ -1290,7 +1274,6 @@ export class CheckExecutionEngine {
           ),
           event: eventObj,
         };
-<<<<<<< HEAD
         const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code2 = `${prelude2}\n${expr}`;
         const res = compileAndRun<string | null>(
@@ -1299,16 +1282,6 @@ export class CheckExecutionEngine {
           { scope },
           { injectLog: false, wrapFunction: true }
         );
-=======
-        const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
-        const code2 = `${prelude2}\n${expr}`;
-        const res = compileAndRun<string | null>(
-          sandbox,
-          code2,
-          { scope },
-          { injectLog: false, wrapFunction: true }
-        );
->>>>>>> origin/main
         if (debug) {
           log(`🔧 Debug: goto_js evaluated → ${this.redact(res)}`);
         }
