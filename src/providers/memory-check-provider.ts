@@ -6,6 +6,7 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox } from '../utils/sandbox';
 
 /**
  * Memory operation types
@@ -39,71 +40,7 @@ export class MemoryCheckProvider extends CheckProvider {
   /**
    * Create a secure sandbox for JavaScript execution
    */
-  private createSecureSandbox(): Sandbox {
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      Math,
-      console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
-      },
-    };
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-
-    // Allow array methods
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-      'push',
-      'pop',
-      'shift',
-      'unshift',
-      'sort',
-      'reverse',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    // Allow string methods
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-      'match',
-      'padStart',
-      'padEnd',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    // Allow object methods
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    return new Sandbox({
-      globals,
-      prototypeWhitelist,
-    });
-  }
+  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
 
   getName(): string {
     return 'memory';

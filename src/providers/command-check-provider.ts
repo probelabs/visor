@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import {
@@ -29,16 +30,7 @@ export class CommandCheckProvider extends CheckProvider {
     // Lazily create sandbox only when transform_js is used
   }
 
-  private createSecureSandbox(): Sandbox {
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      console: console,
-      JSON: JSON,
-    };
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-    return new Sandbox({ globals, prototypeWhitelist });
-  }
+  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
 
   getName(): string {
     return 'command';

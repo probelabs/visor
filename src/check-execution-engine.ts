@@ -19,6 +19,7 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox } from './utils/sandbox';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
 import {
   createPermissionHelpers,
@@ -236,14 +237,7 @@ export class CheckExecutionEngine {
    */
   private getRoutingSandbox(): Sandbox {
     if (this.routingSandbox) return this.routingSandbox;
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      Math,
-      JSON,
-      console: { log: console.log },
-    };
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-    this.routingSandbox = new Sandbox({ globals, prototypeWhitelist });
+    this.routingSandbox = createSecureSandbox();
     return this.routingSandbox;
   }
 

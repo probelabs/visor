@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 
 export class GitHubOpsProvider extends CheckProvider {
@@ -159,11 +160,6 @@ export class GitHubOpsProvider extends CheckProvider {
       try {
         // Evaluate user-provided value_js in a restricted sandbox (no process/global exposure)
         const sandbox = this.getSecureSandbox();
-        const code = `
-          const __fn = () => {\n${cfg.value_js}\n};
-          return __fn();
-        `;
-        const exec = sandbox.compile(code);
 
         // Build dependency outputs map (mirrors Liquid context construction)
         const depOutputs: Record<string, unknown> = {};
@@ -174,31 +170,12 @@ export class GitHubOpsProvider extends CheckProvider {
           }
         }
 
-        // Provide a lightweight logger to sandboxed scripts
-        const sandboxLog = (...args: unknown[]) => {
-          try {
-            const msg = args
-              .map(a =>
-                typeof a === 'string'
-                  ? a
-                  : (() => {
-                      try {
-                        return JSON.stringify(a);
-                      } catch {
-                        return String(a);
-                      }
-                    })()
-              )
-              .join(' ');
-            // Use stderr to surface clearly in CI logs
-            // Prefix to make search/filter easier
-            console.error(`[github:value_js] ${msg}`);
-          } catch {
-            // Best-effort logging; ignore failures
-          }
-        };
-
-        const res = exec({ pr: prInfo, values, outputs: depOutputs, log: sandboxLog });
+        const res = compileAndRun<unknown>(
+          sandbox,
+          cfg.value_js,
+          { pr: prInfo, values, outputs: depOutputs },
+          { injectLog: true, wrapFunction: true, logPrefix: '[github:value_js]' }
+        );
         if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
@@ -294,48 +271,7 @@ export class GitHubOpsProvider extends CheckProvider {
    */
   private getSecureSandbox(): Sandbox {
     if (this.sandbox) return this.sandbox;
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      Math,
-    } as Record<string, unknown>;
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    this.sandbox = new Sandbox({ globals, prototypeWhitelist });
+    this.sandbox = createSecureSandbox();
     return this.sandbox;
   }
 }
