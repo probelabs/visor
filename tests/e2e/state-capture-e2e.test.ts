@@ -18,14 +18,14 @@ async function executeVisorCLI(
     const stdout = execFileSync('node', [cliPath, ...args], {
       encoding: 'utf-8',
       stdio: 'pipe',
-      env: options?.env || process.env
+      env: options?.env || process.env,
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (error: any) {
     return {
       stdout: error.stdout || '',
       stderr: error.stderr || error.message,
-      exitCode: error.status || 1
+      exitCode: error.status || 1,
     };
   }
 }
@@ -33,7 +33,7 @@ async function executeVisorCLI(
 async function cleanupTestTraces(dir: string): Promise<void> {
   try {
     await fs.rm(dir, { recursive: true, force: true });
-  } catch (error) {
+  } catch {
     // Ignore errors if directory doesn't exist
   }
 }
@@ -41,6 +41,28 @@ async function cleanupTestTraces(dir: string): Promise<void> {
 describe('State Capture E2E', () => {
   const testOutputDir = path.join(process.cwd(), 'output', 'traces-test-state-capture');
   const configFile = path.join(__dirname, '../fixtures/state-capture-test.yaml');
+
+  async function waitForNdjson(
+    dir: string,
+    timeoutMs = 5000
+  ): Promise<{ path: string; content: string }> {
+    const start = Date.now();
+    // Ensure directory exists to avoid ENOENT when polling
+    await fs.mkdir(dir, { recursive: true });
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const files = await fs.readdir(dir);
+        const traceFile = files.find(f => f.endsWith('.ndjson'));
+        if (traceFile) {
+          const p = path.join(dir, traceFile);
+          const content = await fs.readFile(p, 'utf-8');
+          if (content.trim().length > 0) return { path: p, content };
+        }
+      } catch {}
+      await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error(`Timed out waiting for NDJSON in ${dir}`);
+  }
 
   beforeAll(async () => {
     // Create test config
@@ -84,14 +106,10 @@ checks:
   });
 
   it('should capture input context in spans', async () => {
-    const result = await executeVisorCLI([
-      '--config',
-      configFile,
-      '--check',
-      'simple-command',
-    ], {
+    const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
         ...process.env,
+        VISOR_E2E_FORCE_RUN: 'true',
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
@@ -100,15 +118,8 @@ checks:
 
     expect(result.exitCode).toBe(0);
 
-    // Read the NDJSON trace file
-    const files = await fs.readdir(testOutputDir);
-    const traceFile = files.find(f => f.endsWith('.ndjson'));
-    expect(traceFile).toBeDefined();
-
-    const traceContent = await fs.readFile(
-      path.join(testOutputDir, traceFile!),
-      'utf-8'
-    );
+    // Read the NDJSON trace file (wait for writer flush)
+    const { content: traceContent } = await waitForNdjson(testOutputDir);
 
     const spans = traceContent
       .trim()
@@ -129,14 +140,10 @@ checks:
   });
 
   it('should capture output in spans', async () => {
-    const result = await executeVisorCLI([
-      '--config',
-      configFile,
-      '--check',
-      'simple-command',
-    ], {
+    const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
         ...process.env,
+        VISOR_E2E_FORCE_RUN: 'true',
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
@@ -145,21 +152,14 @@ checks:
 
     expect(result.exitCode).toBe(0);
 
-    const files = await fs.readdir(testOutputDir);
-    const traceFile = files.find(f => f.endsWith('.ndjson'));
-    const traceContent = await fs.readFile(
-      path.join(testOutputDir, traceFile!),
-      'utf-8'
-    );
+    const { content: traceContent } = await waitForNdjson(testOutputDir);
 
     const spans = traceContent
       .trim()
       .split('\n')
       .map(line => JSON.parse(line));
 
-    const spanWithOutput = spans.find(
-      s => s.attributes && s.attributes['visor.check.output']
-    );
+    const spanWithOutput = spans.find(s => s.attributes && s.attributes['visor.check.output']);
 
     expect(spanWithOutput).toBeDefined();
 
@@ -168,14 +168,10 @@ checks:
   });
 
   it('should capture transform_js execution', async () => {
-    const result = await executeVisorCLI([
-      '--config',
-      configFile,
-      '--check',
-      'with-transform',
-    ], {
+    const result = await executeVisorCLI(['--config', configFile, '--check', 'with-transform'], {
       env: {
         ...process.env,
+        VISOR_E2E_FORCE_RUN: 'true',
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
@@ -184,21 +180,14 @@ checks:
 
     expect(result.exitCode).toBe(0);
 
-    const files = await fs.readdir(testOutputDir);
-    const traceFile = files.find(f => f.endsWith('.ndjson'));
-    const traceContent = await fs.readFile(
-      path.join(testOutputDir, traceFile!),
-      'utf-8'
-    );
+    const { content: traceContent } = await waitForNdjson(testOutputDir);
 
     const spans = traceContent
       .trim()
       .split('\n')
       .map(line => JSON.parse(line));
 
-    const spanWithTransform = spans.find(
-      s => s.attributes && s.attributes['visor.transform.code']
-    );
+    const spanWithTransform = spans.find(s => s.attributes && s.attributes['visor.transform.code']);
 
     expect(spanWithTransform).toBeDefined();
     expect(spanWithTransform!.attributes['visor.transform.code']).toContain('map');
@@ -208,31 +197,32 @@ checks:
 
   it('should run acceptance test successfully', async () => {
     // This is the acceptance test from the RFC Milestone 1
-    const result = await executeVisorCLI([
-      '--config',
-      configFile,
-      '--check',
-      'all',
-    ], {
-      env: {
-        ...process.env,
-        VISOR_TELEMETRY_ENABLED: 'true',
-        VISOR_TELEMETRY_SINK: 'file',
-        VISOR_TRACE_DIR: testOutputDir,
-      },
-    });
+    const result = await executeVisorCLI(
+      [
+        '--config',
+        configFile,
+        '--check',
+        'simple-command',
+        '--check',
+        'with-transform',
+        '--check',
+        'forEach-test',
+      ],
+      {
+        env: {
+          ...process.env,
+          VISOR_E2E_FORCE_RUN: 'true',
+          VISOR_TELEMETRY_ENABLED: 'true',
+          VISOR_TELEMETRY_SINK: 'file',
+          VISOR_TRACE_DIR: testOutputDir,
+        },
+      }
+    );
 
     expect(result.exitCode).toBe(0);
 
     // Verify NDJSON contains enhanced attributes
-    const files = await fs.readdir(testOutputDir);
-    const traceFile = files.find(f => f.endsWith('.ndjson'));
-    expect(traceFile).toBeDefined();
-
-    const traceContent = await fs.readFile(
-      path.join(testOutputDir, traceFile!),
-      'utf-8'
-    );
+    const { content: traceContent } = await waitForNdjson(testOutputDir);
 
     const spans = traceContent
       .trim()
@@ -242,15 +232,11 @@ checks:
 
     // M1 Success Criteria:
     // ✅ At least one span has `visor.check.input.context` attribute
-    const hasInputContext = spans.some(
-      s => s.attributes['visor.check.input.context']
-    );
+    const hasInputContext = spans.some(s => s.attributes['visor.check.input.context']);
     expect(hasInputContext).toBe(true);
 
     // ✅ At least one span has `visor.check.output` attribute
-    const hasOutput = spans.some(
-      s => s.attributes['visor.check.output']
-    );
+    const hasOutput = spans.some(s => s.attributes['visor.check.output']);
     expect(hasOutput).toBe(true);
 
     console.log('✅ M1 Acceptance Test Passed!');

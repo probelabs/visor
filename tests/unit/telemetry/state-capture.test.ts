@@ -1,14 +1,10 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import { Span, SpanStatusCode } from '@opentelemetry/api';
+import { Span } from '@opentelemetry/api';
 import {
   captureCheckInputContext,
   captureCheckOutput,
   captureForEachState,
-  captureLiquidEvaluation,
   captureTransformJS,
-  captureProviderCall,
-  captureConditionalEvaluation,
-  captureRoutingDecision,
   captureStateSnapshot,
 } from '../../../src/telemetry/state-capture';
 
@@ -39,7 +35,10 @@ describe('State Capture', () => {
 
       captureCheckInputContext(mockSpan, context);
 
-      expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.check.input.keys', 'pr,outputs,env');
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+        'visor.check.input.keys',
+        'pr,outputs,env'
+      );
       expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.check.input.count', 3);
       expect(mockSpan.setAttribute).toHaveBeenCalledWith(
         'visor.check.input.context',
@@ -125,10 +124,7 @@ describe('State Capture', () => {
 
       expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.foreach.total', 3);
       expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.foreach.index', 1);
-      expect(mockSpan.setAttribute).toHaveBeenCalledWith(
-        'visor.foreach.current_item',
-        '"item2"'
-      );
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.foreach.current_item', '"item2"');
       expect(mockSpan.setAttribute).toHaveBeenCalledWith(
         'visor.foreach.items',
         JSON.stringify(items)
@@ -159,9 +155,18 @@ describe('State Capture', () => {
       captureTransformJS(mockSpan, code, input, output);
 
       expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.transform.code', code);
-      expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.transform.code.length', code.length);
-      expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.transform.input', JSON.stringify(input));
-      expect(mockSpan.setAttribute).toHaveBeenCalledWith('visor.transform.output', JSON.stringify(output));
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+        'visor.transform.code.length',
+        code.length
+      );
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+        'visor.transform.input',
+        JSON.stringify(input)
+      );
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+        'visor.transform.output',
+        JSON.stringify(output)
+      );
     });
 
     it('should truncate long code', () => {

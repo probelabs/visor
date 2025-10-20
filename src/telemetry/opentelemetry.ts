@@ -38,7 +38,8 @@ export function resetTelemetryForTesting(): void {
 
 export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<void> {
   // Enable telemetry if explicitly enabled, env var is set, OR if debugServer is provided
-  const enabled = !!opts.enabled || !!opts.debugServer || process.env.VISOR_TELEMETRY_ENABLED === 'true';
+  const enabled =
+    !!opts.enabled || !!opts.debugServer || process.env.VISOR_TELEMETRY_ENABLED === 'true';
   // Avoid writing to stdout to keep CLI JSON output clean
   if (!enabled || sdk) return;
 
@@ -58,10 +59,7 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     const resourcesModule = require('@opentelemetry/resources');
     const semanticConventions = require('@opentelemetry/semantic-conventions');
 
-    const {
-      BatchSpanProcessor,
-      ConsoleSpanExporter,
-    } = require('@opentelemetry/sdk-trace-base');
+    const { BatchSpanProcessor, ConsoleSpanExporter } = require('@opentelemetry/sdk-trace-base');
 
     const sink = (opts.sink || (process.env.VISOR_TELEMETRY_SINK as string) || 'file') as
       | 'otlp'
@@ -214,7 +212,6 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     let spanProcessor: SpanProcessor;
     if (processors.length > 1) {
       // Create a simple composite processor
-      const { ReadableSpan } = require('@opentelemetry/sdk-trace-base');
       spanProcessor = {
         onStart: (span: any, context: any) => {
           processors.forEach(p => p.onStart?.(span, context));

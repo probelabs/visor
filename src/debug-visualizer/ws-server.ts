@@ -65,7 +65,7 @@ export class DebugVisualizerServer {
         resolve();
       });
 
-      this.httpServer!.on('error', (error) => {
+      this.httpServer!.on('error', error => {
         reject(error);
       });
     });
@@ -81,7 +81,7 @@ export class DebugVisualizerServer {
 
     // Close HTTP server
     if (this.httpServer) {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>(resolve => {
         this.httpServer!.close(() => {
           console.log('[debug-server] HTTP server closed');
           resolve();
@@ -103,7 +103,7 @@ export class DebugVisualizerServer {
     console.log('[debug-server] Waiting for user to click "Start Execution"...');
 
     // Create a promise that will be resolved when /api/start is called
-    this.startExecutionPromise = new Promise<void>((resolve) => {
+    this.startExecutionPromise = new Promise<void>(resolve => {
       this.startExecutionResolver = () => {
         if (this.startExecutionTimeout) {
           clearTimeout(this.startExecutionTimeout);
@@ -140,7 +140,9 @@ export class DebugVisualizerServer {
     this.executionState = 'idle';
     // Clear any pause gate
     if (this.pauseResolver) {
-      try { this.pauseResolver(); } catch {}
+      try {
+        this.pauseResolver();
+      } catch {}
       this.pauseResolver = null;
       this.pausePromise = null;
     }
@@ -188,14 +190,16 @@ export class DebugVisualizerServer {
     if (url === '/api/spans') {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({
-        spans: this.spans,
-        total: this.spans.length,
-        timestamp: new Date().toISOString(),
-        executionState: this.executionState
-      }));
+      res.end(
+        JSON.stringify({
+          spans: this.spans,
+          total: this.spans.length,
+          timestamp: new Date().toISOString(),
+          executionState: this.executionState,
+        })
+      );
       return;
     }
 
@@ -203,12 +207,14 @@ export class DebugVisualizerServer {
     if (url === '/api/config' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({
-        config: this.config,
-        timestamp: new Date().toISOString()
-      }));
+      res.end(
+        JSON.stringify({
+          config: this.config,
+          timestamp: new Date().toISOString(),
+        })
+      );
       return;
     }
 
@@ -233,13 +239,18 @@ export class DebugVisualizerServer {
 
           res.writeHead(200, {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
+            'Access-Control-Allow-Origin': '*',
           });
-          res.end(JSON.stringify({ success: true, message: 'Config update received (parsing not yet implemented)' }));
-        } catch (error) {
+          res.end(
+            JSON.stringify({
+              success: true,
+              message: 'Config update received (parsing not yet implemented)',
+            })
+          );
+        } catch {
           res.writeHead(400, {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
+            'Access-Control-Allow-Origin': '*',
           });
           res.end(JSON.stringify({ success: false, error: 'Invalid request' }));
         }
@@ -251,15 +262,17 @@ export class DebugVisualizerServer {
     if (url === '/api/status') {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({
-        isRunning: this.isRunning,
-        executionState: this.executionState,
-        isPaused: this.executionState === 'paused',
-        spanCount: this.spans.length,
-        timestamp: new Date().toISOString()
-      }));
+      res.end(
+        JSON.stringify({
+          isRunning: this.isRunning,
+          executionState: this.executionState,
+          isPaused: this.executionState === 'paused',
+          spanCount: this.spans.length,
+          timestamp: new Date().toISOString(),
+        })
+      );
       return;
     }
 
@@ -267,13 +280,15 @@ export class DebugVisualizerServer {
     if (url === '/api/results') {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({
-        results: this.results,
-        timestamp: new Date().toISOString(),
-        executionState: this.executionState
-      }));
+      res.end(
+        JSON.stringify({
+          results: this.results,
+          timestamp: new Date().toISOString(),
+          executionState: this.executionState,
+        })
+      );
       return;
     }
 
@@ -281,7 +296,7 @@ export class DebugVisualizerServer {
     if (url === '/api/start' && req.method === 'POST') {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
       console.log('[debug-server] Received start signal from UI');
 
@@ -303,7 +318,7 @@ export class DebugVisualizerServer {
       }
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
       res.end(JSON.stringify({ success: true }));
       return;
@@ -313,13 +328,15 @@ export class DebugVisualizerServer {
     if (url === '/api/resume' && req.method === 'POST') {
       this.executionState = 'running';
       if (this.pauseResolver) {
-        try { this.pauseResolver(); } catch {}
+        try {
+          this.pauseResolver();
+        } catch {}
         this.pauseResolver = null;
         this.pausePromise = null;
       }
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
       res.end(JSON.stringify({ success: true }));
       return;
@@ -329,13 +346,15 @@ export class DebugVisualizerServer {
     if (url === '/api/stop' && req.method === 'POST') {
       this.executionState = 'stopped';
       if (this.pauseResolver) {
-        try { this.pauseResolver(); } catch {}
+        try {
+          this.pauseResolver();
+        } catch {}
         this.pauseResolver = null;
         this.pausePromise = null;
       }
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
       res.end(JSON.stringify({ success: true }));
       return;
@@ -346,7 +365,7 @@ export class DebugVisualizerServer {
       this.clearSpans();
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
       });
       res.end(JSON.stringify({ success: true }));
       return;
@@ -357,7 +376,7 @@ export class DebugVisualizerServer {
       res.writeHead(200, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
+        'Access-Control-Allow-Headers': 'Content-Type',
       });
       res.end();
       return;
@@ -440,7 +459,9 @@ export class DebugVisualizerServer {
     if (this.executionState !== 'paused') return;
     const p = this.pausePromise;
     if (!p) return;
-    try { await p; } catch {}
+    try {
+      await p;
+    } catch {}
   }
 }
 

@@ -31,10 +31,7 @@ import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallba
 import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
 import { trace, context as otContext } from '@opentelemetry/api';
-import {
-  captureForEachState,
-  captureStateSnapshot,
-} from './telemetry/state-capture';
+import { captureForEachState, captureStateSnapshot } from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -1388,7 +1385,7 @@ export class CheckExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
-    pauseGate?: () => Promise<void>
+    _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =
@@ -1532,7 +1529,7 @@ export class CheckExecutionEngine {
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
     debug?: boolean,
-    pauseGate?: () => Promise<void>
+    _pauseGate?: () => Promise<void>
   ): Promise<CheckResult> {
     if (!config?.checks?.[checkName]) {
       throw new Error(`No configuration found for check: ${checkName}`);
@@ -2390,7 +2387,7 @@ export class CheckExecutionEngine {
         if (pauseGate) {
           try {
             await pauseGate();
-          } catch (e) {
+          } catch {
             return { checkName, error: '__STOP__', result: null, skipped: true };
           }
         }
@@ -2922,7 +2919,11 @@ export class CheckExecutionEngine {
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
                 if (pauseGate) {
-                  try { await pauseGate(); } catch (e) { throw new Error('__STOP__'); }
+                  try {
+                    await pauseGate();
+                  } catch {
+                    throw new Error('__STOP__');
+                  }
                 }
                 try {
                   emitNdjsonSpanWithEvents(
@@ -3925,7 +3926,11 @@ export class CheckExecutionEngine {
           shouldStopExecution = true;
           break;
         }
-        if (result.status === 'rejected' && (result.reason instanceof Error) && (result.reason as Error).message === '__STOP__') {
+        if (
+          result.status === 'rejected' &&
+          result.reason instanceof Error &&
+          (result.reason as Error).message === '__STOP__'
+        ) {
           shouldStopExecution = true;
           break;
         }

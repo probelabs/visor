@@ -130,7 +130,7 @@ describe('time-travel debugging', () => {
       }
 
       // Each check should start before it completes/fails
-      for (const [checkId, lifecycle] of checkLifecycles.entries()) {
+      for (const lifecycle of checkLifecycles.values()) {
         const hasStart = lifecycle.some(t => t === 'check.started');
         const hasEnd = lifecycle.some(t => t === 'check.completed' || t === 'check.failed');
 
@@ -141,7 +141,9 @@ describe('time-travel debugging', () => {
         // Check order: start should come before end
         if (hasStart && hasEnd) {
           const startIndex = lifecycle.findIndex(t => t === 'check.started');
-          const endIndex = lifecycle.findIndex(t => t === 'check.completed' || t === 'check.failed');
+          const endIndex = lifecycle.findIndex(
+            t => t === 'check.completed' || t === 'check.failed'
+          );
           expect(startIndex).toBeLessThan(endIndex);
         }
       }
@@ -243,7 +245,7 @@ function computeDiffChanges(
 ): Array<{ type: string; key: string; value?: any; prevValue?: any; currentValue?: any }> {
   const allKeys = new Set([
     ...Object.keys(prevOutputs || {}),
-    ...Object.keys(currentOutputs || {})
+    ...Object.keys(currentOutputs || {}),
   ]);
 
   const changes = [];

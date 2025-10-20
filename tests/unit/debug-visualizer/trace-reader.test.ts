@@ -9,11 +9,8 @@ import {
   parseNDJSONTrace,
   buildExecutionTree,
   extractStateSnapshots,
-  computeTimeline,
   ProcessedSpan,
   ExecutionNode,
-  StateSnapshot,
-  TimelineEvent,
 } from '../../../src/debug-visualizer/trace-reader';
 
 describe('trace-reader', () => {
@@ -64,9 +61,7 @@ describe('trace-reader', () => {
       const trace = await parseNDJSONTrace(tracePath);
 
       // Find the check span with error status (not the root span)
-      const errorSpan = trace.spans.find(s =>
-        s.status === 'error' && s.name === 'visor.check'
-      );
+      const errorSpan = trace.spans.find(s => s.status === 'error' && s.name === 'visor.check');
       expect(errorSpan).toBeDefined();
       expect(errorSpan!.attributes['visor.check.error']).toBe('Command failed with exit code 1');
     });
@@ -84,8 +79,8 @@ describe('trace-reader', () => {
       fs.writeFileSync(
         tracePath,
         '{"traceId":"test","spanId":"span1","name":"visor.run","startTime":[1697547296,0],"endTime":[1697547297,0],"attributes":{},"events":[],"status":{"code":1}}\n' +
-        'INVALID JSON LINE\n' +
-        '{"traceId":"test","spanId":"span2","parentSpanId":"span1","name":"visor.check","startTime":[1697547296,500000000],"endTime":[1697547297,0],"attributes":{"visor.check.id":"check1"},"events":[],"status":{"code":1}}\n'
+          'INVALID JSON LINE\n' +
+          '{"traceId":"test","spanId":"span2","parentSpanId":"span1","name":"visor.check","startTime":[1697547296,500000000],"endTime":[1697547297,0],"attributes":{"visor.check.id":"check1"},"events":[],"status":{"code":1}}\n'
       );
 
       const trace = await parseNDJSONTrace(tracePath);
@@ -368,9 +363,7 @@ describe('trace-reader', () => {
       expect(snapshotCheckIds).toContain('performance-check');
 
       // Verify timeline completeness
-      const timelineCheckIds = new Set(
-        trace.timeline.filter(e => e.checkId).map(e => e.checkId)
-      );
+      const timelineCheckIds = new Set(trace.timeline.filter(e => e.checkId).map(e => e.checkId));
       expect(timelineCheckIds.size).toBeGreaterThan(0);
     });
 
