@@ -154,7 +154,9 @@ export function captureTransformJS(
   output: unknown
 ): void {
   try {
-    span.setAttribute('visor.transform.code', code.substring(0, 2000));
+    // Truncate long code while keeping plain string (no JSON quoting)
+    const codePreview = code.length > 2000 ? code.substring(0, 2000) + '...[truncated]' : code;
+    span.setAttribute('visor.transform.code', codePreview);
     span.setAttribute('visor.transform.code.length', code.length);
     span.setAttribute('visor.transform.input', safeSerialize(input, 2000));
     span.setAttribute('visor.transform.output', safeSerialize(output, 2000));

@@ -39,7 +39,7 @@ export function resetTelemetryForTesting(): void {
 export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<void> {
   // Enable telemetry if explicitly enabled, env var is set, OR if debugServer is provided
   const enabled = !!opts.enabled || !!opts.debugServer || process.env.VISOR_TELEMETRY_ENABLED === 'true';
-  console.log('[telemetry] Init called - enabled:', enabled, 'debugServer:', !!opts.debugServer, 'sdk exists:', !!sdk);
+  // Avoid writing to stdout to keep CLI JSON output clean
   if (!enabled || sdk) return;
 
   try {
@@ -50,7 +50,7 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     const contextManager = new AsyncHooksContextManager();
     contextManager.enable();
     otelApi.context.setGlobalContextManager(contextManager);
-    console.log('[telemetry] AsyncHooksContextManager enabled and set as global');
+    // console.debug('[telemetry] AsyncHooksContextManager enabled and set as global');
 
     const { NodeSDK } = require('@opentelemetry/sdk-node');
 
@@ -198,13 +198,13 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
 
     // Add debug span exporter for live streaming to WebSocket server
     if (opts.debugServer) {
-      console.log('[telemetry] Adding debug span exporter for live streaming');
+      // Debug span exporter streams live spans to the visualizer server
       try {
         const { DebugSpanExporter } = require('../debug-visualizer/debug-span-exporter');
         const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
         const debugExporter = new DebugSpanExporter(opts.debugServer);
         processors.push(new SimpleSpanProcessor(debugExporter));
-        console.log('[telemetry] Debug span exporter added successfully, total processors:', processors.length);
+        // console.debug('[telemetry] Debug span exporter added successfully, total processors:', processors.length);
       } catch (error) {
         console.error('[telemetry] Failed to initialize debug span exporter:', error);
       }
@@ -245,7 +245,7 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
     await nodeSdk.start();
     sdk = nodeSdk;
-    console.log('[telemetry] NodeSDK started successfully');
+    // console.debug('[telemetry] NodeSDK started successfully');
 
     if (opts.patchConsole !== false) patchConsole();
   } catch (error) {

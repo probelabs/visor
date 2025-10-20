@@ -14,17 +14,17 @@ export async function withActiveSpan<T>(
   const activeCtx = otContext.active();
   const parentSpan = trace.getSpan(activeCtx);
   const parentId = parentSpan ? parentSpan.spanContext().spanId : 'NONE';
-  console.log(`[trace] Creating span: ${name} tracer: true parent in context: ${parentId}`);
+  // Avoid noisy stdout logs that break JSON consumers
   return await new Promise<T>((resolve, reject) => {
     const callback = async (span: Span) => {
       const ctx = span.spanContext();
-      console.log(`[trace] Span callback invoked for: [trace_id=${ctx.traceId} span_id=${ctx.spanId}] ${name} span: true`);
+      // console.debug(`[trace] Span callback invoked for: [trace_id=${ctx.traceId} span_id=${ctx.spanId}] ${name} span: true`);
       try {
         const res = await fn(span);
-        console.log('[trace] Span execution completed for:', name);
+        // console.debug('[trace] Span execution completed for:', name);
         resolve(res);
       } catch (err) {
-        console.log('[trace] Span execution errored for:', name, err);
+        // console.debug('[trace] Span execution errored for:', name, err);
         try {
           if (err instanceof Error) span.recordException(err);
           span.setStatus({ code: SpanStatusCode.ERROR });
@@ -32,7 +32,7 @@ export async function withActiveSpan<T>(
         reject(err);
       } finally {
         try {
-          console.log('[trace] Ending span:', name);
+          // console.debug('[trace] Ending span:', name);
           span.end();
         } catch {}
       }

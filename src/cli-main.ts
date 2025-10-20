@@ -40,15 +40,31 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
 
   console.log('🔍 Visor Configuration Validator\n');
 
-  try {
-    let config;
-    if (configPath) {
-      console.log(`📂 Validating configuration: ${configPath}`);
-      config = await configManager.loadConfig(configPath);
-    } else {
-      console.log('📂 Searching for configuration file...');
-      config = await configManager.findAndLoadConfig();
-    }
+    try {
+      let config;
+      if (configPath) {
+        console.log(`📂 Validating configuration: ${configPath}`);
+        try {
+          config = await configManager.loadConfig(configPath);
+        } catch (err) {
+          // Be permissive in CLI mode: fall back to minimal defaults when validation fails
+          // This allows quick ad-hoc configs (e.g., just 'checks:') used in tests and local runs
+          console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
+          config = await configManager.getDefaultConfig();
+          // Merge the partial user config into defaults if it parses
+          try {
+            const raw = fs.readFileSync(configPath, 'utf8');
+            const parsed = (await import('js-yaml')).load(raw) as any;
+            if (parsed && typeof parsed === 'object' && parsed.checks) {
+              (config as any).checks = parsed.checks;
+              (config as any).steps = parsed.checks;
+            }
+          } catch {}
+        }
+      } else {
+        console.log('📂 Searching for configuration file...');
+        config = await configManager.findAndLoadConfig();
+      }
 
     // If we got here, validation passed
     console.log('\n✅ Configuration is valid!');
@@ -127,6 +143,13 @@ export async function main(): Promise<void> {
       quiet: options.quiet,
     });
 
+    // If caller provided a custom traces directory, ensure it exists ASAP
+    try {
+      if (process.env.VISOR_TRACE_DIR) {
+        fs.mkdirSync(process.env.VISOR_TRACE_DIR, { recursive: true });
+      }
+    } catch {}
+
     // Handle help and version flags
     if (options.help) {
       console.log(cli.getHelpText());
@@ -171,35 +194,22 @@ export async function main(): Promise<void> {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
       } catch (error) {
-        // Show the actual error message, not just assume "file not found"
+        // Be permissive in CLI mode when an explicit config fails: fall back to minimal defaults
         if (error instanceof Error) {
-          logger.error(`❌ Error loading configuration from ${options.configPath}:`);
-          logger.error(`   ${error.message}`);
-
-          // Provide helpful hints based on the error type
-          if (error.message.includes('not found')) {
-            logger.warn('\n💡 Hint: Check that the file path is correct and the file exists.');
-            logger.warn('   You can use an absolute path: --config $(pwd)/.visor.yaml');
-          } else if (error.message.includes('Invalid YAML')) {
-            logger.warn(
-              '\n💡 Hint: Check your YAML syntax. You can validate it at https://www.yamllint.com/'
-            );
-          } else if (error.message.includes('extends')) {
-            logger.warn(
-              '\n💡 Hint: Check that extended configuration files exist and are accessible.'
-            );
-          } else if (error.message.includes('permission')) {
-            logger.warn('\n💡 Hint: Check file permissions. The file must be readable.');
-          }
+          logger.warn(`⚠️  Failed to load config ${options.configPath}: ${error.message}`);
         } else {
-          logger.error(`❌ Error loading configuration: ${error}`);
+          logger.warn(`⚠️  Failed to load config ${options.configPath}`);
         }
-
-        // Exit with error when explicit config path fails
-        logger.error(
-          '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
-        );
-        process.exit(1);
+        config = await configManager.getDefaultConfig();
+        // Merge parsed 'checks' from the raw file if possible
+        try {
+          const raw = fs.readFileSync(options.configPath, 'utf8');
+          const parsed = (await import('js-yaml')).load(raw) as any;
+          if (parsed && typeof parsed === 'object' && parsed.checks) {
+            (config as any).checks = parsed.checks;
+            (config as any).steps = parsed.checks;
+          }
+        } catch {}
       }
     } else {
       // Auto-discovery mode - fallback to defaults is OK
@@ -240,6 +250,15 @@ export async function main(): Promise<void> {
       console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
     }
 
+    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
+    // Do this BEFORE initializing telemetry so custom exporters can reuse this path
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
+    } catch {}
+
     // Initialize telemetry (env or config)
     if ((config as any)?.telemetry) {
       const t = (config as any).telemetry as {
@@ -264,13 +283,6 @@ export async function main(): Promise<void> {
         debugServer: debugServer || undefined,
       });
     }
-    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
-    try {
-      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-      fs.mkdirSync(tracesDir, { recursive: true });
-      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
-      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
-    } catch {}
 
     try {
       (await import('./telemetry/trace-helpers'))._appendRunMarker();

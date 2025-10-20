@@ -848,7 +848,7 @@ export class CheckExecutionEngine {
           continue;
         }
         return res;
-      } catch {
+      } catch (err) {
         // Failure path
         if (!onFail) {
           throw err; // no routing policy
