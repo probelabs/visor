@@ -6,6 +6,7 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * Memory operation types
@@ -40,69 +41,7 @@ export class MemoryCheckProvider extends CheckProvider {
    * Create a secure sandbox for JavaScript execution
    */
   private createSecureSandbox(): Sandbox {
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      Math,
-      console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
-      },
-    };
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-
-    // Allow array methods
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-      'push',
-      'pop',
-      'shift',
-      'unshift',
-      'sort',
-      'reverse',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    // Allow string methods
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-      'match',
-      'padStart',
-      'padEnd',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    // Allow object methods
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    return new Sandbox({
-      globals,
-      prototypeWhitelist,
-    });
+    return createSecureSandbox();
   }
 
   getName(): string {
@@ -497,21 +436,12 @@ export class MemoryCheckProvider extends CheckProvider {
     }
 
     try {
-      // Add log function for debugging
-      const log = (...args: unknown[]) => {
-        logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
-      };
-
-      // Build scope with all context, including memory object
-      // SandboxJS allows calling functions on plain objects
-      const scope: Record<string, unknown> = {
-        ...context,
-        log,
-      };
-
-      // Wrap expression in return statement for SandboxJS
-      const exec = this.sandbox.compile(`return (${expression});`);
-      return exec(scope).run();
+      const scope: Record<string, unknown> = { ...context };
+      return compileAndRun<unknown>(this.sandbox, `return (${expression});`, scope, {
+        injectLog: true,
+        wrapFunction: false,
+        logPrefix: '[memory:value_js]',
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
@@ -528,23 +458,12 @@ export class MemoryCheckProvider extends CheckProvider {
     }
 
     try {
-      // Add log function for debugging
-      const log = (...args: unknown[]) => {
-        logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
-      };
-
-      // Build scope with all context, but keep memory object as-is
-      // SandboxJS allows calling functions on plain objects
-      const scope: Record<string, unknown> = {
-        ...context,
-        log,
-      };
-
-      // Compile script as-is. SandboxJS treats it as a function body
-      // where return statements work at the top level.
-      const exec = this.sandbox.compile(script);
-      const result = exec(scope).run();
-      return result;
+      const scope: Record<string, unknown> = { ...context };
+      return compileAndRun<unknown>(this.sandbox, script, scope, {
+        injectLog: true,
+        wrapFunction: false,
+        logPrefix: '[memory:exec_js]',
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[memory-js] Script execution error: ${errorMsg}`);

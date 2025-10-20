@@ -13,6 +13,7 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox } from './utils/sandbox';
 import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
 
@@ -28,64 +29,7 @@ export class FailureConditionEvaluator {
    * Create a secure sandbox with whitelisted functions and globals
    */
   private createSecureSandbox(): Sandbox {
-    // Start with safe globals and prototypes
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      // Allow Math for calculations
-      Math,
-      // Allow console for debugging (in controlled environment)
-      console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
-      },
-    };
-
-    // Create prototype whitelist - use safe defaults
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-
-    // Explicitly allow array methods that we need
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    // Allow string methods
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    // Allow basic object methods
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    return new Sandbox({
-      globals,
-      prototypeWhitelist,
-    });
+    return createSecureSandbox();
   }
 
   /**

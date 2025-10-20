@@ -148,6 +148,8 @@ export class AIReviewService {
     }
   }
 
+  // NOTE: per request, no additional redaction/encryption helpers are used.
+
   /**
    * Execute AI review using probe agent
    */
@@ -560,8 +562,7 @@ ${prContext}
     // In PR context, always include diffs. Otherwise check the flag.
     const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
 
-    // Log the decision for transparency
-    const log = this.config.debug ? console.error : () => {};
+    // Log the decision for transparency (debug level)
     if (isPRContext) {
       log('🔍 Including full code diffs in AI context (PR mode)');
     } else if (!includeCodeContext) {
@@ -1098,11 +1099,12 @@ ${this.escapeXml(processedFallbackDiff)}
 
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          // do not enforce directory perms here
 
           // Save complete session history (all messages sent and received)
-          const sessionFile = path.join(
+          const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.json`
+            `session-${_checkName || 'unknown'}-${timestamp}`
           );
           const sessionData = {
             timestamp,
@@ -1110,42 +1112,42 @@ ${this.escapeXml(processedFallbackDiff)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            fullConversationHistory: fullHistory,
             totalMessages: fullHistory.length,
-            latestResponse: response,
           };
+          fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
-          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+          // Redacted textual summary
+          let readable = `=============================================================
+`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
+`;
+          readable += `=============================================================
+`;
+          readable += `Timestamp: ${timestamp}
+`;
+          readable += `Check: ${_checkName || 'unknown'}
+`;
+          readable += `Total Messages: ${fullHistory.length}
+`;
+          readable += `=============================================================
 
-          // Save human-readable version
-          const sessionTxtFile = path.join(
-            debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.txt`
-          );
-          let readable = `=============================================================\n`;
-          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
-          readable += `=============================================================\n`;
-          readable += `Timestamp: ${timestamp}\n`;
-          readable += `Check: ${_checkName || 'unknown'}\n`;
-          readable += `Total Messages: ${fullHistory.length}\n`;
-          readable += `=============================================================\n\n`;
-
+`;
           fullHistory.forEach((msg: any, idx: number) => {
-            readable += `\n${'='.repeat(60)}\n`;
-            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
-            readable += `Role: ${msg.role || 'unknown'}\n`;
-            readable += `${'='.repeat(60)}\n`;
-
+            const role = msg.role || 'unknown';
             const content =
               typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += `
+${'='.repeat(60)}
+MESSAGE ${idx + 1}/${fullHistory.length}
+Role: ${role}
+${'='.repeat(60)}
+`;
             readable += content + '\n';
           });
-
-          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+          fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
           log(`💾 Complete session history saved:`);
-          log(`   JSON: ${sessionFile}`);
-          log(`   TXT:  ${sessionTxtFile}`);
+          // (paths omitted)
           log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
         } catch (error) {
           log(`⚠️ Could not save complete session history: ${error}`);
@@ -1224,13 +1226,15 @@ ${this.escapeXml(processedFallbackDiff)}
             log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
           }
         } catch (exportError) {
-          console.error('⚠️  Warning: Failed to export trace for cloned session:', exportError);
+          logger.warn(`⚠️  Warning: Failed to export trace for cloned session: ${exportError}`);
         }
       }
 
       return { response, effectiveSchema };
     } catch (error) {
-      console.error('❌ ProbeAgent session reuse failed:', error);
+      logger.error(
+        `❌ ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       throw new Error(
         `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1452,28 +1456,15 @@ ${this.escapeXml(processedFallbackDiff)}
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
           try {
-            if (!fs.existsSync(debugArtifactsDir)) {
-              fs.mkdirSync(debugArtifactsDir, { recursive: true });
-            }
-
-            // Save JSON version
-            const debugFile = path.join(
+            // do not enforce fs permissions here
+            const base = path.join(
               debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}.json`
+              `prompt-${_checkName || 'unknown'}-${timestamp}`
             );
-            fs.writeFileSync(debugFile, debugJson, 'utf-8');
-
-            // Save readable version
-            const readableFile = path.join(
-              debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}.txt`
-            );
-            fs.writeFileSync(readableFile, readableVersion, 'utf-8');
-
-            log(`\n💾 Full debug info saved to:`);
-            log(`   JSON: ${debugFile}`);
-            log(`   TXT:  ${readableFile}`);
-            log(`   - Includes: prompt, schema, provider, model, and schema options`);
+            fs.writeFileSync(base + '.json', debugJson, 'utf-8');
+            fs.writeFileSync(base + '.summary.txt', readableVersion, 'utf-8');
+            log(`
+💾 Full debug info saved to directory: ${debugArtifactsDir}`);
           } catch {
             // Ignore if we can't write to debug-artifacts
           }
@@ -1548,11 +1539,12 @@ ${this.escapeXml(processedFallbackDiff)}
 
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          // do not enforce fs permissions here
 
           // Save complete session history (all messages sent and received)
-          const sessionFile = path.join(
+          const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.json`
+            `session-${_checkName || 'unknown'}-${timestamp}`
           );
           const sessionData = {
             timestamp,
@@ -1560,42 +1552,42 @@ ${this.escapeXml(processedFallbackDiff)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            fullConversationHistory: fullHistory,
             totalMessages: fullHistory.length,
-            latestResponse: response,
           };
+          fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
-          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+          // Redacted textual summary
+          let readable = `=============================================================
+`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
+`;
+          readable += `=============================================================
+`;
+          readable += `Timestamp: ${timestamp}
+`;
+          readable += `Check: ${_checkName || 'unknown'}
+`;
+          readable += `Total Messages: ${fullHistory.length}
+`;
+          readable += `=============================================================
 
-          // Save human-readable version
-          const sessionTxtFile = path.join(
-            debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.txt`
-          );
-          let readable = `=============================================================\n`;
-          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
-          readable += `=============================================================\n`;
-          readable += `Timestamp: ${timestamp}\n`;
-          readable += `Check: ${_checkName || 'unknown'}\n`;
-          readable += `Total Messages: ${fullHistory.length}\n`;
-          readable += `=============================================================\n\n`;
-
+`;
           fullHistory.forEach((msg: any, idx: number) => {
-            readable += `\n${'='.repeat(60)}\n`;
-            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
-            readable += `Role: ${msg.role || 'unknown'}\n`;
-            readable += `${'='.repeat(60)}\n`;
-
+            const role = msg.role || 'unknown';
             const content =
               typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += `
+${'='.repeat(60)}
+MESSAGE ${idx + 1}/${fullHistory.length}
+Role: ${role}
+${'='.repeat(60)}
+`;
             readable += content + '\n';
           });
-
-          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+          fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
           log(`💾 Complete session history saved:`);
-          log(`   JSON: ${sessionFile}`);
-          log(`   TXT:  ${sessionTxtFile}`);
+          // (paths omitted)
           log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
         } catch (error) {
           log(`⚠️ Could not save complete session history: ${error}`);
@@ -1681,7 +1673,7 @@ ${this.escapeXml(processedFallbackDiff)}
             log(`📊 Trace saved to: ${traceFilePath}`);
           }
         } catch (exportError) {
-          console.error('⚠️  Warning: Failed to export trace:', exportError);
+          logger.warn(`⚠️  Warning: Failed to export trace: ${exportError}`);
         }
       }
 
@@ -1923,6 +1915,28 @@ ${this.escapeXml(processedFallbackDiff)}
         (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
         (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
 
+      const _debugSchemaLogging =
+        this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
+      if (_debugSchemaLogging) {
+        const details = {
+          schema: _schema,
+          isCustomSchema,
+          isCustomLiteral: _schema === 'custom',
+          startsWithDotSlash: typeof _schema === 'string' ? _schema.startsWith('./') : false,
+          endsWithJson: typeof _schema === 'string' ? _schema.endsWith('.json') : false,
+          notCodeReview: _schema !== 'code-review',
+          noOutputPrefix: typeof _schema === 'string' ? !_schema.includes('output/') : false,
+        };
+        try {
+          log(`🔍 Schema detection: ${JSON.stringify(details)}`);
+        } catch {
+          // Fallback if JSON.stringify throws on unexpected values
+          log(
+            `🔍 Schema detection: _schema="${String(_schema)}", isCustomSchema=${isCustomSchema}`
+          );
+        }
+      }
+
       if (isCustomSchema) {
         // For custom schemas, preserve ALL fields from the parsed JSON
         // Don't force the response into the standard ReviewSummary format
@@ -1983,41 +1997,43 @@ ${this.escapeXml(processedFallbackDiff)}
       log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
-      console.error('❌ Failed to parse AI response:', error);
-      console.error('📄 FULL RAW RESPONSE:');
-      console.error('='.repeat(80));
-      console.error(response);
-      console.error('='.repeat(80));
-      console.error(`📏 Response length: ${response.length} characters`);
+      const detailed = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
+      const message = error instanceof Error ? error.message : String(error);
 
-      // Try to provide more helpful error information
-      if (error instanceof SyntaxError) {
-        console.error('🔍 JSON parsing error - the response may not be valid JSON');
-        console.error('🔍 Error details:', error.message);
+      if (detailed) {
+        logger.debug(`❌ Failed to parse AI response: ${message}`);
+        logger.debug('📄 FULL RAW RESPONSE:');
+        logger.debug('='.repeat(80));
+        logger.debug(response);
+        logger.debug('='.repeat(80));
+        logger.debug(`📏 Response length: ${response.length} characters`);
 
-        // Try to identify where the parsing failed
-        const errorMatch = error.message.match(/position (\d+)/);
-        if (errorMatch) {
-          const position = parseInt(errorMatch[1]);
-          console.error(`🔍 Error at position ${position}:`);
-          const start = Math.max(0, position - 50);
-          const end = Math.min(response.length, position + 50);
-          console.error(`🔍 Context: "${response.substring(start, end)}"`);
+        if (error instanceof SyntaxError) {
+          logger.debug('🔍 JSON parsing error - the response may not be valid JSON');
+          logger.debug(`🔍 Error details: ${error.message}`);
 
-          // Show the first 100 characters to understand what format the AI returned
-          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
-        }
+          const errorMatch = error.message.match(/position (\d+)/);
+          if (errorMatch) {
+            const position = parseInt(errorMatch[1]);
+            logger.debug(`🔍 Error at position ${position}:`);
+            const start = Math.max(0, position - 50);
+            const end = Math.min(response.length, position + 50);
+            logger.debug(`🔍 Context: "${response.substring(start, end)}"`);
+            logger.debug(`🔍 Response beginning: "${response.substring(0, 100)}"`);
+          }
 
-        // Check if response contains common non-JSON patterns
-        if (response.includes('I cannot')) {
-          console.error('🔍 Response appears to be a refusal/explanation rather than JSON');
+          if (response.includes('I cannot')) {
+            logger.debug('🔍 Response appears to be a refusal/explanation rather than JSON');
+          }
+          if (response.includes('```')) {
+            logger.debug('🔍 Response appears to contain markdown code blocks');
+          }
+          if (response.startsWith('<')) {
+            logger.debug('🔍 Response appears to start with XML/HTML');
+          }
         }
-        if (response.includes('```')) {
-          console.error('🔍 Response appears to contain markdown code blocks');
-        }
-        if (response.startsWith('<')) {
-          console.error('🔍 Response appears to start with XML/HTML');
-        }
+      } else {
+        logger.error(`❌ Failed to parse AI response: ${message}`);
       }
 
       throw new Error(
