@@ -658,11 +658,10 @@
         <!-- Live Mode Controls -->
         <div id="live-controls" class="hidden" style="display: flex; gap: 8px; align-items: center;">
           <button class="btn" id="btn-start-execution" onclick="liveMode.start()">▶ Start Execution</button>
-          <!-- Pause/Resume/Stop/Reset are not yet implemented server-side. Gate in UI to avoid confusion. -->
-          <button class="btn btn-secondary hidden" id="btn-pause-execution" onclick="liveMode.pause()" disabled title="Coming soon">⏸ Pause</button>
-            <button class="btn btn-secondary hidden" id="btn-resume-execution" onclick="liveMode.resume()" disabled title="Coming soon">▶ Resume</button>
-            <button class="btn btn-secondary hidden" id="btn-stop-execution" onclick="liveMode.stop()" disabled title="Coming soon">⏹ Stop</button>
-            <button class="btn btn-secondary hidden" id="btn-reset-execution" onclick="liveMode.reset()" disabled title="Coming soon">🔄 Reset</button>
+          <button class="btn btn-secondary hidden" id="btn-pause-execution" onclick="liveMode.pause()">⏸ Pause</button>
+          <button class="btn btn-secondary hidden" id="btn-resume-execution" onclick="liveMode.resume()">▶ Resume</button>
+          <button class="btn btn-secondary hidden" id="btn-stop-execution" onclick="liveMode.stop()">⏹ Stop</button>
+          <button class="btn btn-secondary hidden" id="btn-reset-execution" onclick="liveMode.reset()">🔄 Reset</button>
           <span id="live-status" style="font-size: 12px; color: #858585; margin-left: 8px;">Waiting to start...</span>
         </div>
 
@@ -2161,11 +2160,15 @@
         }
       },
 
-      pause() {
+      async pause() {
         if (!this.isRunning || this.isPaused) return;
 
         this.isPaused = true;
         console.log('[live] Pausing execution');
+
+        try {
+          await fetch(`${this.baseUrl}/api/pause`, { method: 'POST' });
+        } catch (e) { console.warn('[live] pause endpoint failed', e); }
 
         // Update UI
         this.updateStatus('Paused');
@@ -2173,11 +2176,15 @@
         document.getElementById('btn-resume-execution').classList.remove('hidden');
       },
 
-      resume() {
+      async resume() {
         if (!this.isPaused) return;
 
         this.isPaused = false;
         console.log('[live] Resuming execution');
+
+        try {
+          await fetch(`${this.baseUrl}/api/resume`, { method: 'POST' });
+        } catch (e) { console.warn('[live] resume endpoint failed', e); }
 
         // Update UI
         this.updateStatus('Running...');
@@ -2185,7 +2192,7 @@
         document.getElementById('btn-pause-execution').classList.remove('hidden');
       },
 
-      stop() {
+      async stop() {
         if (!this.isRunning) return;
 
         this.isRunning = false;
@@ -2195,12 +2202,16 @@
         // Stop polling
         this.stopPolling();
 
+        try {
+          await fetch(`${this.baseUrl}/api/stop`, { method: 'POST' });
+        } catch (e) { console.warn('[live] stop endpoint failed', e); }
+
         // Update UI
         this.updateStatus('Stopped');
         this.showResetButton();
       },
 
-      reset() {
+      async reset() {
         console.log('[live] Resetting execution');
 
         // Stop polling
@@ -2211,6 +2222,10 @@
         this.isRunning = false;
         this.isPaused = false;
         this.lastSpanCount = 0;
+
+        try {
+          await fetch(`${this.baseUrl}/api/reset`, { method: 'POST' });
+        } catch (e) { console.warn('[live] reset endpoint failed', e); }
 
         // Clear visualization
         const svg = d3.select('#graph-svg');

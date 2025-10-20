@@ -42,6 +42,7 @@ export class DebugVisualizerServer {
   private startExecutionPromise: Promise<void> | null = null;
   private startExecutionResolver: (() => void) | null = null;
   private startExecutionTimeout: NodeJS.Timeout | null = null;
+  private executionState: 'idle' | 'running' | 'paused' | 'stopped' = 'idle';
 
   /**
    * Start the HTTP server
@@ -124,6 +125,7 @@ export class DebugVisualizerServer {
     console.log('[debug-server] Start signal received, continuing execution');
     // Reset promise so a subsequent run can wait again
     this.startExecutionPromise = null;
+    this.executionState = 'running';
   }
 
   /**
@@ -132,6 +134,8 @@ export class DebugVisualizerServer {
   clearSpans(): void {
     console.log('[debug-server] Clearing spans for new run');
     this.spans = [];
+    this.results = null;
+    this.executionState = 'idle';
   }
 
   /**
@@ -142,7 +146,8 @@ export class DebugVisualizerServer {
       return;
     }
 
-    // Store span for HTTP polling
+    // Store span for HTTP polling (even when paused; UI may pause polling client-side)
+    // When stopped, we still accept spans for completeness unless explicitly cleared by reset
     this.spans.push(span);
     console.log(`[debug-server] Received span: ${span.name} (total: ${this.spans.length})`);
   }
@@ -161,6 +166,8 @@ export class DebugVisualizerServer {
   setResults(results: any): void {
     this.results = results;
     console.log('[debug-server] Results set');
+    // If results are set, we can mark execution as stopped/completed
+    if (this.executionState !== 'paused') this.executionState = 'stopped';
   }
 
   /**
@@ -178,7 +185,8 @@ export class DebugVisualizerServer {
       res.end(JSON.stringify({
         spans: this.spans,
         total: this.spans.length,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        executionState: this.executionState
       }));
       return;
     }
@@ -239,6 +247,8 @@ export class DebugVisualizerServer {
       });
       res.end(JSON.stringify({
         isRunning: this.isRunning,
+        executionState: this.executionState,
+        isPaused: this.executionState === 'paused',
         spanCount: this.spans.length,
         timestamp: new Date().toISOString()
       }));
@@ -253,7 +263,8 @@ export class DebugVisualizerServer {
       });
       res.end(JSON.stringify({
         results: this.results,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        executionState: this.executionState
       }));
       return;
     }
@@ -271,7 +282,51 @@ export class DebugVisualizerServer {
         this.startExecutionResolver();
         this.startExecutionResolver = null;
       }
+      this.executionState = 'running';
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
 
+    // API endpoint: Pause execution (UI-level pause)
+    if (url === '/api/pause' && req.method === 'POST') {
+      this.executionState = 'paused';
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    // API endpoint: Resume execution
+    if (url === '/api/resume' && req.method === 'POST') {
+      this.executionState = 'running';
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    // API endpoint: Stop execution (mark as completed)
+    if (url === '/api/stop' && req.method === 'POST') {
+      this.executionState = 'stopped';
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    // API endpoint: Reset execution (clear spans and results)
+    if (url === '/api/reset' && req.method === 'POST') {
+      this.clearSpans();
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
       res.end(JSON.stringify({ success: true }));
       return;
     }

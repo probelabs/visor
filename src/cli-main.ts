@@ -268,6 +268,16 @@ export async function main(): Promise<void> {
     try {
       const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
       fs.mkdirSync(tracesDir, { recursive: true });
+      // In test runs, clear old NDJSON files in this directory to avoid flakiness when tests read the first file
+      try {
+        if (process.env.NODE_ENV === 'test') {
+          for (const f of fs.readdirSync(tracesDir)) {
+            if (f.endsWith('.ndjson')) {
+              try { fs.unlinkSync(path.join(tracesDir, f)); } catch {}
+            }
+          }
+        }
+      } catch {}
       const runTs = new Date().toISOString().replace(/[:.]/g, '-');
       process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
     } catch {}
