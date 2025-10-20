@@ -42,9 +42,19 @@ export class FileExclusionHelper {
    * @param additionalPatterns - Additional patterns to add to gitignore rules
    */
   private loadGitignore(additionalPatterns: string[] | null): void {
-    const gitignorePath = path.join(this.workingDirectory, '.gitignore');
+    // Use path.resolve to prevent path traversal
+    const gitignorePath = path.resolve(this.workingDirectory, '.gitignore');
+    const resolvedWorkingDir = path.resolve(this.workingDirectory);
 
     try {
+      // Validate that gitignore path is within working directory
+      // path.sep ensures correct separator on Windows/Unix
+      const normalizedGitignorePath = gitignorePath + path.sep;
+      const normalizedWorkingDir = resolvedWorkingDir + path.sep;
+      if (!normalizedGitignorePath.startsWith(normalizedWorkingDir)) {
+        throw new Error('Invalid gitignore path: path traversal detected');
+      }
+
       this.gitignore = ignore();
 
       // Add additional patterns first (lower priority)
@@ -55,8 +65,16 @@ export class FileExclusionHelper {
       // Load and add .gitignore patterns (higher priority)
       if (fs.existsSync(gitignorePath)) {
         const rawContent = fs.readFileSync(gitignorePath, 'utf8');
-        // Sanitize content to prevent injection attacks
-        const gitignoreContent = rawContent.replace(/[\r\n]+/g, '\n').trim();
+
+        // Comprehensive sanitization to prevent injection attacks
+        const gitignoreContent = rawContent
+          .replace(/[\r\n]+/g, '\n') // Normalize line endings first
+          .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, '') // Remove control chars except \n (0x0A)
+          .split('\n')
+          .filter(line => line.length < 1000) // Reject extremely long lines that could cause DoS
+          .join('\n')
+          .trim();
+
         this.gitignore.add(gitignoreContent);
         console.error('✅ Loaded .gitignore patterns for file filtering');
       } else if (additionalPatterns && additionalPatterns.length > 0) {
