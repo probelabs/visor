@@ -434,38 +434,13 @@ steps:
     on: [issue_opened]
     op: labels.add
     value_js: |
-      try {
-        log('🔍 Debug: apply-issue-labels value_js executing');
-        log('🔍 Debug: outputs keys:', Object.keys(outputs));
-        log('🔍 Debug: issue-assistant output:', JSON.stringify(outputs['issue-assistant']));
-
-        const issueAssistant = outputs['issue-assistant'];
-        if (!issueAssistant) {
-          log('⚠️ Warning: issue-assistant output is undefined or null');
-          return [];
-        }
-
-        const labels = issueAssistant.labels;
-        log('🔍 Debug: labels value:', JSON.stringify(labels), 'type:', typeof labels);
-
-        if (!Array.isArray(labels)) {
-          log('⚠️ Warning: labels is not an array, got:', typeof labels);
-          return [];
-        }
-
-        log('✅ Found', labels.length, 'labels to apply');
-        // Sanitize labels: remove non-alphanumeric chars except :/ and collapse repeated /
-        const sanitized = labels
-          .map(v => v == null ? '' : String(v))
-          .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
-          .filter(s => s.length > 0);
-
-        log('✅ Returning sanitized labels:', JSON.stringify(sanitized));
-        return sanitized;
-      } catch (error) {
-        log('❌ Error processing issue labels:', error);
-        return [];
-      }
+      const issueAssistant = outputs['issue-assistant'];
+      const labels = Array.isArray(issueAssistant?.labels) ? issueAssistant.labels : [];
+      // Sanitize labels: keep [A-Za-z0-9:/], collapse repeated '/'
+      return labels
+        .map(v => (v == null ? '' : String(v)))
+        .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+        .filter(s => s.length > 0);
 
   # External origin labelling for PRs and Issues
   external-label:
