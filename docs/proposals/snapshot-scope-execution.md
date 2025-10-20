@@ -76,9 +76,9 @@ Resolution rules
 ## Phased Plan (Incremental)
 
 Phase 0 — Lay Hooks (no behavior change)
-- [ ] Add `ExecutionJournal` and `ContextView` (internal module).
-- [ ] Commit every enriched result to the journal (in both normal and inline paths).
-- [ ] Feature flag: `VISOR_SNAPSHOT_SCOPE=1` (off by default).
+- [x] Add `ExecutionJournal` and `ContextView` (internal module).
+- [x] Commit every enriched result to the journal (in both normal and inline paths).
+- [x] No feature flags — default-ready rollout.
 
 Acceptance
 - [ ] Unit: journal commits for all executed checks; commitId monotonic.

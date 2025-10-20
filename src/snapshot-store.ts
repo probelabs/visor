@@ -38,3 +38,78 @@ export class ExecutionJournal {
     return this.entries.length;
   }
 }
+
+export class ContextView {
+  constructor(
+    private journal: ExecutionJournal,
+    private sessionId: string,
+    private snapshotId: number,
+    private scope: ScopePath
+  ) {}
+
+  /** Return the nearest result for a check in this scope (exact item → ancestor → latest). */
+  get(checkId: string): (ReviewSummary & { output?: unknown; content?: string }) | undefined {
+    const visible = this.journal
+      .readVisible(this.sessionId, this.snapshotId)
+      .filter(e => e.checkId === checkId);
+    if (visible.length === 0) return undefined;
+
+    // exact scope match
+    const exact = visible.find(e => this.sameScope(e.scope, this.scope));
+    if (exact) return exact.result;
+
+    // nearest ancestor (shortest distance)
+    let best: { entry: JournalEntry; dist: number } | undefined;
+    for (const e of visible) {
+      const dist = this.ancestorDistance(e.scope, this.scope);
+      if (dist >= 0 && (best === undefined || dist < best.dist)) {
+        best = { entry: e, dist };
+      }
+    }
+    if (best) return best.entry.result;
+
+    // fallback to latest committed result
+    return visible[visible.length - 1]?.result;
+  }
+
+  /** Return an aggregate (raw) result – the shallowest scope for this check. */
+  getRaw(checkId: string): (ReviewSummary & { output?: unknown; content?: string }) | undefined {
+    const visible = this.journal
+      .readVisible(this.sessionId, this.snapshotId)
+      .filter(e => e.checkId === checkId);
+    if (visible.length === 0) return undefined;
+    let shallow = visible[0];
+    for (const e of visible) {
+      if (e.scope.length < shallow.scope.length) shallow = e;
+    }
+    return shallow.result;
+  }
+
+  /** All results for a check up to this snapshot. */
+  getHistory(checkId: string): Array<ReviewSummary & { output?: unknown; content?: string }> {
+    return this.journal
+      .readVisible(this.sessionId, this.snapshotId)
+      .filter(e => e.checkId === checkId)
+      .map(e => e.result);
+  }
+
+  private sameScope(a: ScopePath, b: ScopePath): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].check !== b[i].check || a[i].index !== b[i].index) return false;
+    }
+    return true;
+  }
+
+  // distance from ancestor to current; -1 if not ancestor
+  private ancestorDistance(ancestor: ScopePath, current: ScopePath): number {
+    if (ancestor.length > current.length) return -1;
+    // Treat root scope ([]) as non-ancestor for unrelated branches
+    if (ancestor.length === 0 && current.length > 0) return -1;
+    for (let i = 0; i < ancestor.length; i++) {
+      if (ancestor[i].check !== current[i].check || ancestor[i].index !== current[i].index)
+        return -1;
+    }
+    return current.length - ancestor.length;
+  }
+}
