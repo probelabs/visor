@@ -41,6 +41,7 @@ export class DebugVisualizerServer {
   private results: any = null;
   private startExecutionPromise: Promise<void> | null = null;
   private startExecutionResolver: (() => void) | null = null;
+  private startExecutionTimeout: NodeJS.Timeout | null = null;
 
   /**
    * Start the HTTP server
@@ -92,15 +93,37 @@ export class DebugVisualizerServer {
    * Wait for the user to click "Start Execution" in the UI
    */
   async waitForStartSignal(): Promise<void> {
+    // Reuse existing in-flight promise if already waiting
+    if (this.startExecutionPromise) {
+      return this.startExecutionPromise;
+    }
     console.log('[debug-server] Waiting for user to click "Start Execution"...');
 
     // Create a promise that will be resolved when /api/start is called
     this.startExecutionPromise = new Promise<void>((resolve) => {
-      this.startExecutionResolver = resolve;
+      this.startExecutionResolver = () => {
+        if (this.startExecutionTimeout) {
+          clearTimeout(this.startExecutionTimeout);
+          this.startExecutionTimeout = null;
+        }
+        resolve();
+      };
     });
+
+    // Optional safety timeout to avoid deadlock if UI never signals start
+    const timeoutMs = parseInt(process.env.VISOR_DEBUG_START_TIMEOUT_MS || '0', 10);
+    if (timeoutMs > 0) {
+      this.startExecutionTimeout = setTimeout(() => {
+        console.log('[debug-server] Start wait timed out, proceeding without UI');
+        if (this.startExecutionResolver) this.startExecutionResolver();
+        this.startExecutionResolver = null;
+      }, timeoutMs).unref();
+    }
 
     await this.startExecutionPromise;
     console.log('[debug-server] Start signal received, continuing execution');
+    // Reset promise so a subsequent run can wait again
+    this.startExecutionPromise = null;
   }
 
   /**

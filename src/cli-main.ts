@@ -47,19 +47,23 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
         try {
           config = await configManager.loadConfig(configPath);
         } catch (err) {
-          // Be permissive in CLI mode: fall back to minimal defaults when validation fails
-          // This allows quick ad-hoc configs (e.g., just 'checks:') used in tests and local runs
-          console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
-          config = await configManager.getDefaultConfig();
-          // Merge the partial user config into defaults if it parses
-          try {
-            const raw = fs.readFileSync(configPath, 'utf8');
-            const parsed = (await import('js-yaml')).load(raw) as any;
-            if (parsed && typeof parsed === 'object' && parsed.checks) {
-              (config as any).checks = parsed.checks;
-              (config as any).steps = parsed.checks;
-            }
-          } catch {}
+          const msg = err instanceof Error ? err.message : String(err);
+          // Only fall back for schema/validation-style errors; preserve hard errors like "not found"
+          if (/Missing required field|Invalid YAML|must contain a valid YAML object/i.test(msg)) {
+            console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
+            config = await configManager.getDefaultConfig();
+            // Merge the partial user config into defaults if it parses
+            try {
+              const raw = fs.readFileSync(configPath, 'utf8');
+              const parsed = (await import('js-yaml')).load(raw) as any;
+              if (parsed && typeof parsed === 'object' && parsed.checks) {
+                (config as any).checks = parsed.checks;
+                (config as any).steps = parsed.checks;
+              }
+            } catch {}
+          } else {
+            throw err;
+          }
         }
       } else {
         console.log('📂 Searching for configuration file...');
@@ -194,22 +198,31 @@ export async function main(): Promise<void> {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
       } catch (error) {
-        // Be permissive in CLI mode when an explicit config fails: fall back to minimal defaults
-        if (error instanceof Error) {
-          logger.warn(`⚠️  Failed to load config ${options.configPath}: ${error.message}`);
-        } else {
-          logger.warn(`⚠️  Failed to load config ${options.configPath}`);
+        const msg = error instanceof Error ? error.message : String(error);
+        // Preserve original error behavior for not found and other hard errors
+        if (/not found|ENOENT|permission denied/i.test(msg)) {
+          // Show the original, helpful error and exit
+          if (error instanceof Error) {
+            logger.error(`❌ Error loading configuration from ${options.configPath}:`);
+            logger.error(`   ${error.message}`);
+          } else {
+            logger.error(`❌ Error loading configuration from ${options.configPath}`);
+          }
+          logger.error('\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.');
+          process.exit(1);
         }
-        config = await configManager.getDefaultConfig();
-        // Merge parsed 'checks' from the raw file if possible
+        // Otherwise, treat as validation error and fall back
+        logger.warn(`⚠️  Failed to validate config ${options.configPath}: ${msg}`);
+        const def = await configManager.getDefaultConfig();
         try {
           const raw = fs.readFileSync(options.configPath, 'utf8');
           const parsed = (await import('js-yaml')).load(raw) as any;
           if (parsed && typeof parsed === 'object' && parsed.checks) {
-            (config as any).checks = parsed.checks;
-            (config as any).steps = parsed.checks;
+            (def as any).checks = parsed.checks;
+            (def as any).steps = parsed.checks;
           }
         } catch {}
+        config = def;
       }
     } else {
       // Auto-discovery mode - fallback to defaults is OK
