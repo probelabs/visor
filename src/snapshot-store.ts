@@ -4,6 +4,7 @@
  */
 
 import type { ReviewSummary } from './reviewer';
+import type { EventTrigger } from './types/config';
 
 export type ScopePath = Array<{ check: string; index: number }>;
 
@@ -12,6 +13,7 @@ export interface JournalEntry {
   sessionId: string;
   scope: ScopePath;
   checkId: string;
+  event: EventTrigger | undefined;
   result: ReviewSummary & { output?: unknown; content?: string };
 }
 
@@ -23,14 +25,30 @@ export class ExecutionJournal {
     return this.commit;
   }
 
-  commitEntry(entry: Omit<JournalEntry, 'commitId'>): JournalEntry {
-    const committed: JournalEntry = { ...entry, commitId: ++this.commit };
+  commitEntry(entry: {
+    sessionId: string;
+    scope: ScopePath;
+    checkId: string;
+    result: ReviewSummary & { output?: unknown; content?: string };
+    event?: EventTrigger;
+  }): JournalEntry {
+    const committed: JournalEntry = {
+      sessionId: entry.sessionId,
+      scope: entry.scope,
+      checkId: entry.checkId,
+      result: entry.result,
+      event: entry.event,
+      commitId: ++this.commit,
+    };
     this.entries.push(committed);
     return committed;
   }
 
-  readVisible(sessionId: string, commitMax: number): JournalEntry[] {
-    return this.entries.filter(e => e.sessionId === sessionId && e.commitId <= commitMax);
+  readVisible(sessionId: string, commitMax: number, event?: EventTrigger): JournalEntry[] {
+    return this.entries.filter(
+      e =>
+        e.sessionId === sessionId && e.commitId <= commitMax && (event ? e.event === event : true)
+    );
   }
 
   // Lightweight helpers for debugging/metrics
@@ -44,13 +62,14 @@ export class ContextView {
     private journal: ExecutionJournal,
     private sessionId: string,
     private snapshotId: number,
-    private scope: ScopePath
+    private scope: ScopePath,
+    private event?: EventTrigger
   ) {}
 
   /** Return the nearest result for a check in this scope (exact item → ancestor → latest). */
   get(checkId: string): (ReviewSummary & { output?: unknown; content?: string }) | undefined {
     const visible = this.journal
-      .readVisible(this.sessionId, this.snapshotId)
+      .readVisible(this.sessionId, this.snapshotId, this.event)
       .filter(e => e.checkId === checkId);
     if (visible.length === 0) return undefined;
 
@@ -75,7 +94,7 @@ export class ContextView {
   /** Return an aggregate (raw) result – the shallowest scope for this check. */
   getRaw(checkId: string): (ReviewSummary & { output?: unknown; content?: string }) | undefined {
     const visible = this.journal
-      .readVisible(this.sessionId, this.snapshotId)
+      .readVisible(this.sessionId, this.snapshotId, this.event)
       .filter(e => e.checkId === checkId);
     if (visible.length === 0) return undefined;
     let shallow = visible[0];
@@ -88,7 +107,7 @@ export class ContextView {
   /** All results for a check up to this snapshot. */
   getHistory(checkId: string): Array<ReviewSummary & { output?: unknown; content?: string }> {
     return this.journal
-      .readVisible(this.sessionId, this.snapshotId)
+      .readVisible(this.sessionId, this.snapshotId, this.event)
       .filter(e => e.checkId === checkId)
       .map(e => e.result);
   }

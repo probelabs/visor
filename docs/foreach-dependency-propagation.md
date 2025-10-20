@@ -40,9 +40,12 @@ steps:
 - If `tickets` is `[]`, `analyze-ticket` is effectively skipped (no per‑item execution).
 - If `transform_js` returns `undefined`, the engine raises `forEach/undefined_output` and `analyze-ticket` is skipped due to a failed dependency.
 
-## Output History with forEach
+## Output Access and History with forEach
 
-When a check has `forEach: true`, each iteration's output is tracked in `outputs.history`. After processing multiple items, `outputs.history['check-name']` will contain an array with one entry per iteration.
+When a check has `forEach: true`, three accessors are available:
+- `outputs['check-name']` — nearest value in scope (inside an iteration, this is the current item).
+- `outputs_raw['check-name']` — aggregate/parent value (the full array produced by the forEach parent).
+- `outputs.history['check-name']` — all committed values up to the current snapshot (alias: `outputs_history['check-name']`).
 
 ```yaml
 steps:
@@ -60,9 +63,16 @@ steps:
     operation: exec_js
     memory_js: |
       // Access all forEach iteration results
-      const allProcessed = outputs.history['process-items'];
+      const allProcessed = outputs.history['process-items'];  # or outputs_history['process-items']
       return { totalProcessed: allProcessed.length };
 ```
+
+Precedence rules (summary):
+- `outputs['x']` resolves to the nearest item if inside a per-item scope of `x`; otherwise to an ancestor value; otherwise to the latest committed.
+- `outputs_raw['x']` resolves to the shallowest/aggregate scope of `x` (e.g., the full array for a forEach parent).
+- `outputs.history['x']` returns all committed values for `x` in this session up to the snapshot.
+
+Routing JS also gets `outputs_raw` with the same semantics, so you can branch on the aggregate even when you’re inside a per-item iteration.
 
 See [Output History](./output-history.md) for more details on tracking outputs across iterations.
 
@@ -140,6 +150,7 @@ checks:
 
   aggregate-validations:
     type: memory
+    fanout: reduce  # ensure single aggregation run after forEach
     operation: exec_js
     memory_js: |
       // Access all validation results
@@ -355,6 +366,7 @@ checks:
 
   aggregate-all:
     type: memory
+    fanout: reduce
     operation: exec_js
     memory_js: |
       // Access ALL results from ALL dependent checks
@@ -439,4 +451,27 @@ const results = outputs.history['validate-fact'];
 - [Dependencies](./dependencies.md) - `on_finish` with forEach propagation patterns
 - [Output History](./output-history.md) - Accessing historical outputs across iterations
 - [examples/fact-validator.yaml](../examples/fact-validator.yaml) - Complete working example
+## Fan-out Control for Routing (Phase 5)
 
+When routing from a forEach context, you can opt into per‑item runs without writing manual loops:
+
+- Add `fanout: map` to the target check to schedule it once per item.
+- Add `fanout: reduce` (or `reduce: true`) to run once at the parent scope (default).
+
+This works with `on_success.run/goto`, `on_fail.run/goto`, and `on_finish.run/goto`.
+
+Example:
+```yaml
+checks:
+  files:
+    type: command
+    exec: git ls-files '*.ts'
+    forEach: true
+    on_success:
+      run: [lint-file]
+
+  lint-file:
+    type: command
+    fanout: map
+    exec: eslint {{ outputs['files'] }}
+```

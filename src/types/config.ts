@@ -367,6 +367,16 @@ export interface CheckConfig {
   tags?: string[];
   /** Process output as array and run dependent checks for each item */
   forEach?: boolean;
+  /**
+   * Control scheduling behavior when this check is triggered via routing (run/goto)
+   * from a forEach scope.
+   * - 'map': schedule once per item (fan-out) using item scopes.
+   * - 'reduce': schedule a single run at the parent scope (aggregation).
+   * If unset, the current default is a single run (reduce) for backward compatibility.
+   */
+  fanout?: 'map' | 'reduce';
+  /** Alias for fanout: 'reduce' */
+  reduce?: boolean;
   /** Failure routing configuration for this check (retry/goto/run) */
   on_fail?: OnFailConfig;
   /** Success routing configuration for this check (post-actions and optional goto) */

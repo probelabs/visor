@@ -254,6 +254,15 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Process output as array and run dependent checks for each item";
                 };
+                readonly fanout: {
+                    readonly type: "string";
+                    readonly enum: readonly ["map", "reduce"];
+                    readonly description: "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility.";
+                };
+                readonly reduce: {
+                    readonly type: "boolean";
+                    readonly description: "Alias for fanout: 'reduce'";
+                };
                 readonly on_fail: {
                     readonly $ref: "#/definitions/OnFailConfig";
                     readonly description: "Failure routing configuration for this check (retry/goto/run)";

@@ -584,12 +584,18 @@ export class MemoryCheckProvider extends CheckProvider {
 
     // Add dependency outputs - always create outputs object even if no dependencies
     const outputs: Record<string, unknown> = {};
+    const outputsRaw: Record<string, unknown> = {};
     const history: Record<string, unknown[]> = {};
 
     if (dependencyResults) {
       for (const [checkName, result] of dependencyResults.entries()) {
         const summary = result as ReviewSummary & { output?: unknown };
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        if (checkName.endsWith('-raw')) {
+          const name = checkName.slice(0, -4);
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        } else {
+          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        }
       }
     }
 
@@ -606,6 +612,8 @@ export class MemoryCheckProvider extends CheckProvider {
     context.outputs = outputs;
     // Alias for consistency: outputs_history mirrors outputs.history
     (context as any).outputs_history = history;
+    // New: outputs_raw exposes aggregate values for forEach parents
+    (context as any).outputs_raw = outputsRaw;
 
     // Add memory accessor
     if (memoryStore) {

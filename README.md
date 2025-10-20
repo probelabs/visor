@@ -120,7 +120,8 @@ See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
 Additional guides:
 
 - fail conditions: [docs/fail-if.md](docs/fail-if.md)
-- forEach behavior and dependent propagation: [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
+- forEach behavior and dependent propagation (including outputs_raw and history precedence): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
+- Failure routing and `on_finish` (with outputs_raw in routing JS): [docs/failure-routing.md](docs/failure-routing.md)
 - timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 
@@ -398,6 +399,38 @@ steps:
 
 Learn more: [docs/dependencies.md](docs/dependencies.md). See also: [forEach dependency propagation](docs/foreach-dependency-propagation.md)
 
+Quick example (outputs_raw):
+
+```yaml
+version: "2.0"
+checks:
+  list:
+    type: command
+    exec: echo '["a","b","c"]'
+    forEach: true
+
+  summarize:
+    type: memory
+    depends_on: [list]
+    operation: exec_js
+    memory_js: |
+      const arr = outputs_raw['list'] || [];
+      return { total: arr.length };
+
+  branch-by-size:
+    type: memory
+    depends_on: [list]
+    operation: exec_js
+    memory_js: 'return true'
+    on_success:
+      goto_js: |
+        return (outputs_raw['list'] || []).length >= 3 ? 'after' : null;
+
+  after:
+    type: log
+    message: bulk mode reached
+```
+
 ## 🔄 Failure Routing (Auto-fix Loops)
 
 Automatically remediate failures and re‑run steps using config‑driven routing:
@@ -662,6 +695,9 @@ Learn more: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Failure conditions schema: [docs/failure-conditions-schema.md](docs/failure-conditions-schema.md)
 - Failure conditions implementation notes: [docs/failure-conditions-implementation.md](docs/failure-conditions-implementation.md)
 - Recipes and practical examples: [docs/recipes.md](docs/recipes.md)
+- ForEach outputs and precedence (outputs vs outputs_raw vs history): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
+- Failure routing and on_finish aggregation (with outputs_raw in routing): [docs/failure-routing.md](docs/failure-routing.md)
+- Example config using outputs_raw: examples/outputs-raw-basic.yaml
 
 ## 📄 License
 

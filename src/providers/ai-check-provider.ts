@@ -283,6 +283,18 @@ export class AICheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     outputHistory?: Map<string, unknown[]>
   ): Promise<string> {
+    // Build outputs_raw from -raw keys (aggregate parent values)
+    const outputsRaw: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [k, v] of dependencyResults.entries()) {
+        if (k.endsWith('-raw')) {
+          const name = k.slice(0, -4);
+          const summary = v as ReviewSummary & { output?: unknown };
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+    }
+
     // Create comprehensive template context with PR and event information
     const templateContext = {
       // PR Information
@@ -410,6 +422,8 @@ export class AICheckProvider extends CheckProvider {
         }
         return hist;
       })(),
+      // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
+      outputs_raw: outputsRaw,
     };
 
     try {

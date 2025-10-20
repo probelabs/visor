@@ -11,6 +11,43 @@ This guide explains how to configure Visor to automatically remediate failures a
 - Protect against infinite loops with per-scope loop caps and per-step attempt counters
 - Use the same semantics inside forEach branches (each item is isolated)
 
+## Outputs Surface (Routing JS)
+
+When writing `run_js`/`goto_js`, you have three accessors:
+
+- `outputs['x']` — nearest value for check `x` in the current snapshot and scope.
+- `outputs_raw['x']` — aggregate value for `x` (e.g., the full array from a forEach parent).
+- `outputs.history['x']` (alias: `outputs_history['x']`) — all historical values for `x` up to this snapshot.
+
+Precedence for `outputs['x']` in routing sandboxes:
+- If running inside a forEach item of `x`, resolves to that item’s value.
+- Else prefer an ancestor scope value of `x`.
+- Else the latest committed value of `x` in the snapshot.
+
+Quick example using `outputs_raw` in `goto_js`:
+
+```yaml
+checks:
+  list:
+    type: command
+    exec: echo '["a","b","c"]'
+    forEach: true
+
+  decide:
+    type: memory
+    depends_on: [list]
+    operation: exec_js
+    memory_js: 'return { n: (outputs_raw["list"] || []).length }'
+    on_success:
+      goto_js: |
+        // Branch by aggregate size, not per-item value
+        return (outputs_raw['list'] || []).length >= 3 ? 'bulk-process' : null;
+
+  bulk-process: { type: log, message: 'bulk mode' }
+```
+
+Tip: `outputs_raw` is also available in provider templates (AI/command/log/memory), mirroring routing JS.
+
 ## Quick Examples
 
 Retry + goto on failure:
@@ -45,7 +82,11 @@ steps:
   notify: { type: command, exec: "echo notify" }
 ```
 
-**Note:** When using goto loops, `outputs.history` tracks all previous check outputs, while `outputs` always contains the current/latest value. See [Output History](./output-history.md) for accessing historical data in loops and retries.
+Note on outputs access:
+- `outputs['step-id']` returns the latest value for that step in the current snapshot.
+- `outputs.history['step-id']` returns the cross-loop history array.
+- `outputs_history['step-id']` is an alias for `outputs.history['step-id']` and is available in routing JS and provider templates.
+See [Output History](./output-history.md) for more details.
 
 forEach remediation with retry:
 ```yaml
@@ -89,6 +130,51 @@ Per-step actions:
 - Goto (ancestor-only): jump back to a previously executed dependency, then continue forward. On success, Visor re-runs the current step once after the jump.
 - Loop safety: `routing.max_loops` counts all routing transitions (runs, gotos, retries). Exceeding it aborts the current scope with a clear error.
 - forEach: each item is isolated with its own loop/attempt counters; `*_js` receives `{ foreach: { index, total, parent } }`.
+
+### Fan‑out vs. Reduce (Phase 5)
+
+You can control how routing targets behave when invoked from a forEach context:
+
+- `fanout: map` — schedule the target once per item (runs under each item scope).
+- `fanout: reduce` (or `reduce: true`) — schedule a single aggregation run (default/back‑compat).
+
+Where it applies:
+- on_success.run / on_success.goto
+- on_fail.run / on_fail.goto
+- on_finish.run / on_finish.goto (when defined on the forEach producer)
+
+Example — per‑item side‑effects via routing:
+```yaml
+checks:
+  list:
+    type: command
+    exec: echo '["a","b","c"]'
+    forEach: true
+    on_success:
+      run: [notify-item]
+
+  notify-item:
+    type: log
+    fanout: map  # ← run once for each item from 'list'
+    message: "Item: {{ outputs['list'] }}"
+```
+
+Example — single aggregation after forEach:
+```yaml
+checks:
+  extract:
+    forEach: true
+    on_success:
+      run: [summarize]
+
+  summarize:
+    type: memory
+    fanout: reduce  # ← single run
+    operation: exec_js
+    memory_js: |
+      const arr = outputs_raw['extract'] || [];
+      return { total: arr.length };
+```
 
 ## Goto Event Override (goto_event)
 
@@ -213,6 +299,11 @@ The `on_finish` hooks have access to the complete execution context:
   outputs.history: {
     'extract-facts': [[...], ...], // Cross-loop history
     'validate-fact': [[...], ...], // All results from all iterations
+  },
+  // Alias (also available):
+  outputs_history: {
+    'extract-facts': [[...], ...],
+    'validate-fact': [[...], ...],
   },
   forEach: {
     total: 3,              // Total number of items

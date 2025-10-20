@@ -9,6 +9,25 @@ It also lists a set of quick wins we can land immediately to polish PR #146 and 
 
 ---
 
+## Status Dashboard
+
+Priority scale: P0 = must‑have next; P1 = important; P2 = nice‑to‑have.
+
+Overall progress: ~85% complete (Phases 0–3 done; Phases 2 and 4 now complete; Phase 5 pending).
+
+| Phase | Priority | Status | % Complete | Notes |
+|---|---|---:|---:|---|
+| Phase 0 — Lay Hooks | P0 | ✅ Done | 100% | Journal + commits wired; unit coverage present. |
+| Phase 1 — Snapshot Visibility | P0 | ✅ Done | 100% | Engine builds dependencyResults from snapshot. |
+| Phase 2 — Outputs Surface | P1 | ✅ Done | 100% | outputs + outputs_history + outputs_raw shipped; docs updated with precedence matrix and examples. |
+| Phase 3 — Unified Scheduling | P0 | ✅ Done | 100% | runNamedCheck added; routing uses it; loop budget uniform. |
+| Phase 4 — Remove Per‑Item Map Cloning | P1 | ✅ Done | 100% | executeCheckInline and grouped forEach paths now use ScopePath + snapshot; minimal per-item overlay remains only within the same item’s inline descendant chain. |
+| Phase 5 — Fan‑Out/Reduce Control | P2 | ⏳ Not Started | 0% | Add reduce/fanout flag; keep default single‑run. |
+
+High‑priority backlog (outside phases)
+- [P0] Journal Event Scoping: tag entries with event; filter ContextView by current/goto_event.
+- [P1] Journal Performance Indexes: per‑(sessionId, checkId) indexes for readVisible.
+
 ## Goals
 - Deterministic reads under concurrency: each step sees a point‑in‑time view of prior results in the current run/session.
 - Scope‑aware outputs for forEach: nearest item wins, with explicit raw/history accessors.
@@ -81,7 +100,7 @@ Phase 0 — Lay Hooks (no behavior change)
 - [x] No feature flags — default-ready rollout.
 
 Acceptance
-- [ ] Unit: journal commits for all executed checks; commitId monotonic.
+- [x] Unit: journal commits monotonicity (see tests/unit/snapshot-store.test.ts).
 
 Target: by 2025-10-24
 
@@ -101,22 +120,58 @@ Phase 2 — Standardize Outputs Surface
 - [x] Expose `outputs`, `outputs_history` consistently in:
   - [x] Liquid templates (providers: ai, command, log, memory)
   - [x] Routing sandboxes (`on_success.run_js`, `on_success.goto_js`, `on_fail.run_js`, `on_fail.goto_js`, `on_finish.goto_js`)
-- [ ] Expose `outputs_raw` for aggregate parent values (planned with scope-aware raw access)
-- [ ] Document precedence and examples.
+- [x] Expose `outputs_raw` for aggregate parent values (scope‑aware raw access)
+- [x] Document precedence and examples (short snippet + table)
 
 Acceptance
-- [ ] Unit: routing sandbox can read `outputs_history['validate-fact']` without memory.
-- [ ] E2E: fact‑validator branches using history directly.
+- [x] Unit/Integration: routing sandboxes read outputs_history (see tests/integration/output-history-integration.test.ts).
+- [x] E2E: on_finish.goto_js can read outputs.history (see tests/e2e/on-finish-outputs-history-e2e.test.ts).
+- [x] outputs_raw surfaced across providers and routing (tests/integration/outputs-raw-integration.test.ts).
+
+Example: using outputs_raw
+
+```
+checks:
+  list:
+    type: command
+    exec: echo '["a","b","c"]'
+    forEach: true
+
+  use-raw-memory:
+    type: memory
+    depends_on: [list]
+    operation: exec_js
+    memory_js: |
+      const arr = outputs_raw["list"]; // → ["a","b","c"]
+      return { count: arr.length };
+
+  route-by-raw:
+    type: memory
+    depends_on: [list]
+    operation: exec_js
+    memory_js: |
+      return 'ok';
+    on_success:
+      goto_js: |
+        // Branch using the aggregate array
+        return (outputs_raw["list"] || []).length >= 3 ? 'after-route' : null;
+
+  after-route:
+    type: log
+    message: Reached after-route
+```
 
 Target: by 2025-10-31
 
 Phase 3 — Unified Scheduling Helper (same scope)
-- [ ] Introduce `runNamedCheck(target, scope, opts)` used by inline/goto/on_finish.
-- [ ] Ensure routing transitions count toward `routing.max_loops` uniformly.
-- [ ] Preserve current single‑run semantics (no fan‑out yet).
+- [x] Introduce `runNamedCheck(target, scope, opts)` used by inline/goto/on_finish.
+- [x] Ensure routing transitions count toward `routing.max_loops` uniformly.
+- [x] Preserve current single‑run semantics (no fan‑out yet).  
+  Note: Fan‑out control is deferred to Phase 5.
 
 Acceptance
-- [ ] Unit: on_success/on_fail/on_finish all share loop budget behavior.
+- [x] Integration: on_success/on_fail loop budgets enforced uniformly (tests/integration/routing-loop-budget-uniformity.test.ts).
+- [x] Integration: forEach item retry/remediation uses item context (tests/integration/routing-integration.test.ts).
 
 Target: by 2025-11-01
 

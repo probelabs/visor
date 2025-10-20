@@ -269,6 +269,18 @@
           "type": "boolean",
           "description": "Process output as array and run dependent checks for each item"
         },
+        "fanout": {
+          "type": "string",
+          "enum": [
+            "map",
+            "reduce"
+          ],
+          "description": "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility."
+        },
+        "reduce": {
+          "type": "boolean",
+          "description": "Alias for fanout: 'reduce'"
+        },
         "on_fail": {
           "$ref": "#/definitions/OnFailConfig",
           "description": "Failure routing configuration for this check (retry/goto/run)"

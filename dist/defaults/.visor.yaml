@@ -236,6 +236,8 @@ steps:
     depends_on: [overview]
     on: [pr_opened, pr_updated]
 
+  # Note: Fact validator steps are defined later in this file (AI-based)
+
   # Code quality and maintainability
   quality:
     type: ai
@@ -514,7 +516,6 @@ steps:
     value: 0
     namespace: fact-validation
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
 
   # Extract verifiable facts from assistant responses
   # This is a forEach check that triggers validation for each fact
@@ -541,9 +542,7 @@ steps:
         required: [id, category, claim, verifiable]
     depends_on: [init-fact-validation, issue-assistant, comment-assistant]
     on: [issue_opened, issue_comment]
-    if: |
-      env.ENABLE_FACT_VALIDATION === 'true' &&
-      (outputs['issue-assistant'] || outputs['comment-assistant'])
+    if: "outputs['issue-assistant'] || outputs['comment-assistant']"
     ai:
       skip_code_context: true
       disable_tools: true
@@ -621,7 +620,7 @@ steps:
         log('🔄 Facts invalid, retrying assistant with correction context');
         memory.increment('fact_validation_attempt', 1, 'fact-validation');
         return 'extract-facts';
-      goto_event: issue_comment
+      
 
   # Validate each extracted fact
   validate-fact:
@@ -652,7 +651,7 @@ steps:
       required: [fact_id, claim, is_valid, confidence, evidence]
     depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    
     prompt: |
       Validate this factual claim against the codebase:
 
@@ -673,7 +672,7 @@ steps:
     operation: exec_js
     namespace: fact-validation
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    fanout: reduce
     memory_js: |
       const validations = outputs.history['validate-fact'] || [];
 
