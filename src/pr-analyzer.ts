@@ -1,4 +1,7 @@
 import { Octokit } from '@octokit/rest';
+import ignore from 'ignore';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface PRFile {
   filename: string;
@@ -54,10 +57,71 @@ interface NetworkError {
 }
 
 export class PRAnalyzer {
+  private gitignore: ReturnType<typeof ignore> | null = null;
+  private gitignoreLoaded = false;
+
   constructor(
     private octokit: Octokit,
-    private maxRetries: number = 3
+    private maxRetries: number = 3,
+    private workingDirectory: string = process.cwd()
   ) {}
+
+  /**
+   * Load .gitignore patterns from the working directory
+   */
+  private loadGitignore(): void {
+    if (this.gitignoreLoaded) {
+      return;
+    }
+
+    this.gitignoreLoaded = true;
+    const gitignorePath = path.join(this.workingDirectory, '.gitignore');
+
+    try {
+      if (fs.existsSync(gitignorePath)) {
+        const gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
+        this.gitignore = ignore().add(gitignoreContent);
+        console.log('✅ Loaded .gitignore patterns for file filtering');
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to load .gitignore:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  /**
+   * Check if a file should be excluded based on .gitignore patterns
+   */
+  private shouldExcludeFile(filename: string): boolean {
+    // Load gitignore on first check
+    if (!this.gitignoreLoaded) {
+      this.loadGitignore();
+    }
+
+    // Check common build directories that should be excluded even if tracked
+    const excludePatterns = [
+      /^dist\//,
+      /^build\//,
+      /^\.next\//,
+      /^out\//,
+      /^node_modules\//,
+      /^coverage\//,
+      /^\.turbo\//,
+      /^bundled\//,
+    ];
+
+    for (const pattern of excludePatterns) {
+      if (pattern.test(filename)) {
+        return true;
+      }
+    }
+
+    // Check against .gitignore patterns if loaded
+    if (this.gitignore) {
+      return this.gitignore.ignores(filename);
+    }
+
+    return false;
+  }
 
   /**
    * Fetch commit diff for incremental analysis
@@ -172,6 +236,14 @@ export class PRAnalyzer {
               : 'modified') as 'added' | 'removed' | 'modified' | 'renamed',
           }))
           .filter(file => file.filename.length > 0) // Remove files with empty names
+          .filter(file => {
+            // Filter out files in .gitignore
+            if (this.shouldExcludeFile(file.filename)) {
+              console.log(`⏭️  Skipping excluded file: ${file.filename}`);
+              return false;
+            }
+            return true;
+          })
       : [];
 
     const prInfo: PRInfo = {

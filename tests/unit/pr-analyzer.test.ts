@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { PRAnalyzer } from '../../src/pr-analyzer';
+import * as fs from 'fs';
+import * as path from 'path';
+
+jest.mock('fs');
 
 // Mock Octokit
 const mockOctokit = {
@@ -401,6 +405,150 @@ describe('PRAnalyzer', () => {
 
       expect(result).not.toHaveProperty('commitDiff');
       expect(mockOctokit.rest.repos.getCommit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('gitignore filtering', () => {
+    const mockFs = fs as jest.Mocked<typeof fs>;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test('should filter out files in dist/ directory', async () => {
+      const mockPRData = {
+        data: {
+          number: 1,
+          title: 'Test PR',
+          body: 'Test',
+          user: { login: 'test-user' },
+          base: { ref: 'main' },
+          head: { ref: 'feature' },
+        },
+      };
+
+      const mockFilesData = {
+        data: [
+          {
+            filename: 'src/test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            status: 'modified',
+          },
+          {
+            filename: 'dist/index.js',
+            additions: 500,
+            deletions: 100,
+            changes: 600,
+            status: 'modified',
+          },
+        ],
+      };
+
+      mockOctokit.rest.pulls.get.mockResolvedValue(mockPRData);
+      mockOctokit.rest.pulls.listFiles.mockResolvedValue(mockFilesData);
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockFs.existsSync.mockReturnValue(false);
+
+      const result = await analyzer.fetchPRDiff('owner', 'repo', 1);
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].filename).toBe('src/test.ts');
+      expect(result.files.find(f => f.filename === 'dist/index.js')).toBeUndefined();
+    });
+
+    test('should filter out files matching .gitignore patterns', async () => {
+      const mockPRData = {
+        data: {
+          number: 1,
+          title: 'Test PR',
+          body: 'Test',
+          user: { login: 'test-user' },
+          base: { ref: 'main' },
+          head: { ref: 'feature' },
+        },
+      };
+
+      const mockFilesData = {
+        data: [
+          {
+            filename: 'src/test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            status: 'modified',
+          },
+          {
+            filename: 'coverage/lcov-report/index.html',
+            additions: 50,
+            deletions: 10,
+            changes: 60,
+            status: 'added',
+          },
+          {
+            filename: 'node_modules/package/index.js',
+            additions: 100,
+            deletions: 0,
+            changes: 100,
+            status: 'added',
+          },
+        ],
+      };
+
+      mockOctokit.rest.pulls.get.mockResolvedValue(mockPRData);
+      mockOctokit.rest.pulls.listFiles.mockResolvedValue(mockFilesData);
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+
+      // Mock .gitignore file
+      mockFs.existsSync.mockImplementation((filePath: any) => {
+        return filePath === path.join(process.cwd(), '.gitignore');
+      });
+      mockFs.readFileSync.mockReturnValue('coverage/\n*.log\n');
+
+      const analyzerWithGitignore = new PRAnalyzer(mockOctokit, 3, process.cwd());
+      const result = await analyzerWithGitignore.fetchPRDiff('owner', 'repo', 1);
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].filename).toBe('src/test.ts');
+      expect(result.files.find(f => f.filename.includes('coverage/'))).toBeUndefined();
+      expect(result.files.find(f => f.filename.includes('node_modules/'))).toBeUndefined();
+    });
+
+    test('should handle missing .gitignore gracefully', async () => {
+      const mockPRData = {
+        data: {
+          number: 1,
+          title: 'Test PR',
+          body: 'Test',
+          user: { login: 'test-user' },
+          base: { ref: 'main' },
+          head: { ref: 'feature' },
+        },
+      };
+
+      const mockFilesData = {
+        data: [
+          {
+            filename: 'src/test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            status: 'modified',
+          },
+        ],
+      };
+
+      mockOctokit.rest.pulls.get.mockResolvedValue(mockPRData);
+      mockOctokit.rest.pulls.listFiles.mockResolvedValue(mockFilesData);
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockFs.existsSync.mockReturnValue(false);
+
+      const analyzerNoGitignore = new PRAnalyzer(mockOctokit, 3, process.cwd());
+      const result = await analyzerNoGitignore.fetchPRDiff('owner', 'repo', 1);
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].filename).toBe('src/test.ts');
     });
   });
 });
