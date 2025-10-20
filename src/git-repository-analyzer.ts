@@ -277,7 +277,10 @@ export class GitRepositoryAnalyzer {
 
       for (const { file, status } of fileChanges) {
         // Skip files that should be excluded from analysis
-        if (this.fileExclusionHelper.shouldExcludeFile(file) || (await this.shouldExcludeFileGit(file))) {
+        if (
+          this.fileExclusionHelper.shouldExcludeFile(file) ||
+          (await this.shouldExcludeFileGit(file))
+        ) {
           console.error(`⏭️  Skipping excluded file: ${file}`);
           continue;
         }
@@ -312,7 +315,10 @@ export class GitRepositoryAnalyzer {
 
       for (const file of diffSummary.files) {
         // Skip files that should be excluded from analysis
-        if (this.fileExclusionHelper.shouldExcludeFile(file.file) || (await this.shouldExcludeFileGit(file.file))) {
+        if (
+          this.fileExclusionHelper.shouldExcludeFile(file.file) ||
+          (await this.shouldExcludeFileGit(file.file))
+        ) {
           console.error(`⏭️  Skipping excluded file: ${file.file}`);
           continue;
         }
