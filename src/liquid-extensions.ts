@@ -14,15 +14,18 @@ import {
 import { MemoryStore } from './memory-store';
 
 /**
- * Sanitize label strings to only allow [A-Za-z0-9:/] characters
+ * Sanitize label strings to only allow [A-Za-z0-9:/\- ] characters (including spaces and hyphens)
  * @param value - Label value to sanitize
  * @returns Sanitized label string
  */
 export function sanitizeLabel(value: unknown): string {
   if (value == null) return '';
   const s = String(value);
-  // Keep only alphanumerics, colon, slash; collapse repeated slashes
-  return s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/');
+  // Keep only alphanumerics, colon, slash, hyphen, and space; collapse repeated slashes and trim
+  return s
+    .replace(/[^A-Za-z0-9:\/\- ]/g, '')
+    .replace(/\/{2,}/g, '/')
+    .trim();
 }
 
 /**

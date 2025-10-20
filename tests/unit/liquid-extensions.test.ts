@@ -344,4 +344,77 @@ No file included
       expect(result).toBe('[Error: Unable to serialize to JSON]');
     });
   });
+
+  describe('safe_label filter', () => {
+    it('should preserve spaces in label names', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: 'good first issue' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('good first issue');
+    });
+
+    it('should preserve hyphens in label names', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: 'needs-review' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('needs-review');
+    });
+
+    it('should preserve colons and slashes in label names', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: 'review/effort:high' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('review/effort:high');
+    });
+
+    it('should remove special characters but keep spaces', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: 'needs review!' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('needs review');
+    });
+
+    it('should trim leading and trailing whitespace', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: '  good first issue  ' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('good first issue');
+    });
+
+    it('should handle empty/null values', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const result1 = await liquid.parseAndRender(template, { label: '' });
+      const result2 = await liquid.parseAndRender(template, { label: null });
+
+      expect(result1).toBe('');
+      expect(result2).toBe('');
+    });
+
+    it('should collapse repeated slashes', async () => {
+      const liquid = createExtendedLiquid();
+
+      const template = '{{ label | safe_label }}';
+      const context = { label: 'review//effort///high' };
+      const result = await liquid.parseAndRender(template, context);
+
+      expect(result).toBe('review/effort/high');
+    });
+  });
 });

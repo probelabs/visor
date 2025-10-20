@@ -46,7 +46,7 @@ These issues are visible in tables/markdown output and will not abort the whole 
 
 To prevent injection and ensure GitHub‑compatible labels, use Liquid filters:
 
-- `safe_label` — keeps only `[A-Za-z0-9:/]`, collapses repeated `/`.
+- `safe_label` — keeps only `[A-Za-z0-9:/\- ]` (alphanumerics, colon, slash, hyphen, and space), collapses repeated `/`, and trims whitespace.
 - `safe_label_list` — applies `safe_label` to arrays and removes empty values.
 
 Examples:
