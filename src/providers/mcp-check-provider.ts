@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * MCP Check Provider Configuration
@@ -68,74 +69,7 @@ export class McpCheckProvider extends CheckProvider {
    * - No access to filesystem, network, or system resources
    */
   private createSecureSandbox(): Sandbox {
-    const log = (...args: unknown[]) => {
-      logger.debug(`[transform_js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
-    };
-
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS, // Excludes Function, eval, require, process, etc.
-      Math,
-      JSON,
-      console: {
-        log,
-      },
-    };
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-
-    // Allow array methods
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-      'push',
-      'pop',
-      'shift',
-      'unshift',
-      'sort',
-      'reverse',
-      'flat',
-      'flatMap',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    // Allow safe string methods (replace is for string manipulation, not code execution)
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace', // String.prototype.replace for text manipulation (e.g., "hello".replace("h", "H"))
-      'match',
-      'padStart',
-      'padEnd',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    // Allow object methods
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf', 'keys', 'values']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    return new Sandbox({
-      globals,
-      prototypeWhitelist,
-    });
+    return createSecureSandbox();
   }
 
   getName(): string {
@@ -301,8 +235,12 @@ export class McpCheckProvider extends CheckProvider {
           };
 
           // Compile and execute the transform in sandboxed environment
-          const exec = this.sandbox.compile(`return (${cfg.transform_js});`);
-          finalOutput = exec(scope).run();
+          finalOutput = compileAndRun<unknown>(
+            this.sandbox,
+            `return (${cfg.transform_js});`,
+            scope,
+            { injectLog: true, wrapFunction: false, logPrefix: '[mcp:transform_js]' }
+          );
         } catch (error) {
           logger.error(`Failed to apply JavaScript transform: ${error}`);
           return {

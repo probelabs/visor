@@ -2,6 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 
 export class GitHubOpsProvider extends CheckProvider {
@@ -159,12 +160,22 @@ export class GitHubOpsProvider extends CheckProvider {
       try {
         // Evaluate user-provided value_js in a restricted sandbox (no process/global exposure)
         const sandbox = this.getSecureSandbox();
-        const code = `
-          const __fn = () => {\n${cfg.value_js}\n};
-          return __fn();
-        `;
-        const exec = sandbox.compile(code);
-        const res = exec({ pr: prInfo, values });
+
+        // Build dependency outputs map (mirrors Liquid context construction)
+        const depOutputs: Record<string, unknown> = {};
+        if (dependencyResults) {
+          for (const [name, result] of dependencyResults.entries()) {
+            const summary = result as ReviewSummary & { output?: unknown };
+            depOutputs[name] = summary.output !== undefined ? summary.output : summary;
+          }
+        }
+
+        const res = compileAndRun<unknown>(
+          sandbox,
+          cfg.value_js,
+          { pr: prInfo, values, outputs: depOutputs },
+          { injectLog: true, wrapFunction: true, logPrefix: '[github:value_js]' }
+        );
         if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
@@ -260,48 +271,7 @@ export class GitHubOpsProvider extends CheckProvider {
    */
   private getSecureSandbox(): Sandbox {
     if (this.sandbox) return this.sandbox;
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      Math,
-    } as Record<string, unknown>;
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    this.sandbox = new Sandbox({ globals, prototypeWhitelist });
+    this.sandbox = createSecureSandbox();
     return this.sandbox;
   }
 }
