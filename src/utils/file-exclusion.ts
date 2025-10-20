@@ -31,7 +31,7 @@ export class FileExclusionHelper {
         // Sanitize content to prevent injection attacks
         const gitignoreContent = rawContent.replace(/[\r\n]+/g, '\n').trim();
         this.gitignore = ignore().add(gitignoreContent);
-        console.log('✅ Loaded .gitignore patterns for file filtering');
+        console.error('✅ Loaded .gitignore patterns for file filtering');
       }
     } catch (error) {
       console.warn('⚠️ Failed to load .gitignore:', error instanceof Error ? error.message : error);
