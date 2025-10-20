@@ -434,13 +434,18 @@ steps:
     on: [issue_opened]
     op: labels.add
     value_js: |
-      const issueAssistant = outputs['issue-assistant'];
-      const labels = Array.isArray(issueAssistant?.labels) ? issueAssistant.labels : [];
-      // Sanitize labels: keep [A-Za-z0-9:/], collapse repeated '/'
-      return labels
-        .map(v => (v == null ? '' : String(v)))
-        .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
-        .filter(s => s.length > 0);
+      try {
+        const issueAssistant = outputs['issue-assistant'];
+        const labels = Array.isArray(issueAssistant?.labels) ? issueAssistant.labels : [];
+        // Sanitize labels: keep [A-Za-z0-9:/], collapse repeated '/'
+        return labels
+          .map(v => (v == null ? '' : String(v)))
+          .map(s => s.replace(/[^A-Za-z0-9:\/]/g, '').replace(/\/{2,}/g, '/'))
+          .filter(s => s.length > 0);
+      } catch (error) {
+        log('Error processing issue labels:', error);
+        return [];
+      }
 
   # External origin labelling for PRs and Issues
   external-label:
