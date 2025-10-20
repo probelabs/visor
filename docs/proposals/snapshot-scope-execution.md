@@ -92,15 +92,16 @@ Phase 1 — Snapshot‑based Visibility (minimal surface)
 - [x] Keep dependency graph for ordering; this change affects visibility only.
 
 Acceptance
-- [ ] Unit: parallel checks read only entries ≤ their snapshot; later commits are not visible. (todo)
-- [ ] Integration: original “comment‑assistant → extract‑facts” visibility issue resolved without adding deps. (todo)
+- [x] Unit: parallel checks read only entries ≤ their snapshot; later commits are not visible. (covered by snapshot-store tests)
+- [x] Integration: no‑deps visibility validated via snapshot with goto (see `tests/integration/snapshot-visibility-integration.test.ts`).
 
 Target: by 2025-10-28
 
 Phase 2 — Standardize Outputs Surface
-- [ ] Expose `outputs`, `outputs_raw`, `outputs_history` consistently in:
-  - [ ] Liquid templates (providers)
-  - [ ] Routing sandboxes (`goto_js`, `run_js`, `on_finish.goto_js`, `on_finish.run_js`)
+- [x] Expose `outputs`, `outputs_history` consistently in:
+  - [x] Liquid templates (providers: ai, command, log, memory)
+  - [x] Routing sandboxes (`on_success.run_js`, `on_success.goto_js`, `on_fail.run_js`, `on_fail.goto_js`, `on_finish.goto_js`)
+- [ ] Expose `outputs_raw` for aggregate parent values (planned with scope-aware raw access)
 - [ ] Document precedence and examples.
 
 Acceptance
