@@ -213,20 +213,6 @@ export class GitRepositoryAnalyzer {
   }
 
   /**
-   * Check if a file should be excluded from analysis using git check-ignore
-   * This supplements the FileExclusionHelper with git-specific checks
-   */
-  private async shouldExcludeFileGit(filename: string): Promise<boolean> {
-    try {
-      const result = await this.git.raw(['check-ignore', filename]);
-      return result.trim().length > 0;
-    } catch {
-      // If check-ignore returns non-zero exit code, the file is not ignored
-      return false;
-    }
-  }
-
-  /**
    * Truncate a patch if it exceeds MAX_PATCH_SIZE
    */
   private truncatePatch(patch: string, filename: string): { patch: string; truncated: boolean } {
@@ -277,10 +263,8 @@ export class GitRepositoryAnalyzer {
 
       for (const { file, status } of fileChanges) {
         // Skip files that should be excluded from analysis
-        if (
-          this.fileExclusionHelper.shouldExcludeFile(file) ||
-          (await this.shouldExcludeFileGit(file))
-        ) {
+        // FileExclusionHelper uses .gitignore patterns, which is sufficient
+        if (this.fileExclusionHelper.shouldExcludeFile(file)) {
           console.error(`⏭️  Skipping excluded file: ${file}`);
           continue;
         }
@@ -315,10 +299,8 @@ export class GitRepositoryAnalyzer {
 
       for (const file of diffSummary.files) {
         // Skip files that should be excluded from analysis
-        if (
-          this.fileExclusionHelper.shouldExcludeFile(file.file) ||
-          (await this.shouldExcludeFileGit(file.file))
-        ) {
+        // FileExclusionHelper uses .gitignore patterns, which is sufficient
+        if (this.fileExclusionHelper.shouldExcludeFile(file.file)) {
           console.error(`⏭️  Skipping excluded file: ${file.file}`);
           continue;
         }
