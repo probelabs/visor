@@ -96,4 +96,26 @@ describe('GitHubOpsProvider - empty value handling', () => {
       body: 'hello',
     });
   });
+
+  it('preserves spaces in label names like "good first issue"', async () => {
+    const provider = new GitHubOpsProvider();
+    const pr = makePr(10);
+    const cfg: any = {
+      type: 'github',
+      op: 'labels.add',
+      values: ['good first issue', 'enhancement', 'ui/ux'],
+    };
+
+    await provider.execute(pr, cfg);
+
+    const { Octokit } = await import('@octokit/rest');
+    const mockApi = (Octokit as any).__mock;
+    expect(mockApi.addLabels).toHaveBeenCalledTimes(1);
+    expect(mockApi.addLabels).toHaveBeenCalledWith({
+      owner: 'owner',
+      repo: 'repo',
+      issue_number: 10,
+      labels: ['good first issue', 'enhancement', 'ui/ux'],
+    });
+  });
 });

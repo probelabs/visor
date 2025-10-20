@@ -299,5 +299,5 @@ steps:
 
 Notes:
 - Requires `GITHUB_TOKEN` (or `github-token` Action input) and `GITHUB_REPOSITORY` in environment.
-- Use Liquid `safe_label` / `safe_label_list` to constrain labels to `[A-Za-z0-9:/]`.
-- Provider errors surface as issues (e.g., `github/missing_token`, `github/op_failed`) and won’t abort the whole run.
+- Use Liquid `safe_label` / `safe_label_list` to constrain labels to `[A-Za-z0-9:/\- ]` (alphanumerics, colon, slash, hyphen, and space).
+- Provider errors surface as issues (e.g., `github/missing_token`, `github/op_failed`) and won't abort the whole run.
