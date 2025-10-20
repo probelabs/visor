@@ -68,7 +68,9 @@ export class McpCheckProvider extends CheckProvider {
    * - Only allows explicitly whitelisted prototype methods
    * - No access to filesystem, network, or system resources
    */
-  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
+  private createSecureSandbox(): Sandbox {
+    return createSecureSandbox();
+  }
 
   getName(): string {
     return 'mcp';

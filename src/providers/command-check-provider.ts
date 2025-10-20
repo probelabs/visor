@@ -30,7 +30,9 @@ export class CommandCheckProvider extends CheckProvider {
     // Lazily create sandbox only when transform_js is used
   }
 
-  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
+  private createSecureSandbox(): Sandbox {
+    return createSecureSandbox();
+  }
 
   getName(): string {
     return 'command';

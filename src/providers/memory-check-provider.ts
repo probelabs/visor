@@ -40,7 +40,9 @@ export class MemoryCheckProvider extends CheckProvider {
   /**
    * Create a secure sandbox for JavaScript execution
    */
-  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
+  private createSecureSandbox(): Sandbox {
+    return createSecureSandbox();
+  }
 
   getName(): string {
     return 'memory';

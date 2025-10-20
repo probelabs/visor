@@ -28,7 +28,9 @@ export class FailureConditionEvaluator {
   /**
    * Create a secure sandbox with whitelisted functions and globals
    */
-  private createSecureSandbox(): Sandbox { return createSecureSandbox(); }
+  private createSecureSandbox(): Sandbox {
+    return createSecureSandbox();
+  }
 
   /**
    * Evaluate simple fail_if condition

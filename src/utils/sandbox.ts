@@ -81,7 +81,13 @@ export function createSecureSandbox(): Sandbox {
   prototypeWhitelist.set(String.prototype, stringMethods);
 
   // Objects — keep to basic safe operations
-  const objectMethods = new Set<string>(['hasOwnProperty', 'toString', 'valueOf', 'keys', 'values']);
+  const objectMethods = new Set<string>([
+    'hasOwnProperty',
+    'toString',
+    'valueOf',
+    'keys',
+    'values',
+  ]);
   prototypeWhitelist.set(Object.prototype, objectMethods);
 
   return new Sandbox({ globals, prototypeWhitelist });
@@ -106,6 +112,9 @@ export function compileAndRun<T = unknown>(
     : `${userCode}`;
   const code = `${header}${body}`;
   const exec = sandbox.compile(code);
-  return exec(scope) as T;
+  const out = exec(scope) as unknown as { run?: () => T } | T;
+  if (out && typeof (out as any).run === 'function') {
+    return (out as any).run();
+  }
+  return out as T;
 }
-
