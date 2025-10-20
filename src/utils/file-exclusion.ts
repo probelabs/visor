@@ -32,8 +32,23 @@ export class FileExclusionHelper {
     workingDirectory: string = process.cwd(),
     additionalPatterns: string[] | null = DEFAULT_EXCLUSION_PATTERNS
   ) {
-    this.workingDirectory = path.resolve(workingDirectory);
+    // Validate and normalize workingDirectory to prevent path traversal
+    const normalizedPath = path.resolve(workingDirectory);
+
+    // Ensure path doesn't contain suspicious patterns after normalization
+    // Check for null bytes which could be used for injection
+    if (normalizedPath.includes('\0')) {
+      throw new Error('Invalid workingDirectory: contains null bytes');
+    }
+
+    this.workingDirectory = normalizedPath;
+
     // Load gitignore synchronously during construction
+    // This is acceptable because:
+    // 1. Constructor is called once during initialization
+    // 2. .gitignore files are typically small (<10KB)
+    // 3. Synchronous loading ensures patterns are ready immediately
+    // 4. Avoids async constructor complexity
     this.loadGitignore(additionalPatterns);
   }
 

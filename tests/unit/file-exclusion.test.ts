@@ -43,6 +43,20 @@ describe('FileExclusionHelper', () => {
 
       consoleSpy.mockRestore();
     });
+
+    test('should reject workingDirectory with null bytes', () => {
+      expect(() => {
+        new FileExclusionHelper('/tmp/test\0malicious');
+      }).toThrow('Invalid workingDirectory: contains null bytes');
+    });
+
+    test('should normalize relative paths safely', () => {
+      // Relative paths with .. should be normalized safely
+      const helper = new FileExclusionHelper('../test-dir');
+
+      // Should still work (path is normalized to absolute)
+      expect(helper.shouldExcludeFile('dist/index.js')).toBe(true);
+    });
   });
 
   describe('Content Sanitization', () => {
