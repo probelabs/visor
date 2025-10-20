@@ -1,6 +1,8 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { SimpleTelemetry, SimpleAppTracer } from '@probelabs/probe';
+// Use runtime require to avoid TS type errors due to missing named exports in d.ts
+
+const ProbeLib: any = require('@probelabs/probe');
 
 /**
  * Safely initialize a tracer for ProbeAgent with proper path sanitization
@@ -13,6 +15,8 @@ export async function initializeTracer(
 ): Promise<{ tracer: unknown; telemetryConfig: unknown; filePath: string } | null> {
   try {
     // Use SimpleTelemetry (probe no longer exports full OpenTelemetry classes)
+    const SimpleTelemetry = ProbeLib?.SimpleTelemetry;
+    const SimpleAppTracer = ProbeLib?.SimpleAppTracer;
     if (SimpleTelemetry && SimpleAppTracer) {
       // SECURITY: Sanitize checkName to prevent path traversal attacks
       const sanitizedCheckName = checkName ? path.basename(checkName) : 'check';

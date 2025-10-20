@@ -164,7 +164,41 @@ export class GitHubOpsProvider extends CheckProvider {
           return __fn();
         `;
         const exec = sandbox.compile(code);
-        const res = exec({ pr: prInfo, values });
+
+        // Build dependency outputs map (mirrors Liquid context construction)
+        const depOutputs: Record<string, unknown> = {};
+        if (dependencyResults) {
+          for (const [name, result] of dependencyResults.entries()) {
+            const summary = result as ReviewSummary & { output?: unknown };
+            depOutputs[name] = summary.output !== undefined ? summary.output : summary;
+          }
+        }
+
+        // Provide a lightweight logger to sandboxed scripts
+        const sandboxLog = (...args: unknown[]) => {
+          try {
+            const msg = args
+              .map(a =>
+                typeof a === 'string'
+                  ? a
+                  : (() => {
+                      try {
+                        return JSON.stringify(a);
+                      } catch {
+                        return String(a);
+                      }
+                    })()
+              )
+              .join(' ');
+            // Use stderr to surface clearly in CI logs
+            // Prefix to make search/filter easier
+            console.error(`[github:value_js] ${msg}`);
+          } catch {
+            // Best-effort logging; ignore failures
+          }
+        };
+
+        const res = exec({ pr: prInfo, values, outputs: depOutputs, log: sandboxLog });
         if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
