@@ -131,7 +131,7 @@ export class SessionRegistry {
     try {
       // Use ProbeAgent's official clone() method with options
       // This handles intelligent message filtering automatically
-      const clonedAgent = sourceAgent.clone({
+      const clonedAgent = (sourceAgent as any).clone({
         sessionId: newSessionId,
         stripInternalMessages: true, // Remove schema reminders, tool prompts, etc.
         keepSystemMessage: true, // Keep for cache efficiency

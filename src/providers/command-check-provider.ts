@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import {
@@ -36,14 +37,7 @@ export class CommandCheckProvider extends CheckProvider {
   }
 
   private createSecureSandbox(): Sandbox {
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      console: console,
-      JSON: JSON,
-    };
-
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-    return new Sandbox({ globals, prototypeWhitelist });
+    return createSecureSandbox();
   }
 
   getName(): string {
@@ -358,8 +352,12 @@ ${bodyWithReturn}
           if (parsedFromSandboxJson !== undefined) {
             finalOutput = parsedFromSandboxJson;
           } else {
-            const exec = this.sandbox.compile(code);
-            finalOutput = exec({ scope: jsContext }).run();
+            finalOutput = compileAndRun<unknown>(
+              this.sandbox,
+              code,
+              { scope: jsContext },
+              { injectLog: false, wrapFunction: false }
+            );
           }
 
           // Fallback: if sandbox could not preserve primitives (e.g., booleans lost),
