@@ -1923,6 +1923,15 @@ ${this.escapeXml(processedFallbackDiff)}
         (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
         (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
 
+      log(`🔍 Schema detection: _schema="${_schema}", isCustomSchema=${isCustomSchema}`);
+      if (_schema) {
+        log(`   - Is 'custom': ${_schema === 'custom'}`);
+        log(`   - Starts with './': ${_schema.startsWith('./')}`);
+        log(`   - Ends with '.json': ${_schema.endsWith('.json')}`);
+        log(`   - Not 'code-review': ${_schema !== 'code-review'}`);
+        log(`   - Doesn't include 'output/': ${!_schema.includes('output/')}`);
+      }
+
       if (isCustomSchema) {
         // For custom schemas, preserve ALL fields from the parsed JSON
         // Don't force the response into the standard ReviewSummary format
