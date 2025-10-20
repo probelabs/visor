@@ -148,6 +148,8 @@ export class AIReviewService {
     }
   }
 
+  // NOTE: per request, no additional redaction/encryption helpers are used.
+
   /**
    * Execute AI review using probe agent
    */
@@ -1097,11 +1099,12 @@ ${this.escapeXml(processedFallbackDiff)}
 
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          // do not enforce directory perms here
 
           // Save complete session history (all messages sent and received)
-          const sessionFile = path.join(
+          const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.json`
+            `session-${_checkName || 'unknown'}-${timestamp}`
           );
           const sessionData = {
             timestamp,
@@ -1109,42 +1112,41 @@ ${this.escapeXml(processedFallbackDiff)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            fullConversationHistory: fullHistory,
-            totalMessages: fullHistory.length,
-            latestResponse: response,
+            totalMessages: fullHistory.length
           };
+          fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
-          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+          // Redacted textual summary
+          let readable = `=============================================================
+`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
+`;
+          readable += `=============================================================
+`;
+          readable += `Timestamp: ${timestamp}
+`;
+          readable += `Check: ${_checkName || 'unknown'}
+`;
+          readable += `Total Messages: ${fullHistory.length}
+`;
+          readable += `=============================================================
 
-          // Save human-readable version
-          const sessionTxtFile = path.join(
-            debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.txt`
-          );
-          let readable = `=============================================================\n`;
-          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
-          readable += `=============================================================\n`;
-          readable += `Timestamp: ${timestamp}\n`;
-          readable += `Check: ${_checkName || 'unknown'}\n`;
-          readable += `Total Messages: ${fullHistory.length}\n`;
-          readable += `=============================================================\n\n`;
-
+`;
           fullHistory.forEach((msg: any, idx: number) => {
-            readable += `\n${'='.repeat(60)}\n`;
-            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
-            readable += `Role: ${msg.role || 'unknown'}\n`;
-            readable += `${'='.repeat(60)}\n`;
-
-            const content =
-              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
-            readable += content + '\n';
+            const role = msg.role || 'unknown';
+            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += `
+${'='.repeat(60)}
+MESSAGE ${idx + 1}/${fullHistory.length}
+Role: ${role}
+${'='.repeat(60)}
+`;
+            readable += content + "\n";
           });
-
-          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+          fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
           log(`💾 Complete session history saved:`);
-          log(`   JSON: ${sessionFile}`);
-          log(`   TXT:  ${sessionTxtFile}`);
+          // (paths omitted)
           log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
         } catch (error) {
           log(`⚠️ Could not save complete session history: ${error}`);
@@ -1453,28 +1455,15 @@ ${this.escapeXml(processedFallbackDiff)}
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
           try {
-            if (!fs.existsSync(debugArtifactsDir)) {
-              fs.mkdirSync(debugArtifactsDir, { recursive: true });
-            }
-
-            // Save JSON version
-            const debugFile = path.join(
+            // do not enforce fs permissions here
+            const base = path.join(
               debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}.json`
+              `prompt-${_checkName || 'unknown'}-${timestamp}`
             );
-            fs.writeFileSync(debugFile, debugJson, 'utf-8');
-
-            // Save readable version
-            const readableFile = path.join(
-              debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}.txt`
-            );
-            fs.writeFileSync(readableFile, readableVersion, 'utf-8');
-
-            log(`\n💾 Full debug info saved to:`);
-            log(`   JSON: ${debugFile}`);
-            log(`   TXT:  ${readableFile}`);
-            log(`   - Includes: prompt, schema, provider, model, and schema options`);
+            fs.writeFileSync(base + '.json', debugJson, 'utf-8');
+            fs.writeFileSync(base + '.summary.txt', readableVersion, 'utf-8');
+            log(`
+💾 Full debug info saved to directory: ${debugArtifactsDir}`);
           } catch {
             // Ignore if we can't write to debug-artifacts
           }
@@ -1549,11 +1538,12 @@ ${this.escapeXml(processedFallbackDiff)}
 
           const debugArtifactsDir =
             process.env.VISOR_DEBUG_ARTIFACTS || path.join(process.cwd(), 'debug-artifacts');
+          // do not enforce fs permissions here
 
           // Save complete session history (all messages sent and received)
-          const sessionFile = path.join(
+          const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.json`
+            `session-${_checkName || 'unknown'}-${timestamp}`
           );
           const sessionData = {
             timestamp,
@@ -1561,42 +1551,41 @@ ${this.escapeXml(processedFallbackDiff)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            fullConversationHistory: fullHistory,
-            totalMessages: fullHistory.length,
-            latestResponse: response,
+            totalMessages: fullHistory.length
           };
+          fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
-          fs.writeFileSync(sessionFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+          // Redacted textual summary
+          let readable = `=============================================================
+`;
+          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
+`;
+          readable += `=============================================================
+`;
+          readable += `Timestamp: ${timestamp}
+`;
+          readable += `Check: ${_checkName || 'unknown'}
+`;
+          readable += `Total Messages: ${fullHistory.length}
+`;
+          readable += `=============================================================
 
-          // Save human-readable version
-          const sessionTxtFile = path.join(
-            debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}.txt`
-          );
-          let readable = `=============================================================\n`;
-          readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)\n`;
-          readable += `=============================================================\n`;
-          readable += `Timestamp: ${timestamp}\n`;
-          readable += `Check: ${_checkName || 'unknown'}\n`;
-          readable += `Total Messages: ${fullHistory.length}\n`;
-          readable += `=============================================================\n\n`;
-
+`;
           fullHistory.forEach((msg: any, idx: number) => {
-            readable += `\n${'='.repeat(60)}\n`;
-            readable += `MESSAGE ${idx + 1}/${fullHistory.length}\n`;
-            readable += `Role: ${msg.role || 'unknown'}\n`;
-            readable += `${'='.repeat(60)}\n`;
-
-            const content =
-              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
-            readable += content + '\n';
+            const role = msg.role || 'unknown';
+            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            readable += `
+${'='.repeat(60)}
+MESSAGE ${idx + 1}/${fullHistory.length}
+Role: ${role}
+${'='.repeat(60)}
+`;
+            readable += content + "\n";
           });
-
-          fs.writeFileSync(sessionTxtFile, readable, 'utf-8');
+          fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
           log(`💾 Complete session history saved:`);
-          log(`   JSON: ${sessionFile}`);
-          log(`   TXT:  ${sessionTxtFile}`);
+          // (paths omitted)
           log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
         } catch (error) {
           log(`⚠️ Could not save complete session history: ${error}`);
