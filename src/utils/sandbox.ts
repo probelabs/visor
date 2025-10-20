@@ -106,8 +106,12 @@ export function compileAndRun<T = unknown>(
 ): T {
   const inject = opts?.injectLog === true;
   let safePrefix = String(opts?.logPrefix ?? '[sandbox]');
-  // Sanitize prefix: drop control chars and limit length
-  safePrefix = safePrefix.replace(/[\r\n\t\0]/g, '').slice(0, 64);
+  // Sanitize prefix aggressively: drop control chars and risky tokens, limit length
+  safePrefix = safePrefix
+    .replace(/[\r\n\t\0]/g, '')
+    .replace(/[`$\\]/g, '') // strip backticks, dollar (template) and backslashes
+    .replace(/\$\{/g, '') // remove template openings if present
+    .slice(0, 64);
   // Build a safe header without string concatenation inside user code
   const header = inject
     ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`
@@ -116,10 +120,29 @@ export function compileAndRun<T = unknown>(
     ? `const __fn = () => {\n${userCode}\n};\nreturn __fn();\n`
     : `${userCode}`;
   const code = `${header}${body}`;
-  const exec = sandbox.compile(code);
-  const out = exec(scope) as unknown as { run?: () => T } | T;
-  if (out && typeof (out as any).run === 'function') {
-    return (out as any).run();
+  let exec: ReturnType<typeof sandbox.compile>;
+  try {
+    exec = sandbox.compile(code);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`sandbox_compile_error: ${msg}`);
+  }
+
+  let out: any;
+  try {
+    out = exec(scope);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`sandbox_execution_error: ${msg}`);
+  }
+
+  if (out && typeof out.run === 'function') {
+    try {
+      return out.run();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`sandbox_runner_error: ${msg}`);
+    }
   }
   return out as T;
 }
