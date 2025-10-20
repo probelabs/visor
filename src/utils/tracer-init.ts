@@ -1,8 +1,5 @@
 import * as path from 'path';
 import * as fs from 'fs';
-// Use runtime require to avoid TS type errors due to missing named exports in d.ts
-
-const ProbeLib: any = require('@probelabs/probe');
 
 /**
  * Safely initialize a tracer for ProbeAgent with proper path sanitization
@@ -14,6 +11,19 @@ export async function initializeTracer(
   checkName?: string
 ): Promise<{ tracer: unknown; telemetryConfig: unknown; filePath: string } | null> {
   try {
+    // Load Probe lib in a way that works in both ESM and CJS bundles
+    let ProbeLib: any;
+    try {
+      ProbeLib = await import('@probelabs/probe');
+    } catch {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        ProbeLib = require('@probelabs/probe');
+      } catch {
+        ProbeLib = {};
+      }
+    }
+
     // Use SimpleTelemetry (probe no longer exports full OpenTelemetry classes)
     const SimpleTelemetry = ProbeLib?.SimpleTelemetry;
     const SimpleAppTracer = ProbeLib?.SimpleAppTracer;
