@@ -43,6 +43,8 @@ export class DebugVisualizerServer {
   private startExecutionResolver: (() => void) | null = null;
   private startExecutionTimeout: NodeJS.Timeout | null = null;
   private executionState: 'idle' | 'running' | 'paused' | 'stopped' = 'idle';
+  private pausePromise: Promise<void> | null = null;
+  private pauseResolver: (() => void) | null = null;
 
   /**
    * Start the HTTP server
@@ -136,6 +138,12 @@ export class DebugVisualizerServer {
     this.spans = [];
     this.results = null;
     this.executionState = 'idle';
+    // Clear any pause gate
+    if (this.pauseResolver) {
+      try { this.pauseResolver(); } catch {}
+      this.pauseResolver = null;
+      this.pausePromise = null;
+    }
   }
 
   /**
@@ -290,6 +298,9 @@ export class DebugVisualizerServer {
     // API endpoint: Pause execution (UI-level pause)
     if (url === '/api/pause' && req.method === 'POST') {
       this.executionState = 'paused';
+      if (!this.pausePromise) {
+        this.pausePromise = new Promise(resolve => (this.pauseResolver = resolve));
+      }
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
@@ -301,6 +312,11 @@ export class DebugVisualizerServer {
     // API endpoint: Resume execution
     if (url === '/api/resume' && req.method === 'POST') {
       this.executionState = 'running';
+      if (this.pauseResolver) {
+        try { this.pauseResolver(); } catch {}
+        this.pauseResolver = null;
+        this.pausePromise = null;
+      }
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
@@ -312,6 +328,11 @@ export class DebugVisualizerServer {
     // API endpoint: Stop execution (mark as completed)
     if (url === '/api/stop' && req.method === 'POST') {
       this.executionState = 'stopped';
+      if (this.pauseResolver) {
+        try { this.pauseResolver(); } catch {}
+        this.pauseResolver = null;
+        this.pausePromise = null;
+      }
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
@@ -407,6 +428,19 @@ export class DebugVisualizerServer {
    */
   getSpanCount(): number {
     return this.spans.length;
+  }
+
+  /** Return current execution state */
+  getExecutionState(): 'idle' | 'running' | 'paused' | 'stopped' {
+    return this.executionState;
+  }
+
+  /** Await while paused; returns immediately if not paused */
+  async waitWhilePaused(): Promise<void> {
+    if (this.executionState !== 'paused') return;
+    const p = this.pausePromise;
+    if (!p) return;
+    try { await p; } catch {}
   }
 }
 

@@ -1387,7 +1387,8 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    tagFilter?: import('./types/config').TagFilter
+    tagFilter?: import('./types/config').TagFilter,
+    pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =
@@ -1486,7 +1487,8 @@ export class CheckExecutionEngine {
         logFn,
         debug,
         maxParallelism,
-        failFast
+        failFast,
+        pauseGate
       );
     }
 
@@ -1501,7 +1503,8 @@ export class CheckExecutionEngine {
         timeout,
         config,
         logFn,
-        debug
+        debug,
+        pauseGate
       );
 
       const groupedResults: GroupedCheckResults = {};
@@ -1528,7 +1531,8 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
-    debug?: boolean
+    debug?: boolean,
+    pauseGate?: () => Promise<void>
   ): Promise<CheckResult> {
     if (!config?.checks?.[checkName]) {
       throw new Error(`No configuration found for check: ${checkName}`);
@@ -1713,7 +1717,8 @@ export class CheckExecutionEngine {
     logFn?: (message: string) => void,
     debug?: boolean,
     maxParallelism?: number,
-    failFast?: boolean
+    failFast?: boolean,
+    pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
@@ -1724,7 +1729,8 @@ export class CheckExecutionEngine {
       logFn,
       debug,
       maxParallelism,
-      failFast
+      failFast,
+      pauseGate
     );
 
     // Build execution statistics
@@ -2197,7 +2203,8 @@ export class CheckExecutionEngine {
     logFn?: (message: string) => void,
     debug?: boolean,
     maxParallelism?: number,
-    failFast?: boolean
+    failFast?: boolean,
+    pauseGate?: () => Promise<void>
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
 
@@ -2380,6 +2387,13 @@ export class CheckExecutionEngine {
       // Create task functions for checks in this level, skip those already completed inline
       const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
       const levelTaskFunctions = levelChecks.map(checkName => async () => {
+        if (pauseGate) {
+          try {
+            await pauseGate();
+          } catch (e) {
+            return { checkName, error: '__STOP__', result: null, skipped: true };
+          }
+        }
         // Skip if this check was already completed by item-level branch scheduler
         if (results.has(checkName)) {
           if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -2907,6 +2921,9 @@ export class CheckExecutionEngine {
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                if (pauseGate) {
+                  try { await pauseGate(); } catch (e) { throw new Error('__STOP__'); }
+                }
                 try {
                   emitNdjsonSpanWithEvents(
                     'visor.foreach.item',
@@ -3902,6 +3919,16 @@ export class CheckExecutionEngine {
         const checkName = levelChecksList[i];
         const result = levelResults[i];
         const checkConfig = config.checks![checkName];
+
+        // Stop signal propagation
+        if (result.status === 'fulfilled' && (result.value as any)?.error === '__STOP__') {
+          shouldStopExecution = true;
+          break;
+        }
+        if (result.status === 'rejected' && (result.reason instanceof Error) && (result.reason as Error).message === '__STOP__') {
+          shouldStopExecution = true;
+          break;
+        }
 
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip

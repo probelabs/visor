@@ -498,6 +498,23 @@ export async function main(): Promise<void> {
     }
 
     // Execute checks with proper parameters
+    // Build a pause gate that honors the debug server state between steps/iterations
+    const pauseGate = debugServer
+      ? async () => {
+          try {
+            const state = (debugServer as any).getExecutionState?.();
+            if (state === 'paused') {
+              await (debugServer as any).waitWhilePaused?.();
+            }
+            const state2 = (debugServer as any).getExecutionState?.();
+            if (state2 === 'stopped') throw new Error('__EXECUTION_STOP_REQUESTED__');
+          } catch (e) {
+            // Re-throw to signal engine to stop current work gracefully
+            throw e;
+          }
+        }
+      : async () => {};
+
     const executionResult = await withActiveSpan(
       'visor.run',
       { 'visor.run.checks_configured': checksToRun.length },
@@ -511,7 +528,8 @@ export async function main(): Promise<void> {
           options.debug || false,
           options.maxParallelism,
           options.failFast,
-          tagFilter
+          tagFilter,
+          pauseGate
         )
     );
 
