@@ -388,6 +388,13 @@ export interface CheckConfig {
   /** Include execution metadata in log output */
   include_metadata?: boolean;
   /**
+   * Output parsing hint for command provider (optional)
+   * When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text.
+   * Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings
+   * and may be used by providers to alter parsing behavior in the future.
+   */
+  output_format?: 'json' | 'text';
+  /**
    * Memory provider specific options (optional, only used when type === 'memory').
    */
   /** Memory operation to perform */

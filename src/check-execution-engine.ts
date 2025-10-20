@@ -19,6 +19,7 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { ExecutionJournal, ScopePath } from './snapshot-store';
 import { VisorConfig, OnFailConfig, OnSuccessConfig, OnFinishConfig } from './types/config';
 import {
   createPermissionHelpers,
@@ -188,6 +189,11 @@ export class CheckExecutionEngine {
   private executionStats: Map<string, CheckExecutionStats> = new Map();
   // Track history of all outputs for each check (useful for loops and goto)
   private outputHistory: Map<string, unknown[]> = new Map();
+  // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
+  private journal: ExecutionJournal = new ExecutionJournal();
+  private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Cached GitHub context for context elevation when running in Actions
@@ -216,6 +222,24 @@ export class CheckExecutionEngine {
     // This allows us to reuse the existing PRReviewer logic without network calls
     this.mockOctokit = this.createMockOctokit();
     this.reviewer = new PRReviewer(this.mockOctokit as unknown as import('@octokit/rest').Octokit);
+  }
+
+  private sessionUUID(): string {
+    return this.sessionId;
+  }
+
+  private commitJournal(checkId: string, result: ExtendedReviewSummary): void {
+    try {
+      const scope: ScopePath = []; // Phase 0: no per-item scoping yet
+      this.journal.commitEntry({
+        sessionId: this.sessionUUID(),
+        scope,
+        checkId,
+        result,
+      });
+    } catch {
+      // best effort; never throw
+    }
   }
 
   /**
@@ -592,6 +616,8 @@ export class CheckExecutionEngine {
 
     // Store result in results map
     resultsMap?.set(checkId, enriched);
+    // Phase 0: commit to journal (no behavior change)
+    this.commitJournal(checkId, enriched as ExtendedReviewSummary);
 
     if (debug) log(`🔧 Debug: inline executed '${checkId}', issues: ${enrichedIssues.length}`);
 
@@ -673,6 +699,17 @@ export class CheckExecutionEngine {
         for (const [name, result] of results.entries()) {
           outputsForContext[name] = (result as any).output;
         }
+        // Also expose output history for each check (parity with docs/examples)
+        const outputsHistoryForContext: Record<string, unknown[]> = {};
+        try {
+          // this.outputHistory tracks all outputs per check across the run
+          // Convert to a plain object for sandbox consumption
+          for (const [check, history] of this.outputHistory.entries()) {
+            outputsHistoryForContext[check] = history as unknown[];
+          }
+          // Attach to outputs as a nested property for `outputs.history[...]`
+          (outputsForContext as any).history = outputsHistoryForContext;
+        } catch {}
 
         // Create forEach stats
         const forEachStats = {
@@ -729,6 +766,8 @@ export class CheckExecutionEngine {
           attempt: 1,
           loop: 0,
           outputs: outputsForContext,
+          // Provide explicit alias for templates that prefer snake_case
+          outputs_history: outputsHistoryForContext,
           forEach: forEachStats,
           memory: memoryHelpers,
           pr: {
@@ -743,18 +782,51 @@ export class CheckExecutionEngine {
           event: { name: prInfo.eventType || 'manual' },
         };
 
-        // Execute on_finish.run checks sequentially
-        if (onFinish.run && onFinish.run.length > 0) {
-          logger.info(
-            `▶ on_finish.run: executing [${onFinish.run.join(', ')}] for "${checkName}"`
+        // Execute on_finish.run (static + dynamic via run_js) sequentially
+        {
+          const maxLoops = config?.routing?.max_loops ?? 10;
+          let loopCount = 0;
+
+          // Helper to evaluate run_js to string[] safely
+          const evalRunJs = async (js?: string): Promise<string[]> => {
+            if (!js) return [];
+            try {
+              const sandbox = this.getRoutingSandbox();
+              const scope = onFinishContext;
+              const code = `
+                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a);
+                const __fn = () => {\n${js}\n};
+                const __res = __fn();
+                return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+              `;
+              const exec = sandbox.compile(code);
+              const res = exec({ scope }).run();
+              return Array.isArray(res) ? (res as string[]) : [];
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              logger.error(`✗ on_finish.run_js: evaluation failed for "${checkName}": ${msg}`);
+              if (e instanceof Error && e.stack) logger.debug(`Stack trace: ${e.stack}`);
+              return [];
+            }
+          };
+
+          const dynamicRun = await evalRunJs(onFinish.run_js);
+          const runList = Array.from(
+            new Set([...(onFinish.run || []), ...dynamicRun].filter(Boolean))
           );
 
-          try {
-            for (const runCheckId of onFinish.run) {
-              if (debug) {
-                log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
-              }
+          if (runList.length > 0) {
+            logger.info(`▶ on_finish.run: executing [${runList.join(', ')}] for "${checkName}"`);
+          }
 
+          try {
+            for (const runCheckId of runList) {
+              if (++loopCount > maxLoops) {
+                throw new Error(
+                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
+                );
+              }
+              if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
               logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
 
               // Build execution context for inline check
@@ -767,19 +839,18 @@ export class CheckExecutionEngine {
                 sessionInfo: undefined,
                 debug,
                 eventOverride: onFinish.goto_event,
-              };
+              } as const;
 
-              // Execute the check inline
               await this.executeCheckInline(
                 runCheckId,
                 onFinish.goto_event || prInfo.eventType || 'manual',
                 executionContext
               );
-
               logger.info(`  ✓ Completed on_finish check: ${runCheckId}`);
             }
-
-            logger.info(`✓ on_finish.run: completed for "${checkName}"`);
+            if (runList.length > 0) {
+              logger.info(`✓ on_finish.run: completed for "${checkName}"`);
+            }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             logger.error(`✗ on_finish.run: failed for "${checkName}": ${errorMsg}`);
@@ -801,7 +872,7 @@ export class CheckExecutionEngine {
             const scope = onFinishContext;
 
             const code = `
-              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a);
+              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a);
               const __fn = () => {\n${onFinish.goto_js}\n};
               const __res = __fn();
               return (typeof __res === 'string' && __res) ? __res : null;
@@ -839,6 +910,14 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
+          // Count toward loop budget similar to other routing paths
+          const maxLoops = config?.routing?.max_loops ?? 10;
+          // Each on_finish call performs at most one goto; treat it as 1 transition
+          if (maxLoops <= 0) {
+            throw new Error(
+              `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`
+            );
+          }
           logger.info(`▶ on_finish: routing from "${checkName}" to "${gotoTarget}"`);
 
           try {
@@ -4585,6 +4664,8 @@ export class CheckExecutionEngine {
           }
 
           results.set(checkName, reviewResult);
+          // Phase 0: commit to journal
+          this.commitJournal(checkName, reviewResult as ExtendedReviewSummary);
         } else {
           // Store error result for dependency tracking
           const errorSummary: ReviewSummary = {
@@ -4608,6 +4689,8 @@ export class CheckExecutionEngine {
             ],
           };
           results.set(checkName, errorSummary);
+          // Phase 0: commit to journal
+          this.commitJournal(checkName, errorSummary as ExtendedReviewSummary);
 
           // Check if we should stop execution due to fail-fast
           if (effectiveFailFast) {

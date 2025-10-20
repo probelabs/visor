@@ -287,6 +287,11 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Include execution metadata in log output";
                 };
+                readonly output_format: {
+                    readonly type: "string";
+                    readonly enum: readonly ["json", "text"];
+                    readonly description: "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future.";
+                };
                 readonly operation: {
                     readonly type: "string";
                     readonly enum: readonly ["get", "set", "append", "increment", "delete", "clear", "list", "exec_js"];

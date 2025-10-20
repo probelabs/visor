@@ -312,6 +312,12 @@ export const configSchema = {
           type: 'boolean',
           description: 'Include execution metadata in log output',
         },
+        output_format: {
+          type: 'string',
+          enum: ['json', 'text'],
+          description:
+            "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future.",
+        },
         operation: {
           type: 'string',
           enum: ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list', 'exec_js'],
