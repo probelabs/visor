@@ -104,8 +104,13 @@ export function compileAndRun<T = unknown>(
   scope: Record<string, unknown>,
   opts: CompileOptions = { injectLog: true, wrapFunction: true, logPrefix: '[sandbox]' }
 ): T {
-  const header = opts.injectLog
-    ? `const log = (...a) => { try { console.log('${opts.logPrefix ?? '[sandbox]'}', ...a); } catch {} };\n`
+  const inject = opts?.injectLog === true;
+  let safePrefix = String(opts?.logPrefix ?? '[sandbox]');
+  // Sanitize prefix: drop control chars and limit length
+  safePrefix = safePrefix.replace(/[\r\n\t\0]/g, '').slice(0, 64);
+  // Build a safe header without string concatenation inside user code
+  const header = inject
+    ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`
     : '';
   const body = opts.wrapFunction
     ? `const __fn = () => {\n${userCode}\n};\nreturn __fn();\n`

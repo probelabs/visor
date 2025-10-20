@@ -1112,7 +1112,7 @@ ${this.escapeXml(processedFallbackDiff)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            totalMessages: fullHistory.length
+            totalMessages: fullHistory.length,
           };
           fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
@@ -1134,14 +1134,15 @@ ${this.escapeXml(processedFallbackDiff)}
 `;
           fullHistory.forEach((msg: any, idx: number) => {
             const role = msg.role || 'unknown';
-            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            const content =
+              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
             readable += `
 ${'='.repeat(60)}
 MESSAGE ${idx + 1}/${fullHistory.length}
 Role: ${role}
 ${'='.repeat(60)}
 `;
-            readable += content + "\n";
+            readable += content + '\n';
           });
           fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
@@ -1551,7 +1552,7 @@ ${'='.repeat(60)}
             provider: this.config.provider || 'auto',
             model: this.config.model || 'default',
             schema: effectiveSchema,
-            totalMessages: fullHistory.length
+            totalMessages: fullHistory.length,
           };
           fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
@@ -1573,14 +1574,15 @@ ${'='.repeat(60)}
 `;
           fullHistory.forEach((msg: any, idx: number) => {
             const role = msg.role || 'unknown';
-            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            const content =
+              typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
             readable += `
 ${'='.repeat(60)}
 MESSAGE ${idx + 1}/${fullHistory.length}
 Role: ${role}
 ${'='.repeat(60)}
 `;
-            readable += content + "\n";
+            readable += content + '\n';
           });
           fs.writeFileSync(sessionBase + '.summary.txt', readable, 'utf-8');
 
@@ -1913,7 +1915,8 @@ ${'='.repeat(60)}
         (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
         (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
 
-      const _debugSchemaLogging = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
+      const _debugSchemaLogging =
+        this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
       if (_debugSchemaLogging) {
         const details = {
           schema: _schema,
@@ -1928,7 +1931,9 @@ ${'='.repeat(60)}
           log(`🔍 Schema detection: ${JSON.stringify(details)}`);
         } catch {
           // Fallback if JSON.stringify throws on unexpected values
-          log(`🔍 Schema detection: _schema="${String(_schema)}", isCustomSchema=${isCustomSchema}`);
+          log(
+            `🔍 Schema detection: _schema="${String(_schema)}", isCustomSchema=${isCustomSchema}`
+          );
         }
       }
 

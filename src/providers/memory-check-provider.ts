@@ -437,12 +437,11 @@ export class MemoryCheckProvider extends CheckProvider {
 
     try {
       const scope: Record<string, unknown> = { ...context };
-      return compileAndRun<unknown>(
-        this.sandbox,
-        `return (${expression});`,
-        scope,
-        { injectLog: true, wrapFunction: false, logPrefix: '[memory:value_js]' }
-      );
+      return compileAndRun<unknown>(this.sandbox, `return (${expression});`, scope, {
+        injectLog: true,
+        wrapFunction: false,
+        logPrefix: '[memory:value_js]',
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
@@ -460,12 +459,11 @@ export class MemoryCheckProvider extends CheckProvider {
 
     try {
       const scope: Record<string, unknown> = { ...context };
-      return compileAndRun<unknown>(
-        this.sandbox,
-        script,
-        scope,
-        { injectLog: true, wrapFunction: false, logPrefix: '[memory:exec_js]' }
-      );
+      return compileAndRun<unknown>(this.sandbox, script, scope, {
+        injectLog: true,
+        wrapFunction: false,
+        logPrefix: '[memory:exec_js]',
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[memory-js] Script execution error: ${errorMsg}`);

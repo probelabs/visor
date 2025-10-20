@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tyk-loadgen-config
+  namespace: tyk
+data:
+  # One target per line. You can add more if needed.
+  targets.txt: |
+    GET http://gateway-svc-tyk-tyk-pro.tyk:8080/test/
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tyk-loadgen
+  namespace: tyk
+  labels:
+    app: tyk-loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tyk-loadgen
+  template:
+    metadata:
+      labels:
+        app: tyk-loadgen
+    spec:
+      containers:
+        - name: vegeta
+          image: peterevans/vegeta:latest
+          imagePullPolicy: IfNotPresent
+          # Constant 10 rps load against /test/. Duration=0 means run indefinitely.
+          command: ["/bin/sh","-lc"]
+          args:
+            - |
+              exec vegeta attack \
+                -rate="${RATE:-10}" \
+                -duration=0 \
+                -targets=/cfg/targets.txt
+          env:
+            - name: RATE
+              value: "10"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: cfg
+              mountPath: /cfg
+      restartPolicy: Always
+      volumes:
+        - name: cfg
+          configMap:
+            name: tyk-loadgen-config
+

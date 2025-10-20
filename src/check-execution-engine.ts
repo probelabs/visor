@@ -348,7 +348,12 @@ export class CheckExecutionEngine {
         };
         const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code = `${prelude}\n${expr}`;
-        const result = compileAndRun<unknown>(sandbox, code, { scope }, { injectLog: false, wrapFunction: true });
+        const result = compileAndRun<unknown>(
+          sandbox,
+          code,
+          { scope },
+          { injectLog: false, wrapFunction: true }
+        );
         const res = Array.isArray(result) ? result : result ? [result] : [];
         if (debug) {
           log(`🔧 Debug: run_js evaluated → [${this.redact(res)}]`);
@@ -398,7 +403,12 @@ export class CheckExecutionEngine {
         };
         const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code2 = `${prelude2}\n${expr}`;
-        const res = compileAndRun<string | null>(sandbox, code2, { scope }, { injectLog: false, wrapFunction: true });
+        const res = compileAndRun<string | null>(
+          sandbox,
+          code2,
+          { scope },
+          { injectLog: false, wrapFunction: true }
+        );
         if (debug) {
           log(`🔧 Debug: goto_js evaluated → ${this.redact(res)}`);
         }
