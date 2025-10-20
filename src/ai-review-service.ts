@@ -560,8 +560,7 @@ ${prContext}
     // In PR context, always include diffs. Otherwise check the flag.
     const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
 
-    // Log the decision for transparency
-    const log = this.config.debug ? console.error : () => {};
+    // Log the decision for transparency (debug level)
     if (isPRContext) {
       log('🔍 Including full code diffs in AI context (PR mode)');
     } else if (!includeCodeContext) {
@@ -1224,13 +1223,15 @@ ${this.escapeXml(processedFallbackDiff)}
             log(`📊 Trace saved to: ${agentAny._traceFilePath}`);
           }
         } catch (exportError) {
-          console.error('⚠️  Warning: Failed to export trace for cloned session:', exportError);
+          logger.warn(`⚠️  Warning: Failed to export trace for cloned session: ${exportError}`);
         }
       }
 
       return { response, effectiveSchema };
     } catch (error) {
-      console.error('❌ ProbeAgent session reuse failed:', error);
+      logger.error(
+        `❌ ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       throw new Error(
         `ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1681,7 +1682,7 @@ ${this.escapeXml(processedFallbackDiff)}
             log(`📊 Trace saved to: ${traceFilePath}`);
           }
         } catch (exportError) {
-          console.error('⚠️  Warning: Failed to export trace:', exportError);
+          logger.warn(`⚠️  Warning: Failed to export trace: ${exportError}`);
         }
       }
 
@@ -1992,41 +1993,43 @@ ${this.escapeXml(processedFallbackDiff)}
       log('✅ Successfully created ReviewSummary');
       return result;
     } catch (error) {
-      console.error('❌ Failed to parse AI response:', error);
-      console.error('📄 FULL RAW RESPONSE:');
-      console.error('='.repeat(80));
-      console.error(response);
-      console.error('='.repeat(80));
-      console.error(`📏 Response length: ${response.length} characters`);
+      const detailed = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
+      const message = error instanceof Error ? error.message : String(error);
 
-      // Try to provide more helpful error information
-      if (error instanceof SyntaxError) {
-        console.error('🔍 JSON parsing error - the response may not be valid JSON');
-        console.error('🔍 Error details:', error.message);
+      if (detailed) {
+        logger.debug(`❌ Failed to parse AI response: ${message}`);
+        logger.debug('📄 FULL RAW RESPONSE:');
+        logger.debug('='.repeat(80));
+        logger.debug(response);
+        logger.debug('='.repeat(80));
+        logger.debug(`📏 Response length: ${response.length} characters`);
 
-        // Try to identify where the parsing failed
-        const errorMatch = error.message.match(/position (\d+)/);
-        if (errorMatch) {
-          const position = parseInt(errorMatch[1]);
-          console.error(`🔍 Error at position ${position}:`);
-          const start = Math.max(0, position - 50);
-          const end = Math.min(response.length, position + 50);
-          console.error(`🔍 Context: "${response.substring(start, end)}"`);
+        if (error instanceof SyntaxError) {
+          logger.debug('🔍 JSON parsing error - the response may not be valid JSON');
+          logger.debug(`🔍 Error details: ${error.message}`);
 
-          // Show the first 100 characters to understand what format the AI returned
-          console.error(`🔍 Response beginning: "${response.substring(0, 100)}"`);
-        }
+          const errorMatch = error.message.match(/position (\d+)/);
+          if (errorMatch) {
+            const position = parseInt(errorMatch[1]);
+            logger.debug(`🔍 Error at position ${position}:`);
+            const start = Math.max(0, position - 50);
+            const end = Math.min(response.length, position + 50);
+            logger.debug(`🔍 Context: "${response.substring(start, end)}"`);
+            logger.debug(`🔍 Response beginning: "${response.substring(0, 100)}"`);
+          }
 
-        // Check if response contains common non-JSON patterns
-        if (response.includes('I cannot')) {
-          console.error('🔍 Response appears to be a refusal/explanation rather than JSON');
+          if (response.includes('I cannot')) {
+            logger.debug('🔍 Response appears to be a refusal/explanation rather than JSON');
+          }
+          if (response.includes('```')) {
+            logger.debug('🔍 Response appears to contain markdown code blocks');
+          }
+          if (response.startsWith('<')) {
+            logger.debug('🔍 Response appears to start with XML/HTML');
+          }
         }
-        if (response.includes('```')) {
-          console.error('🔍 Response appears to contain markdown code blocks');
-        }
-        if (response.startsWith('<')) {
-          console.error('🔍 Response appears to start with XML/HTML');
-        }
+      } else {
+        logger.error(`❌ Failed to parse AI response: ${message}`);
       }
 
       throw new Error(
