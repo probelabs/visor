@@ -80,6 +80,11 @@ export class CommandCheckProvider extends CheckProvider {
     const transformJs = config.transform_js as string | undefined;
 
     // Prepare template context for Liquid rendering
+    const outputsObj = this.buildOutputContext(
+      dependencyResults,
+      config.__outputHistory as Map<string, unknown[]> | undefined
+    );
+
     const templateContext = {
       pr: {
         number: prInfo.number,
@@ -90,10 +95,9 @@ export class CommandCheckProvider extends CheckProvider {
       },
       files: prInfo.files,
       fileCount: prInfo.files.length,
-      outputs: this.buildOutputContext(
-        dependencyResults,
-        config.__outputHistory as Map<string, unknown[]> | undefined
-      ),
+      outputs: outputsObj,
+      // Alias: outputs_history mirrors outputs.history for consistency
+      outputs_history: (outputsObj as any).history || {},
       env: this.getSafeEnvironmentVariables(),
     };
 

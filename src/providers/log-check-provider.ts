@@ -171,6 +171,8 @@ export class LogCheckProvider extends CheckProvider {
 
       context.dependencies = dependencies;
       context.outputs = outputs;
+      // Alias: outputs_history mirrors outputs.history for consistency
+      (context as any).outputs_history = history;
     }
 
     if (includeMetadata) {

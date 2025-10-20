@@ -1023,6 +1023,10 @@ export class CheckExecutionEngine {
       try {
         const sandbox = this.getRoutingSandbox();
         const eventObj = { name: prInfo.eventType || 'manual' } as const;
+        const outHist: Record<string, unknown[]> = {};
+        try {
+          for (const [k, v] of this.outputHistory.entries()) outHist[k] = v;
+        } catch {}
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -1036,6 +1040,7 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          outputs_history: outHist,
           output: currentRouteOutput,
           pr: {
             number: prInfo.number,
@@ -1053,7 +1058,7 @@ export class CheckExecutionEngine {
           event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return Array.isArray(__res) ? __res : (__res ? [__res] : []);
@@ -1077,6 +1082,10 @@ export class CheckExecutionEngine {
       try {
         const sandbox = this.getRoutingSandbox();
         const eventObj = { name: prInfo.eventType || 'manual' } as const;
+        const outHist: Record<string, unknown[]> = {};
+        try {
+          for (const [k, v] of this.outputHistory.entries()) outHist[k] = v;
+        } catch {}
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -1090,6 +1099,7 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          outputs_history: outHist,
           output: currentRouteOutput,
           pr: {
             number: prInfo.number,
@@ -1107,7 +1117,7 @@ export class CheckExecutionEngine {
           event: eventObj,
         };
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a); const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;
           const __fn = () => {\n${expr}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;

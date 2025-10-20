@@ -86,14 +86,14 @@ Acceptance
 Target: by 2025-10-24
 
 Phase 1 — Snapshot‑based Visibility (minimal surface)
-- [ ] Under flag, build `dependencyResults` from a snapshot view instead of ad‑hoc `depends_on` maps in:
-  - [ ] `executeWithRouting(...)`
-  - [ ] `executeCheckInline(...)`
-- [ ] Keep dependency graph for ordering; this change affects visibility only.
+- [x] Build `dependencyResults` from a snapshot view instead of ad‑hoc `depends_on` maps in:
+  - [x] `executeWithRouting(...)`
+  - [x] `executeCheckInline(...)`
+- [x] Keep dependency graph for ordering; this change affects visibility only.
 
 Acceptance
-- [ ] Unit: parallel checks read only entries ≤ their snapshot; later commits are not visible.
-- [ ] Integration: original “comment‑assistant → extract‑facts” visibility issue resolved without adding deps.
+- [ ] Unit: parallel checks read only entries ≤ their snapshot; later commits are not visible. (todo)
+- [ ] Integration: original “comment‑assistant → extract‑facts” visibility issue resolved without adding deps. (todo)
 
 Target: by 2025-10-28
 
@@ -141,7 +141,7 @@ Target: by 2025-11-06
 ## Engine Touchpoints (Where Changes Land)
 - `src/check-execution-engine.ts`
   - Commit to journal after provider returns (both main and inline paths).
-  - Build snapshot‑based `dependencyResults` (Phase 1, behind flag).
+  - Build snapshot‑based `dependencyResults` (Phase 1, default, no flags).
   - Add `runNamedCheck(...)` and route `on_success`/`on_fail`/`on_finish` through it (Phase 3).
   - Count `on_finish` routing toward loop budgets (Quick Win).
 - Routing sandbox init
@@ -172,8 +172,7 @@ Target: by 2025-11-06
 ---
 
 ## Rollout & Backout
-- Guarded by `VISOR_SNAPSHOT_SCOPE` until Phase 2 completes.
-- Backout: disable flag; engine falls back to current behavior.
+- Default rollout (no flags). Backout by reverting the engine changes if needed.
 
 ---
 

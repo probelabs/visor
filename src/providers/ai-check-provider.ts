@@ -133,7 +133,8 @@ export class AICheckProvider extends CheckProvider {
     promptConfig: string,
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
   ): Promise<string> {
     let promptContent: string;
 
@@ -145,7 +146,13 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Process Liquid templates in the prompt
-    return await this.renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults);
+    return await this.renderPromptTemplate(
+      promptContent,
+      prInfo,
+      eventContext,
+      dependencyResults,
+      outputHistory
+    );
   }
 
   /**
@@ -273,7 +280,8 @@ export class AICheckProvider extends CheckProvider {
     promptContent: string,
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
   ): Promise<string> {
     // Create comprehensive template context with PR and event information
     const templateContext = {
@@ -394,6 +402,14 @@ export class AICheckProvider extends CheckProvider {
             ])
           )
         : {},
+      // Alias for consistency with other providers
+      outputs_history: (() => {
+        const hist: Record<string, unknown[]> = {};
+        if (outputHistory) {
+          for (const [k, v] of outputHistory.entries()) hist[k] = v;
+        }
+        return hist;
+      })(),
     };
 
     try {
@@ -530,7 +546,8 @@ export class AICheckProvider extends CheckProvider {
       customPrompt,
       prInfo,
       eventContext,
-      _dependencyResults
+      _dependencyResults,
+      (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
     // Create AI service with config - environment variables will be used if aiConfig is empty

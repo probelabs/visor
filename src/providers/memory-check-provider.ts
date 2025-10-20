@@ -604,6 +604,8 @@ export class MemoryCheckProvider extends CheckProvider {
     (outputs as any).history = history;
 
     context.outputs = outputs;
+    // Alias for consistency: outputs_history mirrors outputs.history
+    (context as any).outputs_history = history;
 
     // Add memory accessor
     if (memoryStore) {
