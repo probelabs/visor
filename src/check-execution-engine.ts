@@ -19,7 +19,7 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
-import { ExecutionJournal, ScopePath } from './snapshot-store';
+import { ExecutionJournal, ScopePath, ContextView } from './snapshot-store';
 import { VisorConfig, OnFailConfig, OnSuccessConfig, OnFinishConfig } from './types/config';
 import {
   createPermissionHelpers,
@@ -242,6 +242,31 @@ export class CheckExecutionEngine {
     }
   }
 
+  /** Build dependencyResults from a snapshot of all committed results, optionally overlaying provided results. */
+  private buildSnapshotDependencyResults(
+    scope: ScopePath,
+    overlay?: Map<string, ReviewSummary>
+  ): Map<string, ReviewSummary> {
+    const snap = this.journal.beginSnapshot();
+    const view = new ContextView(this.journal, this.sessionUUID(), snap, scope);
+    const visible = new Map<string, ReviewSummary>();
+    try {
+      const entries = this.journal.readVisible(this.sessionUUID(), snap);
+      const ids = Array.from(new Set(entries.map(e => e.checkId)));
+      for (const id of ids) {
+        const v = view.get(id);
+        if (v) visible.set(id, v);
+      }
+      // Overlay any provided results (e.g., per-item context) on top
+      if (overlay) {
+        for (const [k, v] of overlay.entries()) {
+          visible.set(k, v);
+        }
+      }
+    } catch {}
+    return visible;
+  }
+
   /**
    * Enrich event context with authenticated octokit instance
    * @param eventContext - The event context to enrich
@@ -401,14 +426,8 @@ export class CheckExecutionEngine {
       },
     };
 
-    // Build dependency results for this check
-    const targetDeps = getAllDepsFromConfig(checkId);
-    const depResults = new Map<string, ReviewSummary>();
-    for (const depId of targetDeps) {
-      // Prefer per-scope dependencyResults (e.g., forEach item context) over global results
-      const res = dependencyResults.get(depId) || resultsMap?.get(depId);
-      if (res) depResults.set(depId, res);
-    }
+    // Build dependency results for this check using snapshot-based visibility (overlay per-scope results)
+    const depResults = this.buildSnapshotDependencyResults([], dependencyResults);
 
     // Debug: log key dependent outputs for visibility
     if (debug) {
@@ -835,7 +854,7 @@ export class CheckExecutionEngine {
                 dependencyGraph,
                 prInfo,
                 resultsMap: results,
-                dependencyResults: new Map(results), // Use all results as dependencies
+                dependencyResults: this.buildSnapshotDependencyResults([], new Map(results)),
                 sessionInfo: undefined,
                 debug,
                 eventOverride: onFinish.goto_event,
@@ -927,7 +946,7 @@ export class CheckExecutionEngine {
               dependencyGraph,
               prInfo,
               resultsMap: results,
-              dependencyResults: new Map(results),
+              dependencyResults: this.buildSnapshotDependencyResults([], new Map(results)),
               sessionInfo: undefined,
               debug,
               eventOverride: onFinish.goto_event,
@@ -1179,14 +1198,8 @@ export class CheckExecutionEngine {
           debug: !!debug,
         },
       };
-      // Build dependencyResults for target using already computed global results (after ensuring deps executed)
-      const targetDeps = getAllDepsFromConfig(target);
-      const depResults = new Map<string, ReviewSummary>();
-      for (const depId of targetDeps) {
-        // Prefer per-scope dependencyResults (e.g., forEach item context) over global results
-        const res = dependencyResults.get(depId) || resultsMap?.get(depId);
-        if (res) depResults.set(depId, res);
-      }
+      // Build dependencyResults from snapshot visibility and overlay any provided per-scope results
+      const depResults = this.buildSnapshotDependencyResults([], dependencyResults);
       // Debug: log key dependent outputs for visibility
       try {
         // Try to log a small preview of dependent outputs if available
