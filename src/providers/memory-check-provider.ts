@@ -6,7 +6,7 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import Sandbox from '@nyariv/sandboxjs';
-import { createSecureSandbox } from '../utils/sandbox';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * Memory operation types
@@ -436,21 +436,13 @@ export class MemoryCheckProvider extends CheckProvider {
     }
 
     try {
-      // Add log function for debugging
-      const log = (...args: unknown[]) => {
-        logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
-      };
-
-      // Build scope with all context, including memory object
-      // SandboxJS allows calling functions on plain objects
-      const scope: Record<string, unknown> = {
-        ...context,
-        log,
-      };
-
-      // Wrap expression in return statement for SandboxJS
-      const exec = this.sandbox.compile(`return (${expression});`);
-      return exec(scope).run();
+      const scope: Record<string, unknown> = { ...context };
+      return compileAndRun<unknown>(
+        this.sandbox,
+        `return (${expression});`,
+        scope,
+        { injectLog: true, wrapFunction: false, logPrefix: '[memory:value_js]' }
+      );
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
@@ -467,23 +459,13 @@ export class MemoryCheckProvider extends CheckProvider {
     }
 
     try {
-      // Add log function for debugging
-      const log = (...args: unknown[]) => {
-        logger.info(`🔍 [memory-js] ${args.map(a => JSON.stringify(a)).join(' ')}`);
-      };
-
-      // Build scope with all context, but keep memory object as-is
-      // SandboxJS allows calling functions on plain objects
-      const scope: Record<string, unknown> = {
-        ...context,
-        log,
-      };
-
-      // Compile script as-is. SandboxJS treats it as a function body
-      // where return statements work at the top level.
-      const exec = this.sandbox.compile(script);
-      const result = exec(scope).run();
-      return result;
+      const scope: Record<string, unknown> = { ...context };
+      return compileAndRun<unknown>(
+        this.sandbox,
+        script,
+        scope,
+        { injectLog: true, wrapFunction: false, logPrefix: '[memory:exec_js]' }
+      );
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[memory-js] Script execution error: ${errorMsg}`);

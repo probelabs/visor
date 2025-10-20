@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import Sandbox from '@nyariv/sandboxjs';
-import { createSecureSandbox } from '../utils/sandbox';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * MCP Check Provider Configuration
@@ -235,8 +235,12 @@ export class McpCheckProvider extends CheckProvider {
           };
 
           // Compile and execute the transform in sandboxed environment
-          const exec = this.sandbox.compile(`return (${cfg.transform_js});`);
-          finalOutput = exec(scope).run();
+          finalOutput = compileAndRun<unknown>(
+            this.sandbox,
+            `return (${cfg.transform_js});`,
+            scope,
+            { injectLog: true, wrapFunction: false, logPrefix: '[mcp:transform_js]' }
+          );
         } catch (error) {
           logger.error(`Failed to apply JavaScript transform: ${error}`);
           return {
