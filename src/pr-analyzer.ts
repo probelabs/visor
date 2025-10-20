@@ -162,9 +162,23 @@ export class PRAnalyzer {
         : 'feature';
 
     // Filter out malformed files and handle invalid data types
+    // Apply exclusion filtering early to avoid unnecessary processing
+    let skippedCount = 0;
     const validFiles = files
       ? files
           .filter(file => file && typeof file === 'object' && file.filename)
+          .filter(file => {
+            // Early filtering: check exclusion before processing
+            const filename =
+              typeof file.filename === 'string'
+                ? file.filename
+                : String(file.filename || 'unknown');
+            if (!filename || this.fileExclusionHelper.shouldExcludeFile(filename)) {
+              skippedCount++;
+              return false;
+            }
+            return true;
+          })
           .map(file => ({
             filename:
               typeof file.filename === 'string'
@@ -178,16 +192,12 @@ export class PRAnalyzer {
               ? file.status
               : 'modified') as 'added' | 'removed' | 'modified' | 'renamed',
           }))
-          .filter(file => file.filename.length > 0) // Remove files with empty names
-          .filter(file => {
-            // Filter out files in .gitignore
-            if (this.fileExclusionHelper.shouldExcludeFile(file.filename)) {
-              console.log(`⏭️  Skipping excluded file: ${file.filename}`);
-              return false;
-            }
-            return true;
-          })
       : [];
+
+    // Log skipped files summary
+    if (skippedCount > 0) {
+      console.log(`⏭️  Skipped ${skippedCount} excluded file(s)`);
+    }
 
     const prInfo: PRInfo = {
       number: typeof pr.number === 'number' ? pr.number : parseInt(String(pr.number || 1), 10),

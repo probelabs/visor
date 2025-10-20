@@ -7,22 +7,18 @@ import * as path from 'path';
  */
 export class FileExclusionHelper {
   private gitignore: ReturnType<typeof ignore> | null = null;
-  private gitignoreLoaded = false;
   private workingDirectory: string;
 
   constructor(workingDirectory: string = process.cwd()) {
     this.workingDirectory = path.resolve(workingDirectory);
+    // Load gitignore synchronously during construction
+    this.loadGitignore();
   }
 
   /**
-   * Load .gitignore patterns from the working directory
+   * Load .gitignore patterns from the working directory (called once in constructor)
    */
   private loadGitignore(): void {
-    if (this.gitignoreLoaded) {
-      return;
-    }
-
-    this.gitignoreLoaded = true;
     const gitignorePath = path.join(this.workingDirectory, '.gitignore');
 
     try {
@@ -42,11 +38,6 @@ export class FileExclusionHelper {
    * Check if a file should be excluded based on .gitignore patterns and common build directories
    */
   shouldExcludeFile(filename: string): boolean {
-    // Load gitignore on first check
-    if (!this.gitignoreLoaded) {
-      this.loadGitignore();
-    }
-
     // Check common build directories that should be excluded even if tracked
     const excludePatterns = [
       /^dist\//,
