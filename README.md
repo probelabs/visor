@@ -123,6 +123,7 @@ Additional guides:
 - forEach behavior and dependent propagation: [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
 - timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
+- live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
 
 ## 🧩 Core Concepts (1 minute)
 
