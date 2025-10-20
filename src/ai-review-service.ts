@@ -1924,13 +1924,23 @@ ${this.escapeXml(processedFallbackDiff)}
         (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
         (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
 
-      log(`🔍 Schema detection: _schema="${_schema}", isCustomSchema=${isCustomSchema}`);
-      if (_schema) {
-        log(`   - Is 'custom': ${_schema === 'custom'}`);
-        log(`   - Starts with './': ${_schema.startsWith('./')}`);
-        log(`   - Ends with '.json': ${_schema.endsWith('.json')}`);
-        log(`   - Not 'code-review': ${_schema !== 'code-review'}`);
-        log(`   - Doesn't include 'output/': ${!_schema.includes('output/')}`);
+      const _debugSchemaLogging = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
+      if (_debugSchemaLogging) {
+        const details = {
+          schema: _schema,
+          isCustomSchema,
+          isCustomLiteral: _schema === 'custom',
+          startsWithDotSlash: typeof _schema === 'string' ? _schema.startsWith('./') : false,
+          endsWithJson: typeof _schema === 'string' ? _schema.endsWith('.json') : false,
+          notCodeReview: _schema !== 'code-review',
+          noOutputPrefix: typeof _schema === 'string' ? !_schema.includes('output/') : false,
+        };
+        try {
+          log(`🔍 Schema detection: ${JSON.stringify(details)}`);
+        } catch {
+          // Fallback if JSON.stringify throws on unexpected values
+          log(`🔍 Schema detection: _schema="${String(_schema)}", isCustomSchema=${isCustomSchema}`);
+        }
       }
 
       if (isCustomSchema) {
