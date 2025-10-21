@@ -132,12 +132,13 @@ export async function main(): Promise<void> {
       }
       if (process.env.NODE_ENV === 'test') {
         try {
-          console.error(`[e2e] VISOR_TRACE_DIR=${tracesDir} VISOR_FALLBACK_TRACE_FILE=${fallbackPath}`);
+          console.error(
+            `[e2e] VISOR_TRACE_DIR=${tracesDir} VISOR_FALLBACK_TRACE_FILE=${fallbackPath}`
+          );
         } catch {}
       }
       try {
-        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '
-';
+        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n';
         fs.appendFileSync(fallbackPath, line, 'utf8');
       } catch {}
     } catch {}
