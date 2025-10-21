@@ -6621,7 +6621,7 @@ export class CheckExecutionEngine {
     });
 
     summaryTable.push(
-      [`Execution Complete (${durationSec}s)`],
+      [`Checks Complete (${durationSec}s)`],
       [`Checks: ${stats.totalChecksConfigured} configured → ${stats.totalExecutions} executions`],
       [
         `Status: ${stats.successfulExecutions} ✔ │ ${stats.failedExecutions} ✖ │ ${stats.skippedChecks} ⏭`,
@@ -6677,6 +6677,14 @@ export class CheckExecutionEngine {
     }
 
     logger.info(detailsTable.toString());
+
+    // Clarify that we will finalize GitHub check runs after the table (if enabled)
+    try {
+      if (this.checkRunMap && this.checkRunMap.size > 0) {
+        logger.info('');
+        logger.info('⏳ Finalizing GitHub check runs...');
+      }
+    } catch {}
 
     // Legend
     logger.info('');
