@@ -90,6 +90,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
+          add-reactions: 'false'
         env:
           # Multiple API keys for fallback - similar to probe.yml approach
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -132,6 +133,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-review: true
+          add-reactions: 'false'
         env:
           # Multiple API keys for fallback
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
