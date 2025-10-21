@@ -40,7 +40,8 @@ async function cleanupTestTraces(dir: string): Promise<void> {
 
 describe('State Capture E2E', () => {
   const testOutputDir = path.join(process.cwd(), 'output', 'traces-test-state-capture');
-  const configFile = path.join(__dirname, '../fixtures/state-capture-test.yaml');
+  const tempFixtureDir = path.join(__dirname, '../fixtures', 'temp');
+  const configFile = path.join(tempFixtureDir, 'state-capture-test.yaml');
 
   async function waitForNdjson(
     dir: string,
@@ -65,6 +66,7 @@ describe('State Capture E2E', () => {
   }
 
   beforeAll(async () => {
+    await fs.mkdir(tempFixtureDir, { recursive: true });
     // Create test config
     const testConfig = `
 checks:
@@ -94,7 +96,6 @@ checks:
             echo "{\"fruit\": \"{{ item }}\", \"length\": {{ item.size }}}"
 `;
 
-    await fs.mkdir(path.dirname(configFile), { recursive: true });
     await fs.writeFile(configFile, testConfig);
   });
 
@@ -102,6 +103,9 @@ checks:
     await cleanupTestTraces(testOutputDir);
     try {
       await fs.unlink(configFile);
+    } catch {}
+    try {
+      await fs.rm(tempFixtureDir, { recursive: true, force: true });
     } catch {}
   });
 
