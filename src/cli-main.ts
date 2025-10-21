@@ -317,7 +317,10 @@ export async function main(): Promise<void> {
       });
     } else {
       await initTelemetry({
-        enabled: !!debugServer, // Explicitly enable when debugServer is active
+        // Honor env flags even when no telemetry section is present in config
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!debugServer,
+        sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+        file: { dir: process.env.VISOR_TRACE_DIR },
         debugServer: debugServer || undefined,
       });
     }

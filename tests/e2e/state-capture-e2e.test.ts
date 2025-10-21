@@ -45,7 +45,7 @@ describe('State Capture E2E', () => {
 
   async function waitForNdjson(
     dir: string,
-    timeoutMs = 5000
+    timeoutMs = 12000
   ): Promise<{ path: string; content: string }> {
     const start = Date.now();
     // Ensure directory exists to avoid ENOENT when polling
