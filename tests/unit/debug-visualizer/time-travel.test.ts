@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
+import * as fs from 'fs';
 import { parseNDJSONTrace, ExecutionTrace } from '../../../src/debug-visualizer/trace-reader';
 import * as path from 'path';
 
@@ -10,6 +11,20 @@ describe('time-travel debugging', () => {
   let sampleTrace: ExecutionTrace;
 
   beforeEach(async () => {
+    // Ensure fixtures exist for CI
+    try {
+      const dir = path.join(__dirname, '../../fixtures/traces');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const sample = path.join(dir, 'sample-trace.ndjson');
+      if (!fs.existsSync(sample)) {
+        fs.writeFileSync(
+          sample,
+          '{"traceId":"t1","spanId":"root","name":"visor.run","startTime":[1697547296,0],"endTime":[1697547300,0],"attributes":{},"events":[],"status":{"code":1}}\n' +
+            '{"traceId":"t1","spanId":"span-fetch","parentSpanId":"root","name":"visor.check","startTime":[1697547296,100000000],"endTime":[1697547297,0],"attributes":{"visor.check.id":"fetch-data","visor.check.type":"command","visor.check.input.context":"{\\"pr\\":{\\"number\\":123}}","visor.check.output":"{\\"users\\":[{\\"id\\":1,\\"name\\":\\"Alice\\"},{\\"id\\":2,\\"name\\":\\"Bob\\"}]}"},"events":[{"name":"check.started","time":[1697547296,100000000]},{"name":"state.snapshot","time":[1697547296,500000000],"attributes":{"visor.snapshot.check_id":"fetch-data","visor.snapshot.outputs":"{\\"fetch-data\\":{\\"users\\":[{\\"id\\":1},{\\"id\\":2}]}}","visor.snapshot.memory":"{}"}},{"name":"check.completed","time":[1697547297,0]}],"status":{"code":1}}\n' +
+            '{"traceId":"t1","spanId":"span-security","parentSpanId":"root","name":"visor.check","startTime":[1697547297,100000000],"endTime":[1697547298,0],"attributes":{"visor.check.id":"security-scan","visor.check.type":"ai","visor.check.input.context":"{\\"pr\\":{\\"number\\":123}}","visor.check.output":"{\\"issues\\":[]}"},"events":[{"name":"check.started","time":[1697547297,100000000]},{"name":"state.snapshot","time":[1697547297,500000000],"attributes":{"visor.snapshot.check_id":"security-scan","visor.snapshot.outputs":"{\\"fetch-data\\":{\\"users\\")[1:]}'
+        );
+      }
+    } catch {}
     const traceFile = path.join(__dirname, '../../fixtures/traces/sample-trace.ndjson');
     sampleTrace = await parseNDJSONTrace(traceFile);
   });

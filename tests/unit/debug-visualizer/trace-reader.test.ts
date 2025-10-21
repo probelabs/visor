@@ -5,6 +5,7 @@
  */
 
 import * as path from 'path';
+import * as fs from 'fs';
 import {
   parseNDJSONTrace,
   buildExecutionTree,
@@ -15,6 +16,35 @@ import {
 
 describe('trace-reader', () => {
   const fixturesDir = path.join(__dirname, '../../fixtures/traces');
+
+  // Ensure trace fixtures exist (CI-safe)
+  beforeAll(() => {
+    try {
+      if (!fs.existsSync(fixturesDir)) fs.mkdirSync(fixturesDir, { recursive: true });
+      const sample = path.join(fixturesDir, 'sample-trace.ndjson');
+      const errorFile = path.join(fixturesDir, 'error-trace.ndjson');
+      const emptyFile = path.join(fixturesDir, 'empty-trace.ndjson');
+      if (!fs.existsSync(sample)) {
+        fs.writeFileSync(
+          sample,
+          '{"traceId":"t1","spanId":"root","name":"visor.run","startTime":[1697547296,0],"endTime":[1697547300,0],"attributes":{},"events":[],"status":{"code":1}}\n' +
+            '{"traceId":"t1","spanId":"span-fetch","parentSpanId":"root","name":"visor.check","startTime":[1697547296,100000000],"endTime":[1697547297,0],"attributes":{"visor.check.id":"fetch-data","visor.check.type":"command","visor.check.input.context":"{\\"pr\\":{\\"number\\":123}}","visor.check.output":"{\\"users\\":[{\\"id\\":1,\\"name\\":\\"Alice\\"},{\\"id\\":2,\\"name\\":\\"Bob\\"}]}"},"events":[{"name":"check.started","time":[1697547296,100000000]},{"name":"state.snapshot","time":[1697547296,500000000],"attributes":{"visor.snapshot.check_id":"fetch-data","visor.snapshot.outputs":"{\\"fetch-data\\":{\\"users\\":[{\\"id\\":1},{\\"id\\":2}]}}","visor.snapshot.memory":"{}"}},{"name":"check.completed","time":[1697547297,0]}],"status":{"code":1}}\n' +
+            '{"traceId":"t1","spanId":"span-security","parentSpanId":"root","name":"visor.check","startTime":[1697547297,100000000],"endTime":[1697547298,0],"attributes":{"visor.check.id":"security-scan","visor.check.type":"ai","visor.check.input.context":"{\\"pr\\":{\\"number\\":123}}","visor.check.output":"{\\"issues\\":[]}"},"events":[{"name":"check.started","time":[1697547297,100000000]},{"name":"state.snapshot","time":[1697547297,500000000],"attributes":{"visor.snapshot.check_id":"security-scan","visor.snapshot.outputs":"{\\"fetch-data\\":{\\"users\\":[{\\"id\\":1},{\\"id\\":2}]},\\"security-scan\\":{\\"issues\\":[]}}","visor.snapshot.memory":"{}"}},{"name":"check.completed","time":[1697547298,0]}],"status":{"code":1}}\n' +
+            '{"traceId":"t1","spanId":"span-perf","parentSpanId":"root","name":"visor.check","startTime":[1697547298,100000000],"endTime":[1697547299,0],"attributes":{"visor.check.id":"performance-check","visor.check.type":"command","visor.check.output":"{\\"metrics\\":{\\"latency\\":120}}"},"events":[{"name":"check.started","time":[1697547298,100000000]},{"name":"state.snapshot","time":[1697547298,500000000],"attributes":{"visor.snapshot.check_id":"performance-check","visor.snapshot.outputs":"{\\"performance-check\\":{\\"metrics\\":{\\"latency\\":120}}}","visor.snapshot.memory":"{}"}},{"name":"check.completed","time":[1697547299,0]}],"status":{"code":1}}\n'
+        );
+      }
+      if (!fs.existsSync(errorFile)) {
+        fs.writeFileSync(
+          errorFile,
+          '{"traceId":"e1","spanId":"root","name":"visor.run","startTime":[1697547296,0],"endTime":[1697547300,0],"attributes":{},"events":[],"status":{"code":2}}\n' +
+            '{"traceId":"e1","spanId":"span1","parentSpanId":"root","name":"visor.check","startTime":[1697547296,100000000],"endTime":[1697547297,0],"attributes":{"visor.check.id":"failing-check","visor.check.type":"command","visor.check.error":"Command failed with exit code 1"},"events":[{"name":"check.started","time":[1697547296,100000000]},{"name":"check.completed","time":[1697547297,0]}],"status":{"code":2}}\n'
+        );
+      }
+      if (!fs.existsSync(emptyFile)) {
+        fs.writeFileSync(emptyFile, '');
+      }
+    } catch {}
+  });
 
   // =========================================================================
   // parseNDJSONTrace Tests
