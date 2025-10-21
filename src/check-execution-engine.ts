@@ -6526,18 +6526,27 @@ export class CheckExecutionEngine {
       return '⏭';
     }
 
-    if (stats.totalRuns === 0) return '-';
+    // Prefer history length when it indicates more actual executions than our counter
+    const historyLen = (() => {
+      try {
+        return this.outputHistory.get(stats.checkName)?.length || 0;
+      } catch {
+        return 0;
+      }
+    })();
+    const totalRuns = Math.max(stats.totalRuns || 0, historyLen);
+    if (totalRuns === 0) return '-';
 
     const symbol = stats.failedRuns === 0 ? '✔' : stats.successfulRuns === 0 ? '✖' : '✔/✖';
 
     // Show iteration count if > 1
-    if (stats.totalRuns > 1) {
+    if (totalRuns > 1) {
       if (stats.failedRuns > 0 && stats.successfulRuns > 0) {
         // Partial success
-        return `${symbol} ${stats.successfulRuns}/${stats.totalRuns}`;
+        return `${symbol} ${stats.successfulRuns}/${totalRuns}`;
       } else {
         // All success or all failed
-        return `${symbol} ×${stats.totalRuns}`;
+        return `${symbol} ×${totalRuns}`;
       }
     }
 
