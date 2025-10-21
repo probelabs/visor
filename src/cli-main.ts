@@ -293,10 +293,14 @@ export async function main(): Promise<void> {
           }
         }
       } catch {}
-      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
-      const fallbackPath = path.join(tracesDir, `run-${runTs}.ndjson`);
-      process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
-      // Ensure the file is created eagerly with a run marker so tests can detect it deterministically
+      // Respect pre-set fallback file from environment if provided (e.g., in tests/CI)
+      let fallbackPath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      if (!fallbackPath) {
+        const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+        fallbackPath = path.join(tracesDir, `run-${runTs}.ndjson`);
+        process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
+      }
+      // Ensure the file exists eagerly with a run marker so downstream readers can detect it
       try {
         const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n';
         fs.appendFileSync(fallbackPath, line, 'utf8');
