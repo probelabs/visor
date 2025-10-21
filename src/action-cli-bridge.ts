@@ -19,6 +19,7 @@ export interface GitHubActionInputs {
   'comment-on-pr'?: string;
   'create-check'?: string;
   'add-labels'?: string;
+  'add-reactions'?: string;
   'fail-on-critical'?: string;
   'fail-on-api-error'?: string;
   'min-score'?: string;
