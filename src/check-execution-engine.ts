@@ -1088,7 +1088,7 @@ export class CheckExecutionEngine {
             );
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-            logger.error(`✗ on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
+            logger.warn(`⚠️ on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
             if (error instanceof Error && error.stack) {
               logger.debug(`Stack trace: ${error.stack}`);
             }
