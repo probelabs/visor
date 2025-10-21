@@ -294,7 +294,13 @@ export async function main(): Promise<void> {
         }
       } catch {}
       const runTs = new Date().toISOString().replace(/[:.]/g, '-');
-      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
+      const fallbackPath = path.join(tracesDir, `run-${runTs}.ndjson`);
+      process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
+      // Ensure the file is created eagerly with a run marker so tests can detect it deterministically
+      try {
+        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n';
+        fs.appendFileSync(fallbackPath, line, 'utf8');
+      } catch {}
     } catch {}
 
     // Opportunistically create NDJSON run marker early (pre-telemetry) when a trace dir/file is configured
