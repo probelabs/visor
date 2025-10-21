@@ -7,9 +7,10 @@
 import { CheckExecutionEngine } from './check-execution-engine';
 import { ConfigManager } from './config';
 import type { AnalysisResult } from './output-formatters';
-import type { VisorConfig, TagFilter } from './types/config';
+import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
+import type { ExecutionContext } from './providers/check-provider.interface';
 
-export type { VisorConfig, TagFilter };
+export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
 
 export interface VisorOptions {
   cwd?: string;
@@ -27,6 +28,8 @@ export interface RunOptions extends VisorOptions {
   output?: { format?: 'table' | 'json' | 'markdown' | 'sarif' };
   /** Strict mode: treat config warnings (like unknown keys) as errors (default: false) */
   strictValidation?: boolean;
+  /** Execution context for providers (CLI message, hooks, etc.) */
+  executionContext?: ExecutionContext;
 }
 
 /**
@@ -119,6 +122,12 @@ export async function runChecks(opts: RunOptions = {}): Promise<AnalysisResult> 
       : Object.keys(config.checks || {});
 
   const engine = new CheckExecutionEngine(opts.cwd);
+
+  // Set execution context if provided
+  if (opts.executionContext) {
+    engine.setExecutionContext(opts.executionContext);
+  }
+
   const result = await engine.executeChecks({
     checks,
     workingDirectory: opts.cwd,
