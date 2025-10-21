@@ -269,14 +269,42 @@ export class CheckExecutionEngine {
         const raw = view.getRaw(id);
         if (raw) visible.set(`${id}-raw`, raw);
       }
-      // Overlay any provided results (e.g., per-item context) on top
+      // Overlay any provided results (e.g., per-item context) on top.
+      // Root-cause hardening: ignore non-string keys and log once.
       if (overlay) {
         for (const [k, v] of overlay.entries()) {
-          visible.set(k, v);
+          if (typeof k === 'string' && k) {
+            visible.set(k, v);
+          } else {
+            try {
+              require('./logger').logger.warn(
+                `sanitize: dropping non-string overlay key type=${typeof k}`
+              );
+            } catch {}
+          }
         }
       }
     } catch {}
     return visible;
+  }
+
+  /** Drop any non-string keys from a results-like map (root-cause guard). */
+  private sanitizeResultMapKeys(
+    m: Map<unknown, ReviewSummary> | undefined
+  ): Map<string, ReviewSummary> {
+    const out = new Map<string, ReviewSummary>();
+    if (!m) return out;
+    for (const [k, v] of m.entries()) {
+      if (typeof k === 'string' && k) out.set(k, v);
+      else {
+        try {
+          require('./logger').logger.warn(
+            `sanitize: dropping non-string results key type=${typeof k}`
+          );
+        } catch {}
+      }
+    }
+    return out;
   }
 
   /**
@@ -741,8 +769,9 @@ export class CheckExecutionEngine {
 
     // Build context overlay from current results; prefer snapshot visibility for scope (Phase 4)
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
+    const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
     // For event overrides, avoid leaking cross-event results via overlay; rely on snapshot-only view
-    const overlayForExec = eventOverride ? new Map<string, ReviewSummary>() : depOverlay;
+    const overlayForExec = eventOverride ? new Map<string, ReviewSummary>() : depOverlaySanitized;
     if (!this.executionStats.has(target)) this.initializeCheckStats(target);
     const startTs = this.recordIterationStart(target);
     try {
