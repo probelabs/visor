@@ -17,10 +17,7 @@ export function isStdinAvailable(): boolean {
  * @param maxSize Maximum size in bytes (default: 1MB)
  * @returns Promise that resolves with the stdin content
  */
-export async function readStdin(
-  timeout?: number,
-  maxSize: number = 1024 * 1024
-): Promise<string> {
+export async function readStdin(timeout?: number, maxSize: number = 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
     let timeoutId: NodeJS.Timeout | undefined;

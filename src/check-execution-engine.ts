@@ -3310,7 +3310,13 @@ export class CheckExecutionEngine {
                     );
 
                     if (config && (config.fail_if || nodeCfg.fail_if)) {
-                      const fRes = await this.evaluateFailureConditions(node, nodeItemRes, config, prInfo, results);
+                      const fRes = await this.evaluateFailureConditions(
+                        node,
+                        nodeItemRes,
+                        config,
+                        prInfo,
+                        results
+                      );
                       if (fRes.length > 0) {
                         const fIssues = fRes
                           .filter(f => f.failed)
@@ -3434,7 +3440,13 @@ export class CheckExecutionEngine {
                         rForEval = { ...r, output: parsed } as ReviewSummary & { output?: unknown };
                       }
                     }
-                    const failures = await this.evaluateFailureConditions(parent, rForEval, config, prInfo, results);
+                    const failures = await this.evaluateFailureConditions(
+                      parent,
+                      rForEval,
+                      config,
+                      prInfo,
+                      results
+                    );
                     if (failures.some(f => f.failed)) {
                       // Temporary: surface why index is gated
                     }
@@ -5693,7 +5705,13 @@ export class CheckExecutionEngine {
     previousOutputs?: Record<string, ReviewSummary> | Map<string, ReviewSummary>
   ): Promise<boolean> {
     if (!config) return false;
-    const failures = await this.evaluateFailureConditions(checkName, result, config, undefined, previousOutputs);
+    const failures = await this.evaluateFailureConditions(
+      checkName,
+      result,
+      config,
+      undefined,
+      previousOutputs
+    );
     return failures.some(f => f.failed);
   }
 

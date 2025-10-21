@@ -103,9 +103,7 @@ function displayPromptUI(options: PromptOptions, remainingMs?: number): void {
   console.log('\n'); // Add some spacing
 
   // Top border
-  console.log(
-    `${box.topLeft}${drawLine(box.horizontal, width + 2)}${box.topRight}`
-  );
+  console.log(`${box.topLeft}${drawLine(box.horizontal, width + 2)}${box.topRight}`);
 
   // Title
   console.log(
@@ -115,9 +113,7 @@ function displayPromptUI(options: PromptOptions, remainingMs?: number): void {
   );
 
   // Separator
-  console.log(
-    `${box.leftT}${drawLine(box.horizontal, width + 2)}${box.rightT}`
-  );
+  console.log(`${box.leftT}${drawLine(box.horizontal, width + 2)}${box.rightT}`);
 
   // Empty line
   console.log(`${box.vertical} ${' '.repeat(width)} ${box.vertical}`);
@@ -169,9 +165,7 @@ function displayPromptUI(options: PromptOptions, remainingMs?: number): void {
   }
 
   // Bottom border
-  console.log(
-    `${box.bottomLeft}${drawLine(box.horizontal, width + 2)}${box.bottomRight}`
-  );
+  console.log(`${box.bottomLeft}${drawLine(box.horizontal, width + 2)}${box.bottomRight}`);
 
   console.log(''); // Empty line before input
   process.stdout.write(`${colors.green}>${colors.reset} `);
@@ -180,9 +174,7 @@ function displayPromptUI(options: PromptOptions, remainingMs?: number): void {
 /**
  * Prompt user for input with a beautiful interactive UI
  */
-export async function interactivePrompt(
-  options: PromptOptions
-): Promise<string> {
+export async function interactivePrompt(options: PromptOptions): Promise<string> {
   return new Promise((resolve, reject) => {
     let input = '';
     let timeoutId: NodeJS.Timeout | undefined;
@@ -214,9 +206,7 @@ export async function interactivePrompt(
     if (options.timeout) {
       timeoutId = setTimeout(() => {
         cleanup();
-        console.log(
-          `\n${colors.yellow}⏱  Timeout reached${colors.reset}`
-        );
+        console.log(`\n${colors.yellow}⏱  Timeout reached${colors.reset}`);
         if (options.defaultValue !== undefined) {
           console.log(
             `${colors.gray}Using default value: ${options.defaultValue}${colors.reset}\n`
@@ -240,7 +230,7 @@ export async function interactivePrompt(
 
     if (options.multiline) {
       // Multiline mode: collect lines until EOF (Ctrl+D)
-      rl.on('line', (line) => {
+      rl.on('line', line => {
         input += (input ? '\n' : '') + line;
       });
 
@@ -248,9 +238,7 @@ export async function interactivePrompt(
         cleanup();
         const trimmed = input.trim();
         if (!trimmed && !options.allowEmpty) {
-          console.log(
-            `${colors.yellow}⚠  Empty input not allowed${colors.reset}`
-          );
+          console.log(`${colors.yellow}⚠  Empty input not allowed${colors.reset}`);
           reject(new Error('Empty input not allowed'));
         } else {
           finish(trimmed);
@@ -258,13 +246,11 @@ export async function interactivePrompt(
       });
     } else {
       // Single line mode
-      rl.question('', (answer) => {
+      rl.question('', answer => {
         const trimmed = answer.trim();
         if (!trimmed && !options.allowEmpty && !options.defaultValue) {
           cleanup();
-          console.log(
-            `${colors.yellow}⚠  Empty input not allowed${colors.reset}`
-          );
+          console.log(`${colors.yellow}⚠  Empty input not allowed${colors.reset}`);
           reject(new Error('Empty input not allowed'));
         } else {
           finish(trimmed || options.defaultValue || '');
@@ -285,13 +271,13 @@ export async function interactivePrompt(
  * Simple prompt without fancy UI (for non-TTY environments)
  */
 export async function simplePrompt(prompt: string): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    rl.question(`${prompt}\n> `, (answer) => {
+    rl.question(`${prompt}\n> `, answer => {
       rl.close();
       resolve(answer.trim());
     });

@@ -154,10 +154,7 @@ export class HumanInputCheckProvider extends CheckProvider {
   /**
    * Get user input through various methods
    */
-  private async getUserInput(
-    checkName: string,
-    config: CheckProviderConfig
-  ): Promise<string> {
+  private async getUserInput(checkName: string, config: CheckProviderConfig): Promise<string> {
     const prompt = config.prompt || 'Please provide input:';
     const placeholder = (config.placeholder as string | undefined) || 'Enter your response...';
     const allowEmpty = (config.allow_empty as boolean | undefined) ?? false;
