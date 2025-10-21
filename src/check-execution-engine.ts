@@ -617,10 +617,18 @@ export class CheckExecutionEngine {
           },
           async () => {
             try {
-              try { emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [ { name: 'check.started' }, ]); } catch {}
+              try {
+                emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                  { name: 'check.started' },
+                ]);
+              } catch {}
               return await provider.execute(prInfo, providerConfig, dependencyResults, context);
             } finally {
-              try { emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [ { name: 'check.completed' }, ]); } catch {}
+              try {
+                emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                  { name: 'check.completed' },
+                ]);
+              } catch {}
             }
           }
         );
@@ -1571,6 +1579,7 @@ export class CheckExecutionEngine {
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
+      checkName, // propagate for fallback NDJSON attribution
       eventContext: this.enrichEventContext(prInfo.eventContext),
       ai: {
         timeout: timeout || 600000,

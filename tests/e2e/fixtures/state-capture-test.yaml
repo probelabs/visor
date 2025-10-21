@@ -1,0 +1,25 @@
+checks:
+  simple-command:
+    type: command
+    exec: |
+      echo '{"status": "ok", "count": 42}'
+
+  with-transform:
+    type: command
+    depends_on: [simple-command]
+    exec: |
+      echo '{"items": [1, 2, 3]}'
+    transform_js: |
+      const doubled = output.items.map(x => x * 2);
+      return { doubled, prev: outputs["simple-command"] };
+
+  forEach-test:
+    type: command
+    exec: |
+      echo '["apple", "banana", "cherry"]'
+    forEach: "{{ output }}"
+    children:
+      - process-item:
+          type: command
+          exec: |
+            echo "{\"fruit\": \"{{ item }}\", \"length\": {{ item.size }}}"

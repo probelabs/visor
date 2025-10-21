@@ -557,7 +557,11 @@ export class AICheckProvider extends CheckProvider {
       const checkId = (config as any).checkName || (config as any).id || 'unknown';
       const ctxJson = JSON.stringify(templateContext);
       const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
-      emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson }, []);
+      emitNdjsonSpanWithEvents(
+        'visor.check',
+        { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson },
+        []
+      );
     } catch {}
 
     // Process prompt with Liquid templates and file loading
@@ -660,7 +664,11 @@ export class AICheckProvider extends CheckProvider {
         const checkId = (config as any).checkName || (config as any).id || 'unknown';
         const outJson = JSON.stringify((finalResult as any).output ?? finalResult);
         const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
-        emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkId, 'visor.check.output': outJson }, []);
+        emitNdjsonSpanWithEvents(
+          'visor.check',
+          { 'visor.check.id': checkId, 'visor.check.output': outJson },
+          []
+        );
       } catch {}
 
       return finalResult;
