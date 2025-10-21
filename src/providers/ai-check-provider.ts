@@ -552,6 +552,13 @@ export class AICheckProvider extends CheckProvider {
     } catch {
       // Ignore telemetry errors
     }
+    // Fallback NDJSON for input context (non-OTEL environments)
+    try {
+      const checkId = (config as any).checkName || (config as any).id || 'unknown';
+      const ctxJson = JSON.stringify(templateContext);
+      const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+      emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson }, []);
+    } catch {}
 
     // Process prompt with Liquid templates and file loading
     const processedPrompt = await this.processPrompt(
@@ -648,6 +655,13 @@ export class AICheckProvider extends CheckProvider {
       } catch {
         // Ignore telemetry errors
       }
+      // Fallback NDJSON for output (non-OTEL environments)
+      try {
+        const checkId = (config as any).checkName || (config as any).id || 'unknown';
+        const outJson = JSON.stringify((finalResult as any).output ?? finalResult);
+        const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+        emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkId, 'visor.check.output': outJson }, []);
+      } catch {}
 
       return finalResult;
     } catch (error) {
