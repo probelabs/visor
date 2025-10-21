@@ -50,9 +50,8 @@ export class ConfigManager {
     'memory',
     'noop',
     'log',
-    'memory',
     'github',
-    'memory',
+    'human-input',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

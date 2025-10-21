@@ -192,7 +192,8 @@ export type ConfigCheckType =
   | 'memory'
   | 'github'
   | 'claude-code'
-  | 'mcp';
+  | 'mcp'
+  | 'human-input';
 
 /**
  * Valid event triggers for checks
@@ -437,6 +438,17 @@ export interface CheckConfig {
   argsTransform?: string;
   /** Session ID for HTTP transport (optional, server may generate one) */
   sessionId?: string;
+  /**
+   * Human input provider specific options (optional, only used when type === 'human-input').
+   */
+  /** Placeholder text to show in input field */
+  placeholder?: string;
+  /** Allow empty input (default: false) */
+  allow_empty?: boolean;
+  /** Support multiline input (default: false) */
+  multiline?: boolean;
+  /** Default value if timeout occurs or empty input when allow_empty is true */
+  default?: string;
 }
 
 /**
@@ -687,6 +699,34 @@ export interface MemoryConfig {
 }
 
 /**
+ * Human input request passed to hooks
+ */
+export interface HumanInputRequest {
+  /** Check ID requesting input */
+  checkId: string;
+  /** Prompt to display to user */
+  prompt: string;
+  /** Placeholder text (optional) */
+  placeholder?: string;
+  /** Whether empty input is allowed */
+  allowEmpty: boolean;
+  /** Whether multiline input is supported */
+  multiline: boolean;
+  /** Timeout in milliseconds (optional) */
+  timeout?: number;
+  /** Default value if timeout or empty (optional) */
+  default?: string;
+}
+
+/**
+ * Hooks for runtime integration (SDK mode)
+ */
+export interface VisorHooks {
+  /** Called when human input is required */
+  onHumanInput?: (request: HumanInputRequest) => Promise<string>;
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -704,6 +744,8 @@ export interface VisorConfig {
   http_server?: HttpServerConfig;
   /** Memory storage configuration */
   memory?: MemoryConfig;
+  /** Runtime hooks for SDK integration */
+  hooks?: VisorHooks;
   /** Global environment variables */
   env?: EnvConfig;
   /** Global AI model setting */

@@ -199,6 +199,8 @@ export class CheckExecutionEngine {
     .slice(2, 8)}`;
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
+  // Execution context for providers (CLI message, hooks, etc.)
+  private executionContext?: import('./providers/check-provider.interface').ExecutionContext;
   // Cached GitHub context for context elevation when running in Actions
   private actionContext?: {
     owner: string;
@@ -318,6 +320,16 @@ export class CheckExecutionEngine {
       return { ...baseContext, octokit: this.actionContext.octokit };
     }
     return baseContext;
+  }
+
+  /**
+   * Set execution context for providers (CLI message, hooks, etc.)
+   * This allows passing state without using static properties
+   */
+  setExecutionContext(
+    context: import('./providers/check-provider.interface').ExecutionContext
+  ): void {
+    this.executionContext = context;
   }
 
   /**
@@ -522,7 +534,11 @@ export class CheckExecutionEngine {
     let result: ReviewSummary;
     try {
       const __provStart = Date.now();
-      result = await provider.execute(prInfoForInline, provCfg, depResults, sessionInfo);
+      const inlineContext: import('./providers/check-provider.interface').ExecutionContext = {
+        ...sessionInfo,
+        ...this.executionContext,
+      } as any;
+      result = await provider.execute(prInfoForInline, provCfg, depResults, inlineContext);
       this.recordProviderDuration(checkId, Date.now() - __provStart);
     } catch (error) {
       // Restore previous override before rethrowing
@@ -1342,7 +1358,11 @@ export class CheckExecutionEngine {
           });
         } catch {}
         const __provStart = Date.now();
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        const context: import('./providers/check-provider.interface').ExecutionContext = {
+          ...sessionInfo,
+          ...this.executionContext,
+        };
+        const res = await provider.execute(prInfo, providerConfig, dependencyResults, context);
         this.recordProviderDuration(checkName, Date.now() - __provStart);
         try {
           currentRouteOutput = (res as any)?.output;
@@ -3464,7 +3484,7 @@ export class CheckExecutionEngine {
                 (config.fail_if || config.checks![depId]?.fail_if)
               ) {
                 try {
-                  hasFatalFailure = await this.failIfTriggered(depId, depRes, config);
+                  hasFatalFailure = await this.failIfTriggered(depId, depRes, config, results);
                 } catch {}
               }
             }
@@ -3743,7 +3763,9 @@ export class CheckExecutionEngine {
                     const fRes = await this.evaluateFailureConditions(
                       childName,
                       childItemRes,
-                      config
+                      config,
+                      prInfo,
+                      results
                     );
                     if (fRes.length > 0) {
                       const fIssues = fRes
@@ -3902,7 +3924,9 @@ export class CheckExecutionEngine {
                   const itemFailures = await this.evaluateFailureConditions(
                     checkName,
                     itemResult,
-                    config
+                    config,
+                    prInfo,
+                    results
                   );
                   if (itemFailures.length > 0) {
                     const failureIssues = itemFailures
@@ -4091,7 +4115,13 @@ export class CheckExecutionEngine {
                     );
 
                     if (config && (config.fail_if || nodeCfg.fail_if)) {
-                      const fRes = await this.evaluateFailureConditions(node, nodeItemRes, config);
+                      const fRes = await this.evaluateFailureConditions(
+                        node,
+                        nodeItemRes,
+                        config,
+                        prInfo,
+                        results
+                      );
                       if (fRes.length > 0) {
                         const fIssues = fRes
                           .filter(f => f.failed)
@@ -4215,7 +4245,13 @@ export class CheckExecutionEngine {
                         rForEval = { ...r, output: parsed } as ReviewSummary & { output?: unknown };
                       }
                     }
-                    const failures = await this.evaluateFailureConditions(parent, rForEval, config);
+                    const failures = await this.evaluateFailureConditions(
+                      parent,
+                      rForEval,
+                      config,
+                      prInfo,
+                      results
+                    );
                     if (failures.some(f => f.failed)) {
                       // Temporary: surface why index is gated
                     }
@@ -4370,7 +4406,9 @@ export class CheckExecutionEngine {
                             const failures = await this.evaluateFailureConditions(
                               checkName,
                               r,
-                              config
+                              config,
+                              prInfo,
+                              results
                             );
                             hadFatal = failures.some(f => f.failed);
                           } catch {}
@@ -4508,7 +4546,9 @@ export class CheckExecutionEngine {
               const failureResults = await this.evaluateFailureConditions(
                 checkName,
                 finalResult,
-                config
+                config,
+                prInfo,
+                results
               );
               if (failureResults.length > 0) {
                 const failureIssues = failureResults
@@ -5722,7 +5762,8 @@ export class CheckExecutionEngine {
     checkName: string,
     reviewSummary: ReviewSummary,
     config?: import('./types/config').VisorConfig,
-    prInfo?: PRInfo
+    prInfo?: PRInfo,
+    previousOutputs?: Record<string, ReviewSummary> | Map<string, ReviewSummary>
   ): Promise<FailureConditionResult[]> {
     if (!config) {
       return [];
@@ -5732,6 +5773,13 @@ export class CheckExecutionEngine {
     const checkSchema =
       typeof checkConfig?.schema === 'object' ? 'custom' : checkConfig?.schema || '';
     const checkGroup = checkConfig?.group || '';
+
+    // Convert previousOutputs Map to Record if needed
+    const outputsRecord: Record<string, ReviewSummary> | undefined = previousOutputs
+      ? previousOutputs instanceof Map
+        ? Object.fromEntries(previousOutputs.entries())
+        : previousOutputs
+      : undefined;
 
     // Handle new simple fail_if syntax
     const globalFailIf = config.fail_if;
@@ -5748,7 +5796,8 @@ export class CheckExecutionEngine {
           checkSchema,
           checkGroup,
           reviewSummary,
-          globalFailIf
+          globalFailIf,
+          outputsRecord
         );
 
         try {
@@ -5812,7 +5861,8 @@ export class CheckExecutionEngine {
           checkSchema,
           checkGroup,
           reviewSummary,
-          checkFailIf
+          checkFailIf,
+          outputsRecord
         );
 
         try {
@@ -6500,10 +6550,17 @@ export class CheckExecutionEngine {
   private async failIfTriggered(
     checkName: string,
     result: ReviewSummary,
-    config?: import('./types/config').VisorConfig
+    config?: import('./types/config').VisorConfig,
+    previousOutputs?: Record<string, ReviewSummary> | Map<string, ReviewSummary>
   ): Promise<boolean> {
     if (!config) return false;
-    const failures = await this.evaluateFailureConditions(checkName, result, config);
+    const failures = await this.evaluateFailureConditions(
+      checkName,
+      result,
+      config,
+      undefined,
+      previousOutputs
+    );
     return failures.some(f => f.failed);
   }
 

@@ -366,7 +366,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp"];
+            readonly enum: readonly ["ai", "command", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,string>': {

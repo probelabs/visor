@@ -419,7 +419,8 @@
         "memory",
         "github",
         "claude-code",
-        "mcp"
+        "mcp",
+        "human-input"
       ],
       "description": "Valid check types in configuration"
     },

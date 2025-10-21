@@ -71,6 +71,7 @@ export class CLI {
         'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--message <text>', 'Message for human-input checks (inline text or file path)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -143,6 +144,7 @@ export class CLI {
           'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
         )
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+        .option('--message <text>', 'Message for human-input checks (inline text or file path)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -208,6 +210,7 @@ export class CLI {
         codeContext,
         analyzeBranchDiff: options.analyzeBranchDiff,
         event: options.event,
+        message: options.message,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

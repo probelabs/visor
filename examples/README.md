@@ -12,7 +12,7 @@ Use Visor from Node.js without shelling out.
 # Build SDK first
 npm run build:sdk
 
-# Run examples
+# Basic SDK examples
 node examples/sdk-basic.mjs           # Minimal (5 lines)
 node examples/sdk-cjs.cjs             # CommonJS
 node examples/sdk-manual-config.mjs   # Manual config
@@ -21,6 +21,34 @@ node examples/sdk-comprehensive.mjs   # Complex with dependencies
 # TypeScript (full type safety with SDK types)
 npx tsc examples/sdk-typescript.ts --module esnext --target es2022 --moduleResolution bundler --esModuleInterop --skipLibCheck && node examples/sdk-typescript.js
 ```
+
+### 🧮 Human-Input Calculator Examples
+
+Interactive calculator demonstrating human-in-the-loop workflows:
+
+```bash
+# Interactive calculator with table output
+bun examples/calculator-sdk-real.ts
+
+# Calculator with JSON output (programmatic processing)
+bun examples/calculator-sdk-json.ts
+
+# Fully automated calculator (for testing/automation)
+bun examples/calculator-sdk-automated.ts
+bun examples/calculator-sdk-automated.ts 10 5 +  # With args
+
+# YAML config version
+./dist/index.js --config examples/calculator-config.yaml --message "10" --check get-number1
+```
+
+**Features demonstrated:**
+- ✅ Human input via `human-input` check type
+- ✅ Memory provider for state management
+- ✅ JavaScript execution in memory provider
+- ✅ Dependency chains with fail_if validation
+- ✅ JSON output for programmatic processing
+- ✅ Custom visualization in SDK scripts
+- ✅ Suppressing stdout/stderr for clean JSON responses
 
 See `docs/sdk.md` for full SDK documentation.
 
@@ -246,7 +274,92 @@ steps:
 - [Main README](../README.md) - Complete Visor documentation
 - [Configuration Guide](../docs/configuration.md) - Detailed config options
 - [GitHub Actions Guide](../docs/github-actions.md) - CI/CD integration
-### 4. Failure Routing Examples
+### 4. Human Input Examples
+
+Interactive workflows with human-in-the-loop:
+
+```bash
+# Basic human input patterns
+visor --config examples/human-input-example.yaml
+
+# Interactive calculator (demonstrates memory + JS + human input)
+visor --config examples/calculator-config.yaml
+
+# Run with inline message
+visor --config examples/human-input-example.yaml --check approval-gate --message "yes"
+
+# Run with file input (auto-detected)
+echo "yes" > approval.txt
+visor --config examples/human-input-example.yaml --check approval-gate --message approval.txt
+
+# Run with piped input
+echo "yes" | visor --config examples/human-input-example.yaml --check approval-gate
+```
+
+**Calculator Example:**
+The calculator demonstrates a complete workflow:
+1. Prompts for first number
+2. Prompts for second number
+3. Prompts for operation (+, -, *, /)
+4. Stores values in memory
+5. Calculates result using JavaScript
+6. Displays formatted result
+
+**SDK Usage:**
+
+Two SDK examples are provided:
+
+1. **`calculator-sdk-real.ts`** - Complete, runnable SDK example:
+   - Real imports from Visor SDK
+   - Config defined inline (no YAML needed)
+   - Custom readline-based input hook
+   - Full CheckExecutionEngine usage
+   - Works in interactive or automated mode
+
+   ```bash
+   # Interactive mode
+   ts-node examples/calculator-sdk-real.ts
+
+   # Automated mode (for testing)
+   ts-node examples/calculator-sdk-real.ts 42 7 +
+   ```
+
+2. **`calculator-sdk-example.ts`** - Documentation/template example:
+   - Shows the structure and patterns
+   - Includes comments and explanations
+   - Generates YAML config for CLI usage
+
+**SDK Pattern:**
+```typescript
+import { HumanInputCheckProvider } from '../src/providers/human-input-check-provider';
+import { CheckExecutionEngine } from '../src/check-execution-engine';
+import { VisorConfig } from '../src/types/config';
+
+// Define config inline
+const config: VisorConfig = {
+  version: "1.0",
+  checks: {
+    "my-check": {
+      type: "human-input",
+      prompt: "Enter value:"
+    }
+  },
+  output: { pr_comment: { format: "markdown", group_by: "check", collapse: false } }
+};
+
+// Set custom hook
+HumanInputCheckProvider.setHooks({
+  onHumanInput: async (request) => {
+    return await myCustomHandler(request);
+  }
+});
+
+// Run checks
+const engine = new CheckExecutionEngine();
+const results = await engine.executeChecks(prInfo, config, Object.keys(config.checks));
+```
+
+### 5. Failure Routing Examples
 
 Run the examples directly from the repo root:
 

@@ -111,6 +111,17 @@ export async function main(): Promise<void> {
         ? new Set<string>(options.checks.map(check => check.toString()))
         : null;
 
+    // Build execution context for providers
+    const executionContext: import('./providers/check-provider.interface').ExecutionContext = {};
+
+    // Set CLI message for human-input checks if provided
+    if (options.message !== undefined) {
+      executionContext.cliMessage = options.message;
+      // Also set static property for backward compatibility
+      const { HumanInputCheckProvider } = await import('./providers/human-input-check-provider');
+      HumanInputCheckProvider.setCLIMessage(options.message);
+    }
+
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
@@ -352,6 +363,9 @@ export async function main(): Promise<void> {
 
     // Create CheckExecutionEngine for running checks
     const engine = new CheckExecutionEngine();
+
+    // Set execution context on engine
+    engine.setExecutionContext(executionContext);
 
     // Build tag filter from CLI options
     const tagFilter: import('./types/config').TagFilter | undefined =

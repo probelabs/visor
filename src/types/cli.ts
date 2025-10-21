@@ -50,6 +50,8 @@ export interface CliOptions {
   analyzeBranchDiff?: boolean;
   /** Simulate GitHub event type for event-based filtering ('all' runs checks regardless of event triggers) */
   event?: EventTrigger | 'all';
+  /** Message for human-input checks (inline string or file path) */
+  message?: string;
 }
 
 /**
