@@ -153,9 +153,7 @@ export async function parseNDJSONTrace(filePath: string): Promise<ExecutionTrace
   const timeline = computeTimeline(spans);
 
   // Calculate metadata
-  const sortedSpans = [...spans].sort((a, b) =>
-    compareTimeValues(a.startTime, b.startTime)
-  );
+  const sortedSpans = [...spans].sort((a, b) => compareTimeValues(a.startTime, b.startTime));
   const firstSpan = sortedSpans[0];
   const lastSpan = sortedSpans[sortedSpans.length - 1];
 
@@ -292,9 +290,7 @@ function createExecutionNode(span: ProcessedSpan): ExecutionNode {
   const attrs = span.attributes;
 
   // Extract check ID
-  const checkId = attrs['visor.check.id'] ||
-                  attrs['visor.run.id'] ||
-                  span.spanId;
+  const checkId = attrs['visor.check.id'] || attrs['visor.run.id'] || span.spanId;
 
   // Determine type
   let type = 'unknown';
@@ -377,8 +373,10 @@ export function extractStateSnapshots(spans: ProcessedSpan[]): StateSnapshot[] {
         const attrs = event.attributes || {};
 
         const snapshot: StateSnapshot = {
-          checkId: attrs['visor.snapshot.check_id'] || span.attributes['visor.check.id'] || 'unknown',
-          timestamp: attrs['visor.snapshot.timestamp'] || event.timestamp || timeValueToISO(event.time),
+          checkId:
+            attrs['visor.snapshot.check_id'] || span.attributes['visor.check.id'] || 'unknown',
+          timestamp:
+            attrs['visor.snapshot.timestamp'] || event.timestamp || timeValueToISO(event.time),
           timestampNanos: event.time,
           outputs: parseJSON(attrs['visor.snapshot.outputs'], {}),
           memory: parseJSON(attrs['visor.snapshot.memory'], {}),

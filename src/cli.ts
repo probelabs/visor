@@ -72,7 +72,9 @@ export class CLI {
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .option('--debug-server', 'Start debug visualizer server for live execution visualization')
-      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -147,7 +149,9 @@ export class CLI {
         )
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
         .option('--debug-server', 'Start debug visualizer server for live execution visualization')
-        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
+        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+          parseInt(value, 10)
+        )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
@@ -338,7 +342,9 @@ export class CLI {
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
       .option('--debug-server', 'Start debug visualizer server for live execution visualization')
-      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value => parseInt(value, 10))
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

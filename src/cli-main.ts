@@ -40,35 +40,35 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
 
   console.log('🔍 Visor Configuration Validator\n');
 
-    try {
-      let config;
-      if (configPath) {
-        console.log(`📂 Validating configuration: ${configPath}`);
-        try {
-          config = await configManager.loadConfig(configPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // Only fall back for schema/validation-style errors; preserve hard errors like "not found"
-          if (/Missing required field|Invalid YAML|must contain a valid YAML object/i.test(msg)) {
-            console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
-            config = await configManager.getDefaultConfig();
-            // Merge the partial user config into defaults if it parses
-            try {
-              const raw = fs.readFileSync(configPath, 'utf8');
-              const parsed = (await import('js-yaml')).load(raw) as any;
-              if (parsed && typeof parsed === 'object' && parsed.checks) {
-                (config as any).checks = parsed.checks;
-                (config as any).steps = parsed.checks;
-              }
-            } catch {}
-          } else {
-            throw err;
-          }
+  try {
+    let config;
+    if (configPath) {
+      console.log(`📂 Validating configuration: ${configPath}`);
+      try {
+        config = await configManager.loadConfig(configPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Only fall back for schema/validation-style errors; preserve hard errors like "not found"
+        if (/Missing required field|Invalid YAML|must contain a valid YAML object/i.test(msg)) {
+          console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
+          config = await configManager.getDefaultConfig();
+          // Merge the partial user config into defaults if it parses
+          try {
+            const raw = fs.readFileSync(configPath, 'utf8');
+            const parsed = (await import('js-yaml')).load(raw) as any;
+            if (parsed && typeof parsed === 'object' && parsed.checks) {
+              (config as any).checks = parsed.checks;
+              (config as any).steps = parsed.checks;
+            }
+          } catch {}
+        } else {
+          throw err;
         }
-      } else {
-        console.log('📂 Searching for configuration file...');
-        config = await configManager.findAndLoadConfig();
       }
+    } else {
+      console.log('📂 Searching for configuration file...');
+      config = await configManager.findAndLoadConfig();
+    }
 
     // If we got here, validation passed
     console.log('\n✅ Configuration is valid!');
@@ -219,7 +219,9 @@ export async function main(): Promise<void> {
           } else {
             logger.error(`❌ Error loading configuration from ${options.configPath}`);
           }
-          logger.error('\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.');
+          logger.error(
+            '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
+          );
           process.exit(1);
         }
         // Otherwise, treat as validation error and fall back
@@ -284,7 +286,9 @@ export async function main(): Promise<void> {
         if (process.env.NODE_ENV === 'test') {
           for (const f of fs.readdirSync(tracesDir)) {
             if (f.endsWith('.ndjson')) {
-              try { fs.unlinkSync(path.join(tracesDir, f)); } catch {}
+              try {
+                fs.unlinkSync(path.join(tracesDir, f));
+              } catch {}
             }
           }
         }
@@ -400,8 +404,8 @@ export async function main(): Promise<void> {
       check => config.checks?.[check]?.schema === 'code-review'
     );
     const analyzeBranchDiff = options.debugServer
-      ? false  // Skip git diff when debug server is active
-      : (options.analyzeBranchDiff || hasCodeReviewSchema);
+      ? false // Skip git diff when debug server is active
+      : options.analyzeBranchDiff || hasCodeReviewSchema;
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
     try {
@@ -744,7 +748,10 @@ export async function main(): Promise<void> {
       // Spans will be cleared on next execution start
       // debugServer.clearSpans();
 
-      console.log('✅ Execution completed. Debug server still running at http://localhost:' + debugServer.getPort());
+      console.log(
+        '✅ Execution completed. Debug server still running at http://localhost:' +
+          debugServer.getPort()
+      );
       console.log('   Press Ctrl+C to exit');
 
       // Flush telemetry but don't shut down
@@ -809,7 +816,10 @@ export async function main(): Promise<void> {
       // Spans will be cleared on next execution start
       // debugServer.clearSpans();
 
-      console.log('⚠️  Execution failed. Debug server still running at http://localhost:' + debugServer.getPort());
+      console.log(
+        '⚠️  Execution failed. Debug server still running at http://localhost:' +
+          debugServer.getPort()
+      );
       console.log('   Press Ctrl+C to exit');
 
       // Flush telemetry but don't shut down

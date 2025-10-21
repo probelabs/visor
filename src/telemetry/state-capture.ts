@@ -116,7 +116,10 @@ export function captureForEachState(
     if (items.length <= MAX_ARRAY_ITEMS) {
       span.setAttribute('visor.foreach.items', safeSerialize(items));
     } else {
-      span.setAttribute('visor.foreach.items.preview', safeSerialize(items.slice(0, MAX_ARRAY_ITEMS)));
+      span.setAttribute(
+        'visor.foreach.items.preview',
+        safeSerialize(items.slice(0, MAX_ARRAY_ITEMS))
+      );
       span.setAttribute('visor.foreach.items.truncated', true);
     }
   } catch (err) {

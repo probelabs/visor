@@ -39,7 +39,7 @@ export class DebugSpanExporter implements SpanExporter {
       console.error('[debug-exporter] Failed to export spans:', error);
       resultCallback({
         code: ExportResultCode.FAILED,
-        error: error instanceof Error ? error : new Error(String(error))
+        error: error instanceof Error ? error : new Error(String(error)),
       });
     }
   }
@@ -72,14 +72,16 @@ export class DebugSpanExporter implements SpanExporter {
 
     // Debug: Detailed parent span ID logging
     const rawParent = (span as any).parentSpanId;
-    console.log(`[debug-exporter] Span: ${span.name}, parent: ${span.parentSpanId || 'NONE'} (type: ${typeof rawParent})`);
+    console.log(
+      `[debug-exporter] Span: ${span.name}, parent: ${span.parentSpanId || 'NONE'} (type: ${typeof rawParent})`
+    );
 
     // Convert events
     const events = span.events.map(event => ({
       name: event.name,
       time: this.hrTimeToTuple(event.time),
       timestamp: new Date(this.hrTimeToMillis(event.time)).toISOString(),
-      attributes: event.attributes ? { ...event.attributes } : {}
+      attributes: event.attributes ? { ...event.attributes } : {},
     }));
 
     // Determine status
@@ -100,7 +102,7 @@ export class DebugSpanExporter implements SpanExporter {
       duration,
       attributes,
       events,
-      status
+      status,
     };
   }
 
