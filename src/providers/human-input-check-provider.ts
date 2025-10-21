@@ -1,4 +1,4 @@
-import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
+import { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { HumanInputRequest } from '../types/config';
@@ -10,7 +10,7 @@ import * as path from 'path';
 /**
  * Human input check provider that pauses workflow to request user input.
  *
- * Supports three modes:
+ * Supports four modes:
  * 1. CLI with --message argument (inline or file path)
  * 2. CLI with piped stdin
  * 3. CLI interactive mode (beautiful terminal UI)
@@ -27,11 +27,21 @@ import * as path from 'path';
  * ```
  */
 export class HumanInputCheckProvider extends CheckProvider {
+  /**
+   * @deprecated Use ExecutionContext.cliMessage instead
+   * Kept for backward compatibility
+   */
   private static cliMessage: string | undefined;
+
+  /**
+   * @deprecated Use ExecutionContext.hooks instead
+   * Kept for backward compatibility
+   */
   private static hooks: { onHumanInput?: (request: HumanInputRequest) => Promise<string> } = {};
 
   /**
    * Set the CLI message value (from --message argument)
+   * @deprecated Use ExecutionContext.cliMessage instead
    */
   static setCLIMessage(message: string | undefined): void {
     HumanInputCheckProvider.cliMessage = message;
@@ -39,6 +49,7 @@ export class HumanInputCheckProvider extends CheckProvider {
 
   /**
    * Get the current CLI message value
+   * @deprecated Use ExecutionContext.cliMessage instead
    */
   static getCLIMessage(): string | undefined {
     return HumanInputCheckProvider.cliMessage;
@@ -46,6 +57,7 @@ export class HumanInputCheckProvider extends CheckProvider {
 
   /**
    * Set hooks for SDK mode
+   * @deprecated Use ExecutionContext.hooks instead
    */
   static setHooks(hooks: { onHumanInput?: (request: HumanInputRequest) => Promise<string> }): void {
     HumanInputCheckProvider.hooks = hooks;
@@ -154,7 +166,11 @@ export class HumanInputCheckProvider extends CheckProvider {
   /**
    * Get user input through various methods
    */
-  private async getUserInput(checkName: string, config: CheckProviderConfig): Promise<string> {
+  private async getUserInput(
+    checkName: string,
+    config: CheckProviderConfig,
+    context?: ExecutionContext
+  ): Promise<string> {
     const prompt = config.prompt || 'Please provide input:';
     const placeholder = (config.placeholder as string | undefined) || 'Enter your response...';
     const allowEmpty = (config.allow_empty as boolean | undefined) ?? false;
@@ -162,9 +178,12 @@ export class HumanInputCheckProvider extends CheckProvider {
     const timeout = config.timeout ? config.timeout * 1000 : undefined; // Convert to ms
     const defaultValue = config.default as string | undefined;
 
+    // Get cliMessage from context (new way) or static property (backward compat)
+    const cliMessage = context?.cliMessage ?? HumanInputCheckProvider.cliMessage;
+
     // Priority 1: Check for --message CLI argument
-    if (HumanInputCheckProvider.cliMessage !== undefined) {
-      const message = HumanInputCheckProvider.cliMessage;
+    if (cliMessage !== undefined) {
+      const message = cliMessage;
 
       // Check if it looks like a path and try to read the file
       if (this.looksLikePath(message)) {
@@ -185,7 +204,10 @@ export class HumanInputCheckProvider extends CheckProvider {
     }
 
     // Priority 3: SDK hook mode
-    if (HumanInputCheckProvider.hooks.onHumanInput) {
+    // Get hooks from context (new way) or static property (backward compat)
+    const hooks = context?.hooks ?? HumanInputCheckProvider.hooks;
+
+    if (hooks?.onHumanInput) {
       const request: HumanInputRequest = {
         checkId: checkName,
         prompt,
@@ -197,7 +219,7 @@ export class HumanInputCheckProvider extends CheckProvider {
       };
 
       try {
-        const result = await HumanInputCheckProvider.hooks.onHumanInput(request);
+        const result = await hooks.onHumanInput(request);
         return result;
       } catch (error) {
         throw new Error(
@@ -243,13 +265,13 @@ export class HumanInputCheckProvider extends CheckProvider {
     _prInfo: PRInfo,
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    context?: ExecutionContext
   ): Promise<ReviewSummary> {
     const checkName = config.checkName || 'human-input';
 
     try {
-      // Get user input
-      const userInput = await this.getUserInput(checkName, config);
+      // Get user input (pass context for non-static state)
+      const userInput = await this.getUserInput(checkName, config, context);
 
       // Sanitize input to prevent injection attacks in dependent checks
       const sanitizedInput = this.sanitizeInput(userInput);

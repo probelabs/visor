@@ -191,6 +191,8 @@ export class CheckExecutionEngine {
   private outputHistory: Map<string, unknown[]> = new Map();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
+  // Execution context for providers (CLI message, hooks, etc.)
+  private executionContext?: import('./providers/check-provider.interface').ExecutionContext;
   // Cached GitHub context for context elevation when running in Actions
   private actionContext?: {
     owner: string;
@@ -230,6 +232,14 @@ export class CheckExecutionEngine {
       return { ...baseContext, octokit: this.actionContext.octokit };
     }
     return baseContext;
+  }
+
+  /**
+   * Set execution context for providers (CLI message, hooks, etc.)
+   * This allows passing state without using static properties
+   */
+  setExecutionContext(context: import('./providers/check-provider.interface').ExecutionContext): void {
+    this.executionContext = context;
   }
 
   /**
@@ -545,7 +555,12 @@ export class CheckExecutionEngine {
       }
       let r: ReviewSummary;
       try {
-        r = await prov.execute(prInfoForInline, provCfg, depResults, sessionInfo);
+        // Merge sessionInfo with execution context for inline execution
+        const inlineContext: import('./providers/check-provider.interface').ExecutionContext = {
+          ...sessionInfo,
+          ...this.executionContext,
+        };
+        r = await prov.execute(prInfoForInline, provCfg, depResults, inlineContext);
       } finally {
         // Restore previous override
         this.routingEventOverride = prevEventOverride;
@@ -583,7 +598,12 @@ export class CheckExecutionEngine {
             'visor.provider.type': providerConfig.type || 'ai',
           });
         } catch {}
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        // Merge sessionInfo with execution context
+        const context: import('./providers/check-provider.interface').ExecutionContext = {
+          ...sessionInfo,
+          ...this.executionContext,
+        };
+        const res = await provider.execute(prInfo, providerConfig, dependencyResults, context);
         try {
           currentRouteOutput = (res as any)?.output;
         } catch {}
