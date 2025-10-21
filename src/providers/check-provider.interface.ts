@@ -1,6 +1,6 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
-import { EnvConfig } from '../types/config';
+import { EnvConfig, HumanInputRequest } from '../types/config';
 
 /**
  * Configuration for a check provider
@@ -35,6 +35,21 @@ export interface CheckProviderConfig {
 }
 
 /**
+ * Execution context passed to check providers
+ */
+export interface ExecutionContext {
+  /** Session information for AI session reuse */
+  parentSessionId?: string;
+  reuseSession?: boolean;
+  /** CLI message value (from --message argument) */
+  cliMessage?: string;
+  /** SDK hooks for human input */
+  hooks?: {
+    onHumanInput?: (request: HumanInputRequest) => Promise<string>;
+  };
+}
+
+/**
  * Abstract base class for all check providers
  * Implementing classes provide specific check functionality (AI, tool, script, etc.)
  */
@@ -61,14 +76,14 @@ export abstract class CheckProvider {
    * @param prInfo Information about the pull request
    * @param config Provider-specific configuration
    * @param dependencyResults Optional results from dependency checks that this check depends on
-   * @param sessionInfo Optional session information for AI session reuse
+   * @param context Optional execution context with session info, hooks, and CLI state
    * @returns Review summary with scores, issues, and comments
    */
   abstract execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    context?: ExecutionContext
   ): Promise<ReviewSummary>;
 
   /**

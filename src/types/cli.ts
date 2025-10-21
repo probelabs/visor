@@ -54,6 +54,8 @@ export interface CliOptions {
   debugServer?: boolean;
   /** Port for debug visualizer server (default: 3456) */
   debugPort?: number;
+  /** Message for human-input checks (inline string or file path) */
+  message?: string;
 }
 
 /**

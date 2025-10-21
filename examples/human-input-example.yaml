@@ -1,0 +1,63 @@
+version: "1.0"
+
+# Example configuration demonstrating human-input check type
+# This shows various ways to use human-in-the-loop interactions
+
+checks:
+  # Example 1: Simple approval gate
+  approval-gate:
+    type: human-input
+    prompt: "Do you approve this change? (yes/no)"
+    allow_empty: false
+    timeout: 300  # 5 minutes in seconds
+
+  # Example 2: Context collection
+  gather-context:
+    type: human-input
+    prompt: |
+      Please provide additional context about this change:
+      - What problem does it solve?
+      - Are there any risks?
+      - Any special deployment considerations?
+    placeholder: "Enter context here..."
+    multiline: true
+    allow_empty: true
+    default: "No additional context provided"
+
+  # Example 3: Conditional workflow
+  choose-review-type:
+    type: human-input
+    prompt: "Select review type: (1) Quick check or (2) Full analysis?"
+    allow_empty: false
+
+  quick-check:
+    type: log
+    depends_on: [choose-review-type]
+    if: "outputs['choose-review-type'] === '1'"
+    message: "Running quick check... (selected option: {{ outputs['choose-review-type'] }})"
+
+  full-analysis:
+    type: log
+    depends_on: [choose-review-type]
+    if: "outputs['choose-review-type'] === '2'"
+    message: "Running full analysis... (selected option: {{ outputs['choose-review-type'] }})"
+
+  # Example 4: Using human input in subsequent checks
+  deployment-confirmation:
+    type: human-input
+    prompt: "Are you ready to deploy? Enter deployment target (staging/production):"
+    allow_empty: false
+
+  deploy:
+    type: log
+    depends_on: [deployment-confirmation]
+    message: |
+      Deploying to: {{ outputs['deployment-confirmation'] }}
+
+      This is where you would trigger your deployment script
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false

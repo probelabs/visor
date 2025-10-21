@@ -74,6 +74,7 @@ jobs:
           ai-provider: 'mock'
           config-path: '.visor.test.yaml'
           comment-on-pr: 'false'
+          add-reactions: 'false'
 
   test-scenarios:
     runs-on: ubuntu-latest
@@ -110,5 +111,6 @@ jobs:
           ai-provider: 'mock'
           config-path: '.visor.test.yaml'
           comment-on-pr: 'false'
+          add-reactions: 'false'
         env:
           GITHUB_EVENT_NAME: 'repository'

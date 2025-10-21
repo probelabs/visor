@@ -193,7 +193,7 @@ Visor is a general SDLC automation framework:
 - Author permissions: Built-in functions to customize workflows based on contributor trust level (owner, member, collaborator, etc).
 - Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
 - HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
-- Extensible providers: `ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code` — or add your own.
+- Extensible providers: `ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code`, `human-input`, `memory` — or add your own.
 - Security by default: GitHub App support, scoped tokens, remote‑extends allowlist, opt‑in network usage.
 - Observability & control: JSON/SARIF outputs, fail‑fast and timeouts, parallelism and cost control.
 
