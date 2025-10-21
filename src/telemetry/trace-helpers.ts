@@ -11,13 +11,11 @@ export async function withActiveSpan<T>(
 ): Promise<T> {
   const tracer = getTracer();
   // Check for active parent span BEFORE creating new span
+  // Preserve parent context via the tracer API; avoid logging parent IDs to stdout
   const activeCtx = otContext.active();
-  const parentSpan = trace.getSpan(activeCtx);
-  const parentId = parentSpan ? parentSpan.spanContext().spanId : 'NONE';
   // Avoid noisy stdout logs that break JSON consumers
   return await new Promise<T>((resolve, reject) => {
     const callback = async (span: Span) => {
-      const ctx = span.spanContext();
       // console.debug(`[trace] Span callback invoked for: [trace_id=${ctx.traceId} span_id=${ctx.spanId}] ${name} span: true`);
       try {
         const res = await fn(span);
@@ -39,7 +37,7 @@ export async function withActiveSpan<T>(
     };
     // startActiveSpan should use the current active context to set parent automatically
     const options = attrs ? { attributes: attrs as Attributes } : {};
-    tracer.startActiveSpan(name, options, callback as any);
+    tracer.startActiveSpan(name, options, callback);
   });
 }
 

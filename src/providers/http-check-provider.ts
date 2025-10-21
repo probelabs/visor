@@ -102,7 +102,7 @@ export class HttpCheckProvider extends CheckProvider {
       if (span) {
         captureCheckInputContext(span, templateContext);
       }
-    } catch (err) {
+    } catch {
       // Ignore telemetry errors
     }
 
@@ -158,9 +158,10 @@ export class HttpCheckProvider extends CheckProvider {
               content: JSON.stringify(response).substring(0, 500),
             }
           );
-          captureCheckOutput(span, (finalResult as any).output || finalResult);
+          const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
+          captureCheckOutput(span, outputForSpan);
         }
-      } catch (err) {
+      } catch {
         // Ignore telemetry errors
       }
 
