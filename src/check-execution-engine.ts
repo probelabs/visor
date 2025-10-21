@@ -6550,17 +6550,8 @@ export class CheckExecutionEngine {
   private formatDetailsColumn(stats: CheckExecutionStats, isForEachParent?: boolean): string {
     const parts: string[] = [];
 
-    // Clarify iteration semantics in summary:
-    // - For forEach parents (e.g., extract-facts), totalRuns = number of passes
-    // - For per-item children (e.g., validate-fact), totalRuns = item executions across passes
-    if (isForEachParent) {
-      if (stats.totalRuns > 1) parts.push(`passes:${stats.totalRuns}`);
-    } else {
-      // Heuristic: if we have forEach preview (set when executed per item) or multiple runs, show items count
-      const looksPerItem =
-        (stats as any).forEachPreview && (stats as any).forEachPreview.length >= 0;
-      if (looksPerItem && stats.totalRuns > 1) parts.push(`items:${stats.totalRuns}`);
-    }
+    // Simpler summary: do not show passes/items here to avoid confusion.
+    // Status column already shows ×N when runs > 1.
 
     // Show self/provider time to disambiguate inclusive duration in the main column
     if (typeof stats.providerDurationMs === 'number' && stats.providerDurationMs > 0) {
@@ -6654,22 +6645,12 @@ export class CheckExecutionEngine {
 
     for (const checkStats of stats.checks) {
       const isForEachParent = !!this.config?.checks?.[checkStats.checkName]?.forEach;
-      let duration: string;
-      if (checkStats.skipped) {
-        duration = '-';
-      } else if (
-        (checkStats.totalRuns || 0) > 1 &&
-        (checkStats.perIterationDuration?.length || 0) > 1
-      ) {
-        const sum = checkStats.totalDuration / 1000;
-        const avg = checkStats.totalDuration / (checkStats.totalRuns || 1) / 1000;
-        const lastMs =
-          checkStats.perIterationDuration![checkStats.perIterationDuration!.length - 1] || 0;
-        const last = lastMs / 1000;
-        duration = `${sum.toFixed(1)}s/${avg.toFixed(1)}s/${last.toFixed(1)}s`;
-      } else {
-        duration = `${(checkStats.totalDuration / 1000).toFixed(1)}s`;
-      }
+      // Show only the self/provider total time across all runs.
+      const selfMs =
+        typeof checkStats.providerDurationMs === 'number' && checkStats.providerDurationMs > 0
+          ? checkStats.providerDurationMs
+          : checkStats.totalDuration; // fallback if provider time missing
+      const duration = checkStats.skipped ? '-' : `${(selfMs / 1000).toFixed(1)}s`;
       const status = this.formatStatusColumn(checkStats);
       const details = this.formatDetailsColumn(checkStats, isForEachParent);
 
