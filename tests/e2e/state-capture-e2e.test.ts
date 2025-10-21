@@ -41,7 +41,7 @@ async function cleanupTestTraces(dir: string): Promise<void> {
 }
 
 describe('State Capture E2E', () => {
-  const testOutputDir = path.join(process.cwd(), 'output', 'traces-test-state-capture');
+  const createdDirs: string[] = [];
   const tempFixtureDir = path.join(__dirname, '../fixtures', 'temp');
   const configFile = path.join(tempFixtureDir, 'state-capture-test.yaml');
 
@@ -102,7 +102,9 @@ checks:
   });
 
   afterAll(async () => {
-    await cleanupTestTraces(testOutputDir);
+    for (const dir of createdDirs) {
+      await cleanupTestTraces(dir);
+    }
     try {
       await fs.unlink(configFile);
     } catch {}
@@ -112,6 +114,13 @@ checks:
   });
 
   it('should capture input context in spans', async () => {
+    const testOutputDir = path.join(
+      process.cwd(),
+      'output',
+      'traces-test-state-capture',
+      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+    );
+    createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
         ...process.env,
@@ -146,6 +155,13 @@ checks:
   });
 
   it('should capture output in spans', async () => {
+    const testOutputDir = path.join(
+      process.cwd(),
+      'output',
+      'traces-test-state-capture',
+      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+    );
+    createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
         ...process.env,
@@ -174,6 +190,13 @@ checks:
   });
 
   it('should capture transform_js execution', async () => {
+    const testOutputDir = path.join(
+      process.cwd(),
+      'output',
+      'traces-test-state-capture',
+      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+    );
+    createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'with-transform'], {
       env: {
         ...process.env,
@@ -218,6 +241,13 @@ checks:
   });
 
   it('should run acceptance test successfully', async () => {
+    const testOutputDir = path.join(
+      process.cwd(),
+      'output',
+      'traces-test-state-capture',
+      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+    );
+    createdDirs.push(testOutputDir);
     // This is the acceptance test from the RFC Milestone 1
     const result = await executeVisorCLI(
       [
