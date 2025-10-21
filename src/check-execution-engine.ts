@@ -1168,6 +1168,7 @@ export class CheckExecutionEngine {
         const outRaw: Record<string, unknown> = {};
         try {
           for (const [k, v] of (dependencyResults || new Map()).entries()) {
+            if (typeof k !== 'string') continue;
             if (k.endsWith('-raw')) {
               const name = k.slice(0, -4);
               const val: any = (v as any)?.output !== undefined ? (v as any).output : v;
@@ -1240,6 +1241,7 @@ export class CheckExecutionEngine {
         const outRaw: Record<string, unknown> = {};
         try {
           for (const [k, v] of (dependencyResults || new Map()).entries()) {
+            if (typeof k !== 'string') continue;
             if (k.endsWith('-raw')) {
               const name = k.slice(0, -4);
               const val: any = (v as any)?.output !== undefined ? (v as any).output : v;

@@ -287,6 +287,7 @@ export class AICheckProvider extends CheckProvider {
     const outputsRaw: Record<string, unknown> = {};
     if (dependencyResults) {
       for (const [k, v] of dependencyResults.entries()) {
+        if (typeof k !== 'string') continue;
         if (k.endsWith('-raw')) {
           const name = k.slice(0, -4);
           const summary = v as ReviewSummary & { output?: unknown };

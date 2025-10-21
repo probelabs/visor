@@ -149,6 +149,7 @@ export class LogCheckProvider extends CheckProvider {
       context.dependencyCount = dependencyResults.size;
 
       for (const [checkName, result] of dependencyResults.entries()) {
+        if (typeof checkName !== 'string') continue;
         dependencies[checkName] = {
           issueCount: result.issues?.length || 0,
           suggestionCount: 0,
@@ -157,7 +158,7 @@ export class LogCheckProvider extends CheckProvider {
 
         // Add outputs namespace for accessing dependency results directly
         const summary = result as import('../reviewer').ReviewSummary & { output?: unknown };
-        if (checkName.endsWith('-raw')) {
+        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
           const name = checkName.slice(0, -4);
           outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
         } else {

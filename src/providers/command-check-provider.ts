@@ -83,6 +83,7 @@ export class CommandCheckProvider extends CheckProvider {
     const outputsRaw: Record<string, unknown> = {};
     if (dependencyResults) {
       for (const [key, value] of dependencyResults.entries()) {
+        if (typeof key !== 'string') continue;
         if (key.endsWith('-raw')) {
           const name = key.slice(0, -4);
           const summary = value as ReviewSummary & { output?: unknown };

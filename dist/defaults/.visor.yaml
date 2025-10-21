@@ -732,6 +732,12 @@ steps:
     namespace: fact-validation
     on: [issue_opened, issue_comment]
     fanout: reduce
+    on_success:
+      goto_js: |
+        // Route back to the appropriate assistant if there are issues
+        if (!output || output.all_valid) return null;
+        const hasComment = !!(outputs['comment-assistant']) || (outputs.history && (outputs.history['comment-assistant'] || []).length > 0);
+        return hasComment ? 'comment-assistant' : 'issue-assistant';
     memory_js: |
       const validations = outputs.history['validate-fact'] || [];
 

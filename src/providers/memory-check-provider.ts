@@ -508,8 +508,10 @@ export class MemoryCheckProvider extends CheckProvider {
 
     if (dependencyResults) {
       for (const [checkName, result] of dependencyResults.entries()) {
+        // Defensive: some callers may accidentally provide non-string keys
+        if (typeof checkName !== 'string') continue;
         const summary = result as ReviewSummary & { output?: unknown };
-        if (checkName.endsWith('-raw')) {
+        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
           const name = checkName.slice(0, -4);
           outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
         } else {
