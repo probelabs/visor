@@ -809,7 +809,7 @@ export class CheckExecutionEngine {
       );
       const issues = (res.issues || []).map(i => ({ ...i }));
       const success = !this.hasFatal(issues);
-      const out: unknown = (res as any)?.output;
+      const out: unknown = (res as { output?: unknown }).output;
       this.recordIterationComplete(target, startTs, success, issues, out);
       return res;
     } catch (e) {
@@ -4985,7 +4985,7 @@ export class CheckExecutionEngine {
                   : 'manual'
             : 'issue_comment';
           const commenterAssoc = resolveAssociationFromEvent(
-            (prInfo as any)?.eventContext,
+            prInfo.eventContext,
             prInfo.authorAssociation
           );
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
@@ -5252,7 +5252,7 @@ export class CheckExecutionEngine {
       aggregatedIssues.push(...nonInternalIssues);
 
       const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
-      const resultContent = (resultSummary as any).content;
+      const resultContent = (resultSummary as { content?: string }).content;
       if (typeof resultContent === 'string' && resultContent.trim()) {
         contentMap[checkName] = resultContent.trim();
       }
@@ -6613,7 +6613,7 @@ export class CheckExecutionEngine {
   /**
    * Format the Details column for execution summary table
    */
-  private formatDetailsColumn(stats: CheckExecutionStats, isForEachParent?: boolean): string {
+  private formatDetailsColumn(stats: CheckExecutionStats, _isForEachParent?: boolean): string {
     const parts: string[] = [];
 
     // Simpler summary: do not show passes/items here to avoid confusion.
