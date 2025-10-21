@@ -87,7 +87,8 @@ let __ndjsonPath: string | null = null;
 export function __getOrCreateNdjsonPath(): string | null {
   try {
     // If sink is explicitly set to non-file, skip. If unset, still allow when a trace dir/file is configured.
-    if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== 'file') return null;
+    if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== 'file')
+      return null;
     const path = require('path');
     const fs = require('fs');
     // Prefer explicit fallback file path if set by the CLI
