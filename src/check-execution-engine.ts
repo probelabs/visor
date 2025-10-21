@@ -55,6 +55,8 @@ export interface CheckExecutionStats {
   skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed';
   skipCondition?: string; // The actual if condition text
   totalDuration: number; // Total duration in milliseconds
+  // Provider/self time (excludes time spent running routed children/descendants)
+  providerDurationMs?: number;
   perIterationDuration?: number[]; // Duration for each iteration (if forEach)
   issuesFound: number;
   issuesBySeverity: {
@@ -491,7 +493,9 @@ export class CheckExecutionEngine {
     // Execute the check
     let result: ReviewSummary;
     try {
+      const __provStart = Date.now();
       result = await provider.execute(prInfoForInline, provCfg, depResults, sessionInfo);
+      this.recordProviderDuration(checkId, Date.now() - __provStart);
     } catch (error) {
       // Restore previous override before rethrowing
       this.routingEventOverride = prevEventOverride;
@@ -949,7 +953,7 @@ export class CheckExecutionEngine {
               const sandbox = this.getRoutingSandbox();
               const scope = onFinishContext;
               const code = `
-                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a);
+                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const __json = (process?.env?.VISOR_OUTPUT_FORMAT === 'json' || process?.env?.VISOR_OUTPUT_FORMAT === 'sarif'); const log = (...a)=> (__json ? console.error('🔍 Debug:',...a) : console.log('🔍 Debug:',...a));
                 const __fn = () => {\n${js}\n};
                 const __res = __fn();
                 return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
@@ -1020,7 +1024,7 @@ export class CheckExecutionEngine {
             const scope = onFinishContext;
 
             const code = `
-              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=>console.log('🔍 Debug:',...a);
+              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const __json = (process?.env?.VISOR_OUTPUT_FORMAT === 'json' || process?.env?.VISOR_OUTPUT_FORMAT === 'sarif'); const log = (...a)=> (__json ? console.error('🔍 Debug:',...a) : console.log('🔍 Debug:',...a));
               const __fn = () => {\n${onFinish.goto_js}\n};
               const __res = __fn();
               return (typeof __res === 'string' && __res) ? __res : null;
@@ -1306,7 +1310,9 @@ export class CheckExecutionEngine {
             'visor.provider.type': providerConfig.type || 'ai',
           });
         } catch {}
+        const __provStart = Date.now();
         const res = await provider.execute(prInfo, providerConfig, dependencyResults, sessionInfo);
+        this.recordProviderDuration(checkName, Date.now() - __provStart);
         try {
           currentRouteOutput = (res as any)?.output;
         } catch {}
@@ -2186,7 +2192,9 @@ export class CheckExecutionEngine {
           eventContext: this.enrichEventContext(prInfo.eventContext),
           ai: timeout ? { timeout } : undefined,
         };
+        const __provStart = Date.now();
         const result = await provider.execute(prInfo, providerConfig);
+        this.recordProviderDuration(checks[0], Date.now() - __provStart);
 
         // Prefix issues with check name for consistent grouping
         const prefixedIssues = (result.issues || []).map(issue => ({
@@ -2232,7 +2240,9 @@ export class CheckExecutionEngine {
         ai_model: config?.ai_model,
       };
 
+      const __provStart2 = Date.now();
       const result = await provider.execute(prInfo, providerConfig);
+      this.recordProviderDuration(checkName, Date.now() - __provStart2);
 
       // Prefix issues with check name for consistent grouping
       const prefixedIssues = (result.issues || []).map(issue => ({
@@ -2456,7 +2466,9 @@ export class CheckExecutionEngine {
     };
     providerConfig.forEach = checkConfig.forEach;
 
+    const __provStart = Date.now();
     const result = await provider.execute(prInfo, providerConfig);
+    this.recordProviderDuration(checkName, Date.now() - __provStart);
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
     if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
@@ -3576,7 +3588,11 @@ export class CheckExecutionEngine {
               // Skip to the end - don't execute this check
             } else {
               // Emit explicit debug to stdout so CLI e2e can assert it
-              if (debug) {
+              if (
+                debug &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'json' &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'sarif'
+              ) {
                 console.log(
                   `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
                 );
@@ -6277,6 +6293,7 @@ export class CheckExecutionEngine {
       failedRuns: 0,
       skipped: false,
       totalDuration: 0,
+      providerDurationMs: 0,
       issuesFound: 0,
       issuesBySeverity: {
         critical: 0,
@@ -6332,6 +6349,15 @@ export class CheckExecutionEngine {
     if (output !== undefined) {
       stats.outputsProduced = (stats.outputsProduced || 0) + 1;
     }
+  }
+
+  /**
+   * Record provider/self execution time (in milliseconds) for a check
+   */
+  private recordProviderDuration(checkName: string, ms: number): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats) return;
+    stats.providerDurationMs = (stats.providerDurationMs || 0) + Math.max(0, Math.floor(ms));
   }
 
   /**
@@ -6506,8 +6532,26 @@ export class CheckExecutionEngine {
   /**
    * Format the Details column for execution summary table
    */
-  private formatDetailsColumn(stats: CheckExecutionStats): string {
+  private formatDetailsColumn(stats: CheckExecutionStats, isForEachParent?: boolean): string {
     const parts: string[] = [];
+
+    // Clarify iteration semantics in summary:
+    // - For forEach parents (e.g., extract-facts), totalRuns = number of passes
+    // - For per-item children (e.g., validate-fact), totalRuns = item executions across passes
+    if (isForEachParent) {
+      if (stats.totalRuns > 1) parts.push(`passes:${stats.totalRuns}`);
+    } else {
+      // Heuristic: if we have forEach preview (set when executed per item) or multiple runs, show items count
+      const looksPerItem =
+        (stats as any).forEachPreview && (stats as any).forEachPreview.length >= 0;
+      if (looksPerItem && stats.totalRuns > 1) parts.push(`items:${stats.totalRuns}`);
+    }
+
+    // Show self/provider time to disambiguate inclusive duration in the main column
+    if (typeof stats.providerDurationMs === 'number' && stats.providerDurationMs > 0) {
+      const selfSec = (stats.providerDurationMs / 1000).toFixed(1);
+      parts.unshift(`self:${selfSec}s`);
+    }
 
     // Outputs produced (forEach)
     if (stats.outputsProduced && stats.outputsProduced > 0) {
@@ -6586,7 +6630,7 @@ export class CheckExecutionEngine {
 
     const detailsTable = new (require('cli-table3'))({
       head: ['Check', 'Duration', 'Status', 'Details'],
-      colWidths: [21, 10, 10, 21],
+      colWidths: [21, 18, 10, 21],
       style: {
         head: ['cyan'],
         border: ['grey'],
@@ -6594,11 +6638,25 @@ export class CheckExecutionEngine {
     });
 
     for (const checkStats of stats.checks) {
-      const duration = checkStats.skipped
-        ? '-'
-        : `${(checkStats.totalDuration / 1000).toFixed(1)}s`;
+      const isForEachParent = !!this.config?.checks?.[checkStats.checkName]?.forEach;
+      let duration: string;
+      if (checkStats.skipped) {
+        duration = '-';
+      } else if (
+        (checkStats.totalRuns || 0) > 1 &&
+        (checkStats.perIterationDuration?.length || 0) > 1
+      ) {
+        const sum = checkStats.totalDuration / 1000;
+        const avg = checkStats.totalDuration / (checkStats.totalRuns || 1) / 1000;
+        const lastMs =
+          checkStats.perIterationDuration![checkStats.perIterationDuration!.length - 1] || 0;
+        const last = lastMs / 1000;
+        duration = `${sum.toFixed(1)}s/${avg.toFixed(1)}s/${last.toFixed(1)}s`;
+      } else {
+        duration = `${(checkStats.totalDuration / 1000).toFixed(1)}s`;
+      }
       const status = this.formatStatusColumn(checkStats);
-      const details = this.formatDetailsColumn(checkStats);
+      const details = this.formatDetailsColumn(checkStats, isForEachParent);
 
       detailsTable.push([checkStats.checkName, duration, status, details]);
     }

@@ -607,19 +607,9 @@ steps:
 
         log('🔍 Fact validation complete - allValid:', allValid, 'attempt:', attempt);
 
-        if (allValid) {
-          log('✅ All facts valid, proceeding to post verified response');
-          return null;
-        }
-
-        if (attempt >= 1) {
-          log('⚠️  Max attempts reached, posting warning');
-          return null;
-        }
-
-        log('🔄 Facts invalid, retrying assistant with correction context');
-        memory.increment('fact_validation_attempt', 1, 'fact-validation');
-        return 'extract-facts';
+        // 0 retries policy: never schedule another extract-facts pass
+        // If not allValid, we simply stop here and surface issues via aggregate-validations
+        return null;
       # keep event context as-is to avoid cross-event leakage
 
   # Validate each extracted fact
