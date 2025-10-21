@@ -2,11 +2,7 @@
  * Export all provider-related classes and interfaces
  */
 
-export {
-  CheckProvider,
-  CheckProviderConfig,
-  ExecutionContext,
-} from './check-provider.interface';
+export { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 export { CheckProviderRegistry } from './check-provider-registry';
 export { AICheckProvider } from './ai-check-provider';
 export { CommandCheckProvider } from './command-check-provider';

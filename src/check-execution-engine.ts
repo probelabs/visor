@@ -238,7 +238,9 @@ export class CheckExecutionEngine {
    * Set execution context for providers (CLI message, hooks, etc.)
    * This allows passing state without using static properties
    */
-  setExecutionContext(context: import('./providers/check-provider.interface').ExecutionContext): void {
+  setExecutionContext(
+    context: import('./providers/check-provider.interface').ExecutionContext
+  ): void {
     this.executionContext = context;
   }
 
