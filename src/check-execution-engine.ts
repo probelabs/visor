@@ -1470,8 +1470,9 @@ export class CheckExecutionEngine {
           // No retry configured: return existing result
           return res;
         }
-        let needRerun = false;
-        let rerunEventOverride: import('./types/config').EventTrigger | undefined;
+        // Note: previously we re-ran the source check after goto to "re-validate with new state".
+        // This caused success→goto→re-run loops for unconditional gotos. We no longer re-run the
+        // source after goto; goto only schedules the target and returns.
         if (onSuccess) {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
@@ -1711,28 +1712,11 @@ export class CheckExecutionEngine {
                   await scheduleOnce(scopeForRun);
                 }
               }
-              // After jumping back to an ancestor, re-run the current check to re-validate with new state
-              needRerun = true;
-              rerunEventOverride = onSuccess.goto_event;
+              // Do not re-run the current check after goto; target (and its dependents) will run.
             }
           }
         }
-        if (needRerun) {
-          if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
-          try {
-            require('./logger').logger.info(`🔁 Re-running '${checkName}' after goto`);
-          } catch {}
-          // Apply same event override as goto (if any) for this re-run by setting routingEventOverride
-          const prev = this.routingEventOverride;
-          if (rerunEventOverride) this.routingEventOverride = rerunEventOverride;
-          attempt++;
-          // Loop will execute the check again with evaluateIfCondition seeing override
-          // Restore after loop iteration completes for safety
-          // We can't restore here; we'll restore at start of next iteration when override applied,
-          // but ensure no lingering by resetting immediately after attempt increment
-          this.routingEventOverride = prev;
-          continue;
-        }
+        // No re-run after goto
         return res;
       } catch (err) {
         // Failure path
