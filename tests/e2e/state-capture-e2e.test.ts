@@ -128,6 +128,10 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
+        VISOR_FALLBACK_TRACE_FILE: path.join(
+          testOutputDir,
+          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
+        ),
       },
     });
 
@@ -169,6 +173,10 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
+        VISOR_FALLBACK_TRACE_FILE: path.join(
+          testOutputDir,
+          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
+        ),
       },
     });
 
@@ -204,6 +212,10 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
+        VISOR_FALLBACK_TRACE_FILE: path.join(
+          testOutputDir,
+          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
+        ),
       },
     });
 
@@ -267,6 +279,10 @@ checks:
           VISOR_TELEMETRY_ENABLED: 'true',
           VISOR_TELEMETRY_SINK: 'file',
           VISOR_TRACE_DIR: testOutputDir,
+          VISOR_FALLBACK_TRACE_FILE: path.join(
+            testOutputDir,
+            `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
+          ),
         },
       }
     );
