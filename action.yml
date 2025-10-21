@@ -51,14 +51,19 @@ inputs:
     description: 'Post review results as PR comment'
     required: false
     default: 'true'
-  
+
   create-check:
     description: 'Create GitHub check run with results'
     required: false
     default: 'true'
-  
+
   add-labels:
     description: 'Add quality labels to PR'
+    required: false
+    default: 'true'
+
+  add-reactions:
+    description: 'Add emoji reactions to PR/issues (eyes on start, thumbs up on completion)'
     required: false
     default: 'true'
 

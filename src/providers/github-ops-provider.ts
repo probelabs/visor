@@ -49,31 +49,26 @@ export class GitHubOpsProvider extends CheckProvider {
       value_js?: string;
     };
 
-    // Use authenticated octokit from event context if available, otherwise create from env token
-    let octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
+    // IMPORTANT: Always prefer authenticated octokit from event context (GitHub App or token)
+    // This ensures proper bot identity in reactions, labels, and comments
+    const octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
       | import('@octokit/rest').Octokit
       | undefined;
 
     if (!octokit) {
-      const token = process.env['INPUT_GITHUB-TOKEN'] || process.env['GITHUB_TOKEN'];
-      if (!token) {
-        return {
-          issues: [
-            {
-              file: 'system',
-              line: 0,
-              ruleId: 'github/missing_token',
-              message:
-                'No GitHub token available; set GITHUB_TOKEN or pass github-token input for native GitHub operations',
-              severity: 'error',
-              category: 'logic',
-            },
-          ],
-        };
-      }
-
-      const { Octokit } = await import('@octokit/rest');
-      octokit = new Octokit({ auth: token });
+      return {
+        issues: [
+          {
+            file: 'system',
+            line: 0,
+            ruleId: 'github/missing_octokit',
+            message:
+              'No authenticated Octokit instance available in event context. GitHub operations require proper authentication context.',
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
+      };
     }
 
     const repoEnv = process.env.GITHUB_REPOSITORY || '';
