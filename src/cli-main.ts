@@ -304,15 +304,18 @@ export async function main(): Promise<void> {
     try {
       const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
       fs.mkdirSync(tracesDir, { recursive: true });
-      // In test runs, clear old NDJSON files in this directory to avoid flakiness when tests read the first file
+      // In test runs, clear old NDJSON files in this directory to avoid flakiness
+      // BUT do not delete the explicitly provided VISOR_FALLBACK_TRACE_FILE the test may be waiting on
       try {
         if (process.env.NODE_ENV === 'test') {
+          const preserve = process.env.VISOR_FALLBACK_TRACE_FILE || '';
           for (const f of fs.readdirSync(tracesDir)) {
-            if (f.endsWith('.ndjson')) {
-              try {
-                fs.unlinkSync(path.join(tracesDir, f));
-              } catch {}
-            }
+            if (!f.endsWith('.ndjson')) continue;
+            const full = path.join(tracesDir, f);
+            if (preserve && path.resolve(full) === path.resolve(preserve)) continue;
+            try {
+              fs.unlinkSync(full);
+            } catch {}
           }
         }
       } catch {}

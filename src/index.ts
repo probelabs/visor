@@ -1797,7 +1797,11 @@ async function markCheckAsFailed(
 // Entry point - execute immediately when the script is run
 // Note: require.main === module check doesn't work reliably with ncc bundling
 // Only execute if not in test environment
-if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+// Allow forcing the entrypoint under Jest via VISOR_E2E_FORCE_RUN=true
+if (
+  process.env.VISOR_E2E_FORCE_RUN === 'true' ||
+  (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
+) {
   (() => {
     // Explicit, argument-driven mode selection. No auto-detection of GitHub Actions.
     // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.

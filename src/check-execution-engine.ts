@@ -617,15 +617,11 @@ export class CheckExecutionEngine {
           },
           async () => {
             try {
-              try {
-                emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
-                  { name: 'check.started' },
-                ]);
-              } catch {}
               return await provider.execute(prInfo, providerConfig, dependencyResults, context);
             } finally {
               try {
                 emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                  { name: 'check.started' },
                   { name: 'check.completed' },
                 ]);
               } catch {}

@@ -115,10 +115,11 @@ export class CommandCheckProvider extends CheckProvider {
       const checkId = (config as any).checkName || (config as any).id || 'unknown';
       const ctxJson = JSON.stringify(templateContext);
       const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+      // Emit both start and completion markers together for deterministic E2E assertions
       emitNdjsonSpanWithEvents(
         'visor.check',
         { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson },
-        []
+        [{ name: 'check.started' }, { name: 'check.completed' }]
       );
     } catch {}
 
@@ -880,7 +881,7 @@ ${bodyWithReturn}
         emitNdjsonSpanWithEvents(
           'visor.check',
           { 'visor.check.id': checkId, 'visor.check.output': outJson },
-          []
+          [{ name: 'check.started' }, { name: 'check.completed' }]
         );
       } catch {}
 
