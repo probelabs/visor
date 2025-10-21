@@ -224,13 +224,10 @@ export class AIReviewService {
     }
 
     try {
-      const { response, effectiveSchema } = await this.callProbeAgent(
-        prompt,
-        schema,
-        debugInfo,
-        checkName,
-        sessionId
-      );
+      const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
+      const timeoutMs = Math.max(0, this.config.timeout || 0);
+      const { response, effectiveSchema } =
+        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -357,13 +354,16 @@ export class AIReviewService {
 
     try {
       // Use the determined agent (cloned or original)
-      const { response, effectiveSchema } = await this.callProbeAgentWithExistingSession(
+      const call = this.callProbeAgentWithExistingSession(
         agentToUse,
         prompt,
         schema,
         debugInfo,
         checkName
       );
+      const timeoutMs = Math.max(0, this.config.timeout || 0);
+      const { response, effectiveSchema } =
+        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review (session)') : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -406,6 +406,21 @@ export class AIReviewService {
         };
       }
       throw error;
+    }
+  }
+
+  /**
+   * Promise timeout helper that rejects after ms if unresolved
+   */
+  private async withTimeout<T>(p: Promise<T>, ms: number, label = 'operation'): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      });
+      return (await Promise.race([p, timeout])) as T;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

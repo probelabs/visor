@@ -641,6 +641,8 @@ steps:
       required: [fact_id, claim, is_valid, confidence, evidence]
     depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
+    ai:
+      timeout: 180000 # 3 minutes hard cap per validation
     # always validate each fact
     prompt: |
       Validate this factual claim against the codebase:
