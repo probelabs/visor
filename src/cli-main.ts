@@ -297,6 +297,11 @@ export async function main(): Promise<void> {
       process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
     } catch {}
 
+    // Opportunistically create NDJSON run marker early (pre-telemetry) when a trace dir/file is configured
+    try {
+      (await import('./telemetry/trace-helpers'))._appendRunMarker();
+    } catch {}
+
     // Initialize telemetry (env or config)
     if ((config as any)?.telemetry) {
       const t = (config as any).telemetry as {
