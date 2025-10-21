@@ -35,11 +35,16 @@ describe('GitHubOpsProvider - empty value handling', () => {
     totalDeletions: 0,
   });
 
-  beforeEach(() => {
+  let mockOctokit: any;
+
+  beforeEach(async () => {
     jest.resetModules();
     jest.clearAllMocks();
-    process.env.GITHUB_TOKEN = 'test-token';
     process.env.GITHUB_REPOSITORY = 'owner/repo';
+
+    // Create mock octokit instance
+    const { Octokit } = await import('@octokit/rest');
+    mockOctokit = new Octokit();
   });
 
   it('filters empty strings and de-duplicates for labels.add', async () => {
@@ -49,6 +54,7 @@ describe('GitHubOpsProvider - empty value handling', () => {
       type: 'github',
       op: 'labels.add',
       values: ['', 'foo', ' ', 'bar', 'foo', '', '   '],
+      eventContext: { octokit: mockOctokit },
     };
 
     await provider.execute(pr, cfg);
@@ -67,7 +73,12 @@ describe('GitHubOpsProvider - empty value handling', () => {
   it('does not call API when labels are empty after filtering', async () => {
     const provider = new GitHubOpsProvider();
     const pr = makePr(7);
-    const cfg: any = { type: 'github', op: 'labels.add', values: [' ', '', '   '] };
+    const cfg: any = {
+      type: 'github',
+      op: 'labels.add',
+      values: [' ', '', '   '],
+      eventContext: { octokit: mockOctokit },
+    };
 
     await provider.execute(pr, cfg);
 
@@ -83,6 +94,7 @@ describe('GitHubOpsProvider - empty value handling', () => {
       type: 'github',
       op: 'comment.create',
       values: ['', '  hello  ', '', ''],
+      eventContext: { octokit: mockOctokit },
     };
 
     await provider.execute(pr, cfg);
@@ -104,6 +116,7 @@ describe('GitHubOpsProvider - empty value handling', () => {
       type: 'github',
       op: 'labels.add',
       values: ['good first issue', 'enhancement', 'ui/ux'],
+      eventContext: { octokit: mockOctokit },
     };
 
     await provider.execute(pr, cfg);
