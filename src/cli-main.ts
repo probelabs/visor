@@ -120,6 +120,28 @@ export async function main(): Promise<void> {
     const cli = new CLI();
     const configManager = new ConfigManager();
 
+    // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      let fallbackPath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      if (!fallbackPath) {
+        const runTsEarly = new Date().toISOString().replace(/[:.]/g, '-');
+        fallbackPath = path.join(tracesDir, `run-${runTsEarly}.ndjson`);
+        process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
+      }
+      if (process.env.NODE_ENV === 'test') {
+        try {
+          console.error(`[e2e] VISOR_TRACE_DIR=${tracesDir} VISOR_FALLBACK_TRACE_FILE=${fallbackPath}`);
+        } catch {}
+      }
+      try {
+        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '
+';
+        fs.appendFileSync(fallbackPath, line, 'utf8');
+      } catch {}
+    } catch {}
+
     // Filter out the --cli flag if it exists (used to force CLI mode in GitHub Actions)
     const filteredArgv = process.argv.filter(arg => arg !== '--cli');
 
@@ -842,6 +864,7 @@ export async function main(): Promise<void> {
 
       // Flush telemetry but don't shut down
       try {
+        await flushNdjson();
         await shutdownTelemetry();
       } catch {}
 
@@ -850,6 +873,9 @@ export async function main(): Promise<void> {
     }
 
     // Normal error exit path (no debug server)
+    try {
+      await flushNdjson();
+    } catch {}
     try {
       await shutdownTelemetry();
     } catch {}
