@@ -27,11 +27,10 @@ describe('provider context sanitization', () => {
     const res = await provider.execute(
       prInfo,
       { type: 'memory', operation: 'get', key: 'k' } as any,
-      dep,
+      dep
     );
 
     expect(res).toBeTruthy();
     expect(res.issues).toBeDefined();
   });
 });
-
