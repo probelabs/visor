@@ -65,3 +65,6 @@ tests/fixtures/temp/
 # Workshop artifacts
 workshop/build/
 !workshop/Visor-Workshop.pdf
+
+# Local NDJSON traces written by CLI tests or manual runs
+output/**/*.ndjson

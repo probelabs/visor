@@ -11,6 +11,12 @@ import {
   detectLocalMode,
   resolveAssociationFromEvent,
 } from '../utils/author-permissions';
+import { trace, context as otContext } from '@opentelemetry/api';
+import {
+  captureCheckInputContext,
+  captureCheckOutput,
+  captureTransformJS,
+} from '../telemetry/state-capture';
 
 /**
  * Check provider that executes shell commands and captures their output
@@ -94,6 +100,28 @@ export class CommandCheckProvider extends CheckProvider {
     logger.debug(
       `🔧 Debug: Template outputs keys: ${Object.keys(templateContext.outputs || {}).join(', ')}`
     );
+
+    // Capture input context in active OTEL span
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        captureCheckInputContext(span, templateContext);
+      }
+    } catch {
+      // Ignore telemetry errors
+    }
+    // Fallback NDJSON for input context (non-OTEL environments)
+    try {
+      const checkId = (config as any).checkName || (config as any).id || 'unknown';
+      const ctxJson = JSON.stringify(templateContext);
+      const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+      // Emit both start and completion markers together for deterministic E2E assertions
+      emitNdjsonSpanWithEvents(
+        'visor.check',
+        { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson },
+        [{ name: 'check.started' }, { name: 'check.completed' }]
+      );
+    } catch {}
 
     try {
       // Render the command with Liquid templates if needed
@@ -832,6 +860,30 @@ ${bodyWithReturn}
         ...(content ? { content } : {}),
         ...promoted,
       } as ReviewSummary;
+
+      // Capture output and transform details in active OTEL span
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          captureCheckOutput(span, outputForDependents);
+          if (transformJs && output !== finalOutput) {
+            captureTransformJS(span, transformJs, output, finalOutput);
+          }
+        }
+      } catch {
+        // Ignore telemetry errors
+      }
+      // Fallback NDJSON for output (non-OTEL environments)
+      try {
+        const checkId = (config as any).checkName || (config as any).id || 'unknown';
+        const outJson = JSON.stringify((result as any).output ?? result);
+        const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+        emitNdjsonSpanWithEvents(
+          'visor.check',
+          { 'visor.check.id': checkId, 'visor.check.output': outJson },
+          [{ name: 'check.started' }, { name: 'check.completed' }]
+        );
+      } catch {}
 
       // Attach raw transform object only when transform_js was used (avoid polluting plain command outputs)
       try {

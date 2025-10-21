@@ -71,6 +71,10 @@ export class CLI {
         'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -144,6 +148,10 @@ export class CLI {
           'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
         )
         .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+        .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+          parseInt(value, 10)
+        )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
@@ -208,6 +216,8 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        debugServer: options.debugServer || false,
+        debugPort: options.debugPort,
         analyzeBranchDiff: options.analyzeBranchDiff,
         event: options.event,
         message: options.message,
@@ -331,6 +341,10 @@ export class CLI {
         'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
       )
       .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

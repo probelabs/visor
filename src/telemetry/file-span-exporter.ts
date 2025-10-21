@@ -23,7 +23,14 @@ export class FileSpanExporter implements SpanExporter {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const run = opts.runId ? `${opts.runId}-` : '';
     const ext = this.ndjson ? 'ndjson' : 'json';
-    this.filePath = path.join(outDir, `run-${run}${ts}.${ext}`);
+    // If CLI provided a fallback trace file path, prefer writing to it to unify outputs
+    if (process.env.VISOR_FALLBACK_TRACE_FILE) {
+      this.filePath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      const dir = path.dirname(this.filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    } else {
+      this.filePath = path.join(outDir, `run-${run}${ts}.${ext}`);
+    }
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {

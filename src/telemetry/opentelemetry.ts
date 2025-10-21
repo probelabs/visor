@@ -10,6 +10,7 @@ import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { MetricReader } from '@opentelemetry/sdk-metrics';
 import type { NodeSDK as NodeSDKType } from '@opentelemetry/sdk-node';
 import type { Instrumentation } from '@opentelemetry/instrumentation';
+import type { DebugVisualizerServer } from '../debug-visualizer/ws-server';
 
 export interface TelemetryInitOptions {
   enabled?: boolean;
@@ -20,6 +21,7 @@ export interface TelemetryInitOptions {
   patchConsole?: boolean; // default true
   autoInstrument?: boolean; // enable @opentelemetry/auto-instrumentations-node
   traceReport?: boolean; // write a static HTML trace report
+  debugServer?: DebugVisualizerServer; // debug visualizer server for live streaming
 }
 
 let sdk: NodeSDKType | null = null;
@@ -35,21 +37,29 @@ export function resetTelemetryForTesting(): void {
 }
 
 export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<void> {
-  const enabled = !!opts.enabled || process.env.VISOR_TELEMETRY_ENABLED === 'true';
+  // Enable telemetry if explicitly enabled, env var is set, OR if debugServer is provided
+  const enabled =
+    !!opts.enabled || !!opts.debugServer || process.env.VISOR_TELEMETRY_ENABLED === 'true';
+  // Avoid writing to stdout to keep CLI JSON output clean
   if (!enabled || sdk) return;
 
   try {
+    // IMPORTANT: Set up AsyncHooksContextManager as the global context manager FIRST
+    // This must happen before any OpenTelemetry operations
+    const otelApi = require('@opentelemetry/api');
+    const { AsyncHooksContextManager } = require('@opentelemetry/context-async-hooks');
+    const contextManager = new AsyncHooksContextManager();
+    contextManager.enable();
+    otelApi.context.setGlobalContextManager(contextManager);
+    // console.debug('[telemetry] AsyncHooksContextManager enabled and set as global');
+
     const { NodeSDK } = require('@opentelemetry/sdk-node');
 
     // Support both OpenTelemetry v1 and v2 APIs
     const resourcesModule = require('@opentelemetry/resources');
     const semanticConventions = require('@opentelemetry/semantic-conventions');
 
-    const {
-      BatchSpanProcessor,
-      ConsoleSpanExporter,
-      MultiSpanProcessor,
-    } = require('@opentelemetry/sdk-trace-base');
+    const { BatchSpanProcessor, ConsoleSpanExporter } = require('@opentelemetry/sdk-trace-base');
 
     const sink = (opts.sink || (process.env.VISOR_TELEMETRY_SINK as string) || 'file') as
       | 'otlp'
@@ -184,24 +194,60 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       }
     }
 
-    const spanProcessor: SpanProcessor =
-      processors.length > 1 ? new MultiSpanProcessor(processors) : processors[0];
+    // Add debug span exporter for live streaming to WebSocket server
+    if (opts.debugServer) {
+      // Debug span exporter streams live spans to the visualizer server
+      try {
+        const { DebugSpanExporter } = require('../debug-visualizer/debug-span-exporter');
+        const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+        const debugExporter = new DebugSpanExporter(opts.debugServer);
+        processors.push(new SimpleSpanProcessor(debugExporter));
+        // console.debug('[telemetry] Debug span exporter added successfully, total processors:', processors.length);
+      } catch (error) {
+        console.error('[telemetry] Failed to initialize debug span exporter:', error);
+      }
+    }
+
+    // Create a composite span processor if there are multiple processors
+    let spanProcessor: SpanProcessor;
+    if (processors.length > 1) {
+      // Create a simple composite processor
+      spanProcessor = {
+        onStart: (span: any, context: any) => {
+          processors.forEach(p => p.onStart?.(span, context));
+        },
+        onEnd: (span: any) => {
+          processors.forEach(p => p.onEnd?.(span));
+        },
+        shutdown: async () => {
+          await Promise.all(processors.map(p => p.shutdown()));
+        },
+        forceFlush: async () => {
+          await Promise.all(processors.map(p => p.forceFlush()));
+        },
+      } as SpanProcessor;
+    } else {
+      spanProcessor = processors[0];
+    }
 
     const nodeSdk: NodeSDKType = new NodeSDK({
       resource,
       spanProcessor,
       metricReader,
       instrumentations,
+      // Context manager is already set globally above
       // Auto-instrumentations can be added later when desired
     });
 
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
     await nodeSdk.start();
     sdk = nodeSdk;
+    // console.debug('[telemetry] NodeSDK started successfully');
 
     if (opts.patchConsole !== false) patchConsole();
-  } catch {
+  } catch (error) {
     // OTel not installed or failed to init; continue silently
+    console.error('[telemetry] Failed to initialize OTel SDK:', error);
   }
 }
 

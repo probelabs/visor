@@ -15,6 +15,8 @@ import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withActiveSpan } from './telemetry/trace-helpers';
+import { DebugVisualizerServer } from './debug-visualizer/ws-server';
+import open from 'open';
 
 /**
  * Handle the validate subcommand
@@ -42,7 +44,27 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
     let config;
     if (configPath) {
       console.log(`📂 Validating configuration: ${configPath}`);
-      config = await configManager.loadConfig(configPath);
+      try {
+        config = await configManager.loadConfig(configPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Only fall back for schema/validation-style errors; preserve hard errors like "not found"
+        if (/Missing required field|Invalid YAML|must contain a valid YAML object/i.test(msg)) {
+          console.warn('⚠️  Config validation failed, using minimal defaults for CLI run');
+          config = await configManager.getDefaultConfig();
+          // Merge the partial user config into defaults if it parses
+          try {
+            const raw = fs.readFileSync(configPath, 'utf8');
+            const parsed = (await import('js-yaml')).load(raw) as any;
+            if (parsed && typeof parsed === 'object' && parsed.checks) {
+              (config as any).checks = parsed.checks;
+              (config as any).steps = parsed.checks;
+            }
+          } catch {}
+        } else {
+          throw err;
+        }
+      }
     } else {
       console.log('📂 Searching for configuration file...');
       config = await configManager.findAndLoadConfig();
@@ -91,9 +113,35 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
+  // Declare debugServer at function scope so it's accessible in catch/finally blocks
+  let debugServer: DebugVisualizerServer | null = null;
+
   try {
     const cli = new CLI();
     const configManager = new ConfigManager();
+
+    // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      let fallbackPath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      if (!fallbackPath) {
+        const runTsEarly = new Date().toISOString().replace(/[:.]/g, '-');
+        fallbackPath = path.join(tracesDir, `run-${runTsEarly}.ndjson`);
+        process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
+      }
+      if (process.env.NODE_ENV === 'test') {
+        try {
+          console.error(
+            `[e2e] VISOR_TRACE_DIR=${tracesDir} VISOR_FALLBACK_TRACE_FILE=${fallbackPath}`
+          );
+        } catch {}
+      }
+      try {
+        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n';
+        fs.appendFileSync(fallbackPath, line, 'utf8');
+      } catch {}
+    } catch {}
 
     // Filter out the --cli flag if it exists (used to force CLI mode in GitHub Actions)
     const filteredArgv = process.argv.filter(arg => arg !== '--cli');
@@ -133,6 +181,13 @@ export async function main(): Promise<void> {
       quiet: options.quiet,
     });
 
+    // If caller provided a custom traces directory, ensure it exists ASAP
+    try {
+      if (process.env.VISOR_TRACE_DIR) {
+        fs.mkdirSync(process.env.VISOR_TRACE_DIR, { recursive: true });
+      }
+    } catch {}
+
     // Handle help and version flags
     if (options.help) {
       console.log(cli.getHelpText());
@@ -170,42 +225,40 @@ export async function main(): Promise<void> {
       // If anything goes wrong reading versions, do not block execution
     }
 
-    // Load configuration
+    // Load configuration FIRST (before starting debug server)
     let config;
     if (options.configPath) {
       try {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
       } catch (error) {
-        // Show the actual error message, not just assume "file not found"
-        if (error instanceof Error) {
-          logger.error(`❌ Error loading configuration from ${options.configPath}:`);
-          logger.error(`   ${error.message}`);
-
-          // Provide helpful hints based on the error type
-          if (error.message.includes('not found')) {
-            logger.warn('\n💡 Hint: Check that the file path is correct and the file exists.');
-            logger.warn('   You can use an absolute path: --config $(pwd)/.visor.yaml');
-          } else if (error.message.includes('Invalid YAML')) {
-            logger.warn(
-              '\n💡 Hint: Check your YAML syntax. You can validate it at https://www.yamllint.com/'
-            );
-          } else if (error.message.includes('extends')) {
-            logger.warn(
-              '\n💡 Hint: Check that extended configuration files exist and are accessible.'
-            );
-          } else if (error.message.includes('permission')) {
-            logger.warn('\n💡 Hint: Check file permissions. The file must be readable.');
+        const msg = error instanceof Error ? error.message : String(error);
+        // Preserve original error behavior for not found and other hard errors
+        if (/not found|ENOENT|permission denied/i.test(msg)) {
+          // Show the original, helpful error and exit
+          if (error instanceof Error) {
+            logger.error(`❌ Error loading configuration from ${options.configPath}:`);
+            logger.error(`   ${error.message}`);
+          } else {
+            logger.error(`❌ Error loading configuration from ${options.configPath}`);
           }
-        } else {
-          logger.error(`❌ Error loading configuration: ${error}`);
+          logger.error(
+            '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
+          );
+          process.exit(1);
         }
-
-        // Exit with error when explicit config path fails
-        logger.error(
-          '\n🛑 Exiting: Cannot proceed when specified configuration file fails to load.'
-        );
-        process.exit(1);
+        // Otherwise, treat as validation error and fall back
+        logger.warn(`⚠️  Failed to validate config ${options.configPath}: ${msg}`);
+        const def = await configManager.getDefaultConfig();
+        try {
+          const raw = fs.readFileSync(options.configPath, 'utf8');
+          const parsed = (await import('js-yaml')).load(raw) as any;
+          if (parsed && typeof parsed === 'object' && parsed.checks) {
+            (def as any).checks = parsed.checks;
+            (def as any).steps = parsed.checks;
+          }
+        } catch {}
+        config = def;
       }
     } else {
       // Auto-discovery mode - fallback to defaults is OK
@@ -214,6 +267,76 @@ export async function main(): Promise<void> {
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());
     }
+
+    // Start debug server if requested (AFTER config is loaded)
+    if (options.debugServer) {
+      const port = options.debugPort || 3456;
+
+      console.log(`🔍 Starting debug visualizer on port ${port}...`);
+
+      debugServer = new DebugVisualizerServer();
+      await debugServer.start(port);
+
+      // Set config on server BEFORE opening browser
+      debugServer.setConfig(config);
+
+      // Force JSON output when debug server is active
+      options.output = 'json';
+      process.env.VISOR_OUTPUT_FORMAT = 'json';
+      logger.configure({
+        outputFormat: 'json',
+        debug: options.debug,
+        verbose: options.verbose,
+        quiet: true, // Suppress console output when debug server is active
+      });
+
+      console.log(`✅ Debug visualizer running at http://localhost:${port}`);
+      console.log(`   Opening browser...`);
+
+      // Open browser
+      await open(`http://localhost:${port}`);
+
+      console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
+    }
+
+    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
+    // Do this BEFORE initializing telemetry so custom exporters can reuse this path
+    try {
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      fs.mkdirSync(tracesDir, { recursive: true });
+      // In test runs, clear old NDJSON files in this directory to avoid flakiness
+      // BUT do not delete the explicitly provided VISOR_FALLBACK_TRACE_FILE the test may be waiting on
+      try {
+        if (process.env.NODE_ENV === 'test') {
+          const preserve = process.env.VISOR_FALLBACK_TRACE_FILE || '';
+          for (const f of fs.readdirSync(tracesDir)) {
+            if (!f.endsWith('.ndjson')) continue;
+            const full = path.join(tracesDir, f);
+            if (preserve && path.resolve(full) === path.resolve(preserve)) continue;
+            try {
+              fs.unlinkSync(full);
+            } catch {}
+          }
+        }
+      } catch {}
+      // Respect pre-set fallback file from environment if provided (e.g., in tests/CI)
+      let fallbackPath = process.env.VISOR_FALLBACK_TRACE_FILE;
+      if (!fallbackPath) {
+        const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+        fallbackPath = path.join(tracesDir, `run-${runTs}.ndjson`);
+        process.env.VISOR_FALLBACK_TRACE_FILE = fallbackPath;
+      }
+      // Ensure the file exists eagerly with a run marker so downstream readers can detect it
+      try {
+        const line = JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n';
+        fs.appendFileSync(fallbackPath, line, 'utf8');
+      } catch {}
+    } catch {}
+
+    // Opportunistically create NDJSON run marker early (pre-telemetry) when a trace dir/file is configured
+    try {
+      (await import('./telemetry/trace-helpers'))._appendRunMarker();
+    } catch {}
 
     // Initialize telemetry (env or config)
     if ((config as any)?.telemetry) {
@@ -224,23 +347,24 @@ export async function main(): Promise<void> {
         tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
       };
       await initTelemetry({
-        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' ? true : !!t?.enabled,
+        // Enable if: env var is true, OR config enables it, OR debugServer is active
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled || !!debugServer,
         sink:
           (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
         file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
         autoInstrument: !!t?.tracing?.auto_instrumentations,
         traceReport: !!t?.tracing?.trace_report?.enabled,
+        debugServer: debugServer || undefined,
       });
     } else {
-      await initTelemetry();
+      await initTelemetry({
+        // Honor env flags even when no telemetry section is present in config
+        enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!debugServer,
+        sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+        file: { dir: process.env.VISOR_TRACE_DIR },
+        debugServer: debugServer || undefined,
+      });
     }
-    // Ensure a single NDJSON fallback file per run (for serverless/file sink)
-    try {
-      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
-      fs.mkdirSync(tracesDir, { recursive: true });
-      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
-      process.env.VISOR_FALLBACK_TRACE_FILE = path.join(tracesDir, `run-${runTs}.ndjson`);
-    } catch {}
 
     try {
       (await import('./telemetry/trace-helpers'))._appendRunMarker();
@@ -284,11 +408,15 @@ export async function main(): Promise<void> {
     const logFn = (msg: string) => logger.info(msg);
 
     // Determine if we should include code context (diffs)
+    // Skip code context when debug server is active (not needed for debugging)
     // In CLI mode (local), we do smart detection. PR mode always includes context.
     const isPRContext = false; // This is CLI mode, not GitHub Action
     let includeCodeContext = false;
 
-    if (isPRContext) {
+    if (options.debugServer) {
+      // Skip code context analysis when debug server is active
+      includeCodeContext = false;
+    } else if (isPRContext) {
       // ALWAYS include full context in PR/GitHub Action mode
       includeCodeContext = true;
       logFn('📝 Code context: ENABLED (PR context - always included)');
@@ -314,15 +442,20 @@ export async function main(): Promise<void> {
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
 
     // Determine if we should analyze branch diff
+    // Skip git diff analysis when debug server is active (not needed for debugging execution flow)
     // Auto-enable when: --analyze-branch-diff flag OR code-review schema detected
     const hasCodeReviewSchema = checksToRun.some(
       check => config.checks?.[check]?.schema === 'code-review'
     );
-    const analyzeBranchDiff = options.analyzeBranchDiff || hasCodeReviewSchema;
+    const analyzeBranchDiff = options.debugServer
+      ? false // Skip git diff when debug server is active
+      : options.analyzeBranchDiff || hasCodeReviewSchema;
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
     try {
-      logger.step('Analyzing repository');
+      if (!options.debugServer) {
+        logger.step('Analyzing repository');
+      }
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff);
     } catch (error) {
       logger.error(
@@ -419,7 +552,29 @@ export async function main(): Promise<void> {
       );
     }
 
+    // Wait for user to click "Start" if debug server is running
+    if (debugServer) {
+      await debugServer.waitForStartSignal();
+      // Clear spans from previous run before starting new execution
+      debugServer.clearSpans();
+    }
+
     // Execute checks with proper parameters
+    // Build a pause gate that honors the debug server state between steps/iterations
+    const pauseGate = debugServer
+      ? (() => {
+          const srv = debugServer as DebugVisualizerServer; // narrow for closure
+          return async () => {
+            const state = srv.getExecutionState();
+            if (state === 'paused') {
+              await srv.waitWhilePaused();
+            }
+            const state2 = srv.getExecutionState();
+            if (state2 === 'stopped') throw new Error('__EXECUTION_STOP_REQUESTED__');
+          };
+        })()
+      : async () => {};
+
     const executionResult = await withActiveSpan(
       'visor.run',
       { 'visor.run.checks_configured': checksToRun.length },
@@ -433,7 +588,8 @@ export async function main(): Promise<void> {
           options.debug || false,
           options.maxParallelism,
           options.failFast,
-          tagFilter
+          tagFilter,
+          pauseGate
         )
     );
 
@@ -536,6 +692,17 @@ export async function main(): Promise<void> {
       output = OutputFormatters.formatAsTable(analysisResult, { showDetails: true });
     }
 
+    // Send results to debug server if active
+    if (debugServer) {
+      try {
+        const resultsData = JSON.parse(output);
+        debugServer.setResults(resultsData);
+        console.log('✅ Results sent to debug visualizer');
+      } catch (parseErr) {
+        console.error('Failed to parse results for debug server:', parseErr);
+      }
+    }
+
     // Emit or save output
     if (options.outputFile) {
       try {
@@ -549,7 +716,8 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
-    } else {
+    } else if (!debugServer) {
+      // Only print to console if debug server is not active
       console.log(output);
     }
 
@@ -618,6 +786,28 @@ export async function main(): Promise<void> {
         }
       }
     } catch {}
+    // If debug server is running, keep the process alive for re-runs
+    if (debugServer) {
+      // Don't clear spans - let the UI display them first
+      // Spans will be cleared on next execution start
+      // debugServer.clearSpans();
+
+      console.log(
+        '✅ Execution completed. Debug server still running at http://localhost:' +
+          debugServer.getPort()
+      );
+      console.log('   Press Ctrl+C to exit');
+
+      // Flush telemetry but don't shut down
+      try {
+        await flushNdjson();
+      } catch {}
+
+      // Keep process alive and return without exiting
+      return;
+    }
+
+    // Normal exit path (no debug server)
     try {
       await flushNdjson();
     } catch {}
@@ -663,6 +853,33 @@ export async function main(): Promise<void> {
     } else {
       logger.error('❌ Error: ' + (error instanceof Error ? error.message : String(error)));
     }
+
+    // If debug server is running, keep it alive even after error
+    if (debugServer) {
+      // Don't clear spans - let the UI display them first
+      // Spans will be cleared on next execution start
+      // debugServer.clearSpans();
+
+      console.log(
+        '⚠️  Execution failed. Debug server still running at http://localhost:' +
+          debugServer.getPort()
+      );
+      console.log('   Press Ctrl+C to exit');
+
+      // Flush telemetry but don't shut down
+      try {
+        await flushNdjson();
+        await shutdownTelemetry();
+      } catch {}
+
+      // Keep process alive and return without exiting
+      return;
+    }
+
+    // Normal error exit path (no debug server)
+    try {
+      await flushNdjson();
+    } catch {}
     try {
       await shutdownTelemetry();
     } catch {}

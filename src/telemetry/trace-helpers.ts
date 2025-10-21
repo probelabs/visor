@@ -10,12 +10,17 @@ export async function withActiveSpan<T>(
   fn: (span: Span) => Promise<T>
 ): Promise<T> {
   const tracer = getTracer();
+  // Preserve parent context via tracer API; avoid logging parent IDs to stdout
+  // Avoid noisy stdout logs that break JSON consumers
   return await new Promise<T>((resolve, reject) => {
     const callback = async (span: Span) => {
+      // console.debug(`[trace] Span callback invoked for: [trace_id=${ctx.traceId} span_id=${ctx.spanId}] ${name} span: true`);
       try {
         const res = await fn(span);
+        // console.debug('[trace] Span execution completed for:', name);
         resolve(res);
       } catch (err) {
+        // console.debug('[trace] Span execution errored for:', name, err);
         try {
           if (err instanceof Error) span.recordException(err);
           span.setStatus({ code: SpanStatusCode.ERROR });
@@ -23,15 +28,14 @@ export async function withActiveSpan<T>(
         reject(err);
       } finally {
         try {
+          // console.debug('[trace] Ending span:', name);
           span.end();
         } catch {}
       }
     };
-    if (attrs) {
-      tracer.startActiveSpan(name, { attributes: attrs as Attributes }, callback);
-    } else {
-      tracer.startActiveSpan(name, callback as (span: Span) => void);
-    }
+    // startActiveSpan should use the current active context to set parent automatically
+    const options = attrs ? { attributes: attrs as Attributes } : {};
+    tracer.startActiveSpan(name, options, callback);
   });
 }
 
@@ -82,7 +86,9 @@ export function setSpanError(err: unknown): void {
 let __ndjsonPath: string | null = null;
 export function __getOrCreateNdjsonPath(): string | null {
   try {
-    if (process.env.VISOR_TELEMETRY_SINK !== 'file') return null;
+    // If sink is explicitly set to non-file, skip. If unset, still allow when a trace dir/file is configured.
+    if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== 'file')
+      return null;
     const path = require('path');
     const fs = require('fs');
     // Prefer explicit fallback file path if set by the CLI

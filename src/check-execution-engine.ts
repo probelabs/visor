@@ -28,8 +28,10 @@ import {
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
-import { addEvent } from './telemetry/trace-helpers';
+import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
+import { trace, context as otContext } from '@opentelemetry/api';
+import { captureForEachState, captureStateSnapshot } from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -605,7 +607,27 @@ export class CheckExecutionEngine {
           ...sessionInfo,
           ...this.executionContext,
         };
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, context);
+        // Execute check within a span for telemetry while passing merged execution context
+        const res = await withActiveSpan(
+          `visor.check.${checkName}`,
+          {
+            'visor.check.id': checkName,
+            'visor.check.type': providerConfig.type || 'ai',
+            'visor.check.attempt': attempt,
+          },
+          async () => {
+            try {
+              return await provider.execute(prInfo, providerConfig, dependencyResults, context);
+            } finally {
+              try {
+                emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
+                  { name: 'check.started' },
+                  { name: 'check.completed' },
+                ]);
+              } catch {}
+            }
+          }
+        );
         try {
           currentRouteOutput = (res as any)?.output;
         } catch {}
@@ -1391,7 +1413,8 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    tagFilter?: import('./types/config').TagFilter
+    tagFilter?: import('./types/config').TagFilter,
+    _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =
@@ -1490,7 +1513,8 @@ export class CheckExecutionEngine {
         logFn,
         debug,
         maxParallelism,
-        failFast
+        failFast,
+        _pauseGate
       );
     }
 
@@ -1505,7 +1529,8 @@ export class CheckExecutionEngine {
         timeout,
         config,
         logFn,
-        debug
+        debug,
+        _pauseGate
       );
 
       const groupedResults: GroupedCheckResults = {};
@@ -1532,7 +1557,8 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
-    debug?: boolean
+    debug?: boolean,
+    _pauseGate?: () => Promise<void>
   ): Promise<CheckResult> {
     if (!config?.checks?.[checkName]) {
       throw new Error(`No configuration found for check: ${checkName}`);
@@ -1549,6 +1575,7 @@ export class CheckExecutionEngine {
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
+      checkName, // propagate for fallback NDJSON attribution
       eventContext: this.enrichEventContext(prInfo.eventContext),
       ai: {
         timeout: timeout || 600000,
@@ -1717,7 +1744,8 @@ export class CheckExecutionEngine {
     logFn?: (message: string) => void,
     debug?: boolean,
     maxParallelism?: number,
-    failFast?: boolean
+    failFast?: boolean,
+    pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
@@ -1728,7 +1756,8 @@ export class CheckExecutionEngine {
       logFn,
       debug,
       maxParallelism,
-      failFast
+      failFast,
+      pauseGate
     );
 
     // Build execution statistics
@@ -2201,7 +2230,8 @@ export class CheckExecutionEngine {
     logFn?: (message: string) => void,
     debug?: boolean,
     maxParallelism?: number,
-    failFast?: boolean
+    failFast?: boolean,
+    pauseGate?: () => Promise<void>
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
 
@@ -2384,6 +2414,13 @@ export class CheckExecutionEngine {
       // Create task functions for checks in this level, skip those already completed inline
       const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
       const levelTaskFunctions = levelChecks.map(checkName => async () => {
+        if (pauseGate) {
+          try {
+            await pauseGate();
+          } catch {
+            return { checkName, error: '__STOP__', result: null, skipped: true };
+          }
+        }
         // Skip if this check was already completed by item-level branch scheduler
         if (results.has(checkName)) {
           if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -2913,6 +2950,13 @@ export class CheckExecutionEngine {
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                if (pauseGate) {
+                  try {
+                    await pauseGate();
+                  } catch {
+                    throw new Error('__STOP__');
+                  }
+                }
                 try {
                   emitNdjsonSpanWithEvents(
                     'visor.foreach.item',
@@ -2924,6 +2968,17 @@ export class CheckExecutionEngine {
                     []
                   );
                 } catch {}
+
+                // Capture forEach state in active OTEL span
+                try {
+                  const span = trace.getSpan(otContext.active());
+                  if (span) {
+                    captureForEachState(span, forEachItems, itemIndex, item);
+                  }
+                } catch {
+                  // Ignore telemetry errors
+                }
+
                 // Create modified dependency results with current item
                 // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
                 const forEachDependencyResults = new Map<string, ReviewSummary>();
@@ -3918,6 +3973,20 @@ export class CheckExecutionEngine {
         const result = levelResults[i];
         const checkConfig = config.checks![checkName];
 
+        // Stop signal propagation
+        if (result.status === 'fulfilled' && (result.value as any)?.error === '__STOP__') {
+          shouldStopExecution = true;
+          break;
+        }
+        if (
+          result.status === 'rejected' &&
+          result.reason instanceof Error &&
+          (result.reason as Error).message === '__STOP__'
+        ) {
+          shouldStopExecution = true;
+          break;
+        }
+
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
           if ((result.value as any).skipped) {
@@ -3998,6 +4067,24 @@ export class CheckExecutionEngine {
           }
 
           results.set(checkName, reviewResult);
+
+          // Capture state snapshot after check completion
+          try {
+            const span = trace.getSpan(otContext.active());
+            if (span) {
+              const allOutputs: Record<string, unknown> = {};
+              results.forEach((result, name) => {
+                if ((result as any).output !== undefined) {
+                  allOutputs[name] = (result as any).output;
+                }
+              });
+              const memoryStore = MemoryStore.getInstance();
+              const memoryData = await memoryStore.getAll();
+              captureStateSnapshot(span, checkName, allOutputs, memoryData);
+            }
+          } catch {
+            // Ignore telemetry errors
+          }
         } else {
           // Store error result for dependency tracking
           const errorSummary: ReviewSummary = {

@@ -1,0 +1,6 @@
+
+checks:
+  simple-command:
+    type: command
+    exec: |
+      echo '{"status": "ok", "count": 42}'
