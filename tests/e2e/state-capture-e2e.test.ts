@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as os from 'os';
 import { execFileSync } from 'child_process';
 
 // Helper functions
@@ -114,12 +115,8 @@ checks:
   });
 
   it('should capture input context in spans', async () => {
-    const testOutputDir = path.join(
-      process.cwd(),
-      'output',
-      'traces-test-state-capture',
-      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-    );
+    const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
+    const testOutputDir = path.join(baseTmp, 'traces');
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
@@ -159,12 +156,8 @@ checks:
   });
 
   it('should capture output in spans', async () => {
-    const testOutputDir = path.join(
-      process.cwd(),
-      'output',
-      'traces-test-state-capture',
-      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-    );
+    const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
+    const testOutputDir = path.join(baseTmp, 'traces');
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
@@ -198,12 +191,8 @@ checks:
   });
 
   it('should capture transform_js execution', async () => {
-    const testOutputDir = path.join(
-      process.cwd(),
-      'output',
-      'traces-test-state-capture',
-      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-    );
+    const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
+    const testOutputDir = path.join(baseTmp, 'traces');
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'with-transform'], {
       env: {
@@ -253,12 +242,8 @@ checks:
   });
 
   it('should run acceptance test successfully', async () => {
-    const testOutputDir = path.join(
-      process.cwd(),
-      'output',
-      'traces-test-state-capture',
-      `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-    );
+    const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
+    const testOutputDir = path.join(baseTmp, 'traces');
     createdDirs.push(testOutputDir);
     // This is the acceptance test from the RFC Milestone 1
     const result = await executeVisorCLI(
