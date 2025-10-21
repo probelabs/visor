@@ -389,6 +389,7 @@ export const configSchema = {
         'github',
         'claude-code',
         'mcp',
+        'human-input',
       ],
       description: 'Valid check types in configuration',
     },

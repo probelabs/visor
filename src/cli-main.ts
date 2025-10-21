@@ -111,6 +111,12 @@ export async function main(): Promise<void> {
         ? new Set<string>(options.checks.map(check => check.toString()))
         : null;
 
+    // Set CLI message for human-input checks if provided
+    if (options.message !== undefined) {
+      const { HumanInputCheckProvider } = await import('./providers/human-input-check-provider');
+      HumanInputCheckProvider.setCLIMessage(options.message);
+    }
+
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';

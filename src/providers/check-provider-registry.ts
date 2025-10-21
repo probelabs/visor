@@ -10,6 +10,7 @@ import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 import { CommandCheckProvider } from './command-check-provider';
 import { MemoryCheckProvider } from './memory-check-provider';
 import { McpCheckProvider } from './mcp-check-provider';
+import { HumanInputCheckProvider } from './human-input-check-provider';
 
 /**
  * Registry for managing check providers
@@ -47,6 +48,7 @@ export class CheckProviderRegistry {
     this.register(new LogCheckProvider());
     this.register(new MemoryCheckProvider());
     this.register(new GitHubOpsProvider());
+    this.register(new HumanInputCheckProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {

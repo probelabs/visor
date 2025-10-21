@@ -52,6 +52,7 @@ export class ConfigManager {
     'log',
     'memory',
     'github',
+    'human-input',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
