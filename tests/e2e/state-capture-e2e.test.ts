@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
