@@ -14,9 +14,13 @@ export function isStdinAvailable(): boolean {
 /**
  * Read all data from stdin
  * @param timeout Optional timeout in milliseconds
+ * @param maxSize Maximum size in bytes (default: 1MB)
  * @returns Promise that resolves with the stdin content
  */
-export async function readStdin(timeout?: number): Promise<string> {
+export async function readStdin(
+  timeout?: number,
+  maxSize: number = 1024 * 1024
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
     let timeoutId: NodeJS.Timeout | undefined;
@@ -35,10 +39,17 @@ export async function readStdin(timeout?: number): Promise<string> {
       process.stdin.removeListener('data', onData);
       process.stdin.removeListener('end', onEnd);
       process.stdin.removeListener('error', onError);
+      // Pause stdin to prevent resource leaks
+      process.stdin.pause();
     };
 
     const onData = (chunk: Buffer) => {
       data += chunk.toString();
+      // Security: Prevent DoS through large input
+      if (data.length > maxSize) {
+        cleanup();
+        reject(new Error(`Input exceeds maximum size of ${maxSize} bytes`));
+      }
     };
 
     const onEnd = () => {
@@ -64,16 +75,20 @@ export async function readStdin(timeout?: number): Promise<string> {
 /**
  * Try to read from stdin if available, otherwise return null
  * @param timeout Optional timeout in milliseconds
+ * @param maxSize Maximum size in bytes (default: 1MB)
  * @returns Promise that resolves with stdin content or null if not available
  */
-export async function tryReadStdin(timeout?: number): Promise<string | null> {
+export async function tryReadStdin(
+  timeout?: number,
+  maxSize: number = 1024 * 1024
+): Promise<string | null> {
   if (!isStdinAvailable()) {
     return null;
   }
 
   try {
-    return await readStdin(timeout);
-  } catch (error) {
+    return await readStdin(timeout, maxSize);
+  } catch {
     // If reading fails, return null
     return null;
   }

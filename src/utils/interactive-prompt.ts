@@ -66,13 +66,6 @@ function formatTime(ms: number): string {
 }
 
 /**
- * Clear the current line and move cursor to beginning
- */
-function clearLine() {
-  process.stdout.write('\r\x1b[K');
-}
-
-/**
  * Draw a horizontal line
  */
 function drawLine(char: string, width: number): string {

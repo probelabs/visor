@@ -88,7 +88,28 @@ export class HumanInputCheckProvider extends CheckProvider {
   }
 
   /**
+   * Sanitize user input to prevent injection attacks in dependent checks
+   * Removes potentially dangerous characters while preserving useful input
+   */
+  private sanitizeInput(input: string): string {
+    // Remove null bytes (C-string injection)
+    let sanitized = input.replace(/\0/g, '');
+
+    // Remove control characters except newlines and tabs
+    sanitized = sanitized.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '');
+
+    // Limit length to prevent memory issues (100KB max)
+    const maxLength = 100 * 1024;
+    if (sanitized.length > maxLength) {
+      sanitized = sanitized.substring(0, maxLength);
+    }
+
+    return sanitized;
+  }
+
+  /**
    * Try to read message from file if it exists
+   * Validates path to prevent directory traversal attacks
    */
   private async tryReadFile(filePath: string): Promise<string | null> {
     try {
@@ -97,11 +118,34 @@ export class HumanInputCheckProvider extends CheckProvider {
         ? filePath
         : path.resolve(process.cwd(), filePath);
 
-      if (fs.existsSync(absolutePath)) {
-        const content = await fs.promises.readFile(absolutePath, 'utf-8');
-        return content.trim();
+      // Normalize path to resolve .. and . components
+      const normalizedPath = path.normalize(absolutePath);
+
+      // Security: Prevent path traversal attacks
+      // Only allow files within current working directory or its subdirectories
+      const cwd = process.cwd();
+      if (!normalizedPath.startsWith(cwd + path.sep) && normalizedPath !== cwd) {
+        // Path is outside working directory
+        return null;
       }
-    } catch (error) {
+
+      // Use async file access check instead of sync existsSync
+      try {
+        await fs.promises.access(normalizedPath, fs.constants.R_OK);
+        const stats = await fs.promises.stat(normalizedPath);
+
+        // Only read regular files, not directories or special files
+        if (!stats.isFile()) {
+          return null;
+        }
+
+        const content = await fs.promises.readFile(normalizedPath, 'utf-8');
+        return content.trim();
+      } catch {
+        // File doesn't exist or isn't readable
+        return null;
+      }
+    } catch {
       // If file read fails, treat as literal string
     }
     return null;
@@ -210,10 +254,13 @@ export class HumanInputCheckProvider extends CheckProvider {
       // Get user input
       const userInput = await this.getUserInput(checkName, config);
 
+      // Sanitize input to prevent injection attacks in dependent checks
+      const sanitizedInput = this.sanitizeInput(userInput);
+
       // Return the input as the check output (stored in output field for dependent checks)
       return {
         issues: [],
-        output: userInput,
+        output: sanitizedInput,
       } as ReviewSummary & { output: string };
     } catch (error) {
       // If there's an error getting input, return an error issue
