@@ -393,6 +393,21 @@ steps:
         - `intent`: must be "issue_triage" for this flow.
         - `labels` (optional): array of labels that would help organization for this new issue.
 
+        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+
+        References:
+        ```refs
+        path/to/file.ext[:start[-end]] - very short note
+        ```
+
+        Rules for References:
+        - Only include files/lines you actually used. Keep it minimal and relevant.
+        - If you didn’t consult code, write:
+          References:
+          ```refs
+          none
+          ```
+
         Use this triage rubric (adopted from our main prompt):
         1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
         2) Assess priority (low/medium/high/urgent)
@@ -450,6 +465,21 @@ steps:
         - `text`: a concise, helpful markdown reply to the latest comment.
         - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
         - `labels`: omit for comments (do not include).
+
+        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+
+        References:
+        ```refs
+        path/to/file.ext[:start[-end]] - very short note
+        ```
+
+        Rules for References:
+        - Only include files/lines you actually used. Keep it minimal and relevant.
+        - If you didn’t consult code, write:
+          References:
+          ```refs
+          none
+          ```
 
         Rules:
         - Never suggest rerun/disable unless asked explicitly.
@@ -538,6 +568,18 @@ steps:
           verifiable:
             type: boolean
             description: Whether this claim can be verified against the codebase
+          refs:
+            type: array
+            description: Optional list of code references (parsed from assistant References block)
+            items:
+              type: object
+              properties:
+                path:
+                  type: string
+                lines:
+                  type: string
+                  description: Line or range, e.g., "120-145" or "88"
+              required: [path]
         required: [id, category, claim, verifiable]
     depends_on: [init-fact-validation, issue-assistant, comment-assistant]
     on: [issue_opened, issue_comment]
@@ -556,6 +598,13 @@ steps:
       ```
       {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
       ```
+
+      If the response ends with a “References” section in a fenced block labeled `refs`, parse it. Each line will be in the form:
+      path/to/file.ext[:start[-end]] - note
+      Capture it as an array of objects `{ path, lines? }` where `lines` is the numeric line or range if present.
+      When assigning references to facts:
+      - If a reference clearly maps to a specific fact, include only those refs for that fact.
+      - If mapping is ambiguous, include the entire refs list for that fact (better recall than omission).
 
       Extract verifiable factual claims about:
       - Configuration variables and their values (e.g., "max_parallelism defaults to 4")
@@ -580,8 +629,8 @@ steps:
       - Each fact should be atomic and independently verifiable
 
       Example of GOOD claims:
-      - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
-      - "Configuration file defaults/.visor.yaml sets max_parallelism to 4 at line 11"
+        - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
+        - "Configuration file defaults/.visor.yaml sets max_parallelism to 4 at line 11"
 
       Example of BAD claims (missing context):
       - "Default is 3" (missing: default of what? where?)
@@ -595,6 +644,7 @@ steps:
       - Duplicate facts (same claim stated multiple ways)
 
       Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
+      Each item must be: { id, category, claim, verifiable, refs? }
 
     forEach: true
 
@@ -652,6 +702,20 @@ steps:
       **Fact ID:** {{ outputs['extract-facts'].id }}
 
       Use code search and file reading tools to verify if this claim is accurate.
+
+      If references were provided for this fact (parsed earlier), use them FIRST and prefer them strongly:
+      {% assign refs = outputs['extract-facts'].refs %}
+      {% if refs and refs.size > 0 %}
+      Provided References:
+      {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}
+      {% endfor %}
+      Strategy:
+      - Open only these files/line ranges first and try to validate from there.
+      - Expand search to nearby lines in the same files if needed (±50 lines).
+      - Only if still inconclusive, perform a broader search.
+      {% else %}
+      No provided references. Perform a targeted search (prefer exact identifiers from the claim) before broader queries.
+      {% endif %}
 
       Provide:
       - Evidence of what you found in the codebase
