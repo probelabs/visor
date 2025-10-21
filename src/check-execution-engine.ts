@@ -615,7 +615,14 @@ export class CheckExecutionEngine {
             'visor.check.type': providerConfig.type || 'ai',
             'visor.check.attempt': attempt,
           },
-          async () => provider.execute(prInfo, providerConfig, dependencyResults, context)
+          async () => {
+            try {
+              try { emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [ { name: 'check.started' }, ]); } catch {}
+              return await provider.execute(prInfo, providerConfig, dependencyResults, context);
+            } finally {
+              try { emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [ { name: 'check.completed' }, ]); } catch {}
+            }
+          }
         );
         try {
           currentRouteOutput = (res as any)?.output;
