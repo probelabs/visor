@@ -193,7 +193,7 @@ checks:
       .split('\n')
       .map(line => JSON.parse(line));
 
-    let spanWithTransform = spans.find(s => s.attributes && s.attributes['visor.transform.code']);
+    const spanWithTransform = spans.find(s => s.attributes && s.attributes['visor.transform.code']);
 
     if (!spanWithTransform) {
       // Fallback: some environments may not persist transform_* attributes; validate transform effect via output

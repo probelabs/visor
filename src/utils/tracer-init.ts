@@ -6,21 +6,33 @@ import * as fs from 'fs';
  * Uses SimpleTelemetry for lightweight tracing
  * This prevents path traversal vulnerabilities by sanitizing the checkName
  */
+type ProbeModule =
+  | {
+      SimpleTelemetry?: new (opts: {
+        enableFile: boolean;
+        filePath: string;
+        enableConsole?: boolean;
+      }) => unknown;
+      SimpleAppTracer?: new (telemetry: unknown, sessionId: string) => unknown;
+    }
+  | undefined;
+
 export async function initializeTracer(
   sessionId: string,
   checkName?: string
 ): Promise<{ tracer: unknown; telemetryConfig: unknown; filePath: string } | null> {
   try {
     // Load Probe lib in a way that works in both ESM and CJS bundles
-    let ProbeLib: any;
+    let ProbeLib: ProbeModule;
     try {
-      ProbeLib = await import('@probelabs/probe');
+      ProbeLib = (await import('@probelabs/probe')) as ProbeModule;
     } catch {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        ProbeLib = require('@probelabs/probe');
+        // Fallback to CJS require if available
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ProbeLib = require('@probelabs/probe') as ProbeModule;
       } catch {
-        ProbeLib = {};
+        ProbeLib = {} as unknown as ProbeModule;
       }
     }
 
