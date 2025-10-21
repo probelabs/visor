@@ -77,7 +77,16 @@ describe('State Capture E2E', () => {
       try {
         if (isFileTarget) {
           const content = await fs.readFile(dirOrFile, 'utf-8');
-          if (content.trim().length > 0) return { path: dirOrFile, content };
+          const lines = content.trim().split('\n').filter(Boolean);
+          // Require more than the seeded run marker line or presence of visor.check
+          if (
+            lines.length > 1 ||
+            content.includes('"name":"visor.check') ||
+            content.includes('visor.check.input.context') ||
+            content.includes('visor.check.output')
+          ) {
+            return { path: dirOrFile, content };
+          }
         } else {
           const files = await fs.readdir(dirOrFile);
           const traceFile = files.find(f => f.endsWith('.ndjson'));
