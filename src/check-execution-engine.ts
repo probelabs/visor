@@ -1485,7 +1485,7 @@ export class CheckExecutionEngine {
         debug,
         maxParallelism,
         failFast,
-        pauseGate
+        _pauseGate
       );
     }
 
@@ -1501,7 +1501,7 @@ export class CheckExecutionEngine {
         config,
         logFn,
         debug,
-        pauseGate
+        _pauseGate
       );
 
       const groupedResults: GroupedCheckResults = {};
