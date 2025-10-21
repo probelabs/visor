@@ -132,6 +132,7 @@ export async function run(): Promise<void> {
       'comment-on-pr': getInput('comment-on-pr') || undefined,
       'create-check': getInput('create-check') || undefined,
       'add-labels': getInput('add-labels') || undefined,
+      'add-reactions': getInput('add-reactions') || undefined,
       'fail-on-critical': getInput('fail-on-critical') || undefined,
       'fail-on-api-error': getInput('fail-on-api-error') || undefined,
       'min-score': getInput('min-score') || undefined,
@@ -443,6 +444,10 @@ async function handleEvent(
   console.log(`🔧 Checks to run for ${eventType}: ${checksToRun.join(', ')}`);
   console.log(`🐛 DEBUG-VERSION-999: About to create ReactionManager`);
 
+  // Check if reactions are enabled (default: true)
+  const reactionsEnabled = inputs['add-reactions'] !== 'false';
+  console.log(`🔔 Reactions ${reactionsEnabled ? 'enabled' : 'disabled'}`);
+
   // Create reaction manager for emoji reactions
   const reactionManager = new ReactionManager(octokit);
   console.log(`🐛 DEBUG: ReactionManager created successfully`);
@@ -489,12 +494,14 @@ async function handleEvent(
   // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
   // Skip reactions for bot comments to avoid recursion
   let acknowledgementReactionId: number | null = null;
-  if (reactionContext.issueNumber || reactionContext.commentId) {
+  if (reactionsEnabled && (reactionContext.issueNumber || reactionContext.commentId)) {
     acknowledgementReactionId = await reactionManager.addAcknowledgementReaction(
       owner,
       repo,
       reactionContext
     );
+  } else if (!reactionsEnabled) {
+    console.log('⚠️  Reactions disabled - skipping acknowledgement reaction');
   } else {
     console.log('⚠️  No reaction added - neither issueNumber nor commentId available');
   }
@@ -533,7 +540,7 @@ async function handleEvent(
     }
   } finally {
     // Add completion reaction (thumbs up emoji) after processing
-    if (reactionContext.issueNumber || reactionContext.commentId) {
+    if (reactionsEnabled && (reactionContext.issueNumber || reactionContext.commentId)) {
       await reactionManager.addCompletionReaction(owner, repo, {
         ...reactionContext,
         acknowledgementReactionId,

@@ -131,4 +131,23 @@ describe('GitHubOpsProvider - empty value handling', () => {
       labels: ['good first issue', 'enhancement', 'ui/ux'],
     });
   });
+
+  it('returns error when no octokit is provided in eventContext', async () => {
+    const provider = new GitHubOpsProvider();
+    const pr = makePr(42);
+    const cfg: any = {
+      type: 'github',
+      op: 'labels.add',
+      values: ['test-label'],
+      // No eventContext with octokit
+    };
+
+    const result = await provider.execute(pr, cfg);
+
+    expect(result.issues).toBeDefined();
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues![0].ruleId).toBe('github/missing_octokit');
+    expect(result.issues![0].severity).toBe('error');
+    expect(result.issues![0].message).toContain('No authenticated Octokit instance');
+  });
 });
