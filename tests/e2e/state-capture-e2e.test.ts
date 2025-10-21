@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import * as fss from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -42,31 +43,54 @@ async function cleanupTestTraces(dir: string): Promise<void> {
   }
 }
 
+async function prepareTraceTarget(baseDir: string): Promise<{ dir: string; file: string }> {
+  await fs.mkdir(baseDir, { recursive: true });
+  const file = path.join(baseDir, `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`);
+  // Seed with a run marker so the file exists deterministically
+  try {
+    fss.writeFileSync(
+      file,
+      JSON.stringify({ name: 'visor.run', attributes: { started: true } }) + '\n',
+      'utf8'
+    );
+  } catch {}
+  return { dir: baseDir, file };
+}
+
 describe('State Capture E2E', () => {
   const createdDirs: string[] = [];
   const tempFixtureDir = path.join(__dirname, '../fixtures', 'temp');
   const configFile = path.join(tempFixtureDir, 'state-capture-test.yaml');
 
   async function waitForNdjson(
-    dir: string,
+    dirOrFile: string,
     timeoutMs = 12000
   ): Promise<{ path: string; content: string }> {
     const start = Date.now();
-    // Ensure directory exists to avoid ENOENT when polling
-    await fs.mkdir(dir, { recursive: true });
+    // Decide whether a file path was passed in
+    const statExists = (): boolean => fss.existsSync(dirOrFile);
+    const isFileTarget = statExists() && fss.statSync(dirOrFile).isFile();
+    if (!isFileTarget) {
+      await fs.mkdir(dirOrFile, { recursive: true });
+    }
     while (Date.now() - start < timeoutMs) {
       try {
-        const files = await fs.readdir(dir);
-        const traceFile = files.find(f => f.endsWith('.ndjson'));
-        if (traceFile) {
-          const p = path.join(dir, traceFile);
-          const content = await fs.readFile(p, 'utf-8');
-          if (content.trim().length > 0) return { path: p, content };
+        if (isFileTarget) {
+          const content = await fs.readFile(dirOrFile, 'utf-8');
+          if (content.trim().length > 0) return { path: dirOrFile, content };
+        } else {
+          const files = await fs.readdir(dirOrFile);
+          const traceFile = files.find(f => f.endsWith('.ndjson'));
+          if (traceFile) {
+            const p = path.join(dirOrFile, traceFile);
+            const content = await fs.readFile(p, 'utf-8');
+            if (content.trim().length > 0) return { path: p, content };
+          }
         }
       } catch {}
       await new Promise(r => setTimeout(r, 100));
     }
-    throw new Error(`Timed out waiting for NDJSON in ${dir}`);
+    throw new Error(`Timed out waiting for NDJSON in ${dirOrFile}`);
   }
 
   beforeAll(async () => {
@@ -118,6 +142,7 @@ checks:
   it('should capture input context in spans', async () => {
     const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
     const testOutputDir = path.join(baseTmp, 'traces');
+    const target = await prepareTraceTarget(testOutputDir);
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
@@ -126,17 +151,14 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
-        VISOR_FALLBACK_TRACE_FILE: path.join(
-          testOutputDir,
-          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
-        ),
+        VISOR_FALLBACK_TRACE_FILE: target.file,
       },
     });
 
     expect(result.exitCode).toBe(0);
 
     // Read the NDJSON trace file (wait for writer flush)
-    const { content: traceContent } = await waitForNdjson(testOutputDir);
+    const { content: traceContent } = await waitForNdjson(target.file);
 
     const spans = traceContent
       .trim()
@@ -159,6 +181,7 @@ checks:
   it('should capture output in spans', async () => {
     const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
     const testOutputDir = path.join(baseTmp, 'traces');
+    const target = await prepareTraceTarget(testOutputDir);
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'simple-command'], {
       env: {
@@ -167,16 +190,13 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
-        VISOR_FALLBACK_TRACE_FILE: path.join(
-          testOutputDir,
-          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
-        ),
+        VISOR_FALLBACK_TRACE_FILE: target.file,
       },
     });
 
     expect(result.exitCode).toBe(0);
 
-    const { content: traceContent } = await waitForNdjson(testOutputDir);
+    const { content: traceContent } = await waitForNdjson(target.file);
 
     const spans = traceContent
       .trim()
@@ -194,6 +214,7 @@ checks:
   it('should capture transform_js execution', async () => {
     const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
     const testOutputDir = path.join(baseTmp, 'traces');
+    const target = await prepareTraceTarget(testOutputDir);
     createdDirs.push(testOutputDir);
     const result = await executeVisorCLI(['--config', configFile, '--check', 'with-transform'], {
       env: {
@@ -202,16 +223,13 @@ checks:
         VISOR_TELEMETRY_ENABLED: 'true',
         VISOR_TELEMETRY_SINK: 'file',
         VISOR_TRACE_DIR: testOutputDir,
-        VISOR_FALLBACK_TRACE_FILE: path.join(
-          testOutputDir,
-          `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
-        ),
+        VISOR_FALLBACK_TRACE_FILE: target.file,
       },
     });
 
     expect(result.exitCode).toBe(0);
 
-    const { content: traceContent } = await waitForNdjson(testOutputDir);
+    const { content: traceContent } = await waitForNdjson(target.file);
 
     const spans = traceContent
       .trim()
@@ -245,6 +263,7 @@ checks:
   it('should run acceptance test successfully', async () => {
     const baseTmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'visor-e2e-'));
     const testOutputDir = path.join(baseTmp, 'traces');
+    const target = await prepareTraceTarget(testOutputDir);
     createdDirs.push(testOutputDir);
     // This is the acceptance test from the RFC Milestone 1
     const result = await executeVisorCLI(
@@ -265,10 +284,7 @@ checks:
           VISOR_TELEMETRY_ENABLED: 'true',
           VISOR_TELEMETRY_SINK: 'file',
           VISOR_TRACE_DIR: testOutputDir,
-          VISOR_FALLBACK_TRACE_FILE: path.join(
-            testOutputDir,
-            `run-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`
-          ),
+          VISOR_FALLBACK_TRACE_FILE: target.file,
         },
       }
     );
@@ -276,7 +292,7 @@ checks:
     expect(result.exitCode).toBe(0);
 
     // Verify NDJSON contains enhanced attributes
-    const { content: traceContent } = await waitForNdjson(testOutputDir);
+    const { content: traceContent } = await waitForNdjson(target.file);
 
     const spans = traceContent
       .trim()
