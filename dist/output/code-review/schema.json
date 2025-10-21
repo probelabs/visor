@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "code-review",
   "title": "Code Review",
-  "description": "Structured format for code review issues",
+  "description": "Structured format for code review issues. CRITICAL: Return ONLY a valid JSON object matching this schema. Do NOT include prose, explanations, markdown, or XML tags. Start your response with { and end with }.",
   "type": "object",
   "required": ["issues"],
   "properties": {
@@ -39,7 +39,7 @@
           "severity": {
             "type": "string",
             "enum": ["warning", "error", "critical"],
-            "description": "Issue severity level based on the NEW CODE being introduced: info (suggestions/improvements), warning (should fix), error (must fix), critical (NEW security vulnerabilities, data loss risks, or breaking changes that block deployment). IMPORTANT: Use 'critical' ONLY when NEW problematic code is INTRODUCED, NOT when existing issues are being FIXED. "
+            "description": "Issue severity level based on the NEW CODE being introduced: warning (should fix), error (must fix), critical (NEW security vulnerabilities, data loss risks, or breaking changes that block deployment). IMPORTANT: Use 'critical' ONLY when NEW problematic code is INTRODUCED, NOT when existing issues are being FIXED. CRITICAL: Your entire response must be a single valid JSON object matching this schema - do not include any prose, explanations, markdown, or XML tags outside the JSON."
           },
           "category": {
             "type": "string",
