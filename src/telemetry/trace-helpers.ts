@@ -10,9 +10,7 @@ export async function withActiveSpan<T>(
   fn: (span: Span) => Promise<T>
 ): Promise<T> {
   const tracer = getTracer();
-  // Check for active parent span BEFORE creating new span
-  // Preserve parent context via the tracer API; avoid logging parent IDs to stdout
-  const activeCtx = otContext.active();
+  // Preserve parent context via tracer API; avoid logging parent IDs to stdout
   // Avoid noisy stdout logs that break JSON consumers
   return await new Promise<T>((resolve, reject) => {
     const callback = async (span: Span) => {

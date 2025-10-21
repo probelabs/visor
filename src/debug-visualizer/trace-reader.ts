@@ -321,7 +321,7 @@ function createExecutionNode(span: ProcessedSpan): ExecutionNode {
   if (attrs['visor.check.input.context']) {
     try {
       state.inputContext = JSON.parse(attrs['visor.check.input.context']);
-    } catch (e) {
+    } catch {
       state.inputContext = attrs['visor.check.input.context'];
     }
   }
@@ -330,7 +330,7 @@ function createExecutionNode(span: ProcessedSpan): ExecutionNode {
   if (attrs['visor.check.output']) {
     try {
       state.output = JSON.parse(attrs['visor.check.output']);
-    } catch (e) {
+    } catch {
       state.output = attrs['visor.check.output'];
     }
   }
@@ -498,7 +498,7 @@ function parseJSON<T>(value: any, defaultValue: T): T {
 
   try {
     return JSON.parse(value);
-  } catch (e) {
+  } catch {
     return defaultValue;
   }
 }

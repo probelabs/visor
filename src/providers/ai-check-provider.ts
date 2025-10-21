@@ -549,7 +549,7 @@ export class AICheckProvider extends CheckProvider {
       if (span) {
         captureCheckInputContext(span, templateContext);
       }
-    } catch (err) {
+    } catch {
       // Ignore telemetry errors
     }
 
@@ -642,9 +642,10 @@ export class AICheckProvider extends CheckProvider {
               tokens: (result as any).usage?.totalTokens,
             }
           );
-          captureCheckOutput(span, (finalResult as any).output || finalResult);
+          const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
+          captureCheckOutput(span, outputForSpan);
         }
-      } catch (err) {
+      } catch {
         // Ignore telemetry errors
       }
 

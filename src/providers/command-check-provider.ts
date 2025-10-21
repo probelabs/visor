@@ -107,7 +107,7 @@ export class CommandCheckProvider extends CheckProvider {
       if (span) {
         captureCheckInputContext(span, templateContext);
       }
-    } catch (err) {
+    } catch {
       // Ignore telemetry errors
     }
 
@@ -858,7 +858,7 @@ ${bodyWithReturn}
             captureTransformJS(span, transformJs, output, finalOutput);
           }
         }
-      } catch (err) {
+      } catch {
         // Ignore telemetry errors
       }
 
