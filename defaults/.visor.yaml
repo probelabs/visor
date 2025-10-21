@@ -397,11 +397,11 @@ steps:
 
         References:
         ```refs
-        path/to/file.ext[:start[-end]] - very short note
+        path/to/file.ext[:start[-end]|#SymbolName] - very short note
         ```
 
         Rules for References:
-        - Only include files/lines you actually used. Keep it minimal and relevant.
+        - Only include files/lines/symbols you actually used. Keep it minimal and relevant.
         - If you didn’t consult code, write:
           References:
           ```refs
@@ -600,8 +600,8 @@ steps:
       ```
 
       If the response ends with a “References” section in a fenced block labeled `refs`, parse it. Each line will be in the form:
-      path/to/file.ext[:start[-end]] - note
-      Capture it as an array of objects `{ path, lines? }` where `lines` is the numeric line or range if present.
+      path/to/file.ext[:start[-end]|#SymbolName] - note
+      Capture it as an array of objects `{ path, lines?, symbol? }` where `lines` is the numeric line or range if present, or `symbol` is the string after `#`.
       When assigning references to facts:
       - If a reference clearly maps to a specific fact, include only those refs for that fact.
       - If mapping is ambiguous, include the entire refs list for that fact (better recall than omission).
@@ -644,7 +644,7 @@ steps:
       - Duplicate facts (same claim stated multiple ways)
 
       Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
-      Each item must be: { id, category, claim, verifiable, refs? }
+      Each item must be: { id, category, claim, verifiable, refs? } where refs items may contain `lines` or `symbol`.
 
     forEach: true
 
@@ -707,10 +707,13 @@ steps:
       {% assign refs = outputs['extract-facts'].refs %}
       {% if refs and refs.size > 0 %}
       Provided References:
-      {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}
+      {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}{% if r.symbol %}#{{ r.symbol }}{% endif %}
       {% endfor %}
       Strategy:
-      - Open only these files/line ranges first and try to validate from there.
+      - If a reference has `lines`, open those line ranges first and try to validate from there.
+      - If a reference has `symbol`, locate the symbol definition in the referenced file (e.g., function/class/const). Search for common patterns like:
+        - `function SYMBOL(`, `const SYMBOL`, `let SYMBOL`, `class SYMBOL`, `export .* SYMBOL`, `SYMBOL:\s*` (TypeScript), etc.
+        Then analyze ~100 lines around the definition (±50 lines) before expanding.
       - Expand search to nearby lines in the same files if needed (±50 lines).
       - Only if still inconclusive, perform a broader search.
       {% else %}
