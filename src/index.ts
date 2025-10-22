@@ -840,7 +840,7 @@ async function handleIssueComment(
     }
   } else {
     // Default commands when no config is available
-    commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
+    commandRegistry['review'] = ['security', 'performance', 'architecture'];
   }
 
   // Parse comment with available commands
@@ -974,12 +974,7 @@ async function handleIssueComment(
         }
 
         // Extract common arguments
-        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
-          | 'security'
-          | 'performance'
-          | 'style'
-          | 'all'
-          | undefined;
+        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1];
         const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
           | 'table'
           | 'json'

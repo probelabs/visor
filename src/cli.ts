@@ -12,7 +12,6 @@ const packageJson = require('../package.json');
  */
 export class CLI {
   private program: Command;
-  private validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
   private validOutputs: OutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
   // Valid events: all core EventTrigger types plus 'all' for CLI-only usage
   // Reuses VALID_EVENT_TRIGGERS from config.ts as the single source of truth

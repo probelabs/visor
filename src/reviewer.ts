@@ -122,7 +122,7 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
 }
 
 export interface ReviewOptions {
-  focus?: 'security' | 'performance' | 'style' | 'all';
+  focus?: string;
   format?: 'table' | 'json' | 'markdown' | 'sarif';
   debug?: boolean;
   config?: import('./types/config').VisorConfig;

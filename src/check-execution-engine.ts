@@ -4825,15 +4825,12 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Get available check types
+   * Get available check types from providers
+   * Note: Check names are now config-driven. This returns provider types only.
    */
   static getAvailableCheckTypes(): string[] {
     const registry = CheckProviderRegistry.getInstance();
-    const providerTypes = registry.getAvailableProviders();
-    // Add standard focus-based checks
-    const standardTypes = ['security', 'performance', 'style', 'architecture', 'all'];
-    // Combine provider types with standard types (remove duplicates)
-    return [...new Set([...providerTypes, ...standardTypes])];
+    return registry.getAvailableProviders();
   }
 
   /**

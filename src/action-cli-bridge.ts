@@ -2,7 +2,8 @@ import { ChildProcess, spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { CheckType } from './types/cli';
-import { VisorConfig } from './types/config';
+import { VisorConfig, CheckConfig } from './types/config';
+import { ConfigManager } from './config';
 
 export interface GitHubActionInputs {
   'github-token': string;
@@ -69,10 +70,45 @@ export interface ActionCliOutput {
 export class ActionCliBridge {
   private githubToken: string;
   private context: GitHubContext;
+  private defaultConfig: VisorConfig | null = null;
 
   constructor(githubToken: string, context: GitHubContext) {
     this.githubToken = githubToken;
     this.context = context;
+  }
+
+  /**
+   * Load default configuration (lazy loaded)
+   */
+  private async getDefaultConfig(): Promise<VisorConfig> {
+    if (this.defaultConfig) {
+      return this.defaultConfig;
+    }
+
+    const configManager = new ConfigManager();
+    const defaultConfigPath = path.join(__dirname, '..', 'defaults', '.visor.yaml');
+
+    try {
+      this.defaultConfig = await configManager.loadConfig(defaultConfigPath, {
+        validate: false,
+        mergeDefaults: false,
+      });
+      return this.defaultConfig;
+    } catch (error) {
+      console.warn('Failed to load default config, using minimal fallback:', error);
+      // Minimal fallback if default config cannot be loaded
+      return {
+        version: '1.0',
+        checks: {},
+        output: {
+          pr_comment: {
+            format: 'markdown',
+            group_by: 'check',
+            collapse: true,
+          },
+        },
+      };
+    }
   }
 
   /**
@@ -375,11 +411,14 @@ export class ActionCliBridge {
   }
 
   /**
-   * Check if a check type is valid
+   * Check if a check type is valid (exists in default config)
    */
-  private isValidCheck(check: string): check is CheckType {
-    const validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
-    return validChecks.includes(check as CheckType);
+  private async isValidCheck(check: string): Promise<boolean> {
+    const defaultConfig = await this.getDefaultConfig();
+    const checks = defaultConfig.checks || defaultConfig.steps || {};
+
+    // Check if it exists in default config or is 'all'
+    return check === 'all' || Object.keys(checks).includes(check);
   }
 
   /**
@@ -395,16 +434,25 @@ export class ActionCliBridge {
       return null;
     }
 
-    const checks = inputs['visor-checks']
-      .split(',')
-      .map(check => check.trim())
-      .filter(check => this.isValidCheck(check));
+    // Load default config to get check definitions
+    const defaultConfig = await this.getDefaultConfig();
+    const defaultChecks = defaultConfig.checks || defaultConfig.steps || {};
 
-    if (checks.length === 0) {
+    // Parse requested checks and validate against default config
+    const requestedChecks = inputs['visor-checks'].split(',').map(c => c.trim());
+    const validChecks: string[] = [];
+
+    for (const check of requestedChecks) {
+      if (await this.isValidCheck(check)) {
+        validChecks.push(check);
+      }
+    }
+
+    if (validChecks.length === 0) {
       return null;
     }
 
-    // Create a basic Visor config from the checks
+    // Create a config using check definitions from default config
     const config: Partial<VisorConfig> = {
       version: '1.0',
       checks: {},
@@ -417,14 +465,16 @@ export class ActionCliBridge {
       },
     };
 
-    // Map GitHub Action checks to Visor config format
-    for (const check of checks) {
-      const checkName = `${check}-check`;
-      config.checks![checkName] = {
-        type: 'ai',
-        prompt: this.getPromptForCheck(check),
-        on: ['pr_opened', 'pr_updated'],
-      };
+    // Copy check definitions from default config
+    for (const checkName of validChecks) {
+      if (checkName === 'all') {
+        // For 'all', copy all checks from default config
+        Object.assign(config.checks!, defaultChecks);
+        break;
+      } else if (defaultChecks[checkName]) {
+        // Copy specific check from default config
+        config.checks![checkName] = { ...defaultChecks[checkName] };
+      }
     }
 
     // Write temporary config file
@@ -443,24 +493,13 @@ export class ActionCliBridge {
   }
 
   /**
-   * Get AI prompt for a specific check type
+   * Get check configuration from default config
    */
-  private getPromptForCheck(check: CheckType): string {
-    const sharedNoPraise = `\nStrict output policy:\n- Report only actual problems, risks, or deficiencies.\n- Do not write praise, congratulations, or celebratory text.\n- Do not create issues that merely restate improvements or say \"no action needed\".\n- Keep feedback concise, specific, and actionable.\n- If no issues are found for this focus, return no issues.\n`;
+  private async getCheckConfig(checkName: string): Promise<CheckConfig | null> {
+    const defaultConfig = await this.getDefaultConfig();
+    const checks = defaultConfig.checks || defaultConfig.steps || {};
 
-    const prompts: Record<CheckType, string> = {
-      security: `Review this code for security vulnerabilities, focusing on:\n- SQL injection, XSS, CSRF vulnerabilities\n- Authentication and authorization flaws\n- Sensitive data exposure\n- Input validation issues\n- Cryptographic weaknesses\n\nCategory constraint: Only report security issues; ignore non-security concerns.${sharedNoPraise}`,
-
-      performance: `Analyze this code for performance issues, focusing on:\n- Database query efficiency (N+1 problems, missing indexes)\n- Memory usage and potential leaks\n- Algorithmic complexity issues\n- Caching opportunities\n- Resource utilization\n\nCategory constraint: Only report performance issues; ignore non-performance concerns.${sharedNoPraise}`,
-
-      architecture: `Review the architectural aspects of this code, focusing on:\n- Design patterns and code organization\n- Separation of concerns\n- SOLID principles adherence\n- Code maintainability and extensibility\n- Technical debt\n\nCategory constraint: Only report architecture issues; ignore other categories.${sharedNoPraise}`,
-
-      style: `Review code style and maintainability, focusing on:\n- Consistent naming conventions\n- Code formatting and readability\n- Documentation quality\n- Error handling patterns\n- Code complexity\n\nCategory constraint: Only report style/maintainability issues; ignore other categories.${sharedNoPraise}`,
-
-      all: `Perform a comprehensive code review covering:\n- Security vulnerabilities and best practices\n- Performance optimization opportunities\n- Architectural improvements\n- Code style and maintainability\n- Documentation and testing coverage\n\nOutput discipline for all categories:\n- Report only actual problems; no praise/celebrations.\n- Keep to the relevant category for each issue.\n- If no issues are found, return none.${sharedNoPraise}`,
-    };
-
-    return prompts[check];
+    return checks[checkName] || null;
   }
 
   /**
