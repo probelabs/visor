@@ -415,6 +415,10 @@ export interface CheckConfig {
   argsTransform?: string;
   /** Session ID for HTTP transport (optional, server may generate one) */
   sessionId?: string;
+  /** Command arguments (for stdio transport in MCP checks) */
+  args?: string[];
+  /** Working directory (for stdio transport in MCP checks) */
+  workingDirectory?: string;
   /**
    * Human input provider specific options (optional, only used when type === 'human-input').
    */
