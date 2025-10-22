@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { ConfigManager } from '../../src/config';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { CommentManager } from '../../src/github-comments';
 import { EventMapper } from '../../src/event-mapper';
 import { MemoryProfiler, createMockOctokit } from '../performance/test-utilities';
@@ -157,7 +156,7 @@ import * as yaml from 'js-yaml';
         expect(successful).toBeGreaterThanOrEqual(numConfigs * 0.9); // 90% success rate
       });
 
-      test('should handle temporary file cleanup in ActionCliBridge', async () => {
+      test.skip('should handle temporary file cleanup in ActionCliBridge (SKIPPED: ActionCliBridge removed)', async () => {
         console.log('Testing temporary file cleanup in ActionCliBridge...');
 
         const context = {

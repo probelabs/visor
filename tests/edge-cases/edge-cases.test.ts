@@ -4,7 +4,6 @@ import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
 import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { createMockOctokit } from '../performance/test-utilities';
 import * as path from 'path';
 import * as os from 'os';

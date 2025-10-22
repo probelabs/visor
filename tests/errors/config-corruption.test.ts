@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ConfigManager } from '../../src/config';
 import { EventMapper } from '../../src/event-mapper';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';

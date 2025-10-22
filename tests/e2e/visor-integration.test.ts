@@ -891,8 +891,8 @@ describe('Visor Integration E2E Tests', () => {
       expect(result.details).toContain('No PR found for push event');
     });
 
-    test('should work with ActionCliBridge PR context detection', async () => {
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
+    test.skip('should work with ActionCliBridge PR context detection (SKIPPED: ActionCliBridge removed)', async () => {
+      // const { ActionCliBridge } = require('../../src/action-cli-bridge');
 
       const mockActionInputs = {
         'github-token': 'test-token',

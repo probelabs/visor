@@ -4,7 +4,6 @@ import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
 import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { EventMapper } from '../../src/event-mapper';
 import {
   PerformanceTimer,
@@ -343,7 +342,7 @@ import {
       expect(recoveredMemoryMB).toBeGreaterThan(5); // Recover at least 5MB
     });
 
-    test('should cleanup ActionCliBridge temporary resources', async () => {
+    test.skip('should cleanup ActionCliBridge temporary resources (SKIPPED: ActionCliBridge removed)', async () => {
       console.log('Testing ActionCliBridge resource cleanup...');
 
       if (!global.gc) {
