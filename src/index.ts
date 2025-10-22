@@ -14,7 +14,7 @@ import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
 import { resolveHeadShaFromEvent } from './utils/head-sha';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
-import { GitHubActionInputs, GitHubContext } from './types/github';
+import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { ReactionManager } from './github-reactions';
