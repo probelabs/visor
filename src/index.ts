@@ -1810,6 +1810,7 @@ if (
     const forceE2E = process.env.VISOR_E2E_FORCE_RUN === 'true';
     const argv = process.argv.slice(2);
     const explicitCliMode = (() => {
+      if (argv.includes('--cli')) return true;
       const modeEq = argv.find(a => a.startsWith('--mode='));
       if (modeEq && modeEq.split('=')[1]?.toLowerCase() === 'cli') return true;
       const modeIdx = argv.indexOf('--mode');
