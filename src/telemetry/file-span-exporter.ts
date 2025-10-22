@@ -14,7 +14,9 @@ type ExportResult = any;
 let otelCore: any;
 
 try {
-  otelCore = require('@opentelemetry/core');
+  otelCore = (function (name: string) {
+    return require(name);
+  })('@opentelemetry/core');
 } catch {
   // OpenTelemetry not installed - this file won't be used
   otelCore = null;
