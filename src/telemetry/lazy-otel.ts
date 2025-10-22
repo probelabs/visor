@@ -167,9 +167,26 @@ export type HrTime = [number, number];
 function createNoOpTracer() {
   return {
     startSpan: () => createNoOpSpan(),
-    startActiveSpan: (name: string, fn: any) => {
-      if (typeof fn === 'function') return fn(createNoOpSpan());
-      return createNoOpSpan();
+    // Support both OTel v1 and v2 overloads:
+    // - startActiveSpan(name, callback)
+    // - startActiveSpan(name, options, callback)
+    // - startActiveSpan(name, options, context, callback)
+    startActiveSpan: (name: string, arg2?: any, arg3?: any, arg4?: any) => {
+      const span = createNoOpSpan();
+      let cb: any = undefined;
+      if (typeof arg2 === 'function') cb = arg2;
+      else if (typeof arg3 === 'function') cb = arg3;
+      else if (typeof arg4 === 'function') cb = arg4;
+      if (typeof cb === 'function') {
+        try {
+          return cb(span);
+        } catch {
+          // swallow errors in no-op implementation
+          return undefined;
+        }
+      }
+      // No callback supplied: return a no-op span like the real API would
+      return span;
     },
   };
 }
