@@ -1807,6 +1807,7 @@ if (
     // - Default to Action mode under GITHUB_ACTIONS
     // - But if user explicitly invokes CLI help/version/validate or --mode cli, honor CLI even in Actions
     const inGithub = process.env.GITHUB_ACTIONS === 'true' || !!process.env.GITHUB_ACTIONS;
+    const forceE2E = process.env.VISOR_E2E_FORCE_RUN === 'true';
     const argv = process.argv.slice(2);
     const explicitCliMode = (() => {
       const modeEq = argv.find(a => a.startsWith('--mode='));
@@ -1822,7 +1823,7 @@ if (
       argv.includes('-V') ||
       argv.includes('validate');
 
-    if (inGithub && !explicitCliMode && !wantsCliHelp) {
+    if (inGithub && !explicitCliMode && !wantsCliHelp && !forceE2E) {
       // Run in GitHub Action mode explicitly and await completion to avoid early exit
       try {
         await run();
