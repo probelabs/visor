@@ -33,7 +33,7 @@ inputs:
     default: 'true'
   
   checks:
-    description: 'Comma-separated list of checks to run (security,performance,style,architecture,all)'
+    description: 'Comma-separated list of checks to run (security,performance,architecture,quality,all)'
     required: false
     default: 'all'
   

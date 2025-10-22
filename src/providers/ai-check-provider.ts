@@ -54,10 +54,8 @@ export class AICheckProvider extends CheckProvider {
       return false;
     }
 
-    // Validate focus if specified
-    if (cfg.focus && !['security', 'performance', 'style', 'all'].includes(cfg.focus as string)) {
-      return false;
-    }
+    // Focus is now config-driven - any string value is acceptable
+    // No validation needed here as focus is just a hint to the AI
 
     // Validate AI provider config if present
     if (cfg.ai) {

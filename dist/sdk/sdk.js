@@ -4649,9 +4649,6 @@ var init_ai_check_provider = __esm({
         if (typeof prompt !== "string") {
           return false;
         }
-        if (cfg.focus && !["security", "performance", "style", "all"].includes(cfg.focus)) {
-          return false;
-        }
         if (cfg.ai) {
           if (cfg.ai.provider && !["google", "anthropic", "openai", "bedrock", "mock"].includes(cfg.ai.provider)) {
             return false;
@@ -14711,13 +14708,12 @@ ${result.value.result.debug.rawResponse}`;
         };
       }
       /**
-       * Get available check types
+       * Get available check types from providers
+       * Note: Check names are now config-driven. This returns provider types only.
        */
       static getAvailableCheckTypes() {
         const registry = CheckProviderRegistry.getInstance();
-        const providerTypes = registry.getAvailableProviders();
-        const standardTypes = ["security", "performance", "style", "architecture", "all"];
-        return [.../* @__PURE__ */ new Set([...providerTypes, ...standardTypes])];
+        return registry.getAvailableProviders();
       }
       /**
        * Validate check types

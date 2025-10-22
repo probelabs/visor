@@ -1,55 +1,6 @@
-import { ChildProcess, spawn } from 'child_process';
-import { promises as fs } from 'fs';
-import * as path from 'path';
-import { CheckType } from './types/cli';
-import { VisorConfig } from './types/config';
+import { GitHubActionInputs, GitHubContext } from './types/github';
 
-export interface GitHubActionInputs {
-  'github-token': string;
-  owner?: string;
-  repo?: string;
-  'auto-review'?: string;
-  // GitHub App authentication
-  'app-id'?: string;
-  'private-key'?: string;
-  'installation-id'?: string;
-  checks?: string;
-  'output-format'?: string;
-  'config-path'?: string;
-  'comment-on-pr'?: string;
-  'create-check'?: string;
-  'add-labels'?: string;
-  'add-reactions'?: string;
-  'fail-on-critical'?: string;
-  'fail-on-api-error'?: string;
-  'min-score'?: string;
-  'max-parallelism'?: string;
-  'fail-fast'?: string;
-  debug?: string;
-  'ai-provider'?: string;
-  'ai-model'?: string;
-  // Tag filtering
-  tags?: string;
-  'exclude-tags'?: string;
-  // Legacy inputs for backward compatibility
-  'visor-config-path'?: string;
-  'visor-checks'?: string;
-}
-
-export interface GitHubContext {
-  event_name: string;
-  repository?: {
-    owner: { login: string };
-    name: string;
-  };
-  event?: {
-    comment?: Record<string, unknown>;
-    issue?: Record<string, unknown>;
-    pull_request?: Record<string, unknown>;
-    action?: string;
-  };
-  payload?: Record<string, unknown>;
-}
+export { GitHubActionInputs, GitHubContext };
 
 export interface ActionCliOutput {
   success: boolean;
@@ -64,7 +15,8 @@ export interface ActionCliOutput {
 }
 
 /**
- * Bridge between GitHub Action and Visor CLI
+ * Minimal bridge between GitHub Action and Visor
+ * Provides utility functions for parsing GitHub Action inputs
  */
 export class ActionCliBridge {
   private githubToken: string;
@@ -76,205 +28,67 @@ export class ActionCliBridge {
   }
 
   /**
-   * Determine if Visor CLI should be used based on inputs
+   * Determine if legacy Visor inputs are present
    */
   public shouldUseVisor(inputs: GitHubActionInputs): boolean {
-    return !!(
-      inputs['config-path'] ||
-      inputs['visor-config-path'] ||
-      inputs.checks ||
-      inputs['visor-checks']
-    );
+    return !!(inputs['visor-config-path'] || inputs['visor-checks']);
   }
 
   /**
-   * Parse GitHub Action inputs to CLI arguments
+   * Parse GitHub Action inputs into CLI arguments
+   * Note: No validation - let the config system handle it
    */
   public parseGitHubInputsToCliArgs(inputs: GitHubActionInputs): string[] {
     const args: string[] = [];
 
-    // Add config path if specified (prefer new input name over legacy)
-    const configPath = inputs['config-path'] || inputs['visor-config-path'];
-    if (configPath && configPath.trim() !== '') {
+    // Handle config path
+    const configPath = inputs['visor-config-path'] || inputs['config-path'];
+    if (configPath) {
       args.push('--config', configPath);
     }
 
-    // Add checks if specified (prefer new input name over legacy)
-    const checksInput = inputs.checks || inputs['visor-checks'];
-    if (checksInput) {
-      const checks = checksInput
+    // Handle checks (no validation - config-driven)
+    const checks = inputs['visor-checks'] || inputs.checks;
+    if (checks) {
+      const checkList = checks
         .split(',')
-        .map(check => check.trim())
-        .filter(check => this.isValidCheck(check));
-
-      // CRITICAL FIX: When "all" is specified, don't add any --check arguments
-      // This allows CLI to extract all checks from the config file
-      if (checks.length > 0 && !checks.includes('all')) {
-        // Only add specific checks if "all" is not in the list
-        for (const check of checks) {
-          args.push('--check', check);
-        }
+        .map((c: string) => c.trim())
+        .filter(Boolean);
+      for (const check of checkList) {
+        args.push('--check', check);
       }
-      // When checks includes 'all', we intentionally don't add any --check arguments
-      // The CLI will then use all checks defined in .visor.yaml
     }
 
-    // Add output format if specified
-    if (inputs['output-format']) {
-      args.push('--output', inputs['output-format']);
-    } else {
-      // Always use JSON output for programmatic processing
-      args.push('--output', 'json');
-    }
-
-    // Add debug flag if enabled
+    // Handle debug mode
     if (inputs.debug === 'true') {
       args.push('--debug');
     }
 
-    // Add max parallelism if specified
-    if (inputs['max-parallelism']) {
-      args.push('--max-parallelism', inputs['max-parallelism']);
-    }
-
-    // Add fail-fast flag if enabled
-    if (inputs['fail-fast'] === 'true') {
-      args.push('--fail-fast');
-    }
-
-    // Add tag filters if specified
-    if (inputs.tags) {
-      args.push('--tags', inputs.tags);
-    }
-
-    if (inputs['exclude-tags']) {
-      args.push('--exclude-tags', inputs['exclude-tags']);
-    }
+    // Always add output format
+    args.push('--output', 'json');
 
     return args;
   }
 
   /**
-   * Execute CLI with GitHub context
-   */
-  public async executeCliWithContext(
-    inputs: GitHubActionInputs,
-    options: {
-      workingDir?: string;
-      timeout?: number;
-    } = {}
-  ): Promise<ActionCliOutput> {
-    const { workingDir = process.cwd(), timeout = 300000 } = options; // 5 min timeout
-
-    try {
-      const cliArgs = this.parseGitHubInputsToCliArgs(inputs);
-
-      // Set up environment variables for CLI
-      const env: Record<string, string> = {
-        ...(process.env as Record<string, string>),
-        GITHUB_EVENT_NAME: this.context.event_name,
-        GITHUB_CONTEXT: JSON.stringify(this.context),
-        GITHUB_REPOSITORY_OWNER: this.context.repository?.owner.login || inputs.owner || '',
-        GITHUB_REPOSITORY: this.context.repository
-          ? `${this.context.repository.owner.login}/${this.context.repository.name}`
-          : `${inputs.owner || ''}/${inputs.repo || ''}`,
-      };
-
-      // Pass GitHub App credentials if they exist in inputs (use GitHub Actions input format)
-      if (inputs['app-id']) {
-        env['INPUT_APP-ID'] = inputs['app-id'];
-      }
-      if (inputs['private-key']) {
-        env['INPUT_PRIVATE-KEY'] = inputs['private-key'];
-      }
-      if (inputs['installation-id']) {
-        env['INPUT_INSTALLATION-ID'] = inputs['installation-id'];
-      }
-
-      // Pass GitHub token using GitHub Actions input format
-      const isUsingGitHubApp = inputs['app-id'] && inputs['private-key'];
-      if (this.githubToken && !isUsingGitHubApp) {
-        env['INPUT_GITHUB-TOKEN'] = this.githubToken;
-      }
-
-      // Also pass owner and repo as inputs
-      if (inputs.owner) {
-        env.INPUT_OWNER = inputs.owner;
-      }
-      if (inputs.repo) {
-        env.INPUT_REPO = inputs.repo;
-      }
-
-      console.log(`🚀 Executing Visor CLI with args: ${cliArgs.join(' ')}`);
-
-      // Use bundled index.js for CLI execution
-      // When running as a GitHub Action, GITHUB_ACTION_PATH points to the action's directory
-      // The bundled index.js contains both action and CLI functionality
-      const actionPath = process.env.GITHUB_ACTION_PATH;
-      const bundledPath = actionPath
-        ? path.join(actionPath, 'dist', 'index.js')
-        : path.join(__dirname, 'index.js'); // When running locally
-
-      // Pass --cli flag to force CLI mode even when GITHUB_ACTIONS env var is set
-      const result = await this.executeCommand('node', [bundledPath, '--cli', ...cliArgs], {
-        cwd: workingDir,
-        env,
-        timeout,
-      });
-
-      if (result.exitCode === 0) {
-        // Try to parse CLI output for additional data
-        const cliOutput = this.parseCliOutput(result.output);
-
-        return {
-          success: true,
-          output: result.output,
-          exitCode: result.exitCode,
-          cliOutput,
-        };
-      } else {
-        return {
-          success: false,
-          output: result.output,
-          error: result.error,
-          exitCode: result.exitCode,
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        exitCode: -1,
-      };
-    }
-  }
-
-  /**
-   * Merge CLI and Action outputs for backward compatibility
+   * Merge CLI outputs with legacy Action outputs
    */
   public mergeActionAndCliOutputs(
-    actionInputs: GitHubActionInputs,
+    inputs: GitHubActionInputs,
     cliResult: ActionCliOutput,
-    legacyOutputs?: Record<string, string>
+    legacyOutputs: Record<string, string> = {}
   ): Record<string, string> {
-    const outputs: Record<string, string> = {
-      // Preserve legacy outputs if present
-      ...(legacyOutputs || {}),
-    };
+    const outputs = { ...legacyOutputs };
 
     if (cliResult.success && cliResult.cliOutput) {
-      const cli = cliResult.cliOutput;
-
-      if (cli.reviewScore !== undefined) {
-        outputs['review-score'] = cli.reviewScore.toString();
+      if (cliResult.cliOutput.reviewScore !== undefined) {
+        outputs['review-score'] = String(cliResult.cliOutput.reviewScore);
       }
-
-      if (cli.issuesFound !== undefined) {
-        outputs['issues-found'] = cli.issuesFound.toString();
+      if (cliResult.cliOutput.issuesFound !== undefined) {
+        outputs['issues-found'] = String(cliResult.cliOutput.issuesFound);
       }
-
-      if (cli.autoReviewCompleted !== undefined) {
-        outputs['auto-review-completed'] = cli.autoReviewCompleted.toString();
+      if (cliResult.cliOutput.autoReviewCompleted !== undefined) {
+        outputs['auto-review-completed'] = String(cliResult.cliOutput.autoReviewCompleted);
       }
     }
 
@@ -282,198 +96,10 @@ export class ActionCliBridge {
   }
 
   /**
-   * Execute command with timeout and proper error handling
+   * Cleanup method for compatibility (no-op since we don't create temp files)
    */
-  private executeCommand(
-    command: string,
-    args: string[],
-    options: {
-      cwd?: string;
-      env?: Record<string, string>;
-      timeout?: number;
-    } = {}
-  ): Promise<{ output: string; error: string; exitCode: number }> {
-    return new Promise((resolve, reject) => {
-      const { cwd, env, timeout = 30000 } = options;
-
-      const child: ChildProcess = spawn(command, args, {
-        cwd,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let output = '';
-      let error = '';
-      let timeoutHandle: NodeJS.Timeout | null = null;
-
-      if (child.stdout) {
-        child.stdout.on('data', data => {
-          output += data.toString();
-        });
-      }
-
-      if (child.stderr) {
-        child.stderr.on('data', data => {
-          error += data.toString();
-        });
-      }
-
-      child.on('close', code => {
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-        resolve({
-          output: output.trim(),
-          error: error.trim(),
-          exitCode: code || 0,
-        });
-      });
-
-      child.on('error', err => {
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-        reject(new Error(`Command execution failed: ${err.message}`));
-      });
-
-      // Set timeout if specified
-      if (timeout > 0) {
-        timeoutHandle = setTimeout(() => {
-          child.kill('SIGTERM');
-          reject(new Error(`Command execution timed out after ${timeout}ms`));
-        }, timeout);
-      }
-    });
-  }
-
-  /**
-   * Parse CLI JSON output to extract relevant data
-   */
-  private parseCliOutput(output: string): ActionCliOutput['cliOutput'] {
-    try {
-      // Look for JSON output in the CLI result
-      const lines = output.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-          const parsed = JSON.parse(trimmed);
-
-          // Extract relevant data that can be used for Action outputs
-          return {
-            reviewScore: parsed.reviewScore || parsed.overallScore,
-            issuesFound: parsed.issuesFound || parsed.totalIssues,
-            autoReviewCompleted: parsed.autoReviewCompleted || false,
-          };
-        }
-      }
-
-      return {};
-    } catch {
-      console.log('Could not parse CLI output as JSON, using default values');
-      return {};
-    }
-  }
-
-  /**
-   * Check if a check type is valid
-   */
-  private isValidCheck(check: string): check is CheckType {
-    const validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
-    return validChecks.includes(check as CheckType);
-  }
-
-  /**
-   * Create temporary config file from action inputs
-   */
-  public async createTempConfigFromInputs(
-    inputs: GitHubActionInputs,
-    options: { workingDir?: string } = {}
-  ): Promise<string | null> {
-    const { workingDir = process.cwd() } = options;
-
-    if (!inputs['visor-checks']) {
-      return null;
-    }
-
-    const checks = inputs['visor-checks']
-      .split(',')
-      .map(check => check.trim())
-      .filter(check => this.isValidCheck(check));
-
-    if (checks.length === 0) {
-      return null;
-    }
-
-    // Create a basic Visor config from the checks
-    const config: Partial<VisorConfig> = {
-      version: '1.0',
-      checks: {},
-      output: {
-        pr_comment: {
-          format: 'markdown',
-          group_by: 'check',
-          collapse: true,
-        },
-      },
-    };
-
-    // Map GitHub Action checks to Visor config format
-    for (const check of checks) {
-      const checkName = `${check}-check`;
-      config.checks![checkName] = {
-        type: 'ai',
-        prompt: this.getPromptForCheck(check),
-        on: ['pr_opened', 'pr_updated'],
-      };
-    }
-
-    // Write temporary config file
-    const tempConfigPath = path.join(workingDir, '.visor-temp.yaml');
-
-    try {
-      const yaml = require('js-yaml');
-      const yamlContent = yaml.dump(config);
-      await fs.writeFile(tempConfigPath, yamlContent, 'utf8');
-
-      return tempConfigPath;
-    } catch (error) {
-      console.error('Failed to create temporary config file:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get AI prompt for a specific check type
-   */
-  private getPromptForCheck(check: CheckType): string {
-    const sharedNoPraise = `\nStrict output policy:\n- Report only actual problems, risks, or deficiencies.\n- Do not write praise, congratulations, or celebratory text.\n- Do not create issues that merely restate improvements or say \"no action needed\".\n- Keep feedback concise, specific, and actionable.\n- If no issues are found for this focus, return no issues.\n`;
-
-    const prompts: Record<CheckType, string> = {
-      security: `Review this code for security vulnerabilities, focusing on:\n- SQL injection, XSS, CSRF vulnerabilities\n- Authentication and authorization flaws\n- Sensitive data exposure\n- Input validation issues\n- Cryptographic weaknesses\n\nCategory constraint: Only report security issues; ignore non-security concerns.${sharedNoPraise}`,
-
-      performance: `Analyze this code for performance issues, focusing on:\n- Database query efficiency (N+1 problems, missing indexes)\n- Memory usage and potential leaks\n- Algorithmic complexity issues\n- Caching opportunities\n- Resource utilization\n\nCategory constraint: Only report performance issues; ignore non-performance concerns.${sharedNoPraise}`,
-
-      architecture: `Review the architectural aspects of this code, focusing on:\n- Design patterns and code organization\n- Separation of concerns\n- SOLID principles adherence\n- Code maintainability and extensibility\n- Technical debt\n\nCategory constraint: Only report architecture issues; ignore other categories.${sharedNoPraise}`,
-
-      style: `Review code style and maintainability, focusing on:\n- Consistent naming conventions\n- Code formatting and readability\n- Documentation quality\n- Error handling patterns\n- Code complexity\n\nCategory constraint: Only report style/maintainability issues; ignore other categories.${sharedNoPraise}`,
-
-      all: `Perform a comprehensive code review covering:\n- Security vulnerabilities and best practices\n- Performance optimization opportunities\n- Architectural improvements\n- Code style and maintainability\n- Documentation and testing coverage\n\nOutput discipline for all categories:\n- Report only actual problems; no praise/celebrations.\n- Keep to the relevant category for each issue.\n- If no issues are found, return none.${sharedNoPraise}`,
-    };
-
-    return prompts[check];
-  }
-
-  /**
-   * Cleanup temporary files
-   */
-  public async cleanup(options: { workingDir?: string } = {}): Promise<void> {
-    const { workingDir = process.cwd() } = options;
-    const tempConfigPath = path.join(workingDir, '.visor-temp.yaml');
-
-    try {
-      await fs.unlink(tempConfigPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+  public async cleanup(): Promise<void> {
+    // No-op: we don't create temporary files anymore
+    return Promise.resolve();
   }
 }

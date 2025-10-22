@@ -443,19 +443,18 @@ describe('CheckExecutionEngine', () => {
       it('should return all available check types', () => {
         const checkTypes = CheckExecutionEngine.getAvailableCheckTypes();
 
-        expect(checkTypes).toContain('security');
-        expect(checkTypes).toContain('performance');
-        expect(checkTypes).toContain('style');
-        expect(checkTypes).toContain('architecture');
-        expect(checkTypes).toContain('all');
-        // Now includes provider types (ai, tool, script, webhook) + standard types
-        expect(checkTypes).toHaveLength(9);
+        // After removing 'style' check and making system config-driven,
+        // getAvailableCheckTypes now returns only provider types
+        expect(checkTypes).toContain('ai');
+        expect(checkTypes).toContain('tool');
+        expect(checkTypes).toContain('script');
+        expect(checkTypes).toContain('webhook');
       });
     });
 
     describe('validateCheckTypes', () => {
       it('should validate all valid check types', () => {
-        const checks = ['security', 'performance', 'style'];
+        const checks = ['ai', 'tool', 'script'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
         expect(result.valid).toEqual(checks);
@@ -463,10 +462,10 @@ describe('CheckExecutionEngine', () => {
       });
 
       it('should identify invalid check types', () => {
-        const checks = ['security', 'invalid-check', 'performance', 'another-invalid'];
+        const checks = ['ai', 'invalid-check', 'tool', 'another-invalid'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
-        expect(result.valid).toEqual(['security', 'performance']);
+        expect(result.valid).toEqual(['ai', 'tool']);
         expect(result.invalid).toEqual(['invalid-check', 'another-invalid']);
       });
 
@@ -477,19 +476,19 @@ describe('CheckExecutionEngine', () => {
         expect(result.invalid).toHaveLength(0);
       });
 
-      it('should handle all check type', () => {
-        const checks = ['all'];
+      it('should handle provider types', () => {
+        const checks = ['ai', 'tool'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
-        expect(result.valid).toEqual(['all']);
+        expect(result.valid).toEqual(['ai', 'tool']);
         expect(result.invalid).toHaveLength(0);
       });
 
       it('should handle mixed valid and invalid checks', () => {
-        const checks = ['all', 'invalid', 'security', 'bad-check', 'performance'];
+        const checks = ['ai', 'invalid', 'tool', 'bad-check', 'script'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
-        expect(result.valid).toEqual(['all', 'security', 'performance']);
+        expect(result.valid).toEqual(['ai', 'tool', 'script']);
         expect(result.invalid).toEqual(['invalid', 'bad-check']);
       });
     });

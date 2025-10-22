@@ -402,7 +402,7 @@ async function handleEvent(
   // Now apply the 'checks' input filter if provided
   const checksInput = inputs.checks || inputs['visor-checks'];
   if (checksInput && checksInput.trim() !== '') {
-    const requestedChecks = checksInput.split(',').map(c => c.trim());
+    const requestedChecks = checksInput.split(',').map((c: string) => c.trim());
 
     if (requestedChecks.includes('all')) {
       // If 'all' is specified, run all event checks
@@ -676,13 +676,13 @@ async function handleIssueEvent(
             include: inputs.tags
               ? inputs.tags
                   .split(',')
-                  .map(t => t.trim())
+                  .map((t: string) => t.trim())
                   .filter(Boolean)
               : undefined,
             exclude: inputs['exclude-tags']
               ? inputs['exclude-tags']
                   .split(',')
-                  .map(t => t.trim())
+                  .map((t: string) => t.trim())
                   .filter(Boolean)
               : undefined,
           }
@@ -840,7 +840,7 @@ async function handleIssueComment(
     }
   } else {
     // Default commands when no config is available
-    commandRegistry['review'] = ['security', 'performance', 'style', 'architecture'];
+    commandRegistry['review'] = ['security', 'performance', 'architecture'];
   }
 
   // Parse comment with available commands
@@ -974,12 +974,7 @@ async function handleIssueComment(
         }
 
         // Extract common arguments
-        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1] as
-          | 'security'
-          | 'performance'
-          | 'style'
-          | 'all'
-          | undefined;
+        const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1];
         const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
           | 'table'
           | 'json'
@@ -1037,13 +1032,13 @@ async function handleIssueComment(
                   include: inputs.tags
                     ? inputs.tags
                         .split(',')
-                        .map(t => t.trim())
+                        .map((t: string) => t.trim())
                         .filter(Boolean)
                     : undefined,
                   exclude: inputs['exclude-tags']
                     ? inputs['exclude-tags']
                         .split(',')
-                        .map(t => t.trim())
+                        .map((t: string) => t.trim())
                         .filter(Boolean)
                     : undefined,
                 }
@@ -1187,13 +1182,13 @@ async function handlePullRequestWithConfig(
           include: inputs.tags
             ? inputs.tags
                 .split(',')
-                .map(t => t.trim())
+                .map((t: string) => t.trim())
                 .filter(Boolean)
             : undefined,
           exclude: inputs['exclude-tags']
             ? inputs['exclude-tags']
                 .split(',')
-                .map(t => t.trim())
+                .map((t: string) => t.trim())
                 .filter(Boolean)
             : undefined,
         }

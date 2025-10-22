@@ -306,46 +306,6 @@ steps:
     depends_on: [overview]
     on: [pr_opened, pr_updated]
 
-  # Code style and formatting analysis
-  style:
-    type: ai
-    group: review
-    schema: code-review
-    prompt: |
-        Building on our overview discussion, analyze the code style and formatting consistency.
-
-        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
-
-        ## Style Assessment Areas
-        **Code Formatting & Consistency:**
-        - Indentation and spacing consistency
-        - Naming conventions adherence
-        - Code organization and structure
-        - Comment style and documentation
-
-        **Language-Specific Style Guidelines:**
-        - Adherence to language style guides (PEP 8, ESLint, etc.)
-        - Import/require statement organization
-        - Variable and function naming patterns
-        - Code readability and clarity
-
-        **Team Standards:**
-        - Consistency with existing codebase patterns
-        - Formatting tool configuration compliance
-        - Documentation standards adherence
-        - Code comment quality and completeness
-
-        Focus on style improvements that enhance code readability and maintainability based on the overview analysis.
-
-        ## Severity Guidelines
-        Use the following severity levels appropriately:
-        - **critical**: Never use for style issues (style issues are never critical)
-        - **error**: Major style violations that significantly harm readability (completely inconsistent formatting, misleading names)
-        - **warning**: Style inconsistencies that should be fixed (mixed conventions, unclear naming, formatting issues)
-        - **info**: Style suggestions and minor improvements (spacing, comment formatting, optional conventions)
-    depends_on: [overview]
-    on: [pr_opened, pr_updated]
-
   # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
   apply-overview-labels:
     type: github
