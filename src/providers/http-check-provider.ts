@@ -128,7 +128,7 @@ export class HttpCheckProvider extends CheckProvider {
 
     try {
       // Resolve environment variables in headers
-      const resolvedHeaders = this.resolveHeaders(headers);
+      const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
 
       // Send webhook request
       const response = await this.sendWebhookRequest(
@@ -156,12 +156,15 @@ export class HttpCheckProvider extends CheckProvider {
       try {
         const span = trace.getSpan(otContext.active());
         if (span) {
+          // Sanitize headers for telemetry to avoid exposing sensitive data
+          const sanitizedHeaders = EnvironmentResolver.sanitizeHeaders(resolvedHeaders);
           captureProviderCall(
             span,
             'http',
             {
               url,
               method,
+              headers: sanitizedHeaders,
               body: JSON.stringify(payload).substring(0, 500),
             },
             {
@@ -179,17 +182,6 @@ export class HttpCheckProvider extends CheckProvider {
     } catch (error) {
       return this.createErrorResult(url, error);
     }
-  }
-
-  /**
-   * Resolve environment variables in headers
-   */
-  private resolveHeaders(headers: Record<string, string>): Record<string, string> {
-    const resolved: Record<string, string> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      resolved[key] = String(EnvironmentResolver.resolveValue(value));
-    }
-    return resolved;
   }
 
   private async sendWebhookRequest(

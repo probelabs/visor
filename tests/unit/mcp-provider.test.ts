@@ -1,4 +1,5 @@
 import { McpCheckProvider } from '../../src/providers/mcp-check-provider';
+import { EnvironmentResolver } from '../../src/utils/env-resolver';
 
 describe('MCP Check Provider', () => {
   let provider: McpCheckProvider;
@@ -201,9 +202,7 @@ describe('MCP Check Provider', () => {
         'X-Custom': '${TEST_TOKEN}',
       };
 
-      // Access the private method through a workaround
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
       expect(resolved['X-Custom']).toBe('test-token-456');
@@ -214,8 +213,7 @@ describe('MCP Check Provider', () => {
         Authorization: 'Bearer $TEST_API_KEY',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
     });
@@ -225,8 +223,7 @@ describe('MCP Check Provider', () => {
         Authorization: 'Bearer ${{ env.TEST_API_KEY }}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
     });
@@ -238,8 +235,7 @@ describe('MCP Check Provider', () => {
         'X-Key3': '${{ env.TEST_API_KEY }}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved['X-Key1']).toBe('test-key-123');
       expect(resolved['X-Key2']).toBe('test-token-456');
@@ -251,8 +247,7 @@ describe('MCP Check Provider', () => {
         Authorization: 'Bearer ${NONEXISTENT_VAR}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer ${NONEXISTENT_VAR}');
     });
@@ -263,8 +258,7 @@ describe('MCP Check Provider', () => {
         'X-Static': 'static-value',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved['Content-Type']).toBe('application/json');
       expect(resolved['X-Static']).toBe('static-value');

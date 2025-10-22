@@ -2,6 +2,7 @@ import { HttpCheckProvider } from '../../../src/providers/http-check-provider';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
 import { Liquid } from 'liquidjs';
+import { EnvironmentResolver } from '../../../src/utils/env-resolver';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -390,8 +391,7 @@ describe('HttpCheckProvider', () => {
         'X-Custom': '${TEST_TOKEN}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
       expect(resolved['X-Custom']).toBe('test-token-456');
@@ -402,8 +402,7 @@ describe('HttpCheckProvider', () => {
         Authorization: 'Bearer $TEST_API_KEY',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
     });
@@ -413,8 +412,7 @@ describe('HttpCheckProvider', () => {
         Authorization: 'Bearer ${{ env.TEST_API_KEY }}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer test-key-123');
     });
@@ -426,8 +424,7 @@ describe('HttpCheckProvider', () => {
         'X-Key3': '${{ env.TEST_API_KEY }}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved['X-Key1']).toBe('test-key-123');
       expect(resolved['X-Key2']).toBe('test-token-456');
@@ -439,8 +436,7 @@ describe('HttpCheckProvider', () => {
         Authorization: 'Bearer ${NONEXISTENT_VAR}',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved.Authorization).toBe('Bearer ${NONEXISTENT_VAR}');
     });
@@ -451,8 +447,7 @@ describe('HttpCheckProvider', () => {
         'X-Static': 'static-value',
       };
 
-      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
-      const resolved = resolveHeaders(headers);
+      const resolved = EnvironmentResolver.resolveHeaders(headers);
 
       expect(resolved['Content-Type']).toBe('application/json');
       expect(resolved['X-Static']).toBe('static-value');

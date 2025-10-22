@@ -419,17 +419,6 @@ export class McpCheckProvider extends CheckProvider {
   }
 
   /**
-   * Resolve environment variables in headers
-   */
-  private resolveHeaders(headers: Record<string, string>): Record<string, string> {
-    const resolved: Record<string, string> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      resolved[key] = String(EnvironmentResolver.resolveValue(value));
-    }
-    return resolved;
-  }
-
-  /**
    * Execute MCP method using SSE transport
    */
   private async executeSseMethod(
@@ -439,7 +428,7 @@ export class McpCheckProvider extends CheckProvider {
   ): Promise<unknown> {
     const requestInit: RequestInit = {};
     if (config.headers) {
-      requestInit.headers = this.resolveHeaders(config.headers);
+      requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
     }
 
     const transport = new SSEClientTransport(new URL(config.url!), {
@@ -459,7 +448,7 @@ export class McpCheckProvider extends CheckProvider {
   ): Promise<unknown> {
     const requestInit: RequestInit = {};
     if (config.headers) {
-      requestInit.headers = this.resolveHeaders(config.headers);
+      requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
     }
 
     const transport = new StreamableHTTPClientTransport(new URL(config.url!), {

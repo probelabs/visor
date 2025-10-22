@@ -94,7 +94,7 @@ export class HttpClientProvider extends CheckProvider {
       }
 
       // Resolve environment variables in headers
-      const resolvedHeaders = this.resolveHeaders(headers);
+      const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
 
       // Fetch data from the endpoint
       const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
@@ -151,17 +151,6 @@ export class HttpClientProvider extends CheckProvider {
         ],
       };
     }
-  }
-
-  /**
-   * Resolve environment variables in headers
-   */
-  private resolveHeaders(headers: Record<string, string>): Record<string, string> {
-    const resolved: Record<string, string> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      resolved[key] = String(EnvironmentResolver.resolveValue(value));
-    }
-    return resolved;
   }
 
   private async fetchData(
