@@ -10,6 +10,7 @@ import {
   captureCheckOutput,
   captureProviderCall,
 } from '../telemetry/state-capture';
+import { EnvironmentResolver } from '../utils/env-resolver';
 
 /**
  * Check provider that sends data to an HTTP endpoint, typically used as an output/notification provider
@@ -126,8 +127,17 @@ export class HttpCheckProvider extends CheckProvider {
     }
 
     try {
+      // Resolve environment variables in headers
+      const resolvedHeaders = this.resolveHeaders(headers);
+
       // Send webhook request
-      const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+      const response = await this.sendWebhookRequest(
+        url,
+        method,
+        resolvedHeaders,
+        payload,
+        timeout
+      );
 
       // Parse webhook response
       const result = this.parseWebhookResponse(response, url);
@@ -169,6 +179,17 @@ export class HttpCheckProvider extends CheckProvider {
     } catch (error) {
       return this.createErrorResult(url, error);
     }
+  }
+
+  /**
+   * Resolve environment variables in headers
+   */
+  private resolveHeaders(headers: Record<string, string>): Record<string, string> {
+    const resolved: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      resolved[key] = String(EnvironmentResolver.resolveValue(value));
+    }
+    return resolved;
   }
 
   private async sendWebhookRequest(

@@ -182,6 +182,95 @@ describe('MCP Check Provider', () => {
     });
   });
 
+  describe('header environment variable resolution', () => {
+    beforeEach(() => {
+      // Set up test environment variables
+      process.env.TEST_API_KEY = 'test-key-123';
+      process.env.TEST_TOKEN = 'test-token-456';
+    });
+
+    afterEach(() => {
+      // Clean up test environment variables
+      delete process.env.TEST_API_KEY;
+      delete process.env.TEST_TOKEN;
+    });
+
+    it('should resolve shell-style environment variables in headers', () => {
+      const headers = {
+        Authorization: 'Bearer ${TEST_API_KEY}',
+        'X-Custom': '${TEST_TOKEN}',
+      };
+
+      // Access the private method through a workaround
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved.Authorization).toBe('Bearer test-key-123');
+      expect(resolved['X-Custom']).toBe('test-token-456');
+    });
+
+    it('should resolve simple shell-style environment variables in headers', () => {
+      const headers = {
+        Authorization: 'Bearer $TEST_API_KEY',
+      };
+
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved.Authorization).toBe('Bearer test-key-123');
+    });
+
+    it('should resolve GitHub Actions-style environment variables in headers', () => {
+      const headers = {
+        Authorization: 'Bearer ${{ env.TEST_API_KEY }}',
+      };
+
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved.Authorization).toBe('Bearer test-key-123');
+    });
+
+    it('should handle mixed environment variable syntaxes in headers', () => {
+      const headers = {
+        'X-Key1': '${TEST_API_KEY}',
+        'X-Key2': '$TEST_TOKEN',
+        'X-Key3': '${{ env.TEST_API_KEY }}',
+      };
+
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved['X-Key1']).toBe('test-key-123');
+      expect(resolved['X-Key2']).toBe('test-token-456');
+      expect(resolved['X-Key3']).toBe('test-key-123');
+    });
+
+    it('should leave unresolved variables as-is when environment variable is missing', () => {
+      const headers = {
+        Authorization: 'Bearer ${NONEXISTENT_VAR}',
+      };
+
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved.Authorization).toBe('Bearer ${NONEXISTENT_VAR}');
+    });
+
+    it('should handle headers without environment variables', () => {
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Static': 'static-value',
+      };
+
+      const resolveHeaders = (provider as any).resolveHeaders.bind(provider);
+      const resolved = resolveHeaders(headers);
+
+      expect(resolved['Content-Type']).toBe('application/json');
+      expect(resolved['X-Static']).toBe('static-value');
+    });
+  });
+
   describe('execute with mock data', () => {
     it('should handle timeout configuration', async () => {
       const config = {
