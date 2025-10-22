@@ -11,21 +11,19 @@
 import { DebugVisualizerServer, ProcessedSpan } from './ws-server';
 
 // Conditional imports - these packages are optional dependencies
-type SpanExporter = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ReadableSpan = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ExportResult = any;
-type ExportResultCode = any;
 
 // Load OTel packages only if available
-let otelSdkTraceBase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let otelCore: any;
 
 try {
-  otelSdkTraceBase = require('@opentelemetry/sdk-trace-base');
   otelCore = require('@opentelemetry/core');
 } catch {
   // OpenTelemetry not installed - this file won't be used
-  otelSdkTraceBase = null;
   otelCore = null;
 }
 

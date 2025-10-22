@@ -4,26 +4,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Conditional imports - these packages are optional dependencies
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ReadableSpan = any;
-type SpanExporter = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ExportResult = any;
-type ExportResultCode = any;
 type HrTime = [number, number];
 
 // Load OTel packages only if available
-let otelSdkTraceBase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let otelCore: any;
-let otelApi: any;
 
 try {
-  otelSdkTraceBase = require('@opentelemetry/sdk-trace-base');
   otelCore = require('@opentelemetry/core');
-  otelApi = require('@opentelemetry/api');
 } catch {
   // OpenTelemetry not installed - this file won't be used
-  otelSdkTraceBase = null;
   otelCore = null;
-  otelApi = null;
 }
 
 function hrTimeToMillis(t: HrTime): number {
