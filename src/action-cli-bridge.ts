@@ -1,4 +1,3 @@
-import { CheckType } from './types/cli';
 import { GitHubActionInputs, GitHubContext } from './types/github';
 
 export { GitHubActionInputs, GitHubContext };
