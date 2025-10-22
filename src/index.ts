@@ -1803,41 +1803,22 @@ if (
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
   (async () => {
-    // Minimal, yesterday-like behavior with a small exception:
-    // - Default to Action mode under GITHUB_ACTIONS
-    // - But if user explicitly invokes CLI help/version/validate or --mode cli, honor CLI even in Actions
-    const inGithub = process.env.GITHUB_ACTIONS === 'true' || !!process.env.GITHUB_ACTIONS;
-    const forceE2E = process.env.VISOR_E2E_FORCE_RUN === 'true';
+    // Explicit mode selection: --mode flag (or --cli) > Action input 'mode' > default 'cli'.
+    // This avoids relying on GITHUB_ACTIONS heuristics.
     const argv = process.argv.slice(2);
-    const explicitCliMode = (() => {
-      if (argv.includes('--cli')) return true;
-      const modeEq = argv.find(a => a.startsWith('--mode='));
-      if (modeEq && modeEq.split('=')[1]?.toLowerCase() === 'cli') return true;
-      const modeIdx = argv.indexOf('--mode');
-      if (modeIdx >= 0 && argv[modeIdx + 1]?.toLowerCase() === 'cli') return true;
-      return false;
-    })();
-    const wantsCliHelp =
-      argv.includes('--help') ||
-      argv.includes('-h') ||
-      argv.includes('--version') ||
-      argv.includes('-V') ||
-      argv.includes('validate');
-    const wantsCliJsonSarif = (() => {
-      const outEq = argv.find(a => a.startsWith('--output='));
-      if (outEq) {
-        const v = outEq.split('=')[1]?.toLowerCase();
-        if (v === 'json' || v === 'sarif') return true;
-      }
-      const outIdx = argv.indexOf('--output');
-      if (outIdx >= 0) {
-        const v = argv[outIdx + 1]?.toLowerCase();
-        if (v === 'json' || v === 'sarif') return true;
-      }
-      return false;
-    })();
+    const modeFromFlagEq = argv.find(a => a.startsWith('--mode='))?.split('=')[1];
+    const modeIdx = argv.indexOf('--mode');
+    const modeFromFlag = modeFromFlagEq || (modeIdx >= 0 ? argv[modeIdx + 1] : undefined);
+    const shorthandCli = argv.includes('--cli');
+    let modeFromInput = '';
+    try {
+      modeFromInput = getInput('mode') || '';
+    } catch {}
+    const mode = (modeFromFlag || (shorthandCli ? 'cli' : '') || modeFromInput || 'cli')
+      .toString()
+      .toLowerCase();
 
-    if (inGithub && !explicitCliMode && !wantsCliHelp && !forceE2E && !wantsCliJsonSarif) {
+    if (mode === 'github-actions' || mode === 'github') {
       // Run in GitHub Action mode explicitly and await completion to avoid early exit
       try {
         await run();
