@@ -3490,6 +3490,33 @@ var init_env_resolver = __esm({
         }
         return missing;
       }
+      /**
+       * Resolves environment variables in HTTP headers
+       * Each header value is processed through resolveValue to replace env var references
+       */
+      static resolveHeaders(headers) {
+        const resolved = {};
+        for (const [key, value] of Object.entries(headers)) {
+          resolved[key] = String(this.resolveValue(value));
+        }
+        return resolved;
+      }
+      /**
+       * Sanitizes headers for logging/telemetry by redacting sensitive values
+       * Headers like Authorization, API keys, and cookies are replaced with [REDACTED]
+       */
+      static sanitizeHeaders(headers) {
+        const sensitiveHeaders = ["authorization", "x-api-key", "cookie", "set-cookie"];
+        const sanitized = {};
+        for (const [key, value] of Object.entries(headers)) {
+          if (sensitiveHeaders.includes(key.toLowerCase())) {
+            sanitized[key] = "[REDACTED]";
+          } else {
+            sanitized[key] = value;
+          }
+        }
+        return sanitized;
+      }
     };
   }
 });
@@ -5098,6 +5125,7 @@ var init_http_check_provider = __esm({
     init_liquid_extensions();
     init_lazy_otel();
     init_state_capture();
+    init_env_resolver();
     HttpCheckProvider = class extends CheckProvider {
       liquid;
       constructor() {
@@ -5183,7 +5211,14 @@ var init_http_check_provider = __esm({
           );
         }
         try {
-          const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+          const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+          const response = await this.sendWebhookRequest(
+            url,
+            method,
+            resolvedHeaders,
+            payload,
+            timeout
+          );
           const result = this.parseWebhookResponse(response, url);
           const suppressionEnabled = config.suppressionEnabled !== false;
           const issueFilter = new IssueFilter(suppressionEnabled);
@@ -5195,12 +5230,14 @@ var init_http_check_provider = __esm({
           try {
             const span = trace.getSpan(context.active());
             if (span) {
+              const sanitizedHeaders = EnvironmentResolver.sanitizeHeaders(resolvedHeaders);
               captureProviderCall(
                 span,
                 "http",
                 {
                   url,
                   method,
+                  headers: sanitizedHeaders,
                   body: JSON.stringify(payload).substring(0, 500)
                 },
                 {
@@ -5451,6 +5488,7 @@ var init_http_client_provider = __esm({
     "use strict";
     init_check_provider_interface();
     init_liquid_extensions();
+    init_env_resolver();
     HttpClientProvider = class extends CheckProvider {
       liquid;
       constructor() {
@@ -5512,7 +5550,8 @@ var init_http_client_provider = __esm({
             const renderedBody = await this.liquid.parseAndRender(bodyTemplate, templateContext);
             requestBody = renderedBody;
           }
-          const data = await this.fetchData(renderedUrl, method, headers, requestBody, timeout);
+          const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+          const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
           let processedData = data;
           if (transform) {
             try {
@@ -8434,6 +8473,7 @@ var init_mcp_check_provider = __esm({
     import_sse = require("@modelcontextprotocol/sdk/client/sse.js");
     import_streamableHttp = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
     init_sandbox();
+    init_env_resolver();
     McpCheckProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -8734,7 +8774,7 @@ var init_mcp_check_provider = __esm({
       async executeSseMethod(config, methodArgs, timeout) {
         const requestInit = {};
         if (config.headers) {
-          requestInit.headers = config.headers;
+          requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
         }
         const transport = new import_sse.SSEClientTransport(new URL(config.url), {
           requestInit
@@ -8747,7 +8787,7 @@ var init_mcp_check_provider = __esm({
       async executeHttpMethod(config, methodArgs, timeout) {
         const requestInit = {};
         if (config.headers) {
-          requestInit.headers = config.headers;
+          requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
         }
         const transport = new import_streamableHttp.StreamableHTTPClientTransport(new URL(config.url), {
           requestInit,

@@ -1803,15 +1803,13 @@ if (
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
   (async () => {
-    // Explicit mode selection: --mode flag takes precedence; otherwise read Action input 'mode';
-    // Fallback to 'cli' when unspecified. This removes reliance on GITHUB_ACTIONS heuristics.
+    // Explicit mode selection: --mode flag (or --cli) > Action input 'mode' > default 'cli'.
+    // This avoids relying on GITHUB_ACTIONS heuristics.
     const argv = process.argv.slice(2);
     const modeFromFlagEq = argv.find(a => a.startsWith('--mode='))?.split('=')[1];
     const modeIdx = argv.indexOf('--mode');
     const modeFromFlag = modeFromFlagEq || (modeIdx >= 0 ? argv[modeIdx + 1] : undefined);
-    // Allow shorthand --cli to force CLI path
     const shorthandCli = argv.includes('--cli');
-    // Read GitHub Action input 'mode' if available (no-op outside Actions)
     let modeFromInput = '';
     try {
       modeFromInput = getInput('mode') || '';

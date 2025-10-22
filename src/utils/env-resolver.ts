@@ -139,4 +139,35 @@ export class EnvironmentResolver {
 
     return missing;
   }
+
+  /**
+   * Resolves environment variables in HTTP headers
+   * Each header value is processed through resolveValue to replace env var references
+   */
+  static resolveHeaders(headers: Record<string, string>): Record<string, string> {
+    const resolved: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      resolved[key] = String(this.resolveValue(value));
+    }
+    return resolved;
+  }
+
+  /**
+   * Sanitizes headers for logging/telemetry by redacting sensitive values
+   * Headers like Authorization, API keys, and cookies are replaced with [REDACTED]
+   */
+  static sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
+    const sensitiveHeaders = ['authorization', 'x-api-key', 'cookie', 'set-cookie'];
+    const sanitized: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(headers)) {
+      if (sensitiveHeaders.includes(key.toLowerCase())) {
+        sanitized[key] = '[REDACTED]';
+      } else {
+        sanitized[key] = value;
+      }
+    }
+
+    return sanitized;
+  }
 }

@@ -3,6 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { EnvironmentResolver } from '../utils/env-resolver';
 
 /**
  * Check provider that fetches data from HTTP endpoints
@@ -92,8 +93,11 @@ export class HttpClientProvider extends CheckProvider {
         requestBody = renderedBody;
       }
 
+      // Resolve environment variables in headers
+      const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+
       // Fetch data from the endpoint
-      const data = await this.fetchData(renderedUrl, method, headers, requestBody, timeout);
+      const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
 
       // Apply transformation if specified
       let processedData = data;

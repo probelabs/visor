@@ -10,6 +10,7 @@ import {
   captureCheckOutput,
   captureProviderCall,
 } from '../telemetry/state-capture';
+import { EnvironmentResolver } from '../utils/env-resolver';
 
 /**
  * Check provider that sends data to an HTTP endpoint, typically used as an output/notification provider
@@ -126,8 +127,17 @@ export class HttpCheckProvider extends CheckProvider {
     }
 
     try {
+      // Resolve environment variables in headers
+      const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+
       // Send webhook request
-      const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+      const response = await this.sendWebhookRequest(
+        url,
+        method,
+        resolvedHeaders,
+        payload,
+        timeout
+      );
 
       // Parse webhook response
       const result = this.parseWebhookResponse(response, url);
@@ -146,12 +156,15 @@ export class HttpCheckProvider extends CheckProvider {
       try {
         const span = trace.getSpan(otContext.active());
         if (span) {
+          // Sanitize headers for telemetry to avoid exposing sensitive data
+          const sanitizedHeaders = EnvironmentResolver.sanitizeHeaders(resolvedHeaders);
           captureProviderCall(
             span,
             'http',
             {
               url,
               method,
+              headers: sanitizedHeaders,
               body: JSON.stringify(payload).substring(0, 500),
             },
             {
