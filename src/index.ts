@@ -1802,7 +1802,7 @@ if (
   process.env.VISOR_E2E_FORCE_RUN === 'true' ||
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
-  (() => {
+  (async () => {
     // Explicit, argument-driven mode selection. No auto-detection of GitHub Actions.
     // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.
     const argv = process.argv;
@@ -1826,21 +1826,27 @@ if (
     const isGitHubMode = mode === 'github-actions' || mode === 'github';
 
     if (isGitHubMode) {
-      // Run in GitHub Action mode explicitly
-      run();
+      // Run in GitHub Action mode explicitly and await completion to avoid early exit
+      try {
+        await run();
+      } catch (error) {
+        console.error('GitHub Action execution failed:', error);
+        // Prefer failing the action explicitly if available
+        try {
+          const { setFailed } = await import('@actions/core');
+          setFailed(error instanceof Error ? error.message : String(error));
+        } catch {}
+        process.exit(1);
+      }
     } else {
       // Default to CLI mode
-      import('./cli-main')
-        .then(({ main }) => {
-          main().catch(error => {
-            console.error('CLI execution failed:', error);
-            process.exit(1);
-          });
-        })
-        .catch(error => {
-          console.error('Failed to import CLI module:', error);
-          process.exit(1);
-        });
+      try {
+        const { main } = await import('./cli-main');
+        await main();
+      } catch (error) {
+        console.error('CLI execution failed:', error);
+        process.exit(1);
+      }
     }
   })();
 }
