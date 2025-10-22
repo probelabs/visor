@@ -14,7 +14,7 @@ import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
 import { resolveHeadShaFromEvent } from './utils/head-sha';
 import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
-import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
+import { GitHubActionInputs, GitHubContext } from './types/github';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { ReactionManager } from './github-reactions';
@@ -402,7 +402,7 @@ async function handleEvent(
   // Now apply the 'checks' input filter if provided
   const checksInput = inputs.checks || inputs['visor-checks'];
   if (checksInput && checksInput.trim() !== '') {
-    const requestedChecks = checksInput.split(',').map(c => c.trim());
+    const requestedChecks = checksInput.split(',').map((c: string) => c.trim());
 
     if (requestedChecks.includes('all')) {
       // If 'all' is specified, run all event checks
@@ -676,13 +676,13 @@ async function handleIssueEvent(
             include: inputs.tags
               ? inputs.tags
                   .split(',')
-                  .map(t => t.trim())
+                  .map((t: string) => t.trim())
                   .filter(Boolean)
               : undefined,
             exclude: inputs['exclude-tags']
               ? inputs['exclude-tags']
                   .split(',')
-                  .map(t => t.trim())
+                  .map((t: string) => t.trim())
                   .filter(Boolean)
               : undefined,
           }
@@ -1032,13 +1032,13 @@ async function handleIssueComment(
                   include: inputs.tags
                     ? inputs.tags
                         .split(',')
-                        .map(t => t.trim())
+                        .map((t: string) => t.trim())
                         .filter(Boolean)
                     : undefined,
                   exclude: inputs['exclude-tags']
                     ? inputs['exclude-tags']
                         .split(',')
-                        .map(t => t.trim())
+                        .map((t: string) => t.trim())
                         .filter(Boolean)
                     : undefined,
                 }
@@ -1182,13 +1182,13 @@ async function handlePullRequestWithConfig(
           include: inputs.tags
             ? inputs.tags
                 .split(',')
-                .map(t => t.trim())
+                .map((t: string) => t.trim())
                 .filter(Boolean)
             : undefined,
           exclude: inputs['exclude-tags']
             ? inputs['exclude-tags']
                 .split(',')
-                .map(t => t.trim())
+                .map((t: string) => t.trim())
                 .filter(Boolean)
             : undefined,
         }

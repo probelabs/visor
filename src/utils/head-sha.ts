@@ -1,4 +1,4 @@
-import type { GitHubContext } from '../action-cli-bridge';
+import type { GitHubContext } from '../types/github';
 
 /**
  * Resolve the PR head SHA for contexts like issue_comment where payload may not include head.sha.
