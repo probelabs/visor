@@ -2,6 +2,7 @@
 import { PRAnalyzer } from '../../src/pr-analyzer';
 import { PRReviewer } from '../../src/reviewer';
 import { CommentManager } from '../../src/github-comments';
+import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { ConfigManager } from '../../src/config';
 import { EventMapper } from '../../src/event-mapper';
 import { PerformanceTimer, createMockOctokit } from '../performance/test-utilities';

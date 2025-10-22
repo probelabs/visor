@@ -6,6 +6,7 @@
 // import { MockGithub } from '@kie/mock-github';
 import { Octokit } from '@octokit/rest';
 import { PRDetector, GitHubEventContext } from '../../src/pr-detector';
+import { ActionCliBridge, GitHubContext } from '../../src/action-cli-bridge';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';

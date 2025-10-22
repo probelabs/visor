@@ -186,17 +186,15 @@ import * as yaml from 'js-yaml';
           };
 
           try {
-            // This should create temporary config files
-            const tempConfigPath = await bridge.createTempConfigFromInputs(inputs);
-
-            if (tempConfigPath) {
-              tempFilePaths.push(tempConfigPath);
-
-              // Verify file was created
-              if (fs.existsSync(tempConfigPath)) {
-                console.log(`  Created temp file: ${path.basename(tempConfigPath)}`);
-              }
-            }
+            // NOTE: createTempConfigFromInputs was removed - no longer creates temp files
+            // This test section is commented out as the functionality no longer exists
+            // const tempConfigPath = await bridge.createTempConfigFromInputs(inputs);
+            // if (tempConfigPath) {
+            //   tempFilePaths.push(tempConfigPath);
+            //   if (fs.existsSync(tempConfigPath)) {
+            //     console.log(`  Created temp file: ${path.basename(tempConfigPath)}`);
+            //   }
+            // }
           } catch (error: any) {
             // Some operations might fail, but that's ok for cleanup testing
             console.log(`  Bridge ${i} failed to create temp config: ${error.message}`);

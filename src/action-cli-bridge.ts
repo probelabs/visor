@@ -59,6 +59,11 @@ export class ActionCliBridge {
       }
     }
 
+    // Handle debug mode
+    if (inputs.debug === 'true') {
+      args.push('--debug');
+    }
+
     // Always add output format
     args.push('--output', 'json');
 

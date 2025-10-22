@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { MockGithub } from '@kie/mock-github';
 import { Act } from '@kie/act-js';
+import { ActionCliBridge } from '../../src/action-cli-bridge';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
