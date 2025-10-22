@@ -31,7 +31,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "build:cli": "ncc build src/index.ts -o dist --external @opentelemetry/api --external @opentelemetry/core --external @opentelemetry/exporter-trace-otlp-grpc --external @opentelemetry/exporter-trace-otlp-http --external @opentelemetry/instrumentation --external @opentelemetry/resources --external @opentelemetry/sdk-metrics --external @opentelemetry/sdk-node --external @opentelemetry/sdk-trace-base --external @opentelemetry/semantic-conventions --external @opentelemetry/context-async-hooks --external @opentelemetry/exporter-metrics-otlp-http --external @opentelemetry/auto-instrumentations-node && cp -r defaults dist/ && cp -r output dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
     "build": "npm run build:cli && npm run build:sdk",
     "test": "jest",
@@ -91,16 +91,6 @@
     "@octokit/auth-app": "^8.1.0",
     "@octokit/core": "^7.0.3",
     "@octokit/rest": "^22.0.0",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/core": "^1.30.1",
-    "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
-    "@opentelemetry/instrumentation": "^0.203.0",
-    "@opentelemetry/resources": "^1.30.1",
-    "@opentelemetry/sdk-metrics": "^1.30.1",
-    "@opentelemetry/sdk-node": "^0.203.0",
-    "@opentelemetry/sdk-trace-base": "^1.30.1",
-    "@opentelemetry/semantic-conventions": "^1.30.1",
     "@probelabs/probe": "^0.6.0-rc153",
     "@types/commander": "^2.12.0",
     "@types/uuid": "^10.0.0",
@@ -117,6 +107,18 @@
     "simple-git": "^3.28.0",
     "uuid": "^11.1.0",
     "ws": "^8.18.3"
+  },
+  "optionalDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.30.1",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
+    "@opentelemetry/instrumentation": "^0.203.0",
+    "@opentelemetry/resources": "^1.30.1",
+    "@opentelemetry/sdk-metrics": "^1.30.1",
+    "@opentelemetry/sdk-node": "^0.203.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.1",
+    "@opentelemetry/semantic-conventions": "^1.30.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
