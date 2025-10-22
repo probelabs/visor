@@ -390,7 +390,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
             // Verify that invalid check types are filtered out
             if (input['visor-checks'] && input['visor-checks'].includes('invalid')) {
-              expect(args.some(arg => arg.includes('invalid'))).toBe(false);
+              expect(args.some((arg: string) => arg.includes('invalid'))).toBe(false);
             }
           }
         } catch (error: any) {

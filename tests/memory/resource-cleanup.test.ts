@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { ConfigManager } from '../../src/config';
 import { CommentManager } from '../../src/github-comments';
+import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { EventMapper } from '../../src/event-mapper';
 import { MemoryProfiler, createMockOctokit } from '../performance/test-utilities';
 import * as fs from 'fs';

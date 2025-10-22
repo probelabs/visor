@@ -476,19 +476,19 @@ describe('CheckExecutionEngine', () => {
         expect(result.invalid).toHaveLength(0);
       });
 
-      it('should handle all check type', () => {
-        const checks = ['all'];
+      it('should handle provider types', () => {
+        const checks = ['ai', 'tool'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
-        expect(result.valid).toEqual(['all']);
+        expect(result.valid).toEqual(['ai', 'tool']);
         expect(result.invalid).toHaveLength(0);
       });
 
       it('should handle mixed valid and invalid checks', () => {
-        const checks = ['all', 'invalid', 'security', 'bad-check', 'performance'];
+        const checks = ['ai', 'invalid', 'tool', 'bad-check', 'script'];
         const result = CheckExecutionEngine.validateCheckTypes(checks);
 
-        expect(result.valid).toEqual(['all', 'security', 'performance']);
+        expect(result.valid).toEqual(['ai', 'tool', 'script']);
         expect(result.invalid).toEqual(['invalid', 'bad-check']);
       });
     });
