@@ -1803,9 +1803,26 @@ if (
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
   (async () => {
-    // Minimal, yesterday-like behavior: prefer GITHUB_ACTIONS to select path.
+    // Minimal, yesterday-like behavior with a small exception:
+    // - Default to Action mode under GITHUB_ACTIONS
+    // - But if user explicitly invokes CLI help/version/validate or --mode cli, honor CLI even in Actions
     const inGithub = process.env.GITHUB_ACTIONS === 'true' || !!process.env.GITHUB_ACTIONS;
-    if (inGithub) {
+    const argv = process.argv.slice(2);
+    const explicitCliMode = (() => {
+      const modeEq = argv.find(a => a.startsWith('--mode='));
+      if (modeEq && modeEq.split('=')[1]?.toLowerCase() === 'cli') return true;
+      const modeIdx = argv.indexOf('--mode');
+      if (modeIdx >= 0 && argv[modeIdx + 1]?.toLowerCase() === 'cli') return true;
+      return false;
+    })();
+    const wantsCliHelp =
+      argv.includes('--help') ||
+      argv.includes('-h') ||
+      argv.includes('--version') ||
+      argv.includes('-V') ||
+      argv.includes('validate');
+
+    if (inGithub && !explicitCliMode && !wantsCliHelp) {
       // Run in GitHub Action mode explicitly and await completion to avoid early exit
       try {
         await run();
