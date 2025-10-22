@@ -378,7 +378,32 @@ export class MemoryCheckProvider extends CheckProvider {
       },
     };
 
+    try {
+      if ((config as any).checkName === 'aggregate-validations') {
+        const hist = (enhancedContext as any)?.outputs?.history || {};
+        const keys = Object.keys(hist);
+        console.log('[MemoryProvider] aggregate-validations: history keys =', keys);
+        const vf = (hist as any)['validate-fact'];
+        console.log(
+          '[MemoryProvider] aggregate-validations: validate-fact history length =',
+          Array.isArray(vf) ? vf.length : 'n/a'
+        );
+      }
+    } catch {}
+
     const result = this.evaluateJavaScriptBlock(script, enhancedContext);
+    try {
+      if ((config as any).checkName === 'aggregate-validations') {
+        const tv = store.get('total_validations', 'fact-validation');
+        const av = store.get('all_valid', 'fact-validation');
+        console.error(
+          '[MemoryProvider] post-exec aggregate-validations total_validations=',
+          tv,
+          'all_valid=',
+          av
+        );
+      }
+    } catch {}
 
     // Execute pending async operations
     if (
@@ -543,7 +568,26 @@ export class MemoryCheckProvider extends CheckProvider {
         has: (key: string, ns?: string) => memoryStore.has(key, ns),
         list: (ns?: string) => memoryStore.list(ns),
         getAll: (ns?: string) => memoryStore.getAll(ns),
-      };
+        set: (key: string, value: unknown, ns?: string) => {
+          const nsName = ns || memoryStore.getDefaultNamespace();
+          if (!(memoryStore as any)['data'].has(nsName)) {
+            (memoryStore as any)['data'].set(nsName, new Map());
+          }
+          (memoryStore as any)['data'].get(nsName)!.set(key, value);
+          return true;
+        },
+        increment: (key: string, amount: number = 1, ns?: string) => {
+          const nsName = ns || memoryStore.getDefaultNamespace();
+          const current = memoryStore.get(key, nsName);
+          const numCurrent = typeof current === 'number' ? (current as number) : 0;
+          const newValue = numCurrent + amount;
+          if (!(memoryStore as any)['data'].has(nsName)) {
+            (memoryStore as any)['data'].set(nsName, new Map());
+          }
+          (memoryStore as any)['data'].get(nsName)!.set(key, newValue);
+          return newValue;
+        },
+      } as Record<string, unknown>;
     }
 
     // SECURITY: Do NOT expose process.env to user-controlled scripts

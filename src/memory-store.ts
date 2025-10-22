@@ -120,6 +120,22 @@ export class MemoryStore {
     const nsData = this.data.get(ns)!;
     nsData.set(key, value);
 
+    try {
+      if (process.env.VISOR_DEBUG === 'true' || process.env.JEST_WORKER_ID !== undefined) {
+        if (ns === 'fact-validation' && (key === 'total_validations' || key === 'all_valid')) {
+          console.log('[MemoryStore] SET ' + ns + '.' + key + ' = ' + JSON.stringify(value));
+        }
+      }
+    } catch {}
+
+    try {
+      if (process.env.VISOR_DEBUG === 'true' || process.env.JEST_WORKER_ID !== undefined) {
+        if (ns === 'fact-validation' && (key === 'total_validations' || key === 'all_valid')) {
+          console.log();
+        }
+      }
+    } catch {}
+
     // Auto-save if configured
     if (this.config.storage === 'file' && this.config.auto_save) {
       await this.save();

@@ -895,7 +895,7 @@ ${this.escapeXml(processedFallbackDiff)}
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
-      const response = await this.generateMockResponse(prompt);
+      const response = await this.generateMockResponse(prompt, _checkName, schema);
       return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
     }
 
@@ -1269,7 +1269,7 @@ ${'='.repeat(60)}
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing');
-      const response = await this.generateMockResponse(prompt);
+      const response = await this.generateMockResponse(prompt, _checkName, schema);
       return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
     }
 
@@ -2134,51 +2134,51 @@ ${'='.repeat(60)}
   /**
    * Generate mock response for testing
    */
-  private async generateMockResponse(_prompt: string): Promise<string> {
+  private async generateMockResponse(
+    _prompt: string,
+    _checkName?: string,
+    _schema?: string | Record<string, unknown>
+  ): Promise<string> {
     // Simulate some processing time
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Generate mock response based on prompt content
-    const mockResponse = {
-      content: JSON.stringify({
-        issues: [
-          {
-            file: 'test.ts',
-            line: 7,
-            endLine: 11,
-            ruleId: 'security/sql-injection',
-            message: 'SQL injection vulnerability detected in dynamic query construction',
-            severity: 'critical',
-            category: 'security',
-            suggestion: 'Use parameterized queries or ORM methods to prevent SQL injection',
-          },
-          {
-            file: 'test.ts',
-            line: 14,
-            endLine: 23,
-            ruleId: 'performance/nested-loops',
-            message: 'Inefficient nested loops with O(n²) complexity',
-            severity: 'warning',
-            category: 'performance',
-            suggestion: 'Consider using more efficient algorithms or caching mechanisms',
-          },
-          {
-            file: 'test.ts',
-            line: 28,
-            ruleId: 'style/inconsistent-naming',
-            message: 'Inconsistent variable naming and formatting',
-            severity: 'info',
-            category: 'style',
-            suggestion: 'Use consistent camelCase naming and proper spacing',
-          },
-        ],
-        summary: {
-          totalIssues: 3,
-          criticalIssues: 1,
-        },
-      }),
-    };
-
+    // Schema-accurate mocks for default flows
+    const name = (_checkName || '').toLowerCase();
+    if (name.includes('extract-facts')) {
+      const arr = Array.from({ length: 6 }, (_, i) => ({
+        id: `fact-${i + 1}`,
+        category: 'Feature',
+        claim: `claim-${i + 1}`,
+        verifiable: true,
+        refs: [{ path: 'src/check-execution-engine.ts', lines: '6400-6460' }],
+      }));
+      return JSON.stringify(arr);
+    }
+    if (name.includes('validate-fact')) {
+      const idMatch = _prompt.match(/Fact ID:\s*([\w\-]+)/i);
+      const claimMatch = _prompt.match(/\*\*Claim:\*\*\s*(.+)/i);
+      const attemptMatch = _prompt.match(/Attempt:\s*(\d+)/i);
+      const factId = idMatch ? idMatch[1] : 'fact-1';
+      const claim = claimMatch ? claimMatch[1].trim() : 'unknown-claim';
+      const n = Number(factId.split('-')[1] || '0');
+      const attempt = attemptMatch ? Number(attemptMatch[1]) : 0;
+      const isValid = attempt >= 1 ? true : !(n >= 1 && n <= 3);
+      return JSON.stringify({
+        fact_id: factId,
+        claim,
+        is_valid: isValid,
+        confidence: 'high',
+        evidence: isValid ? 'verified' : 'not found',
+        correction: isValid ? null : `correct ${claim}`,
+      });
+    }
+    if (name.includes('issue-assistant') || name.includes('comment-assistant')) {
+      const text = '### Assistant Reply';
+      const intent = name.includes('issue') ? 'issue_triage' : 'comment_reply';
+      return JSON.stringify({ text, intent });
+    }
+    // Fallback
+    const mockResponse = { content: JSON.stringify({ issues: [], summary: { totalIssues: 0 } }) };
     return JSON.stringify(mockResponse);
   }
 

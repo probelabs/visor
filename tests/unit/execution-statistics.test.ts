@@ -164,7 +164,8 @@ describe('Execution Statistics', () => {
         c => c.checkName === 'output-check'
       );
       expect(checkStats).toBeDefined();
-      expect(checkStats?.outputsProduced).toBe(1);
+      // For forEach parents, outputsProduced equals number of items
+      expect(checkStats?.outputsProduced).toBe(3);
     });
 
     it('should track execution duration', async () => {
