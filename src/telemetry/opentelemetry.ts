@@ -5,12 +5,13 @@
  * - Patches console to append trace context for log correlation (optional).
  */
 
-import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
-import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { MetricReader } from '@opentelemetry/sdk-metrics';
-import type { NodeSDK as NodeSDKType } from '@opentelemetry/sdk-node';
-import type { Instrumentation } from '@opentelemetry/instrumentation';
 import type { DebugVisualizerServer } from '../debug-visualizer/ws-server';
+
+// Import types conditionally to avoid bundling OTel packages
+type SpanProcessor = any;
+type MetricReader = any;
+type NodeSDKType = any;
+type Instrumentation = any;
 
 export interface TelemetryInitOptions {
   enabled?: boolean;
@@ -239,7 +240,10 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       // Auto-instrumentations can be added later when desired
     });
 
-    diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
+    const otelApiForDiag = require('@opentelemetry/api');
+    const DiagConsoleLoggerClass = otelApiForDiag.DiagConsoleLogger;
+    const diagLogLevel = otelApiForDiag.DiagLogLevel;
+    otelApiForDiag.diag.setLogger(new DiagConsoleLoggerClass(), diagLogLevel.ERROR);
     await nodeSdk.start();
     sdk = nodeSdk;
     // console.debug('[telemetry] NodeSDK started successfully');
