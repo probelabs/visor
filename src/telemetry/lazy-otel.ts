@@ -1,17 +1,22 @@
 /**
  * Lazy-loading wrapper for OpenTelemetry API.
  * Returns no-op implementations if OpenTelemetry is not installed.
+ * Uses hardcoded module name for security - no dynamic module loading.
  */
 
 let otelApi: any = null;
 let otelApiAttempted = false;
+
+// Hardcoded allowed module name to prevent module loading attacks
+const OTEL_API_MODULE = '@opentelemetry/api';
 
 function getOtelApi() {
   if (otelApiAttempted) return otelApi;
   otelApiAttempted = true;
 
   try {
-    otelApi = require('@opentelemetry/api');
+    // Security: Only load the specific @opentelemetry/api module
+    otelApi = require(OTEL_API_MODULE);
   } catch {
     // OpenTelemetry not installed - provide no-op implementations
     otelApi = null;
@@ -110,8 +115,44 @@ export const diag = {
   },
 };
 
-export const DiagConsoleLogger = getOtelApi()?.DiagConsoleLogger;
-export const DiagLogLevel = getOtelApi()?.DiagLogLevel;
+// Lazy-loaded DiagConsoleLogger and DiagLogLevel for consistency
+export const DiagConsoleLogger = {
+  get() {
+    const api = getOtelApi();
+    return api?.DiagConsoleLogger;
+  },
+};
+
+export const DiagLogLevel = {
+  get NONE() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.NONE ?? 0;
+  },
+  get ERROR() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.ERROR ?? 30;
+  },
+  get WARN() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.WARN ?? 50;
+  },
+  get INFO() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.INFO ?? 60;
+  },
+  get DEBUG() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.DEBUG ?? 70;
+  },
+  get VERBOSE() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.VERBOSE ?? 80;
+  },
+  get ALL() {
+    const api = getOtelApi();
+    return api?.DiagLogLevel?.ALL ?? 9999;
+  },
+};
 
 // Type exports for TypeScript
 export type Span = any;

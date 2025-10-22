@@ -5,16 +5,34 @@
  * while also allowing them to be exported to other exporters (file, console, etc.)
  *
  * Milestone 4: Live Streaming Server
+ * Note: This file is only loaded when telemetry is enabled via opentelemetry.ts
  */
 
-import { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
-import { ExportResult, ExportResultCode } from '@opentelemetry/core';
 import { DebugVisualizerServer, ProcessedSpan } from './ws-server';
+
+// Conditional imports - these packages are optional dependencies
+type SpanExporter = any;
+type ReadableSpan = any;
+type ExportResult = any;
+type ExportResultCode = any;
+
+// Load OTel packages only if available
+let otelSdkTraceBase: any;
+let otelCore: any;
+
+try {
+  otelSdkTraceBase = require('@opentelemetry/sdk-trace-base');
+  otelCore = require('@opentelemetry/core');
+} catch {
+  // OpenTelemetry not installed - this file won't be used
+  otelSdkTraceBase = null;
+  otelCore = null;
+}
 
 /**
  * OTEL Span Exporter that streams spans to debug visualizer WebSocket server
  */
-export class DebugSpanExporter implements SpanExporter {
+export class DebugSpanExporter {
   private server: DebugVisualizerServer;
 
   constructor(server: DebugVisualizerServer) {
@@ -25,6 +43,7 @@ export class DebugSpanExporter implements SpanExporter {
    * Export spans to WebSocket server
    */
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+    const ExportResultCode = otelCore?.ExportResultCode || { SUCCESS: 0, FAILED: 1 };
     console.log(`[debug-exporter] Export called with ${spans.length} spans`);
     try {
       for (const span of spans) {
@@ -77,7 +96,7 @@ export class DebugSpanExporter implements SpanExporter {
     );
 
     // Convert events
-    const events = span.events.map(event => ({
+    const events = span.events.map((event: any) => ({
       name: event.name,
       time: this.hrTimeToTuple(event.time),
       timestamp: new Date(this.hrTimeToMillis(event.time)).toISOString(),

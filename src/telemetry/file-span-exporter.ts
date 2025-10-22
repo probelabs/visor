@@ -1,9 +1,26 @@
 // Minimal NDJSON SpanExporter for serverless mode.
+// Note: This file is only loaded when telemetry is enabled via opentelemetry.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
-import { ExportResultCode } from '@opentelemetry/core';
-import type { ExportResult } from '@opentelemetry/core';
+
+// Conditional imports - these packages are optional dependencies
+type ReadableSpan = any;
+type SpanExporter = any;
+type ExportResult = any;
+type ExportResultCode = any;
+
+// Load OTel packages only if available
+let otelSdkTraceBase: any;
+let otelCore: any;
+
+try {
+  otelSdkTraceBase = require('@opentelemetry/sdk-trace-base');
+  otelCore = require('@opentelemetry/core');
+} catch {
+  // OpenTelemetry not installed - this file won't be used
+  otelSdkTraceBase = null;
+  otelCore = null;
+}
 
 export interface FileSpanExporterOptions {
   dir?: string; // output directory
@@ -11,7 +28,7 @@ export interface FileSpanExporterOptions {
   ndjson?: boolean; // when true, one span per line; default true
 }
 
-export class FileSpanExporter implements SpanExporter {
+export class FileSpanExporter {
   private filePath: string;
   private buffer: ReturnType<typeof serializeSpan>[] = [];
   private ndjson: boolean;
@@ -34,6 +51,7 @@ export class FileSpanExporter implements SpanExporter {
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+    const ExportResultCode = otelCore?.ExportResultCode || { SUCCESS: 0, FAILED: 1 };
     try {
       if (this.ndjson) {
         for (const s of spans) {
@@ -81,7 +99,7 @@ function serializeSpan(s: ReadableSpan) {
     endTime: s.endTime,
     status: s.status,
     attributes: s.attributes,
-    events: s.events?.map(e => ({ name: e.name, time: e.time, attributes: e.attributes })),
+    events: s.events?.map((e: any) => ({ name: e.name, time: e.time, attributes: e.attributes })),
     resource: s.resource?.attributes,
     kind: s.kind,
   };

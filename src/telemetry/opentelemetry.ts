@@ -240,8 +240,10 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       // Auto-instrumentations can be added later when desired
     });
 
-    const { diag, DiagConsoleLogger, DiagLogLevel } = require('@opentelemetry/api');
-    diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
+    const otelApiForDiag = require('@opentelemetry/api');
+    const DiagConsoleLoggerClass = otelApiForDiag.DiagConsoleLogger;
+    const diagLogLevel = otelApiForDiag.DiagLogLevel;
+    otelApiForDiag.diag.setLogger(new DiagConsoleLoggerClass(), diagLogLevel.ERROR);
     await nodeSdk.start();
     sdk = nodeSdk;
     // console.debug('[telemetry] NodeSDK started successfully');
