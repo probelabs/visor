@@ -1803,29 +1803,9 @@ if (
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
   (async () => {
-    // Explicit, argument-driven mode selection. No auto-detection of GitHub Actions.
-    // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.
-    const argv = process.argv;
-    let modeFromArg: string | undefined;
-
-    for (let i = 0; i < argv.length; i++) {
-      const arg = argv[i];
-      if (arg === '--mode' && i + 1 < argv.length) {
-        modeFromArg = argv[i + 1];
-        break;
-      } else if (arg.startsWith('--mode=')) {
-        modeFromArg = arg.split('=')[1];
-        break;
-      }
-    }
-
-    const mode = (modeFromArg || process.env.VISOR_MODE || process.env.INPUT_MODE || 'cli')
-      .toString()
-      .toLowerCase();
-
-    const isGitHubMode = mode === 'github-actions' || mode === 'github';
-
-    if (isGitHubMode) {
+    // Minimal, yesterday-like behavior: prefer GITHUB_ACTIONS to select path.
+    const inGithub = process.env.GITHUB_ACTIONS === 'true' || !!process.env.GITHUB_ACTIONS;
+    if (inGithub) {
       // Run in GitHub Action mode explicitly and await completion to avoid early exit
       try {
         await run();
