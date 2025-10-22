@@ -1,4 +1,4 @@
-import { metrics } from '@opentelemetry/api';
+import { metrics } from './lazy-otel';
 
 let initialized = false;
 const meter = metrics.getMeter('visor');

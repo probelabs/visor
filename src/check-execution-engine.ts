@@ -30,7 +30,7 @@ import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
 import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
-import { trace, context as otContext } from '@opentelemetry/api';
+import { trace, context as otContext } from './telemetry/lazy-otel';
 import { captureForEachState, captureStateSnapshot } from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {

@@ -339,6 +339,17 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Session ID for HTTP transport (optional, server may generate one)";
                 };
+                readonly args: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Command arguments (for stdio transport in MCP checks)";
+                };
+                readonly workingDirectory: {
+                    readonly type: "string";
+                    readonly description: "Working directory (for stdio transport in MCP checks)";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Configuration for a single check";

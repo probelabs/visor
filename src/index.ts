@@ -1797,45 +1797,44 @@ if (
   process.env.VISOR_E2E_FORCE_RUN === 'true' ||
   (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined)
 ) {
-  (() => {
-    // Explicit, argument-driven mode selection. No auto-detection of GitHub Actions.
-    // Priority order: --mode flag > VISOR_MODE env > INPUT_MODE env > default 'cli'.
-    const argv = process.argv;
-    let modeFromArg: string | undefined;
-
-    for (let i = 0; i < argv.length; i++) {
-      const arg = argv[i];
-      if (arg === '--mode' && i + 1 < argv.length) {
-        modeFromArg = argv[i + 1];
-        break;
-      } else if (arg.startsWith('--mode=')) {
-        modeFromArg = arg.split('=')[1];
-        break;
-      }
-    }
-
-    const mode = (modeFromArg || process.env.VISOR_MODE || process.env.INPUT_MODE || 'cli')
+  (async () => {
+    // Explicit mode selection: --mode flag (or --cli) > Action input 'mode' > default 'cli'.
+    // This avoids relying on GITHUB_ACTIONS heuristics.
+    const argv = process.argv.slice(2);
+    const modeFromFlagEq = argv.find(a => a.startsWith('--mode='))?.split('=')[1];
+    const modeIdx = argv.indexOf('--mode');
+    const modeFromFlag = modeFromFlagEq || (modeIdx >= 0 ? argv[modeIdx + 1] : undefined);
+    const shorthandCli = argv.includes('--cli');
+    let modeFromInput = '';
+    try {
+      modeFromInput = getInput('mode') || '';
+    } catch {}
+    const mode = (modeFromFlag || (shorthandCli ? 'cli' : '') || modeFromInput || 'cli')
       .toString()
       .toLowerCase();
 
-    const isGitHubMode = mode === 'github-actions' || mode === 'github';
-
-    if (isGitHubMode) {
-      // Run in GitHub Action mode explicitly
-      run();
+    if (mode === 'github-actions' || mode === 'github') {
+      // Run in GitHub Action mode explicitly and await completion to avoid early exit
+      try {
+        await run();
+      } catch (error) {
+        console.error('GitHub Action execution failed:', error);
+        // Prefer failing the action explicitly if available
+        try {
+          const { setFailed } = await import('@actions/core');
+          setFailed(error instanceof Error ? error.message : String(error));
+        } catch {}
+        process.exit(1);
+      }
     } else {
       // Default to CLI mode
-      import('./cli-main')
-        .then(({ main }) => {
-          main().catch(error => {
-            console.error('CLI execution failed:', error);
-            process.exit(1);
-          });
-        })
-        .catch(error => {
-          console.error('Failed to import CLI module:', error);
-          process.exit(1);
-        });
+      try {
+        const { main } = await import('./cli-main');
+        await main();
+      } catch (error) {
+        console.error('CLI execution failed:', error);
+        process.exit(1);
+      }
     }
   })();
 }
