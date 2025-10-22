@@ -50,7 +50,10 @@ export class ActionCliBridge {
     // Handle checks (no validation - config-driven)
     const checks = inputs['visor-checks'] || inputs.checks;
     if (checks) {
-      const checkList = checks.split(',').map((c: string) => c.trim()).filter(Boolean);
+      const checkList = checks
+        .split(',')
+        .map((c: string) => c.trim())
+        .filter(Boolean);
       for (const check of checkList) {
         args.push('--check', check);
       }
