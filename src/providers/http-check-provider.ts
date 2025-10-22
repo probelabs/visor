@@ -4,7 +4,7 @@ import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
-import { trace, context as otContext } from '@opentelemetry/api';
+import { trace, context as otContext } from '../telemetry/lazy-otel';
 import {
   captureCheckInputContext,
   captureCheckOutput,

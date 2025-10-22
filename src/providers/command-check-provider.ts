@@ -11,7 +11,7 @@ import {
   detectLocalMode,
   resolveAssociationFromEvent,
 } from '../utils/author-permissions';
-import { trace, context as otContext } from '@opentelemetry/api';
+import { trace, context as otContext } from '../telemetry/lazy-otel';
 import {
   captureCheckInputContext,
   captureCheckOutput,

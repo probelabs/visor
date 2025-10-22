@@ -5,7 +5,7 @@
  * attributes, enabling time-travel debugging and full state inspection.
  */
 
-import { Span } from '@opentelemetry/api';
+import { Span } from './lazy-otel';
 
 const MAX_ATTRIBUTE_LENGTH = 10000; // Truncate large values
 const MAX_ARRAY_ITEMS = 100; // Limit array size in attributes

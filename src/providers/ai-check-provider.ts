@@ -8,7 +8,7 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
-import { trace, context as otContext } from '@opentelemetry/api';
+import { trace, context as otContext } from '../telemetry/lazy-otel';
 import {
   captureCheckInputContext,
   captureCheckOutput,
