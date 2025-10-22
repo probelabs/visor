@@ -4291,9 +4291,24 @@ function getOtelApi() {
 function createNoOpTracer() {
   return {
     startSpan: () => createNoOpSpan(),
-    startActiveSpan: (name, fn) => {
-      if (typeof fn === "function") return fn(createNoOpSpan());
-      return createNoOpSpan();
+    // Support both OTel v1 and v2 overloads:
+    // - startActiveSpan(name, callback)
+    // - startActiveSpan(name, options, callback)
+    // - startActiveSpan(name, options, context, callback)
+    startActiveSpan: (name, arg2, arg3, arg4) => {
+      const span = createNoOpSpan();
+      let cb = void 0;
+      if (typeof arg2 === "function") cb = arg2;
+      else if (typeof arg3 === "function") cb = arg3;
+      else if (typeof arg4 === "function") cb = arg4;
+      if (typeof cb === "function") {
+        try {
+          return cb(span);
+        } catch {
+          return void 0;
+        }
+      }
+      return span;
     }
   };
 }
