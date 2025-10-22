@@ -1822,8 +1822,21 @@ if (
       argv.includes('--version') ||
       argv.includes('-V') ||
       argv.includes('validate');
+    const wantsCliJsonSarif = (() => {
+      const outEq = argv.find(a => a.startsWith('--output='));
+      if (outEq) {
+        const v = outEq.split('=')[1]?.toLowerCase();
+        if (v === 'json' || v === 'sarif') return true;
+      }
+      const outIdx = argv.indexOf('--output');
+      if (outIdx >= 0) {
+        const v = argv[outIdx + 1]?.toLowerCase();
+        if (v === 'json' || v === 'sarif') return true;
+      }
+      return false;
+    })();
 
-    if (inGithub && !explicitCliMode && !wantsCliHelp && !forceE2E) {
+    if (inGithub && !explicitCliMode && !wantsCliHelp && !forceE2E && !wantsCliJsonSarif) {
       // Run in GitHub Action mode explicitly and await completion to avoid early exit
       try {
         await run();
