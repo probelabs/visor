@@ -16,7 +16,11 @@ function getOtelApi() {
 
   try {
     // Security: Only load the specific @opentelemetry/api module
-    otelApi = require(OTEL_API_MODULE);
+    // Use dynamic require to prevent bundlers from including this module
+
+    otelApi = (function (name: string) {
+      return require(name);
+    })(OTEL_API_MODULE);
   } catch {
     // OpenTelemetry not installed - provide no-op implementations
     otelApi = null;
