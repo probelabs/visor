@@ -2336,7 +2336,8 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    tagFilter?: import('./types/config').TagFilter
+    tagFilter?: import('./types/config').TagFilter,
+    _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
     // Determine where to send log messages based on output format
     const logFn =

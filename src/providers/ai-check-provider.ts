@@ -8,6 +8,12 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
+import { trace, context as otContext } from '@opentelemetry/api';
+import {
+  captureCheckInputContext,
+  captureCheckOutput,
+  captureProviderCall,
+} from '../telemetry/state-capture';
 
 /**
  * AI-powered check provider using probe agent
@@ -554,6 +560,47 @@ export class AICheckProvider extends CheckProvider {
       console.error(`🔧 Debug: AI check has tools disabled - MCP servers will not be passed`);
     }
 
+    // Build template context for state capture
+    const templateContext = {
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+      },
+      files: prInfo.files,
+      outputs: _dependencyResults
+        ? Object.fromEntries(
+            Array.from(_dependencyResults.entries()).map(([checkName, result]) => [
+              checkName,
+              (result as any).output !== undefined ? (result as any).output : result,
+            ])
+          )
+        : {},
+    };
+
+    // Capture input context in active OTEL span
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        captureCheckInputContext(span, templateContext);
+      }
+    } catch {
+      // Ignore telemetry errors
+    }
+    // Fallback NDJSON for input context (non-OTEL environments)
+    try {
+      const checkId = (config as any).checkName || (config as any).id || 'unknown';
+      const ctxJson = JSON.stringify(templateContext);
+      const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+      emitNdjsonSpanWithEvents(
+        'visor.check',
+        { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson },
+        []
+      );
+    } catch {}
+
     // Process prompt with Liquid templates and file loading
     // Skip event context (PR diffs, files, etc.) if requested
     const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
@@ -625,10 +672,46 @@ export class AICheckProvider extends CheckProvider {
       const issueFilter = new IssueFilter(suppressionEnabled);
       const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
 
-      return {
+      const finalResult = {
         ...result,
         issues: filteredIssues,
       };
+
+      // Capture AI provider call and output in active OTEL span
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          captureProviderCall(
+            span,
+            'ai',
+            {
+              prompt: processedPrompt.substring(0, 500), // Preview only
+              model: aiConfig.model,
+            },
+            {
+              content: JSON.stringify(finalResult).substring(0, 500),
+              tokens: (result as any).usage?.totalTokens,
+            }
+          );
+          const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
+          captureCheckOutput(span, outputForSpan);
+        }
+      } catch {
+        // Ignore telemetry errors
+      }
+      // Fallback NDJSON for output (non-OTEL environments)
+      try {
+        const checkId = (config as any).checkName || (config as any).id || 'unknown';
+        const outJson = JSON.stringify((finalResult as any).output ?? finalResult);
+        const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+        emitNdjsonSpanWithEvents(
+          'visor.check',
+          { 'visor.check.id': checkId, 'visor.check.output': outJson },
+          []
+        );
+      } catch {}
+
+      return finalResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
