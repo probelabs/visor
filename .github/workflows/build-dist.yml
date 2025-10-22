@@ -60,6 +60,12 @@ jobs:
             echo "✅ Copied output schemas to bundle"
           fi
 
+          # Copy SDK build artifacts
+          if [ -d dist/sdk ]; then
+            cp -r dist/sdk bundled/
+            echo "✅ Copied SDK build artifacts to bundle"
+          fi
+
       - name: Update dist files
         run: |
           # Configure git
@@ -93,6 +99,12 @@ jobs:
           if [ -d bundled/output ]; then
             cp -r bundled/output dist/
             echo "✅ Copied output schemas to dist/"
+          fi
+
+          # Copy SDK build artifacts if they exist
+          if [ -d bundled/sdk ]; then
+            cp -r bundled/sdk dist/
+            echo "✅ Copied SDK build artifacts to dist/"
           fi
 
           # Add bundled files to git (force add since dist/ is in .gitignore)

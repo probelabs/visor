@@ -47,20 +47,32 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   try {
     // IMPORTANT: Set up AsyncHooksContextManager as the global context manager FIRST
     // This must happen before any OpenTelemetry operations
-    const otelApi = require('@opentelemetry/api');
-    const { AsyncHooksContextManager } = require('@opentelemetry/context-async-hooks');
+    const otelApi = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/api');
+    const { AsyncHooksContextManager } = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/context-async-hooks');
     const contextManager = new AsyncHooksContextManager();
     contextManager.enable();
     otelApi.context.setGlobalContextManager(contextManager);
     // console.debug('[telemetry] AsyncHooksContextManager enabled and set as global');
 
-    const { NodeSDK } = require('@opentelemetry/sdk-node');
+    const { NodeSDK } = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/sdk-node');
 
     // Support both OpenTelemetry v1 and v2 APIs
-    const resourcesModule = require('@opentelemetry/resources');
-    const semanticConventions = require('@opentelemetry/semantic-conventions');
+    const resourcesModule = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/resources');
+    const semanticConventions = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/semantic-conventions');
 
-    const { BatchSpanProcessor, ConsoleSpanExporter } = require('@opentelemetry/sdk-trace-base');
+    const { BatchSpanProcessor, ConsoleSpanExporter } = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/sdk-trace-base');
 
     const sink = (opts.sink || (process.env.VISOR_TELEMETRY_SINK as string) || 'file') as
       | 'otlp'
@@ -87,7 +99,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     if (sink === 'otlp') {
       const protocol = opts.otlp?.protocol || 'http';
       if (protocol === 'http') {
-        const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
+        const { OTLPTraceExporter } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/exporter-trace-otlp-http');
         const exporter = new OTLPTraceExporter({
           url:
             opts.otlp?.endpoint ||
@@ -98,9 +112,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
         processors.push(new BatchSpanProcessor(exporter, batchParams()));
       } else {
         try {
-          const {
-            OTLPTraceExporter: GrpcExporter,
-          } = require('@opentelemetry/exporter-trace-otlp-grpc');
+          const { OTLPTraceExporter: GrpcExporter } = (function (name: string) {
+            return require(name);
+          })('@opentelemetry/exporter-trace-otlp-grpc');
           processors.push(new BatchSpanProcessor(new GrpcExporter({}), batchParams()));
         } catch {
           // fallback to console if grpc exporter not present
@@ -144,8 +158,12 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     let metricReader: MetricReader | undefined;
     if (sink === 'otlp') {
       try {
-        const { OTLPMetricExporter } = require('@opentelemetry/exporter-metrics-otlp-http');
-        const { PeriodicExportingMetricReader } = require('@opentelemetry/sdk-metrics');
+        const { OTLPMetricExporter } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/exporter-metrics-otlp-http');
+        const { PeriodicExportingMetricReader } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/sdk-metrics');
         const mExporter = new OTLPMetricExporter({
           url:
             process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ||
@@ -168,9 +186,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       opts.autoInstrument === true || process.env.VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS === 'true';
     if (autoInstr) {
       try {
-        const {
-          getNodeAutoInstrumentations,
-        } = require('@opentelemetry/auto-instrumentations-node');
+        const { getNodeAutoInstrumentations } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/auto-instrumentations-node');
         instrumentations = [getNodeAutoInstrumentations() as unknown as Instrumentation];
       } catch {
         // ignore if package not installed
@@ -181,7 +199,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     if (opts.traceReport === true || process.env.VISOR_TRACE_REPORT === 'true') {
       try {
         const { TraceReportExporter } = require('./trace-report-exporter');
-        const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+        const { BatchSpanProcessor } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/sdk-trace-base');
         processors.push(
           new BatchSpanProcessor(
             new TraceReportExporter({
@@ -200,7 +220,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       // Debug span exporter streams live spans to the visualizer server
       try {
         const { DebugSpanExporter } = require('../debug-visualizer/debug-span-exporter');
-        const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+        const { SimpleSpanProcessor } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/sdk-trace-base');
         const debugExporter = new DebugSpanExporter(opts.debugServer);
         processors.push(new SimpleSpanProcessor(debugExporter));
         // console.debug('[telemetry] Debug span exporter added successfully, total processors:', processors.length);
@@ -240,7 +262,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       // Auto-instrumentations can be added later when desired
     });
 
-    const otelApiForDiag = require('@opentelemetry/api');
+    const otelApiForDiag = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/api');
     const DiagConsoleLoggerClass = otelApiForDiag.DiagConsoleLogger;
     const diagLogLevel = otelApiForDiag.DiagLogLevel;
     otelApiForDiag.diag.setLogger(new DiagConsoleLoggerClass(), diagLogLevel.ERROR);
@@ -307,7 +331,9 @@ function batchParams() {
 function patchConsole() {
   if (patched) return;
   try {
-    const { context, trace } = require('@opentelemetry/api');
+    const { context, trace } = (function (name: string) {
+      return require(name);
+    })('@opentelemetry/api');
     const methods: Array<'log' | 'info' | 'warn' | 'error'> = ['log', 'info', 'warn', 'error'];
     const c = globalThis.console as Console;
     for (const m of methods) {
