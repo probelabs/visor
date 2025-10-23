@@ -2,9 +2,9 @@
 import { CLI } from '../../src/cli';
 import { ConfigManager } from '../../src/config';
 import { PRAnalyzer } from '../../src/pr-analyzer';
+import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { EventMapper } from '../../src/event-mapper';
 import { CommentManager } from '../../src/github-comments';
-import { ActionCliBridge } from '../../src/action-cli-bridge';
 import { PerformanceTimer, MemoryProfiler } from '../performance/test-utilities';
 import * as fs from 'fs';
 import * as path from 'path';

@@ -29,7 +29,7 @@ import {
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
-import { addEvent } from './telemetry/trace-helpers';
+import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
 
 type ExtendedReviewSummary = ReviewSummary & {
@@ -538,7 +538,11 @@ export class CheckExecutionEngine {
         ...sessionInfo,
         ...this.executionContext,
       } as any;
-      result = await provider.execute(prInfoForInline, provCfg, depResults, inlineContext);
+      result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        { 'visor.check.id': checkId, 'visor.check.type': provCfg.type || 'ai' },
+        async () => provider.execute(prInfoForInline, provCfg, depResults, inlineContext)
+      );
       this.recordProviderDuration(checkId, Date.now() - __provStart);
     } catch (error) {
       // Restore previous override before rethrowing
@@ -1371,7 +1375,15 @@ export class CheckExecutionEngine {
           ...sessionInfo,
           ...this.executionContext,
         };
-        const res = await provider.execute(prInfo, providerConfig, dependencyResults, context);
+        const res = await withActiveSpan(
+          `visor.check.${checkName}`,
+          {
+            'visor.check.id': checkName,
+            'visor.check.type': providerConfig.type || 'ai',
+            'visor.check.attempt': attempt,
+          },
+          async () => provider.execute(prInfo, providerConfig, dependencyResults, context)
+        );
         this.recordProviderDuration(checkName, Date.now() - __provStart);
         try {
           currentRouteOutput = (res as any)?.output;
@@ -5590,15 +5602,12 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Get available check types
+   * Get available check types from providers
+   * Note: Check names are now config-driven. This returns provider types only.
    */
   static getAvailableCheckTypes(): string[] {
     const registry = CheckProviderRegistry.getInstance();
-    const providerTypes = registry.getAvailableProviders();
-    // Add standard focus-based checks
-    const standardTypes = ['security', 'performance', 'style', 'architecture', 'all'];
-    // Combine provider types with standard types (remove duplicates)
-    return [...new Set([...providerTypes, ...standardTypes])];
+    return registry.getAvailableProviders();
   }
 
   /**

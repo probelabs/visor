@@ -389,6 +389,17 @@ export const configSchema = {
           type: 'string',
           description: 'Session ID for HTTP transport (optional, server may generate one)',
         },
+        args: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Command arguments (for stdio transport in MCP checks)',
+        },
+        workingDirectory: {
+          type: 'string',
+          description: 'Working directory (for stdio transport in MCP checks)',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',

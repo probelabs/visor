@@ -2,8 +2,9 @@ import { EventTrigger } from './config';
 
 /**
  * Valid check types that can be performed by Visor
+ * Now config-driven - any check name from config is valid
  */
-export type CheckType = 'performance' | 'architecture' | 'security' | 'style' | 'all';
+export type CheckType = string;
 
 /**
  * Valid output formats for CLI results

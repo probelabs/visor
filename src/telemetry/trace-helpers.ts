@@ -1,4 +1,4 @@
-import { context as otContext, Span, SpanStatusCode, trace, Attributes } from '@opentelemetry/api';
+import { context as otContext, Span, SpanStatusCode, trace, Attributes } from './lazy-otel';
 
 export function getTracer() {
   return trace.getTracer('visor');

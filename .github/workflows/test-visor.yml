@@ -101,11 +101,11 @@ jobs:
       - name: 🧪 Test Table Output
         run: |
           echo "Testing Table output format..."
-          echo "Running: ./dist/index.js --cli --check style --output table"
+          echo "Running: ./dist/index.js --cli --check architecture --output table"
 
           # Capture output and exit code (disable exit-on-error temporarily)
           set +e
-          OUTPUT=$(./dist/index.js --cli --check style --output table 2>&1)
+          OUTPUT=$(./dist/index.js --cli --check architecture --output table 2>&1)
           EXIT_CODE=$?
           set -e
 

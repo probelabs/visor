@@ -1,9 +1,27 @@
+// Trace Report Exporter - generates static HTML trace visualization
+// Note: This file is only loaded when telemetry is enabled via opentelemetry.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
-import { ExportResultCode } from '@opentelemetry/core';
-import type { ExportResult } from '@opentelemetry/core';
-import { HrTime } from '@opentelemetry/api';
+
+// Conditional imports - these packages are optional dependencies
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ReadableSpan = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExportResult = any;
+type HrTime = [number, number];
+
+// Load OTel packages only if available
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let otelCore: any;
+
+try {
+  otelCore = (function (name: string) {
+    return require(name);
+  })('@opentelemetry/core');
+} catch {
+  // OpenTelemetry not installed - this file won't be used
+  otelCore = null;
+}
 
 function hrTimeToMillis(t: HrTime): number {
   return t[0] * 1000 + Math.floor(t[1] / 1e6);
@@ -14,7 +32,7 @@ export interface TraceReportExporterOptions {
   runId?: string;
 }
 
-export class TraceReportExporter implements SpanExporter {
+export class TraceReportExporter {
   private spans: ReadableSpan[] = [];
   private outDir: string;
   private runId?: string;
@@ -26,6 +44,7 @@ export class TraceReportExporter implements SpanExporter {
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+    const ExportResultCode = otelCore?.ExportResultCode || { SUCCESS: 0, FAILED: 1 };
     try {
       this.spans.push(...spans);
       resultCallback({ code: ExportResultCode.SUCCESS } as ExportResult);
@@ -57,7 +76,7 @@ export class TraceReportExporter implements SpanExporter {
         duration: Math.max(0, hrTimeToMillis(s.endTime) - hrTimeToMillis(s.startTime)),
         offset: hrTimeToMillis(s.startTime) - minStart,
         attrs: s.attributes,
-        events: s.events?.map(e => ({
+        events: s.events?.map((e: any) => ({
           name: e.name,
           time: hrTimeToMillis(e.time),
           attrs: e.attributes,
@@ -215,7 +234,7 @@ export class TraceReportExporter implements SpanExporter {
         startTimeUnixNano: toNs(startMs),
         endTimeUnixNano: toNs(endMs),
         attributes: toOtelAttributes((s as any).attributes || {}),
-        events: (s.events || []).map(e => ({
+        events: (s.events || []).map((e: any) => ({
           timeUnixNano: toNs(hrTimeToMillis(e.time)),
           name: e.name,
           attributes: toOtelAttributes(e.attributes || {}),

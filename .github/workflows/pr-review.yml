@@ -54,6 +54,7 @@ jobs:
         id: visor_review
         uses: ./
         with:
+          mode: github-actions
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}

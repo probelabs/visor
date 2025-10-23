@@ -43,6 +43,7 @@ export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = [
     'ai',
     'claude-code',
+    'mcp',
     'command',
     'http',
     'http_input',
