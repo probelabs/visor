@@ -1323,6 +1323,11 @@ ${'='.repeat(60)}
         (options as any).mcpConfig = { mcpServers: this.config.mcpServers };
       }
 
+      // Enable delegate tool if configured
+      if (this.config.enableDelegate !== undefined) {
+        (options as any).enableDelegate = this.config.enableDelegate;
+      }
+
       // Add provider-specific options if configured
       if (this.config.provider) {
         // Map claude-code to anthropic for ProbeAgent compatibility

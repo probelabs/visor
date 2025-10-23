@@ -159,6 +159,49 @@ output:
     collapse: true
 ```
 
+### Advanced AI Configuration
+
+#### Task Delegation (`enableDelegate`)
+
+Enable the delegate tool to allow AI agents to break down complex tasks and distribute them to specialized subagents for parallel processing. This feature is available when using Probe as the AI provider (Google Gemini, Anthropic Claude, OpenAI GPT, AWS Bedrock).
+
+```yaml
+steps:
+  comprehensive-security-audit:
+    type: ai
+    prompt: |
+      Perform a comprehensive security audit including:
+      - SQL injection vulnerabilities
+      - XSS attack vectors
+      - Authentication bypass risks
+      - Authorization flaws
+      - Cryptographic weaknesses
+    ai:
+      provider: anthropic
+      model: claude-3-opus
+      enableDelegate: true  # Enable task delegation to subagents
+
+  focused-sql-injection-check:
+    type: ai
+    prompt: "Check for SQL injection vulnerabilities"
+    ai:
+      provider: google
+      enableDelegate: false  # Disable delegation for focused check
+```
+
+**When to enable delegation:**
+- Complex multi-step analysis requiring different expertise areas (e.g., security + performance + architecture)
+- Large codebases where parallel processing speeds up review
+- Comprehensive audits that benefit from specialized subagents
+
+**When to disable delegation:**
+- Simple, focused checks (e.g., "check for SQL injection")
+- Time-sensitive reviews where speed is critical
+- Resource-constrained environments
+- Default behavior (delegation is disabled by default)
+
+**Note:** Task delegation increases execution time and token usage, but can provide more thorough analysis for complex tasks.
+
 ### Fallback Behavior
 
 If no key is configured, Visor falls back to fast, heuristic checks (simple patterns, basic style/perf). For best results, set a provider.
