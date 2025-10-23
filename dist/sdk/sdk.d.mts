@@ -162,6 +162,10 @@ interface AIProviderConfig {
     timeout?: number;
     /** Enable debug mode */
     debug?: boolean;
+    /** Skip adding code context (diffs, files, PR info) to the prompt */
+    skip_code_context?: boolean;
+    /** Disable MCP tools - AI will only have access to the prompt text */
+    disable_tools?: boolean;
     /** MCP servers configuration */
     mcpServers?: Record<string, McpServerConfig>;
 }
@@ -274,10 +278,22 @@ interface CheckConfig {
     tags?: string[];
     /** Process output as array and run dependent checks for each item */
     forEach?: boolean;
+    /**
+     * Control scheduling behavior when this check is triggered via routing (run/goto)
+     * from a forEach scope.
+     * - 'map': schedule once per item (fan-out) using item scopes.
+     * - 'reduce': schedule a single run at the parent scope (aggregation).
+     * If unset, the current default is a single run (reduce) for backward compatibility.
+     */
+    fanout?: 'map' | 'reduce';
+    /** Alias for fanout: 'reduce' */
+    reduce?: boolean;
     /** Failure routing configuration for this check (retry/goto/run) */
     on_fail?: OnFailConfig;
     /** Success routing configuration for this check (post-actions and optional goto) */
     on_success?: OnSuccessConfig;
+    /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
+    on_finish?: OnFinishConfig;
     /**
      * Log provider specific options (optional, only used when type === 'log').
      * Declared here to ensure JSON Schema allows these keys and Ajv does not warn.
@@ -292,6 +308,13 @@ interface CheckConfig {
     include_dependencies?: boolean;
     /** Include execution metadata in log output */
     include_metadata?: boolean;
+    /**
+     * Output parsing hint for command provider (optional)
+     * When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text.
+     * Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings
+     * and may be used by providers to alter parsing behavior in the future.
+     */
+    output_format?: 'json' | 'text';
     /**
      * Memory provider specific options (optional, only used when type === 'memory').
      */
@@ -389,6 +412,22 @@ interface OnSuccessConfig {
     /** Dynamic goto: JS expression returning step id or null */
     goto_js?: string;
     /** Dynamic post-success steps: JS expression returning string[] */
+    run_js?: string;
+}
+/**
+ * Finish routing configuration for forEach checks
+ * Runs once after ALL iterations of forEach and ALL dependent checks complete
+ */
+interface OnFinishConfig {
+    /** Post-finish steps to run */
+    run?: string[];
+    /** Optional jump back to ancestor step (by id) */
+    goto?: string;
+    /** Simulate a different event when performing goto (e.g., 'pr_updated') */
+    goto_event?: EventTrigger;
+    /** Dynamic goto: JS expression returning step id or null */
+    goto_js?: string;
+    /** Dynamic post-finish steps: JS expression returning string[] */
     run_js?: string;
 }
 /**
@@ -640,6 +679,7 @@ interface CheckExecutionStats {
     skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed';
     skipCondition?: string;
     totalDuration: number;
+    providerDurationMs?: number;
     perIterationDuration?: number[];
     issuesFound: number;
     issuesBySeverity: {
