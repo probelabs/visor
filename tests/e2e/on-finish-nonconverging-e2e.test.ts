@@ -87,9 +87,10 @@ describe('on_finish non-converging loop (pre-fix repro)', () => {
     const validateRuns = statsBy['validate']?.totalRuns || 0;
     const wave = MemoryStore.getInstance().get('wave', NS) || 0;
 
-    // Pre-fix: wave exceeds routing.max_loops (3). We bounded the loop with SAFETY_MAX.
-    expect(wave).toBe(SAFETY_MAX);
-    // Validate was re-fanned out many times; at least beyond the loop budget.
-    expect(validateRuns).toBeGreaterThan(ITEMS * 3);
+    // After fix: wave should not exceed routing.max_loops (3)
+    expect(wave).toBeLessThanOrEqual(3);
+    // Validate total runs should not exceed ITEMS * routing.max_loops
+    expect(validateRuns).toBeLessThanOrEqual(ITEMS * 3);
+    expect(validateRuns).toBeGreaterThan(0);
   });
 });

@@ -192,6 +192,8 @@ export class CheckExecutionEngine {
   private executionStats: Map<string, CheckExecutionStats> = new Map();
   // Track history of all outputs for each check (useful for loops and goto)
   private outputHistory: Map<string, unknown[]> = new Map();
+  // Track on_finish loop counts per forEach parent during a single execution run
+  private onFinishLoopCounts: Map<string, number> = new Map();
   // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
   private journal: ExecutionJournal = new ExecutionJournal();
   private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
@@ -1107,14 +1109,17 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
-          // Count toward loop budget similar to other routing paths
+          // Count toward loop budget similar to other routing paths (per-parent on_finish)
           const maxLoops = config?.routing?.max_loops ?? 10;
-          // Each on_finish call performs at most one goto; treat it as 1 transition
-          if (maxLoops <= 0) {
-            throw new Error(
-              `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`
+          const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
+          if (used > maxLoops) {
+            logger.warn(
+              `⚠️ on_finish: loop budget exceeded for "${checkName}" (max_loops=${maxLoops}); last goto='${gotoTarget}'. Skipping further routing.`
             );
+            continue;
           }
+          this.onFinishLoopCounts.set(checkName, used);
+
           logger.info(`▶ on_finish: routing from "${checkName}" to "${gotoTarget}"`);
 
           try {
@@ -1143,19 +1148,6 @@ export class CheckExecutionEngine {
 
             logger.info(`  ✓ Routed to: ${gotoTarget}`);
             logger.info(`  Event override: ${onFinish.goto_event || '(none)'}`);
-
-            // After routing to a forEach parent, its dependents may have executed again.
-            // Run on_finish hooks once more so aggregators (e.g., aggregate-validations)
-            // can observe the updated outputs_history and potentially halt further retries.
-            try {
-              await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug);
-            } catch (e) {
-              if (debug) {
-                log(
-                  `⚠️ Debug: recursive on_finish processing after goto failed: ${e instanceof Error ? e.message : String(e)}`
-                );
-              }
-            }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             logger.error(
@@ -1968,6 +1960,8 @@ export class CheckExecutionEngine {
         logger.debug('Memory store initialized');
       }
 
+      // Reset per-run on_finish loop counters
+      this.onFinishLoopCounts.clear();
       // Store webhook context if provided
       this.webhookContext = options.webhookContext;
 

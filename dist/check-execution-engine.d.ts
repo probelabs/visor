@@ -123,6 +123,7 @@ export declare class CheckExecutionEngine {
     private routingSandbox?;
     private executionStats;
     private outputHistory;
+    private onFinishLoopCounts;
     private journal;
     private sessionId;
     private routingEventOverride?;
