@@ -603,6 +603,12 @@ export class CheckExecutionEngine {
       };
       enriched = forEachResult as ReviewSummary;
 
+      // Make the parent result visible to dependency resolution BEFORE scheduling dependents
+      // so that recursive dependency checks do not re-execute this forEach parent in the same wave.
+      try {
+        resultsMap?.set(checkId, enriched);
+      } catch {}
+
       // Phase 4: commit aggregate parent result early (root scope) so outputs_raw is visible
       this.commitJournal(
         checkId,
@@ -796,7 +802,7 @@ export class CheckExecutionEngine {
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
     const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
     // For event overrides, avoid leaking cross-event results via overlay; rely on snapshot-only view
-    const overlayForExec = eventOverride ? new Map<string, ReviewSummary>() : depOverlaySanitized;
+    const overlayForExec = (eventOverride && eventOverride !== (prInfo.eventType || 'manual')) ? new Map<string, ReviewSummary>() : depOverlaySanitized;
     if (!this.executionStats.has(target)) this.initializeCheckStats(target);
     const startTs = this.recordIterationStart(target);
     try {
