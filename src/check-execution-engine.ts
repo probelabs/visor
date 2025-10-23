@@ -395,6 +395,7 @@ export class CheckExecutionEngine {
       debug: boolean;
       eventOverride?: import('./types/config').EventTrigger;
       scope?: ScopePath;
+      origin?: 'on_finish' | 'on_success' | 'on_fail' | 'foreach' | 'initial' | 'inline';
     }
   ): Promise<ReviewSummary> {
     const {
@@ -408,6 +409,7 @@ export class CheckExecutionEngine {
       scope,
     } = context;
     const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+    const origin = (context as any).origin || 'inline';
 
     // Find the check configuration
     const checkConfig = config?.checks?.[checkId];
@@ -582,7 +584,7 @@ export class CheckExecutionEngine {
       const wave = (this.forEachWaveCounts.get(checkId) || 0) + 1;
       this.forEachWaveCounts.set(checkId, wave);
       log(
-        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration (wave #${wave})`
+        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration (wave #${wave}, origin=${origin})`
       );
       if (debug) {
         log(
@@ -608,6 +610,17 @@ export class CheckExecutionEngine {
         prInfoForInline.eventType || prInfo.eventType,
         []
       );
+
+      // Wave guard: if waves exceed routing.max_loops, stop scheduling dependents to prevent runaway loops
+      const maxLoops = config?.routing?.max_loops ?? 10;
+      if (wave > maxLoops) {
+        try {
+          logger.warn(`⛔ forEach wave guard: '${checkId}' exceeded max_loops=${maxLoops} (wave #${wave}); skipping dependents and routing`);
+        } catch {}
+        // Store and return aggregated result
+        resultsMap?.set(checkId, enriched);
+        return enriched;
+      }
 
       // Find checks that depend on this forEach check
       const dependentChecks = Object.keys(config?.checks || {}).filter(name => {
@@ -687,7 +700,7 @@ export class CheckExecutionEngine {
             );
 
             // Use unified helper to ensure stats and history are tracked for each item run
-            const res = await this.runNamedCheck(depCheckName, itemScope, {
+            const res = await this.runNamedCheck(depCheckName, itemScope, { origin: 'foreach',
               config: config!,
               dependencyGraph: context.dependencyGraph,
               prInfo,
@@ -765,6 +778,7 @@ export class CheckExecutionEngine {
       sessionInfo?: { parentSessionId?: string; reuseSession?: boolean };
       eventOverride?: import('./types/config').EventTrigger;
       overlay?: Map<string, ReviewSummary>;
+      origin?: 'on_finish' | 'on_success' | 'on_fail' | 'foreach' | 'initial' | 'inline';
     }
   ): Promise<ReviewSummary> {
     const {
@@ -800,6 +814,7 @@ export class CheckExecutionEngine {
           debug,
           eventOverride,
           scope,
+          origin: opts.origin || 'inline',
         }
       );
       const issues = (res.issues || []).map(i => ({ ...i }));
@@ -834,6 +849,7 @@ export class CheckExecutionEngine {
     debug: boolean
   ): Promise<void> {
     const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+
 
     // Find all checks with forEach: true and on_finish configured
     const forEachChecksWithOnFinish: Array<{
@@ -1060,7 +1076,7 @@ export class CheckExecutionEngine {
               if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
               logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
 
-              await this.runNamedCheck(runCheckId, [], {
+              await this.runNamedCheck(runCheckId, [], { origin: 'on_finish',
                 config,
                 dependencyGraph,
                 prInfo,
@@ -1154,7 +1170,7 @@ export class CheckExecutionEngine {
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
             const scheduleOnce = async (scopeForRun: ScopePath) =>
-              this.runNamedCheck(gotoTarget!, scopeForRun, {
+              this.runNamedCheck(gotoTarget!, scopeForRun, { origin: 'on_finish',
                 config,
                 dependencyGraph,
                 prInfo,
