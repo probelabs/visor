@@ -194,6 +194,8 @@ export class CheckExecutionEngine {
   private outputHistory: Map<string, unknown[]> = new Map();
   // Track on_finish loop counts per forEach parent during a single execution run
   private onFinishLoopCounts: Map<string, number> = new Map();
+  // Track how many times a forEach parent check has produced an array during this run ("waves")
+  private forEachWaveCounts: Map<string, number> = new Map();
   // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
   private journal: ExecutionJournal = new ExecutionJournal();
   private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
@@ -577,8 +579,10 @@ export class CheckExecutionEngine {
     if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
       const forEachItems = enrichedWithOutput.output;
       // Always log forEach detection (not just in debug mode) for visibility
+      const wave = (this.forEachWaveCounts.get(checkId) || 0) + 1;
+      this.forEachWaveCounts.set(checkId, wave);
       log(
-        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration`
+        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration (wave #${wave})`
       );
       if (debug) {
         log(
@@ -642,7 +646,10 @@ export class CheckExecutionEngine {
 
         // Always log iteration start
         try {
-          log(`🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`);
+          const wave = this.forEachWaveCounts.get(checkId) || 1;
+          log(
+            `🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items (wave #${wave})`
+          );
         } catch {}
 
         const depResults: ReviewSummary[] = [];
@@ -650,7 +657,10 @@ export class CheckExecutionEngine {
         // Execute once per forEach item
         for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
           const item = forEachItems[itemIndex];
-          log(`  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}'`);
+          const wave = this.forEachWaveCounts.get(checkId) || 1;
+          log(
+            `  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}' (wave #${wave})`
+          );
 
           // Phase 4: Commit per-item entry for parent in journal under item scope
           const itemScope: ScopePath = [{ check: checkId, index: itemIndex }];
@@ -981,6 +991,21 @@ export class CheckExecutionEngine {
           event: { name: prInfo.eventType || 'manual' },
         };
 
+        // Diagnostics: log attempt, dependents, items, and current budget usage
+        try {
+          const ns = 'fact-validation';
+          const attemptNow = Number(memoryStore.get('fact_validation_attempt', ns) || 0);
+          const usedBudget = this.onFinishLoopCounts.get(checkName) || 0;
+          const maxBudget = config?.routing?.max_loops ?? 10;
+          logger.info(
+            `🧭 on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} attempt=${attemptNow} budget=${usedBudget}/${maxBudget}`
+          );
+          const vfHist = (outputsHistoryForContext['validate-fact'] as unknown[]) || [];
+          if (vfHist.length) {
+            logger.debug(`🧭 on_finish: outputs.history['validate-fact'] length=${vfHist.length}`);
+          }
+        } catch {}
+
         // Execute on_finish.run (static + dynamic via run_js) sequentially
         {
           const maxLoops = config?.routing?.max_loops ?? 10;
@@ -1120,7 +1145,9 @@ export class CheckExecutionEngine {
           }
           this.onFinishLoopCounts.set(checkName, used);
 
-          logger.info(`▶ on_finish: routing from "${checkName}" to "${gotoTarget}"`);
+          logger.info(
+            `▶ on_finish: routing from "${checkName}" to "${gotoTarget}" (budget ${used}/${maxLoops})`
+          );
 
           try {
             const tcfg = config.checks?.[gotoTarget];
@@ -1962,6 +1989,8 @@ export class CheckExecutionEngine {
 
       // Reset per-run on_finish loop counters
       this.onFinishLoopCounts.clear();
+      // Reset per-run forEach wave counters
+      this.forEachWaveCounts.clear();
       // Store webhook context if provided
       this.webhookContext = options.webhookContext;
 

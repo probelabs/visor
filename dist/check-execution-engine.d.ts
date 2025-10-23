@@ -124,6 +124,7 @@ export declare class CheckExecutionEngine {
     private executionStats;
     private outputHistory;
     private onFinishLoopCounts;
+    private forEachWaveCounts;
     private journal;
     private sessionId;
     private routingEventOverride?;
