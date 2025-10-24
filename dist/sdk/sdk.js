@@ -1764,6 +1764,9 @@ ${"=".repeat(60)}
             options.enableMcp = true;
             options.mcpConfig = { mcpServers: this.config.mcpServers };
           }
+          if (this.config.enableDelegate !== void 0) {
+            options.enableDelegate = this.config.enableDelegate;
+          }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
             if (providerOverride) {
@@ -4957,6 +4960,9 @@ var init_ai_check_provider = __esm({
           if (config.ai.debug !== void 0) {
             aiConfig.debug = config.ai.debug;
           }
+          if (config.ai.enableDelegate !== void 0) {
+            aiConfig.enableDelegate = config.ai.enableDelegate;
+          }
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
           }
@@ -5142,6 +5148,7 @@ var init_ai_check_provider = __esm({
           "ai.apiKey",
           "ai.timeout",
           "ai.mcpServers",
+          "ai.enableDelegate",
           "ai_model",
           "ai_provider",
           "ai_mcp_servers",

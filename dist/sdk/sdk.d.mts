@@ -168,6 +168,8 @@ interface AIProviderConfig {
     disable_tools?: boolean;
     /** MCP servers configuration */
     mcpServers?: Record<string, McpServerConfig>;
+    /** Enable the delegate tool for task distribution to subagents */
+    enableDelegate?: boolean;
 }
 /**
  * MCP Server configuration
@@ -194,6 +196,8 @@ interface ClaudeCodeConfig {
     mcpServers?: Record<string, McpServerConfig>;
     /** Path to subagent script */
     subagent?: string;
+    /** Enable the delegate tool for task distribution to subagents */
+    enableDelegate?: boolean;
     /** Event hooks for lifecycle management */
     hooks?: {
         /** Called when check starts */
