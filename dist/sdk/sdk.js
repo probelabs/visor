@@ -6810,6 +6810,66 @@ var init_claude_code_check_provider = __esm({
   }
 });
 
+// src/utils/env-exposure.ts
+var env_exposure_exports = {};
+__export(env_exposure_exports, {
+  buildSandboxEnv: () => buildSandboxEnv
+});
+function buildSandboxEnv(input) {
+  const denyDefaults = [
+    "GITHUB_TOKEN",
+    "INPUT_GITHUB-TOKEN",
+    "ACTIONS_RUNTIME_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AZURE_CLIENT_SECRET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "HUGGINGFACE_API_KEY",
+    "CLAUDE_CODE_API_KEY",
+    "PROBE_API_KEY"
+  ];
+  const denyExtra = (input.VISOR_DENY_ENV || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const deny = Array.from(/* @__PURE__ */ new Set([...denyDefaults, ...denyExtra]));
+  const allowSpec = (input.VISOR_ALLOW_ENV || "*").trim();
+  const denyMatch = (key) => {
+    for (const pat of deny) {
+      if (!pat) continue;
+      if (pat.endsWith("*")) {
+        const prefix = pat.slice(0, -1);
+        if (key.startsWith(prefix)) return true;
+      } else if (key === pat) {
+        return true;
+      }
+    }
+    if (/(_TOKEN|_SECRET|_PASSWORD|_PRIVATE_KEY)$/i.test(key)) return true;
+    return false;
+  };
+  const out = {};
+  if (allowSpec !== "*") {
+    const allow = allowSpec.split(",").map((s) => s.trim()).filter(Boolean);
+    for (const key of allow) {
+      const val = input[key];
+      if (key && val !== void 0 && !denyMatch(key)) out[key] = String(val);
+    }
+    return out;
+  }
+  for (const [k, v] of Object.entries(input)) {
+    if (v === void 0 || v === null) continue;
+    if (denyMatch(k)) continue;
+    out[k] = String(v);
+  }
+  return out;
+}
+var init_env_exposure = __esm({
+  "src/utils/env-exposure.ts"() {
+    "use strict";
+  }
+});
+
 // src/providers/command-check-provider.ts
 var CommandCheckProvider;
 var init_command_check_provider = __esm({
@@ -7858,11 +7918,11 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
       }
       getSafeEnvironmentVariables() {
         const safeVars = {};
-        const allowedPrefixes = ["CI_", "GITHUB_", "RUNNER_", "NODE_", "npm_", "PATH", "HOME", "USER"];
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value !== void 0 && allowedPrefixes.some((prefix) => key.startsWith(prefix))) {
-            safeVars[key] = value;
-          }
+        const allowedPrefixes = [];
+        const { buildSandboxEnv: buildSandboxEnv2 } = (init_env_exposure(), __toCommonJS(env_exposure_exports));
+        const merged = buildSandboxEnv2(process.env);
+        for (const [key, value] of Object.entries(merged)) {
+          safeVars[key] = String(value);
         }
         safeVars["PWD"] = process.cwd();
         return safeVars;
@@ -8959,11 +9019,11 @@ var init_mcp_check_provider = __esm({
        */
       getSafeEnvironmentVariables() {
         const safeVars = {};
-        const allowedPrefixes = ["CI_", "GITHUB_", "RUNNER_", "NODE_", "npm_", "PATH", "HOME", "USER"];
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value !== void 0 && allowedPrefixes.some((prefix) => key.startsWith(prefix))) {
-            safeVars[key] = value;
-          }
+        const allowedPrefixes = [];
+        const { buildSandboxEnv: buildSandboxEnv2 } = (init_env_exposure(), __toCommonJS(env_exposure_exports));
+        const merged = buildSandboxEnv2(process.env);
+        for (const [key, value] of Object.entries(merged)) {
+          safeVars[key] = String(value);
         }
         safeVars["PWD"] = process.cwd();
         return safeVars;
@@ -11395,27 +11455,8 @@ __export(check_execution_engine_exports, {
   CheckExecutionEngine: () => CheckExecutionEngine
 });
 function getSafeEnvironmentVariables() {
-  const safeEnvVars = [
-    "CI",
-    "GITHUB_EVENT_NAME",
-    "GITHUB_REPOSITORY",
-    "GITHUB_REF",
-    "GITHUB_SHA",
-    "GITHUB_HEAD_REF",
-    "GITHUB_BASE_REF",
-    "GITHUB_ACTOR",
-    "GITHUB_WORKFLOW",
-    "GITHUB_RUN_ID",
-    "GITHUB_RUN_NUMBER",
-    "NODE_ENV"
-  ];
-  const safeEnv = {};
-  for (const key of safeEnvVars) {
-    if (process.env[key]) {
-      safeEnv[key] = process.env[key];
-    }
-  }
-  return safeEnv;
+  const { buildSandboxEnv: buildSandboxEnv2 } = (init_env_exposure(), __toCommonJS(env_exposure_exports));
+  return buildSandboxEnv2(process.env);
 }
 var CheckExecutionEngine;
 var init_check_execution_engine = __esm({
@@ -11829,7 +11870,7 @@ var init_check_execution_engine = __esm({
               const item = forEachItems[itemIndex];
               const wave2 = this.forEachWaveCounts.get(checkId) || 1;
               log2(
-                `  \u{1F504} Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}' (wave #${wave2})`
+                `  \u{1F504} Iteration ${itemIndex + 1}/${forEachItems.length} f|| '${depCheckName}' (wave #${wave2})`
               );
               const itemScope = [{ check: checkId, index: itemIndex }];
               try {
@@ -12561,7 +12602,7 @@ ${expr}`;
             if (hasSoftFailure && onFail) {
               if (debug)
                 log2(
-                  `\u{1F527} Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
+                  `\u{1F527} Debug: Soft failure detected f|| '${checkName}' with ${(res.issues || []).length} issue(s)`
                 );
               const lastError = {
                 message: "soft-failure: issues present",
@@ -14050,7 +14091,7 @@ ${expr}`;
               const providerType = checkConfig.type || "ai";
               const provider = this.providerRegistry.getProviderOrThrow(providerType);
               if (debug) {
-                log2(`\u{1F527} Debug: Provider for '${checkName}' is '${providerType}'`);
+                log2(`\u{1F527} Debug: Provider f|| '${checkName}' is '${providerType}'`);
               }
               this.setProviderWebhookContext(provider);
               const extendedCheckConfig = checkConfig;
