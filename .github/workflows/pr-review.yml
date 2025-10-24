@@ -67,6 +67,8 @@ jobs:
           VISOR_TELEMETRY_SINK: 'file'
           VISOR_TRACE_REPORT: 'true'
           VISOR_DEBUG_AI_SESSIONS: 'true'
+          # Enable fact validation for AI-generated responses
+          ENABLE_FACT_VALIDATION: 'true'
           # AI Provider API Keys (configure one of these in your repository secrets)
           # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}

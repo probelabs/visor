@@ -254,6 +254,15 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Process output as array and run dependent checks for each item";
                 };
+                readonly fanout: {
+                    readonly type: "string";
+                    readonly enum: readonly ["map", "reduce"];
+                    readonly description: "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility.";
+                };
+                readonly reduce: {
+                    readonly type: "boolean";
+                    readonly description: "Alias for fanout: 'reduce'";
+                };
                 readonly on_fail: {
                     readonly $ref: "#/definitions/OnFailConfig";
                     readonly description: "Failure routing configuration for this check (retry/goto/run)";
@@ -261,6 +270,10 @@ export declare const configSchema: {
                 readonly on_success: {
                     readonly $ref: "#/definitions/OnSuccessConfig";
                     readonly description: "Success routing configuration for this check (post-actions and optional goto)";
+                };
+                readonly on_finish: {
+                    readonly $ref: "#/definitions/OnFinishConfig";
+                    readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
                 };
                 readonly message: {
                     readonly type: "string";
@@ -282,6 +295,11 @@ export declare const configSchema: {
                 readonly include_metadata: {
                     readonly type: "boolean";
                     readonly description: "Include execution metadata in log output";
+                };
+                readonly output_format: {
+                    readonly type: "string";
+                    readonly enum: readonly ["json", "text"];
+                    readonly description: "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future.";
                 };
                 readonly operation: {
                     readonly type: "string";
@@ -396,6 +414,14 @@ export declare const configSchema: {
                 readonly debug: {
                     readonly type: "boolean";
                     readonly description: "Enable debug mode";
+                };
+                readonly skip_code_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
+                };
+                readonly disable_tools: {
+                    readonly type: "boolean";
+                    readonly description: "Disable MCP tools - AI will only have access to the prompt text";
                 };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
@@ -678,6 +704,39 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Success routing configuration per check";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly OnFinishConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly run: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Post-finish steps to run";
+                };
+                readonly goto: {
+                    readonly type: "string";
+                    readonly description: "Optional jump back to ancestor step (by id)";
+                };
+                readonly goto_event: {
+                    readonly $ref: "#/definitions/EventTrigger";
+                    readonly description: "Simulate a different event when performing goto (e.g., 'pr_updated')";
+                };
+                readonly goto_js: {
+                    readonly type: "string";
+                    readonly description: "Dynamic goto: JS expression returning step id or null";
+                };
+                readonly run_js: {
+                    readonly type: "string";
+                    readonly description: "Dynamic post-finish steps: JS expression returning string[]";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

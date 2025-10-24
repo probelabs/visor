@@ -80,6 +80,24 @@ export class CommandCheckProvider extends CheckProvider {
     const transformJs = config.transform_js as string | undefined;
 
     // Prepare template context for Liquid rendering
+    const outputsObj = this.buildOutputContext(
+      dependencyResults,
+      config.__outputHistory as Map<string, unknown[]> | undefined
+    );
+
+    // Build outputs_raw from -raw keys in dependencyResults
+    const outputsRaw: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [key, value] of dependencyResults.entries()) {
+        if (typeof key !== 'string') continue;
+        if (key.endsWith('-raw')) {
+          const name = key.slice(0, -4);
+          const summary = value as ReviewSummary & { output?: unknown };
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+    }
+
     const templateContext = {
       pr: {
         number: prInfo.number,
@@ -90,10 +108,11 @@ export class CommandCheckProvider extends CheckProvider {
       },
       files: prInfo.files,
       fileCount: prInfo.files.length,
-      outputs: this.buildOutputContext(
-        dependencyResults,
-        config.__outputHistory as Map<string, unknown[]> | undefined
-      ),
+      outputs: outputsObj,
+      // Alias: outputs_history mirrors outputs.history for consistency
+      outputs_history: (outputsObj as any).history || {},
+      // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
+      outputs_raw: outputsRaw,
       env: this.getSafeEnvironmentVariables(),
     };
 

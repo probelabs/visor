@@ -1,11 +1,11 @@
 import {
   CheckExecutionEngine
-} from "./chunk-EP6JGHUF.mjs";
-import "./chunk-TUTOLSFV.mjs";
+} from "./chunk-PFXMGGJZ.mjs";
+import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
   logger
-} from "./chunk-B5QBV2QJ.mjs";
+} from "./chunk-AN5E5XGX.mjs";
 import "./chunk-U7X54EMV.mjs";
 import {
   ConfigMerger
@@ -289,6 +289,15 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Process output as array and run dependent checks for each item"
             },
+            fanout: {
+              type: "string",
+              enum: ["map", "reduce"],
+              description: "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility."
+            },
+            reduce: {
+              type: "boolean",
+              description: "Alias for fanout: 'reduce'"
+            },
             on_fail: {
               $ref: "#/definitions/OnFailConfig",
               description: "Failure routing configuration for this check (retry/goto/run)"
@@ -296,6 +305,10 @@ var init_config_schema = __esm({
             on_success: {
               $ref: "#/definitions/OnSuccessConfig",
               description: "Success routing configuration for this check (post-actions and optional goto)"
+            },
+            on_finish: {
+              $ref: "#/definitions/OnFinishConfig",
+              description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
             },
             message: {
               type: "string",
@@ -317,6 +330,11 @@ var init_config_schema = __esm({
             include_metadata: {
               type: "boolean",
               description: "Include execution metadata in log output"
+            },
+            output_format: {
+              type: "string",
+              enum: ["json", "text"],
+              description: "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future."
             },
             operation: {
               type: "string",
@@ -456,6 +474,14 @@ var init_config_schema = __esm({
             debug: {
               type: "boolean",
               description: "Enable debug mode"
+            },
+            skip_code_context: {
+              type: "boolean",
+              description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            disable_tools: {
+              type: "boolean",
+              description: "Disable MCP tools - AI will only have access to the prompt text"
             },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
@@ -741,6 +767,39 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Success routing configuration per check",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnFinishConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Post-finish steps to run"
+            },
+            goto: {
+              type: "string",
+              description: "Optional jump back to ancestor step (by id)"
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
+            },
+            goto_js: {
+              type: "string",
+              description: "Dynamic goto: JS expression returning step id or null"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic post-finish steps: JS expression returning string[]"
+            }
+          },
+          additionalProperties: false,
+          description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete",
           patternProperties: {
             "^x-": {}
           }
@@ -1488,7 +1547,6 @@ var ConfigManager = class {
     "memory",
     "noop",
     "log",
-    "memory",
     "github",
     "human-input"
   ];
@@ -2015,6 +2073,15 @@ var ConfigManager = class {
               value: tag
             });
           }
+        });
+      }
+    }
+    if (checkConfig.on_finish !== void 0) {
+      if (!checkConfig.forEach) {
+        errors.push({
+          field: `checks.${checkName}.on_finish`,
+          message: `Check "${checkName}" has on_finish but forEach is not true. on_finish is only valid on forEach checks.`,
+          value: checkConfig.on_finish
         });
       }
     }
