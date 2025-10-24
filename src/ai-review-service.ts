@@ -200,12 +200,30 @@ export class AIReviewService {
         const errorMessage =
           'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).';
 
-        // In debug mode, return a review with the error captured
+        // In debug mode, return a result that still renders for custom schemas
         if (debugInfo) {
           debugInfo.errors = [errorMessage];
           debugInfo.processingTime = Date.now() - startTime;
           debugInfo.rawResponse = 'API call not attempted - no API key configured';
 
+          // Detect custom schemas (issue-assistant, overview, inline, file-based)
+          const isCustomSchema =
+            (typeof schema === 'string' && schema !== 'code-review') || typeof schema === 'object';
+
+          if (isCustomSchema) {
+            const out = {
+              // Provide a friendly, bounded fallback so built-in templates render
+              text: '⚠️ AI provider is not configured for this run. Set GOOGLE_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY or AWS credentials to enable real responses.\n\nThis is a placeholder response so your workflow still posts a comment.',
+            } as Record<string, unknown>;
+            const res: any = {
+              issues: [],
+              output: out,
+              debug: debugInfo,
+            };
+            return res;
+          }
+
+          // Non-custom schemas: return error as an issue (previous behavior)
           return {
             issues: [
               {
