@@ -1177,7 +1177,9 @@ export class CheckExecutionEngine {
 
           // If gotoTarget was cleared (e.g., all_valid guard), skip routing
           if (!gotoTarget) {
-            try { logger.info(`✓ on_finish.goto: no routing needed for "${checkName}"`); } catch {}
+            try {
+              logger.info(`✓ on_finish.goto: no routing needed for "${checkName}"`);
+            } catch {}
             continue;
           }
 
