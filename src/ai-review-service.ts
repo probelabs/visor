@@ -1959,15 +1959,27 @@ ${'='.repeat(60)}
         }
       }
 
-      // Check if this is a custom schema (free-form data)
-      // Custom schemas are:
-      // 1. Inline schemas (effectiveSchema === 'custom')
-      // 2. File-based custom schemas (starts with ./ or contains .json)
-      // 3. Any schema that is NOT 'code-review' or other built-in schemas
+      // Decide how to interpret the parsed JSON based on the effective schema and the shape of data
+      // Built-ins:
+      //  - 'code-review' → expects { issues: [...] }
+      //  - 'overview' / assistants → expects { text: string, ... }
+      //  - 'plain' → handled earlier
+      //  - custom (object/file path) → free-form object, ensure output.text fallback
+      const looksLikeTextOutput =
+        reviewData &&
+        typeof reviewData === 'object' &&
+        typeof (reviewData as any).text === 'string' &&
+        String((reviewData as any).text).trim().length > 0;
+
+      // Treat as custom/text-style when:
+      //  - explicit custom schema
+      //  - schema is any non code-review built-in like 'overview', 'issue-assistant', 'comment-assistant'
+      //  - or schema is unknown/undefined but the payload clearly contains a text field
       const isCustomSchema =
         _schema === 'custom' ||
         (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
-        (_schema && _schema !== 'code-review' && !_schema.includes('output/'));
+        (_schema && _schema !== 'code-review' && !_schema.includes('output/')) ||
+        (!_schema && looksLikeTextOutput);
 
       const _debugSchemaLogging =
         this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
@@ -2042,7 +2054,8 @@ ${'='.repeat(60)}
         return result;
       }
 
-      // Standard code-review schema processing
+      // Standard code-review schema processing (only when schema is explicitly code-review
+      // or when the payload clearly has an issues array)
       log('🔍 Validating parsed review data...');
       log(`📊 Overall score: ${0}`);
       log(`📋 Total issues: ${reviewData.issues?.length || 0}`);
@@ -2051,9 +2064,10 @@ ${'='.repeat(60)}
       );
       log(`💬 Comments count: ${Array.isArray(reviewData.issues) ? reviewData.issues.length : 0}`);
 
-      // Process issues from the simplified format
-      const processedIssues = Array.isArray(reviewData.issues)
-        ? reviewData.issues.map((issue, index) => {
+      // Process issues from the simplified format; if we don't have issues and the
+      // data looks like a text-style output, route through the custom path above.
+      const processedIssues = Array.isArray((reviewData as any).issues)
+        ? (reviewData as any).issues.map((issue: any, index: number) => {
             log(`🔍 Processing issue ${index + 1}:`, issue);
             return {
               file: issue.file || 'unknown',

@@ -2128,9 +2128,9 @@ ${"=".repeat(60)}
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath2 = path16.resolve(process.cwd(), schema);
-            log(`\u{1F4CB} Loading custom schema from file: ${schemaPath2}`);
-            const schemaContent = await fs14.readFile(schemaPath2, "utf-8");
+            const schemaPath = path16.resolve(process.cwd(), schema);
+            log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
+            const schemaContent = await fs14.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -2142,15 +2142,24 @@ ${"=".repeat(60)}
         if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
           throw new Error("Invalid schema name");
         }
-        const schemaPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
-        try {
-          const schemaContent = await fs14.readFile(schemaPath, "utf-8");
-          return schemaContent.trim();
-        } catch (error) {
-          throw new Error(
-            `Failed to load schema from ${schemaPath}: ${error instanceof Error ? error.message : "Unknown error"}`
-          );
+        const candidatePaths = [
+          // When bundled with ncc, __dirname points to dist/. We copy output/ into dist/output/.
+          path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          // Fallback for local development / simulator
+          path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+        ];
+        for (const schemaPath of candidatePaths) {
+          try {
+            const schemaContent = await fs14.readFile(schemaPath, "utf-8");
+            return schemaContent.trim();
+          } catch {
+          }
         }
+        const distPath = path16.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const cwdPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        throw new Error(
+          `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath} and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
+        );
       }
       /**
        * Parse AI response JSON
@@ -2302,7 +2311,9 @@ ${"=".repeat(60)}
               issues: [],
               output: out
             };
-            log("\u2705 Successfully created ReviewSummary with custom schema output (with fallback text when needed)");
+            log(
+              "\u2705 Successfully created ReviewSummary with custom schema output (with fallback text when needed)"
+            );
             return result2;
           }
           log("\u{1F50D} Validating parsed review data...");
@@ -2557,15 +2568,20 @@ var init_reviewer = __esm({
             if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
               return false;
             }
-            const schemaPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
-            try {
-              const schemaContent = await fs14.readFile(schemaPath, "utf-8");
-              const schemaObj = JSON.parse(schemaContent);
-              const properties = schemaObj.properties;
-              return !!(properties && "text" in properties);
-            } catch {
-              return false;
+            const candidatePaths = [
+              path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+              path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+            ];
+            for (const schemaPath of candidatePaths) {
+              try {
+                const schemaContent = await fs14.readFile(schemaPath, "utf-8");
+                const schemaObj = JSON.parse(schemaContent);
+                const properties = schemaObj.properties;
+                return !!(properties && "text" in properties);
+              } catch {
+              }
             }
+            return false;
           } else {
             const properties = schema.properties;
             return !!(properties && "text" in properties);
