@@ -2263,14 +2263,33 @@ ${"=".repeat(60)}
           if (isCustomSchema) {
             log("\u{1F4CB} Custom schema detected - preserving all fields from parsed JSON");
             log(`\u{1F4CA} Schema: ${_schema}`);
-            log(`\u{1F4CA} Custom schema keys: ${Object.keys(reviewData).join(", ")}`);
+            try {
+              log(`\u{1F4CA} Custom schema keys: ${Object.keys(reviewData).join(", ")}`);
+            } catch {
+            }
+            const out = reviewData && typeof reviewData === "object" ? reviewData : {};
+            const hasText = typeof out.text === "string" && String(out.text).trim().length > 0;
+            if (!hasText) {
+              let fallbackText = "";
+              try {
+                if (Array.isArray(reviewData?.issues) && reviewData.issues.length > 0) {
+                  fallbackText = reviewData.issues.map((i) => i && (i.message || i.text || i.response)).filter((s) => typeof s === "string" && s.trim().length > 0).join("\n");
+                }
+              } catch {
+              }
+              if (!fallbackText && typeof response === "string" && response.trim()) {
+                fallbackText = response.trim().slice(0, 6e4);
+              }
+              if (fallbackText) {
+                out.text = fallbackText;
+              }
+            }
             const result2 = {
+              // Keep issues empty for custom-schema rendering; consumers read from output.*
               issues: [],
-              // Empty array for custom schemas (no code review issues)
-              output: reviewData
-              // Preserve ALL custom schema fields here
+              output: out
             };
-            log("\u2705 Successfully created ReviewSummary with custom schema output");
+            log("\u2705 Successfully created ReviewSummary with custom schema output (with fallback text when needed)");
             return result2;
           }
           log("\u{1F50D} Validating parsed review data...");

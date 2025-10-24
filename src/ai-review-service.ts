@@ -1960,20 +1960,53 @@ ${'='.repeat(60)}
       }
 
       if (isCustomSchema) {
-        // For custom schemas, preserve ALL fields from the parsed JSON
-        // Don't force the response into the standard ReviewSummary format
+        // For custom schemas, preserve ALL fields from the parsed JSON and make sure
+        // we always have something renderable in templates (e.g., output.text).
         log('📋 Custom schema detected - preserving all fields from parsed JSON');
         log(`📊 Schema: ${_schema}`);
-        log(`📊 Custom schema keys: ${Object.keys(reviewData).join(', ')}`);
+        try {
+          log(`📊 Custom schema keys: ${Object.keys(reviewData).join(', ')}`);
+        } catch {}
 
-        // Return the full parsed data as the output, with an empty issues array
-        // This allows downstream checks to access all custom fields via outputs
+        // Ensure "output" is an object and has a sensible text fallback for templates
+        const out: Record<string, unknown> =
+          reviewData && typeof reviewData === 'object' ? (reviewData as any) : ({} as any);
+
+        const hasText =
+          typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
+        if (!hasText) {
+          // Build a fallback string from the raw response or issue messages if available
+          let fallbackText = '';
+          try {
+            if (
+              Array.isArray((reviewData as any)?.issues) &&
+              (reviewData as any).issues.length > 0
+            ) {
+              // Join issue messages into a readable block
+              fallbackText = (reviewData as any).issues
+                .map((i: any) => (i && (i.message || i.text || i.response)) as string)
+                .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+                .join('\n');
+            }
+          } catch {}
+          if (!fallbackText && typeof response === 'string' && response.trim()) {
+            // Use raw provider response (trim and bound length for safety)
+            fallbackText = response.trim().slice(0, 60000);
+          }
+          if (fallbackText) {
+            (out as any).text = fallbackText;
+          }
+        }
+
         const result: ReviewSummary & { output?: unknown } = {
-          issues: [], // Empty array for custom schemas (no code review issues)
-          output: reviewData, // Preserve ALL custom schema fields here
+          // Keep issues empty for custom-schema rendering; consumers read from output.*
+          issues: [],
+          output: out,
         };
 
-        log('✅ Successfully created ReviewSummary with custom schema output');
+        log(
+          '✅ Successfully created ReviewSummary with custom schema output (with fallback text when needed)'
+        );
         return result;
       }
 
