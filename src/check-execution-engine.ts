@@ -1175,6 +1175,12 @@ export class CheckExecutionEngine {
             }
           } catch {}
 
+          // If gotoTarget was cleared (e.g., all_valid guard), skip routing
+          if (!gotoTarget) {
+            try { logger.info(`✓ on_finish.goto: no routing needed for "${checkName}"`); } catch {}
+            continue;
+          }
+
           // Count toward loop budget similar to other routing paths (per-parent on_finish)
           const maxLoops = config?.routing?.max_loops ?? 10;
           const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
@@ -1191,7 +1197,7 @@ export class CheckExecutionEngine {
           );
 
           try {
-            const tcfg = config.checks?.[gotoTarget];
+            const tcfg = config.checks?.[gotoTarget as string];
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
             const scheduleOnce = async (scopeForRun: ScopePath) =>
