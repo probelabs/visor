@@ -1183,6 +1183,22 @@ export class CheckExecutionEngine {
             continue;
           }
 
+          // Secondary guard: if the common dependent 'validate-fact' history shows all items valid,
+          // avoid routing back to the forEach parent even if goto_js asked to.
+          try {
+            if (gotoTarget === checkName) {
+              const vfHist = this.outputHistory.get('validate-fact');
+              const arr = Array.isArray(vfHist) ? (vfHist as unknown[]) : [];
+              const allOk = arr.length > 0 && arr.every((v: any) => v && v.is_valid === true);
+              if (allOk) {
+                logger.info(
+                  `✓ on_finish.goto: validate-fact history all valid; skipping routing to '${gotoTarget}'`
+                );
+                continue;
+              }
+            }
+          } catch {}
+
           // Count toward loop budget similar to other routing paths (per-parent on_finish)
           const maxLoops = config?.routing?.max_loops ?? 10;
           const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
