@@ -137,7 +137,8 @@ export class AICheckProvider extends CheckProvider {
     promptConfig: string,
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
   ): Promise<string> {
     let promptContent: string;
 
@@ -149,7 +150,13 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Process Liquid templates in the prompt
-    return await this.renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults);
+    return await this.renderPromptTemplate(
+      promptContent,
+      prInfo,
+      eventContext,
+      dependencyResults,
+      outputHistory
+    );
   }
 
   /**
@@ -277,8 +284,22 @@ export class AICheckProvider extends CheckProvider {
     promptContent: string,
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
   ): Promise<string> {
+    // Build outputs_raw from -raw keys (aggregate parent values)
+    const outputsRaw: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [k, v] of dependencyResults.entries()) {
+        if (typeof k !== 'string') continue;
+        if (k.endsWith('-raw')) {
+          const name = k.slice(0, -4);
+          const summary = v as ReviewSummary & { output?: unknown };
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+    }
+
     // Create comprehensive template context with PR and event information
     const templateContext = {
       // PR Information
@@ -398,6 +419,16 @@ export class AICheckProvider extends CheckProvider {
             ])
           )
         : {},
+      // Alias for consistency with other providers
+      outputs_history: (() => {
+        const hist: Record<string, unknown[]> = {};
+        if (outputHistory) {
+          for (const [k, v] of outputHistory.entries()) hist[k] = v;
+        }
+        return hist;
+      })(),
+      // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
+      outputs_raw: outputsRaw,
     };
 
     try {
@@ -465,6 +496,10 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
       }
+      if (config.ai.skip_code_context !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
+      }
     }
 
     // Check-level AI model and provider (top-level properties)
@@ -510,8 +545,8 @@ export class AICheckProvider extends CheckProvider {
       Object.assign(mcpServers, config.ai.mcpServers);
     }
 
-    // Pass MCP server config directly to AI service
-    if (Object.keys(mcpServers).length > 0) {
+    // Pass MCP server config directly to AI service (unless tools are disabled)
+    if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
       if (aiConfig.debug) {
@@ -519,6 +554,8 @@ export class AICheckProvider extends CheckProvider {
           `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
         );
       }
+    } else if (config.ai?.disable_tools && aiConfig.debug) {
+      console.error(`🔧 Debug: AI check has tools disabled - MCP servers will not be passed`);
     }
 
     // Build template context for state capture
@@ -563,11 +600,14 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
 
     // Process prompt with Liquid templates and file loading
+    // Skip event context (PR diffs, files, etc.) if requested
+    const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
     const processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
-      config.eventContext,
-      _dependencyResults
+      eventContext,
+      _dependencyResults,
+      (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
     // Create AI service with config - environment variables will be used if aiConfig is empty

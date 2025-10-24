@@ -19,8 +19,9 @@ import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
+import { ExecutionJournal, ScopePath, ContextView } from './snapshot-store';
 import { createSecureSandbox, compileAndRun } from './utils/sandbox';
-import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
+import { VisorConfig, OnFailConfig, OnSuccessConfig, OnFinishConfig } from './types/config';
 import {
   createPermissionHelpers,
   detectLocalMode,
@@ -30,8 +31,6 @@ import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
 import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
-import { trace, context as otContext } from './telemetry/lazy-otel';
-import { captureForEachState, captureStateSnapshot } from './telemetry/state-capture';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -56,6 +55,8 @@ export interface CheckExecutionStats {
   skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed';
   skipCondition?: string; // The actual if condition text
   totalDuration: number; // Total duration in milliseconds
+  // Provider/self time (excludes time spent running routed children/descendants)
+  providerDurationMs?: number;
   perIterationDuration?: number[]; // Duration for each iteration (if forEach)
   issuesFound: number;
   issuesBySeverity: {
@@ -191,6 +192,15 @@ export class CheckExecutionEngine {
   private executionStats: Map<string, CheckExecutionStats> = new Map();
   // Track history of all outputs for each check (useful for loops and goto)
   private outputHistory: Map<string, unknown[]> = new Map();
+  // Track on_finish loop counts per forEach parent during a single execution run
+  private onFinishLoopCounts: Map<string, number> = new Map();
+  // Track how many times a forEach parent check has produced an array during this run ("waves")
+  private forEachWaveCounts: Map<string, number> = new Map();
+  // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
+  private journal: ExecutionJournal = new ExecutionJournal();
+  private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Execution context for providers (CLI message, hooks, etc.)
@@ -221,6 +231,86 @@ export class CheckExecutionEngine {
     // This allows us to reuse the existing PRReviewer logic without network calls
     this.mockOctokit = this.createMockOctokit();
     this.reviewer = new PRReviewer(this.mockOctokit as unknown as import('@octokit/rest').Octokit);
+  }
+
+  private sessionUUID(): string {
+    return this.sessionId;
+  }
+
+  private commitJournal(
+    checkId: string,
+    result: ExtendedReviewSummary,
+    event?: import('./types/config').EventTrigger,
+    scopeOverride?: ScopePath
+  ): void {
+    try {
+      const scope: ScopePath = scopeOverride || [];
+      this.journal.commitEntry({
+        sessionId: this.sessionUUID(),
+        scope,
+        checkId,
+        event,
+        result,
+      });
+    } catch {
+      // best effort; never throw
+    }
+  }
+
+  /** Build dependencyResults from a snapshot of all committed results, optionally overlaying provided results. */
+  private buildSnapshotDependencyResults(
+    scope: ScopePath,
+    overlay: Map<string, ReviewSummary> | undefined,
+    event: import('./types/config').EventTrigger | undefined
+  ): Map<string, ReviewSummary> {
+    const snap = this.journal.beginSnapshot();
+    const view = new ContextView(this.journal, this.sessionUUID(), snap, scope, event);
+    const visible = new Map<string, ReviewSummary>();
+    try {
+      const entries = this.journal.readVisible(this.sessionUUID(), snap, event);
+      const ids = Array.from(new Set(entries.map(e => e.checkId)));
+      for (const id of ids) {
+        const v = view.get(id);
+        if (v) visible.set(id, v);
+        const raw = view.getRaw(id);
+        if (raw) visible.set(`${id}-raw`, raw);
+      }
+      // Overlay any provided results (e.g., per-item context) on top.
+      // Root-cause hardening: ignore non-string keys and log once.
+      if (overlay) {
+        for (const [k, v] of overlay.entries()) {
+          if (typeof k === 'string' && k) {
+            visible.set(k, v);
+          } else {
+            try {
+              require('./logger').logger.warn(
+                `sanitize: dropping non-string overlay key type=${typeof k}`
+              );
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+    return visible;
+  }
+
+  /** Drop any non-string keys from a results-like map (root-cause guard). */
+  private sanitizeResultMapKeys(
+    m: Map<unknown, ReviewSummary> | undefined
+  ): Map<string, ReviewSummary> {
+    const out = new Map<string, ReviewSummary>();
+    if (!m) return out;
+    for (const [k, v] of m.entries()) {
+      if (typeof k === 'string' && k) out.set(k, v);
+      else {
+        try {
+          require('./logger').logger.warn(
+            `sanitize: dropping non-string results key type=${typeof k}`
+          );
+        } catch {}
+      }
+    }
+    return out;
   }
 
   /**
@@ -289,6 +379,978 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Execute a single named check inline (used by routing logic and on_finish)
+   * This is extracted from executeWithRouting to be reusable
+   */
+  private async executeCheckInline(
+    checkId: string,
+    event: import('./types/config').EventTrigger,
+    context: {
+      config: VisorConfig;
+      dependencyGraph: DependencyGraph;
+      prInfo: PRInfo;
+      resultsMap: Map<string, ReviewSummary>;
+      dependencyResults: Map<string, ReviewSummary>;
+      sessionInfo?: { parentSessionId?: string; reuseSession?: boolean };
+      debug: boolean;
+      eventOverride?: import('./types/config').EventTrigger;
+      scope?: ScopePath;
+      origin?: 'on_finish' | 'on_success' | 'on_fail' | 'foreach' | 'initial' | 'inline';
+    }
+  ): Promise<ReviewSummary> {
+    const {
+      config,
+      prInfo,
+      resultsMap,
+      dependencyResults,
+      sessionInfo,
+      debug,
+      eventOverride,
+      scope,
+    } = context;
+    const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+    const origin = (context as any).origin || 'inline';
+
+    // Find the check configuration
+    const checkConfig = config?.checks?.[checkId];
+    if (!checkConfig) {
+      throw new Error(`on_finish referenced unknown check '${checkId}'`);
+    }
+
+    // Helper to get all dependencies recursively from config
+    const getAllDepsFromConfig = (name: string): string[] => {
+      const visited = new Set<string>();
+      const acc: string[] = [];
+      const dfs = (n: string) => {
+        if (visited.has(n)) return;
+        visited.add(n);
+        const cfg = config?.checks?.[n];
+        const deps = cfg?.depends_on || [];
+        for (const d of deps) {
+          acc.push(d);
+          dfs(d);
+        }
+      };
+      dfs(name);
+      return Array.from(new Set(acc));
+    };
+
+    // Ensure all dependencies of target are available; execute missing ones in topological order
+    const allTargetDeps = getAllDepsFromConfig(checkId);
+    if (allTargetDeps.length > 0) {
+      // Build subgraph mapping for ordered execution
+      const subSet = new Set<string>([...allTargetDeps]);
+      const subDeps: Record<string, string[]> = {};
+      for (const id of subSet) {
+        const cfg = config?.checks?.[id];
+        subDeps[id] = (cfg?.depends_on || []).filter(d => subSet.has(d));
+      }
+      const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
+      for (const group of subGraph.executionOrder) {
+        for (const depId of group.parallel) {
+          // Skip if already have results
+          if (resultsMap?.has(depId) || dependencyResults.has(depId)) continue;
+          // Execute dependency inline (recursively ensures its deps are also present)
+          await this.executeCheckInline(depId, event, context);
+        }
+      }
+    }
+
+    // Get provider for this check
+    const providerType = checkConfig.type || 'ai';
+    const provider = this.providerRegistry.getProviderOrThrow(providerType);
+    this.setProviderWebhookContext(provider);
+
+    // Build provider configuration
+    const provCfg: CheckProviderConfig = {
+      type: providerType,
+      prompt: checkConfig.prompt,
+      exec: checkConfig.exec,
+      focus: checkConfig.focus || this.mapCheckNameToFocus(checkId),
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      checkName: checkId,
+      eventContext: this.enrichEventContext(prInfo.eventContext),
+      transform: checkConfig.transform,
+      transform_js: checkConfig.transform_js,
+      env: checkConfig.env,
+      forEach: checkConfig.forEach,
+      // Pass output history for loop/goto scenarios
+      __outputHistory: this.outputHistory,
+      // Include provider-specific keys (e.g., op/values for github)
+      ...checkConfig,
+      ai: {
+        ...(checkConfig.ai || {}),
+        timeout: checkConfig.ai?.timeout || 600000,
+        debug: !!debug,
+      },
+    };
+
+    // Build dependency results for this check using snapshot-based visibility (overlay per-scope results)
+    const depResults = this.buildSnapshotDependencyResults(
+      scope || [],
+      dependencyResults,
+      eventOverride || prInfo.eventType
+    );
+
+    // Debug: log key dependent outputs for visibility
+    if (debug) {
+      try {
+        const depPreview: Record<string, unknown> = {};
+        for (const [k, v] of depResults.entries()) {
+          const out = (v as any)?.output;
+          if (out !== undefined) depPreview[k] = out;
+        }
+        log(`🔧 Debug: inline exec '${checkId}' deps output: ${JSON.stringify(depPreview)}`);
+      } catch {}
+    }
+
+    if (debug) {
+      const execStr = (provCfg as any).exec;
+      if (execStr) log(`🔧 Debug: inline exec '${checkId}' command: ${execStr}`);
+    }
+
+    // If event override provided, clone prInfo with overridden eventType
+    let prInfoForInline = prInfo;
+    const prevEventOverride = this.routingEventOverride;
+    if (eventOverride) {
+      // Try to elevate to PR context when routing to PR events from issue threads
+      const elevated = await this.elevateContextToPullRequest(
+        { ...(prInfo as any), eventType: eventOverride } as PRInfo,
+        eventOverride,
+        log,
+        debug
+      );
+      if (elevated) {
+        prInfoForInline = elevated;
+      } else {
+        prInfoForInline = { ...(prInfo as any), eventType: eventOverride } as PRInfo;
+      }
+      this.routingEventOverride = eventOverride;
+      const msg = `↪ goto_event: inline '${checkId}' with event=${eventOverride}${
+        elevated ? ' (elevated to PR context)' : ''
+      }`;
+      if (debug) log(`🔧 Debug: ${msg}`);
+      try {
+        require('./logger').logger.info(msg);
+      } catch {}
+    }
+
+    // Execute the check
+    let result: ReviewSummary;
+    try {
+      const __provStart = Date.now();
+      const inlineContext: import('./providers/check-provider.interface').ExecutionContext = {
+        ...sessionInfo,
+        ...this.executionContext,
+      } as any;
+      result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        { 'visor.check.id': checkId, 'visor.check.type': provCfg.type || 'ai' },
+        async () => provider.execute(prInfoForInline, provCfg, depResults, inlineContext)
+      );
+      this.recordProviderDuration(checkId, Date.now() - __provStart);
+    } catch (error) {
+      // Restore previous override before rethrowing
+      this.routingEventOverride = prevEventOverride;
+      throw error;
+    } finally {
+      // Always restore previous override
+      this.routingEventOverride = prevEventOverride;
+    }
+
+    // Enrich issues with metadata
+    const enrichedIssues = (result.issues || []).map(issue => ({
+      ...issue,
+      checkName: checkId,
+      ruleId: `${checkId}/${issue.ruleId}`,
+      group: checkConfig.group,
+      schema: typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema,
+      template: checkConfig.template,
+      timestamp: Date.now(),
+    }));
+    let enriched = { ...result, issues: enrichedIssues } as ReviewSummary;
+
+    // Track output history for loop/goto scenarios
+    const enrichedWithOutput = enriched as ReviewSummary & { output?: unknown };
+    if (enrichedWithOutput.output !== undefined) {
+      this.trackOutputHistory(checkId, enrichedWithOutput.output);
+    }
+
+    // Handle forEach iteration for this check if it returned an array
+    if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
+      const forEachItems = enrichedWithOutput.output;
+      // Always log forEach detection (not just in debug mode) for visibility
+      const wave = (this.forEachWaveCounts.get(checkId) || 0) + 1;
+      this.forEachWaveCounts.set(checkId, wave);
+      log(
+        `🔄 forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration (wave #${wave}, origin=${origin})`
+      );
+      if (debug) {
+        log(
+          `🔧 Debug: forEach item preview: ${JSON.stringify(forEachItems[0] || {}).substring(0, 200)}`
+        );
+      }
+
+      // Store the array output with forEach metadata
+      const forEachResult = {
+        ...enriched,
+        forEachItems,
+        forEachItemResults: forEachItems.map(item => ({
+          issues: [],
+          output: item,
+        })),
+      };
+      enriched = forEachResult as ReviewSummary;
+
+      // Make the parent result visible to dependency resolution BEFORE scheduling dependents
+      // so that recursive dependency checks do not re-execute this forEach parent in the same wave.
+      try {
+        resultsMap?.set(checkId, enriched);
+      } catch {}
+
+      // Phase 4: commit aggregate parent result early (root scope) so outputs_raw is visible
+      this.commitJournal(
+        checkId,
+        enriched as ExtendedReviewSummary,
+        prInfoForInline.eventType || prInfo.eventType,
+        []
+      );
+
+      // Wave guard: if waves exceed routing.max_loops, stop scheduling dependents to prevent runaway loops
+      const maxLoops = config?.routing?.max_loops ?? 10;
+      if (wave > maxLoops) {
+        try {
+          logger.warn(
+            `⛔ forEach wave guard: '${checkId}' exceeded max_loops=${maxLoops} (wave #${wave}); skipping dependents and routing`
+          );
+        } catch {}
+        // Store and return aggregated result
+        resultsMap?.set(checkId, enriched);
+        return enriched;
+      }
+
+      // Find checks that depend on this forEach check
+      const dependentChecks = Object.keys(config?.checks || {}).filter(name => {
+        const cfg = config?.checks?.[name];
+        return cfg?.depends_on?.includes(checkId);
+      });
+
+      // Always log dependents for visibility
+      try {
+        if (dependentChecks.length > 0) {
+          log(
+            `🔄 forEach check '${checkId}' has ${dependentChecks.length} dependents: ${dependentChecks.join(', ')}`
+          );
+        } else {
+          log(`⚠️  forEach check '${checkId}' has NO dependents - nothing to iterate`);
+        }
+      } catch {}
+
+      // Execute each dependent check once per forEach item (scope-based; no per-item map cloning)
+      for (const depCheckName of dependentChecks) {
+        const depCheckConfig = config?.checks?.[depCheckName];
+        if (!depCheckConfig) continue;
+
+        // Always (re)run dependents during inline reruns (on_finish.goto to parent).
+        // We intentionally do not short-circuit on existing results here so stats/history
+        // reflect multiple waves.
+        // Skip if no items to iterate over
+        if (forEachItems.length === 0) {
+          if (debug) {
+            log(`🔧 Debug: Skipping forEach dependent '${depCheckName}' - no items to iterate`);
+          }
+          // Store empty result
+          resultsMap?.set(depCheckName, { issues: [] });
+          continue;
+        }
+
+        // Always log iteration start
+        try {
+          const wave = this.forEachWaveCounts.get(checkId) || 1;
+          log(
+            `🔄 Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items (wave #${wave})`
+          );
+        } catch {}
+
+        const depResults: ReviewSummary[] = [];
+
+        // Execute once per forEach item
+        for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
+          const item = forEachItems[itemIndex];
+          const wave = this.forEachWaveCounts.get(checkId) || 1;
+          log(
+            `  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}' (wave #${wave})`
+          );
+
+          // Phase 4: Commit per-item entry for parent in journal under item scope
+          const itemScope: ScopePath = [{ check: checkId, index: itemIndex }];
+          try {
+            this.commitJournal(
+              checkId,
+              { issues: [], output: item } as ExtendedReviewSummary,
+              prInfoForInline.eventType || prInfo.eventType,
+              itemScope
+            );
+          } catch {}
+
+          try {
+            // Build provider + config for dependent and execute with full routing semantics
+            const depProviderType = depCheckConfig.type || 'ai';
+            const depProvider = this.providerRegistry.getProviderOrThrow(depProviderType);
+            this.setProviderWebhookContext(depProvider);
+
+            // Build dependency results from snapshot at item scope (no cloning)
+            const snapshotDeps = this.buildSnapshotDependencyResults(
+              itemScope,
+              undefined,
+              prInfoForInline.eventType || prInfo.eventType
+            );
+
+            // Use unified helper to ensure stats and history are tracked for each item run
+            const res = await this.runNamedCheck(depCheckName, itemScope, {
+              origin: 'foreach',
+              config: config!,
+              dependencyGraph: context.dependencyGraph,
+              prInfo,
+              resultsMap: resultsMap || new Map(),
+              debug: !!debug,
+              eventOverride: prInfoForInline.eventType || prInfo.eventType,
+              overlay: snapshotDeps,
+            });
+            depResults.push(res);
+          } catch (error) {
+            // Store error result for this iteration
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const errorIssue: ReviewIssue = {
+              file: '',
+              line: 0,
+              ruleId: `${depCheckName}/forEach/iteration_error`,
+              message: `forEach iteration ${itemIndex + 1} failed: ${errorMsg}`,
+              severity: 'error',
+              category: 'logic',
+            };
+            depResults.push({
+              issues: [errorIssue],
+            });
+          }
+        }
+
+        // Aggregate results from all iterations
+        const aggregatedResult: ReviewSummary = {
+          issues: depResults.flatMap(r => r.issues || []),
+        };
+
+        // Store in results map
+        resultsMap?.set(depCheckName, aggregatedResult);
+
+        if (debug) {
+          log(
+            `🔧 Debug: Completed forEach dependent '${depCheckName}' with ${depResults.length} iterations`
+          );
+        }
+      }
+    }
+
+    // Store result in results map
+    resultsMap?.set(checkId, enriched);
+    // Commit to journal with provided scope (or root). Avoid double-commit if we already committed aggregate above.
+    const isForEachAggregate = checkConfig.forEach && Array.isArray(enrichedWithOutput.output);
+    if (!isForEachAggregate) {
+      this.commitJournal(
+        checkId,
+        enriched as ExtendedReviewSummary,
+        prInfoForInline.eventType || prInfo.eventType,
+        scope || []
+      );
+    }
+
+    if (debug) log(`🔧 Debug: inline executed '${checkId}', issues: ${enrichedIssues.length}`);
+
+    return enriched;
+  }
+
+  /**
+   * Phase 3: Unified scheduling helper
+   * Runs a named check in the current session/scope and records results.
+   * Used by on_success/on_fail/on_finish routing and internal inline execution.
+   */
+  private async runNamedCheck(
+    target: string,
+    scope: ScopePath,
+    opts: {
+      config: VisorConfig;
+      dependencyGraph: DependencyGraph;
+      prInfo: PRInfo;
+      resultsMap: Map<string, ReviewSummary>;
+      debug: boolean;
+      sessionInfo?: { parentSessionId?: string; reuseSession?: boolean };
+      eventOverride?: import('./types/config').EventTrigger;
+      overlay?: Map<string, ReviewSummary>;
+      origin?: 'on_finish' | 'on_success' | 'on_fail' | 'foreach' | 'initial' | 'inline';
+    }
+  ): Promise<ReviewSummary> {
+    const {
+      config,
+      dependencyGraph,
+      prInfo,
+      resultsMap,
+      debug,
+      sessionInfo,
+      eventOverride,
+      overlay,
+    } = opts;
+
+    // Build context overlay from current results; prefer snapshot visibility for scope (Phase 4)
+    const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
+    const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
+    // For event overrides, avoid leaking cross-event results via overlay; rely on snapshot-only view
+    const overlayForExec =
+      eventOverride && eventOverride !== (prInfo.eventType || 'manual')
+        ? new Map<string, ReviewSummary>()
+        : depOverlaySanitized;
+    if (!this.executionStats.has(target)) this.initializeCheckStats(target);
+    const startTs = this.recordIterationStart(target);
+    try {
+      const res = await this.executeCheckInline(
+        target,
+        eventOverride || prInfo.eventType || 'manual',
+        {
+          config,
+          dependencyGraph,
+          prInfo,
+          resultsMap,
+          // Use snapshot-only deps when eventOverride is set
+          dependencyResults: overlayForExec,
+          sessionInfo,
+          debug,
+          eventOverride,
+          scope,
+          origin: opts.origin || 'inline',
+        }
+      );
+      const issues = (res.issues || []).map(i => ({ ...i }));
+      const success = !this.hasFatal(issues);
+      const out: unknown = (res as { output?: unknown }).output;
+      const isForEachParent =
+        (res as any)?.isForEach === true ||
+        Array.isArray((res as any)?.forEachItems) ||
+        Array.isArray(out);
+      this.recordIterationComplete(
+        target,
+        startTs,
+        success,
+        issues,
+        isForEachParent ? undefined : out
+      );
+      return res;
+    } catch (e) {
+      this.recordIterationComplete(target, startTs, false, [], undefined);
+      throw e;
+    }
+  }
+
+  /**
+   * Handle on_finish hooks for forEach checks after ALL dependents complete
+   */
+  private async handleOnFinishHooks(
+    config: VisorConfig,
+    dependencyGraph: DependencyGraph,
+    results: Map<string, ReviewSummary>,
+    prInfo: PRInfo,
+    debug: boolean
+  ): Promise<void> {
+    const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+
+    // Find all checks with forEach: true and on_finish configured
+    const forEachChecksWithOnFinish: Array<{
+      checkName: string;
+      checkConfig: CheckConfig;
+      onFinish: OnFinishConfig;
+    }> = [];
+
+    for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
+      if (checkConfig.forEach && checkConfig.on_finish) {
+        forEachChecksWithOnFinish.push({
+          checkName,
+          checkConfig,
+          onFinish: checkConfig.on_finish,
+        });
+      }
+    }
+
+    if (forEachChecksWithOnFinish.length === 0) {
+      return; // No on_finish hooks to process
+    }
+
+    if (debug) {
+      log(`🎯 Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
+    }
+
+    // Process each forEach check's on_finish hook
+    for (const { checkName, checkConfig, onFinish } of forEachChecksWithOnFinish) {
+      try {
+        const forEachResult = results.get(checkName) as ExtendedReviewSummary | undefined;
+        if (!forEachResult) {
+          if (debug) log(`⚠️ No result found for forEach check "${checkName}", skipping on_finish`);
+          continue;
+        }
+
+        // Skip if the forEach check returned empty array
+        const forEachItems = forEachResult.forEachItems || [];
+        if (forEachItems.length === 0) {
+          if (debug) log(`⏭  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
+          continue;
+        }
+
+        // Get all dependents of this forEach check
+        const node = dependencyGraph.nodes.get(checkName);
+        const dependents = node?.dependents || [];
+
+        if (debug) {
+          log(`🔍 on_finish for "${checkName}": ${dependents.length} dependent(s)`);
+        }
+
+        // Verify all dependents have completed
+        const allDependentsCompleted = dependents.every(dep => results.has(dep));
+        if (!allDependentsCompleted) {
+          if (debug) log(`⚠️ Not all dependents of "${checkName}" completed, skipping on_finish`);
+          continue;
+        }
+
+        logger.info(`▶ on_finish: processing for "${checkName}"`);
+
+        // Build context for on_finish evaluation
+        const outputsForContext: Record<string, unknown> = {};
+        for (const [name, result] of results.entries()) {
+          const r = result as import('./reviewer').ReviewSummary & { output?: unknown };
+          outputsForContext[name] = r.output !== undefined ? r.output : r;
+        }
+        // Also expose output history for each check (parity with docs/examples)
+        const outputsHistoryForContext: Record<string, unknown[]> = {};
+        try {
+          // this.outputHistory tracks all outputs per check across the run
+          // Convert to a plain object for sandbox consumption
+          for (const [check, history] of this.outputHistory.entries()) {
+            outputsHistoryForContext[check] = history as unknown[];
+          }
+          // Attach to outputs as a nested property for `outputs.history[...]`
+          /* outputs.history available via outputsMergedForContext */
+        } catch {}
+
+        // Create forEach stats
+        const forEachStats = {
+          total: forEachItems.length,
+          successful: forEachResult.forEachItemResults
+            ? forEachResult.forEachItemResults.filter(
+                r => r && (!r.issues || r.issues.length === 0)
+              ).length
+            : forEachItems.length,
+          failed: forEachResult.forEachItemResults
+            ? forEachResult.forEachItemResults.filter(r => r && r.issues && r.issues.length > 0)
+                .length
+            : 0,
+          items: forEachItems,
+        };
+
+        // Get memory store for context
+        const memoryStore = MemoryStore.getInstance(this.config?.memory);
+        const memoryHelpers = {
+          get: (key: string, ns?: string) => memoryStore.get(key, ns),
+          has: (key: string, ns?: string) => memoryStore.has(key, ns),
+          list: (ns?: string) => memoryStore.list(ns),
+          getAll: (ns?: string) => {
+            const keys = memoryStore.list(ns);
+            const result: Record<string, unknown> = {};
+            for (const key of keys) {
+              result[key] = memoryStore.get(key, ns);
+            }
+            return result;
+          },
+          set: (key: string, value: unknown, ns?: string) => {
+            const nsName = ns || memoryStore.getDefaultNamespace();
+            if (!memoryStore['data'].has(nsName)) {
+              memoryStore['data'].set(nsName, new Map());
+            }
+            memoryStore['data'].get(nsName)!.set(key, value);
+          },
+          increment: (key: string, amount: number, ns?: string) => {
+            const current = memoryStore.get(key, ns);
+            const numCurrent = typeof current === 'number' ? current : 0;
+            const newValue = numCurrent + amount;
+            const nsName = ns || memoryStore.getDefaultNamespace();
+            if (!memoryStore['data'].has(nsName)) {
+              memoryStore['data'].set(nsName, new Map());
+            }
+            memoryStore['data'].get(nsName)!.set(key, newValue);
+            return newValue;
+          },
+        };
+
+        // Build outputs_raw for on_finish (aggregate values)
+        const outputsRawForContext: Record<string, unknown> = {};
+        try {
+          for (const [name, val] of Object.entries(outputsForContext)) {
+            if (name === 'history') continue;
+            outputsRawForContext[name] = val;
+          }
+        } catch {}
+
+        // Build full context for on_finish evaluation
+        const outputsMergedForContext: Record<string, unknown> = {
+          ...outputsForContext,
+          history: outputsHistoryForContext,
+        };
+
+        const onFinishContext = {
+          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+          attempt: 1,
+          loop: 0,
+          outputs: outputsMergedForContext,
+          // Provide explicit alias for templates that prefer snake_case
+          outputs_history: outputsHistoryForContext,
+          outputs_raw: outputsRawForContext,
+          forEach: forEachStats,
+          memory: memoryHelpers,
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base,
+          },
+          files: prInfo.files,
+          env: getSafeEnvironmentVariables(),
+          event: { name: prInfo.eventType || 'manual' },
+        };
+
+        // Diagnostics: log attempt, dependents, items, and current budget usage
+        try {
+          const ns = 'fact-validation';
+          const attemptNow = Number(memoryStore.get('fact_validation_attempt', ns) || 0);
+          const usedBudget = this.onFinishLoopCounts.get(checkName) || 0;
+          const maxBudget = config?.routing?.max_loops ?? 10;
+          logger.info(
+            `🧭 on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} attempt=${attemptNow} budget=${usedBudget}/${maxBudget}`
+          );
+          const vfHist = (outputsHistoryForContext['validate-fact'] as unknown[]) || [];
+          if (vfHist.length) {
+            logger.debug(`🧭 on_finish: outputs.history['validate-fact'] length=${vfHist.length}`);
+          }
+        } catch {}
+
+        let lastRunOutput: unknown = undefined;
+
+        // Execute on_finish.run (static + dynamic via run_js) sequentially
+        {
+          const maxLoops = config?.routing?.max_loops ?? 10;
+          let loopCount = 0;
+
+          // Helper to evaluate run_js to string[] safely
+          const evalRunJs = async (js?: string): Promise<string[]> => {
+            if (!js) return [];
+            try {
+              const sandbox = this.getRoutingSandbox();
+              const scope = onFinishContext;
+              const code = `
+                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+                const __fn = () => {\n${js}\n};
+                const __res = __fn();
+                return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+              `;
+              try {
+                if (code.includes('process')) {
+                  logger.warn('⚠️ on_finish.goto_js prelude contains "process" token');
+                } else {
+                  logger.info('🔧 on_finish.goto_js prelude is clean (no process token)');
+                }
+              } catch {}
+              const exec = sandbox.compile(code);
+              const res = exec({ scope }).run();
+              return Array.isArray(res) ? (res as string[]) : [];
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              logger.error(`✗ on_finish.run_js: evaluation failed for "${checkName}": ${msg}`);
+              if (e instanceof Error && e.stack) logger.debug(`Stack trace: ${e.stack}`);
+              return [];
+            }
+          };
+
+          const dynamicRun = await evalRunJs(onFinish.run_js);
+          const runList = Array.from(
+            new Set([...(onFinish.run || []), ...dynamicRun].filter(Boolean))
+          );
+
+          if (runList.length > 0) {
+            logger.info(`▶ on_finish.run: executing [${runList.join(', ')}] for "${checkName}"`);
+          }
+
+          try {
+            for (const runCheckId of runList) {
+              if (++loopCount > maxLoops) {
+                throw new Error(
+                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
+                );
+              }
+              if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
+              logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
+
+              const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
+                origin: 'on_finish',
+                config,
+                dependencyGraph,
+                prInfo,
+                resultsMap: results,
+                sessionInfo: undefined,
+                debug,
+                eventOverride: onFinish.goto_event,
+                overlay: new Map(results),
+              });
+              try {
+                lastRunOutput = (__onFinishRes as any)?.output;
+              } catch {}
+              logger.info(`  ✓ Completed on_finish check: ${runCheckId}`);
+            }
+            if (runList.length > 0) {
+              logger.info(`✓ on_finish.run: completed for "${checkName}"`);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            logger.error(`✗ on_finish.run: failed for "${checkName}": ${errorMsg}`);
+            if (error instanceof Error && error.stack) {
+              logger.debug(`Stack trace: ${error.stack}`);
+            }
+            throw error;
+          }
+        }
+
+        // After on_finish.run completes, recompute an authoritative 'all_valid' flag from
+        // the latest validate-fact history and persist it to memory. This ensures goto_js
+        // sees a consistent value even if a prior aggregate step ran out of order.
+        try {
+          const vfNow = (this.outputHistory.get('validate-fact') || []) as unknown[];
+          if (
+            Array.isArray(vfNow) &&
+            forEachItems.length > 0 &&
+            vfNow.length >= forEachItems.length
+          ) {
+            const lastWave = vfNow.slice(-forEachItems.length);
+            const ok = lastWave.every(
+              (v: any) => v && (v.is_valid === true || (v as any).valid === true)
+            );
+            await MemoryStore.getInstance(this.config?.memory).set(
+              'all_valid',
+              ok,
+              'fact-validation'
+            );
+            try {
+              logger.info(
+                `🧮 on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
+              );
+            } catch {}
+          }
+        } catch {}
+        // Evaluate on_finish.goto_js for routing decision
+        let gotoTarget: string | null = null;
+
+        if (onFinish.goto_js) {
+          logger.info(`▶ on_finish.goto_js: evaluating for "${checkName}"`);
+
+          try {
+            const sandbox = this.getRoutingSandbox();
+            const scope = onFinishContext;
+
+            const code = `
+              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+              const __fn = () => {\n${onFinish.goto_js}\n};
+              const __res = __fn();
+              return (typeof __res === 'string' && __res) ? __res : null;
+            `;
+
+            const exec = sandbox.compile(code);
+            const result = exec({ scope }).run();
+            gotoTarget = typeof result === 'string' && result ? result : null;
+
+            if (debug) {
+              log(`🔧 Debug: on_finish.goto_js evaluated → ${this.redact(gotoTarget)}`);
+            }
+
+            logger.info(
+              `✓ on_finish.goto_js: evaluated to '${gotoTarget || 'null'}' for "${checkName}"`
+            );
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            logger.warn(`⚠️ on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
+            if (error instanceof Error && error.stack) {
+              logger.debug(`Stack trace: ${error.stack}`);
+            }
+
+            // Fallback to static goto if goto_js fails
+            if (onFinish.goto) {
+              logger.info(`  ⚠ Falling back to static goto: '${onFinish.goto}'`);
+              gotoTarget = onFinish.goto;
+            }
+          }
+        } else if (onFinish.goto) {
+          // Static goto
+          gotoTarget = onFinish.goto;
+          logger.info(`▶ on_finish.goto: routing to '${gotoTarget}' for "${checkName}"`);
+        }
+
+        // Execute routing if we have a target
+        if (gotoTarget) {
+          // Special safety: check memory flag and last aggregator output
+
+          try {
+            const memDbg = MemoryStore.getInstance(this.config?.memory);
+            const dbgVal = memDbg.get('all_valid', 'fact-validation');
+            try {
+              logger.info(`  🧪 on_finish.goto: mem all_valid currently=${String(dbgVal)}`);
+            } catch {}
+          } catch {}
+
+          try {
+            const mem = MemoryStore.getInstance(this.config?.memory);
+            const allValidMem = mem.get('all_valid', 'fact-validation');
+            const lro =
+              lastRunOutput && typeof lastRunOutput === 'object'
+                ? (lastRunOutput as Record<string, unknown>)
+                : undefined;
+            const allValidOut = lro
+              ? lro['all_valid'] === true || (lro as Record<string, unknown>)['allValid'] === true
+              : false;
+
+            try {
+              logger.info(
+                `  🔒 on_finish.goto guard: gotoTarget=${String(gotoTarget)} allValidMem=${String(allValidMem)} allValidOut=${String(allValidOut)}`
+              );
+            } catch {}
+            if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
+              logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
+              gotoTarget = null as any;
+            }
+          } catch {}
+
+          // Extra deterministic guard: if the last wave of validate-fact is all valid,
+          try {
+            const __h = this.outputHistory.get('validate-fact');
+            logger.info(
+              `  🧪 on_finish.goto: validate-fact history now len=${Array.isArray(__h) ? __h.length : 0}`
+            );
+          } catch {}
+          // skip routing back to the forEach parent even if goto_js requested it.
+          try {
+            if (gotoTarget === checkName) {
+              const vfHistNow = (this.outputHistory.get('validate-fact') || []) as unknown[];
+              if (Array.isArray(vfHistNow) && forEachItems.length > 0) {
+                const verdicts = vfHistNow
+                  .map(v => (v && typeof v === 'object' ? (v as any) : undefined))
+                  .filter(
+                    v => v && (typeof v.is_valid === 'boolean' || typeof v.valid === 'boolean')
+                  )
+                  .map(v => v.is_valid === true || v.valid === true);
+                if (verdicts.length >= forEachItems.length) {
+                  const lastVerdicts = verdicts.slice(-forEachItems.length);
+                  const allTrue = lastVerdicts.every(Boolean);
+                  if (allTrue) {
+                    try {
+                      logger.info(
+                        `✓ on_finish.goto: history verdicts all valid; skipping routing to '${gotoTarget}'`
+                      );
+                    } catch {}
+                    gotoTarget = null as any;
+                  }
+                }
+              }
+            }
+          } catch {}
+
+          // If gotoTarget was cleared (e.g., all_valid guard), skip routing
+          if (!gotoTarget) {
+            try {
+              logger.info(`✓ on_finish.goto: no routing needed for "${checkName}"`);
+            } catch {}
+            continue;
+          }
+
+          // Secondary guard: if the common dependent 'validate-fact' history shows all items valid,
+          // avoid routing back to the forEach parent even if goto_js asked to.
+          try {
+            if (gotoTarget === checkName) {
+              const vfHist = this.outputHistory.get('validate-fact');
+              const arr = Array.isArray(vfHist) ? (vfHist as unknown[]) : [];
+              const allOk = arr.length > 0 && arr.every((v: any) => v && v.is_valid === true);
+              if (allOk) {
+                logger.info(
+                  `✓ on_finish.goto: validate-fact history all valid; skipping routing to '${gotoTarget}'`
+                );
+                continue;
+              }
+            }
+          } catch {}
+
+          // Count toward loop budget similar to other routing paths (per-parent on_finish)
+          const maxLoops = config?.routing?.max_loops ?? 10;
+          const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
+          if (used > maxLoops) {
+            logger.warn(
+              `⚠️ on_finish: loop budget exceeded for "${checkName}" (max_loops=${maxLoops}); last goto='${gotoTarget}'. Skipping further routing.`
+            );
+            continue;
+          }
+          this.onFinishLoopCounts.set(checkName, used);
+
+          logger.info(
+            `▶ on_finish: routing from "${checkName}" to "${gotoTarget}" (budget ${used}/${maxLoops})`
+          );
+
+          try {
+            const tcfg = config.checks?.[gotoTarget as string];
+            const mode =
+              tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
+            const scheduleOnce = async (scopeForRun: ScopePath) =>
+              this.runNamedCheck(gotoTarget!, scopeForRun, {
+                origin: 'on_finish',
+                config,
+                dependencyGraph,
+                prInfo,
+                resultsMap: results,
+                sessionInfo: undefined,
+                debug,
+                eventOverride: onFinish.goto_event,
+                overlay: new Map(results),
+              });
+            if (mode === 'map' && forEachItems.length > 0) {
+              for (let i = 0; i < forEachItems.length; i++) {
+                const itemScope: ScopePath = [{ check: checkName, index: i }];
+                await scheduleOnce(itemScope);
+              }
+            } else {
+              await scheduleOnce([]);
+            }
+
+            logger.info(`  ✓ Routed to: ${gotoTarget}`);
+            logger.info(`  Event override: ${onFinish.goto_event || '(none)'}`);
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            logger.error(
+              `✗ on_finish: routing failed for "${checkName}" → "${gotoTarget}": ${errorMsg}`
+            );
+            if (error instanceof Error && error.stack) {
+              logger.debug(`Stack trace: ${error.stack}`);
+            }
+            throw error;
+          }
+        }
+
+        logger.info(`✓ on_finish: completed for "${checkName}"`);
+      } catch (error) {
+        logger.error(`✗ on_finish: error for "${checkName}": ${error}`);
+      }
+    }
+  }
+
+  /**
    * Execute a check with retry/backoff and routing semantics (on_fail/on_success)
    */
   private async executeWithRouting(
@@ -331,6 +1393,22 @@ export class CheckExecutionEngine {
       try {
         const sandbox = this.getRoutingSandbox();
         const eventObj = { name: prInfo.eventType || 'manual' } as const;
+        const outHist: Record<string, unknown[]> = {};
+        try {
+          for (const [k, v] of this.outputHistory.entries()) outHist[k] = v;
+        } catch {}
+        // Build outputs_raw object from dependencyResults (-raw aliases)
+        const outRaw: Record<string, unknown> = {};
+        try {
+          for (const [k, v] of (dependencyResults || new Map()).entries()) {
+            if (typeof k !== 'string') continue;
+            if (k.endsWith('-raw')) {
+              const name = k.slice(0, -4);
+              const val: any = (v as any)?.output !== undefined ? (v as any).output : v;
+              outRaw[name] = val;
+            }
+          }
+        } catch {}
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -344,6 +1422,8 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          outputs_history: outHist,
+          outputs_raw: outRaw,
           output: currentRouteOutput,
           pr: {
             number: prInfo.number,
@@ -360,7 +1440,7 @@ export class CheckExecutionEngine {
           ),
           event: eventObj,
         };
-        const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
+        const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code = `${prelude}\n${expr}`;
         const result = compileAndRun<unknown>(
           sandbox,
@@ -386,6 +1466,22 @@ export class CheckExecutionEngine {
       try {
         const sandbox = this.getRoutingSandbox();
         const eventObj = { name: prInfo.eventType || 'manual' } as const;
+        const outHist: Record<string, unknown[]> = {};
+        try {
+          for (const [k, v] of this.outputHistory.entries()) outHist[k] = v;
+        } catch {}
+        // Build outputs_raw object from dependencyResults (-raw aliases)
+        const outRaw: Record<string, unknown> = {};
+        try {
+          for (const [k, v] of (dependencyResults || new Map()).entries()) {
+            if (typeof k !== 'string') continue;
+            if (k.endsWith('-raw')) {
+              const name = k.slice(0, -4);
+              const val: any = (v as any)?.output !== undefined ? (v as any).output : v;
+              outRaw[name] = val;
+            }
+          }
+        } catch {}
         const scope = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt,
@@ -399,6 +1495,8 @@ export class CheckExecutionEngine {
               }
             : null,
           outputs: Object.fromEntries((dependencyResults || new Map()).entries()),
+          outputs_history: outHist,
+          outputs_raw: outRaw,
           output: currentRouteOutput,
           pr: {
             number: prInfo.number,
@@ -415,7 +1513,7 @@ export class CheckExecutionEngine {
           ),
           event: eventObj,
         };
-        const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
+        const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code2 = `${prelude2}\n${expr}`;
         const res = compileAndRun<string | null>(
           sandbox,
@@ -435,162 +1533,7 @@ export class CheckExecutionEngine {
       }
     };
 
-    const getAllDepsFromConfig = (name: string): string[] => {
-      const visited = new Set<string>();
-      const acc: string[] = [];
-      const dfs = (n: string) => {
-        if (visited.has(n)) return;
-        visited.add(n);
-        const cfg = config?.checks?.[n];
-        const deps = cfg?.depends_on || [];
-        for (const d of deps) {
-          acc.push(d);
-          dfs(d);
-        }
-      };
-      dfs(name);
-      return Array.from(new Set(acc));
-    };
-
-    const executeNamedCheckInline = async (
-      target: string,
-      opts?: { eventOverride?: import('./types/config').EventTrigger }
-    ): Promise<ReviewSummary> => {
-      const targetCfg = config?.checks?.[target];
-      if (!targetCfg) {
-        throw new Error(`on_* referenced unknown check '${target}'`);
-      }
-      // Ensure all dependencies of target are available; execute missing ones in topological order
-      // Use config graph (not only current dependencyGraph) so inline steps can bring their own deps
-      const allTargetDeps = getAllDepsFromConfig(target);
-      if (allTargetDeps.length > 0) {
-        // Build subgraph mapping for ordered execution
-        const subSet = new Set<string>([...allTargetDeps]);
-        const subDeps: Record<string, string[]> = {};
-        for (const id of subSet) {
-          const cfg = config?.checks?.[id];
-          subDeps[id] = (cfg?.depends_on || []).filter(d => subSet.has(d));
-        }
-        const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
-        for (const group of subGraph.executionOrder) {
-          for (const depId of group.parallel) {
-            // Skip if already have results
-            if (resultsMap?.has(depId) || dependencyResults.has(depId)) continue;
-            // Execute dependency inline (recursively ensures its deps are also present)
-            await executeNamedCheckInline(depId);
-          }
-        }
-      }
-      const providerType = targetCfg.type || 'ai';
-      const prov = this.providerRegistry.getProviderOrThrow(providerType);
-      this.setProviderWebhookContext(prov);
-      const provCfg: CheckProviderConfig = {
-        type: providerType,
-        prompt: targetCfg.prompt,
-        exec: targetCfg.exec,
-        focus: targetCfg.focus || this.mapCheckNameToFocus(target),
-        schema: targetCfg.schema,
-        group: targetCfg.group,
-        checkName: target,
-        eventContext: this.enrichEventContext(prInfo.eventContext),
-        transform: targetCfg.transform,
-        transform_js: targetCfg.transform_js,
-        env: targetCfg.env,
-        forEach: targetCfg.forEach,
-        // Pass output history for loop/goto scenarios
-        __outputHistory: this.outputHistory,
-        // Include provider-specific keys (e.g., op/values for github)
-        ...targetCfg,
-        ai: {
-          ...(targetCfg.ai || {}),
-          timeout: providerConfig.ai?.timeout || 600000,
-          debug: !!debug,
-        },
-      };
-      // Build dependencyResults for target using already computed global results (after ensuring deps executed)
-      const targetDeps = getAllDepsFromConfig(target);
-      const depResults = new Map<string, ReviewSummary>();
-      for (const depId of targetDeps) {
-        // Prefer per-scope dependencyResults (e.g., forEach item context) over global results
-        const res = dependencyResults.get(depId) || resultsMap?.get(depId);
-        if (res) depResults.set(depId, res);
-      }
-      // Debug: log key dependent outputs for visibility
-      try {
-        // Try to log a small preview of dependent outputs if available
-        const depPreview: Record<string, unknown> = {};
-        for (const [k, v] of depResults.entries()) {
-          const out = (v as any)?.output;
-          if (out !== undefined) depPreview[k] = out;
-        }
-        if (debug) {
-          log(`🔧 Debug: inline exec '${target}' deps output: ${JSON.stringify(depPreview)}`);
-        }
-      } catch {}
-
-      if (debug) {
-        const execStr = (provCfg as any).exec;
-        if (execStr) log(`🔧 Debug: inline exec '${target}' command: ${execStr}`);
-      }
-      // If event override provided, clone prInfo with overridden eventType
-      let prInfoForInline = prInfo;
-      const prevEventOverride = this.routingEventOverride;
-      if (opts?.eventOverride) {
-        // Try to elevate to PR context when routing to PR events from issue threads
-        const elevated = await this.elevateContextToPullRequest(
-          { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo,
-          opts.eventOverride,
-          log,
-          debug
-        );
-        if (elevated) {
-          prInfoForInline = elevated;
-        } else {
-          prInfoForInline = { ...(prInfo as any), eventType: opts.eventOverride } as PRInfo;
-        }
-        this.routingEventOverride = opts.eventOverride;
-        const msg = `↪ goto_event: inline '${target}' with event=${opts.eventOverride}${
-          elevated ? ' (elevated to PR context)' : ''
-        }`;
-        if (debug) log(`🔧 Debug: ${msg}`);
-        try {
-          require('./logger').logger.info(msg);
-        } catch {}
-      }
-      let r: ReviewSummary;
-      try {
-        // Merge sessionInfo with execution context for inline execution
-        const inlineContext: import('./providers/check-provider.interface').ExecutionContext = {
-          ...sessionInfo,
-          ...this.executionContext,
-        };
-        r = await prov.execute(prInfoForInline, provCfg, depResults, inlineContext);
-      } finally {
-        // Restore previous override
-        this.routingEventOverride = prevEventOverride;
-      }
-      // enrich with metadata similar to main flow
-      const enrichedIssues = (r.issues || []).map(issue => ({
-        ...issue,
-        checkName: target,
-        ruleId: `${target}/${issue.ruleId}`,
-        group: targetCfg.group,
-        schema: typeof targetCfg.schema === 'object' ? 'custom' : targetCfg.schema,
-        template: targetCfg.template,
-        timestamp: Date.now(),
-      }));
-      const enriched = { ...r, issues: enrichedIssues } as ReviewSummary;
-
-      // Track output history for loop/goto scenarios
-      const enrichedWithOutput = enriched as ReviewSummary & { output?: unknown };
-      if (enrichedWithOutput.output !== undefined) {
-        this.trackOutputHistory(target, enrichedWithOutput.output);
-      }
-
-      resultsMap?.set(target, enriched);
-      if (debug) log(`🔧 Debug: inline executed '${target}', issues: ${enrichedIssues.length}`);
-      return enriched;
-    };
+    // Phase 3: unified scheduling helper replaces inline nested executor
 
     // Begin attempts loop
     // We treat each retry/goto/run as consuming one loop budget entry
@@ -602,12 +1545,11 @@ export class CheckExecutionEngine {
             'visor.provider.type': providerConfig.type || 'ai',
           });
         } catch {}
-        // Merge sessionInfo with execution context
+        const __provStart = Date.now();
         const context: import('./providers/check-provider.interface').ExecutionContext = {
           ...sessionInfo,
           ...this.executionContext,
         };
-        // Execute check within a span for telemetry while passing merged execution context
         const res = await withActiveSpan(
           `visor.check.${checkName}`,
           {
@@ -615,19 +1557,9 @@ export class CheckExecutionEngine {
             'visor.check.type': providerConfig.type || 'ai',
             'visor.check.attempt': attempt,
           },
-          async () => {
-            try {
-              return await provider.execute(prInfo, providerConfig, dependencyResults, context);
-            } finally {
-              try {
-                emitNdjsonSpanWithEvents('visor.check', { 'visor.check.id': checkName }, [
-                  { name: 'check.started' },
-                  { name: 'check.completed' },
-                ]);
-              } catch {}
-            }
-          }
+          async () => provider.execute(prInfo, providerConfig, dependencyResults, context)
         );
+        this.recordProviderDuration(checkName, Date.now() - __provStart);
         try {
           currentRouteOutput = (res as any)?.output;
         } catch {}
@@ -664,7 +1596,45 @@ export class CheckExecutionEngine {
             }
             if (debug) log(`🔧 Debug: on_fail.run (soft) executing [${runList.join(', ')}]`);
             for (const stepId of runList) {
-              await executeNamedCheckInline(stepId);
+              const tcfg = config!.checks?.[stepId] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              const mode =
+                tcfg?.fanout === 'map'
+                  ? 'map'
+                  : tcfg?.reduce
+                    ? 'reduce'
+                    : tcfg?.fanout || 'default';
+              const inItem = !!foreachContext;
+              const items =
+                checkConfig.forEach && Array.isArray(currentRouteOutput)
+                  ? (currentRouteOutput as unknown[])
+                  : [];
+              if (!inItem && mode === 'map' && items.length > 0) {
+                for (let i = 0; i < items.length; i++) {
+                  const itemScope: ScopePath = [{ check: checkName, index: i }];
+                  await this.runNamedCheck(stepId, itemScope, {
+                    config: config!,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap: resultsMap || new Map(),
+                    debug: !!debug,
+                    overlay: dependencyResults,
+                  });
+                }
+              } else {
+                const scopeForRun: ScopePath = foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : [];
+                await this.runNamedCheck(stepId, scopeForRun, {
+                  config: config!,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: resultsMap || new Map(),
+                  debug: !!debug,
+                  overlay: dependencyResults,
+                });
+              }
             }
           }
           let target = await evalGotoJs(onFail.goto_js, lastError);
@@ -688,7 +1658,42 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
                 );
               }
-              await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
+              {
+                const tcfg = config!.checks?.[target] as
+                  | import('./types/config').CheckConfig
+                  | undefined;
+                const mode =
+                  tcfg?.fanout === 'map'
+                    ? 'map'
+                    : tcfg?.reduce
+                      ? 'reduce'
+                      : tcfg?.fanout || 'default';
+                const inItem = !!foreachContext;
+                const items =
+                  checkConfig.forEach && Array.isArray(currentRouteOutput)
+                    ? (currentRouteOutput as unknown[])
+                    : [];
+                const scheduleOnce = async (scopeForRun: ScopePath) =>
+                  this.runNamedCheck(target, scopeForRun, {
+                    config: config!,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap: resultsMap || new Map(),
+                    debug: !!debug,
+                    eventOverride: onFail.goto_event,
+                  });
+                if (!inItem && mode === 'map' && items.length > 0) {
+                  for (let i = 0; i < items.length; i++) {
+                    const itemScope: ScopePath = [{ check: checkName, index: i }];
+                    await scheduleOnce(itemScope);
+                  }
+                } else {
+                  const scopeForRun: ScopePath = foreachContext
+                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                    : [];
+                  await scheduleOnce(scopeForRun);
+                }
+              }
             }
           }
 
@@ -712,8 +1717,9 @@ export class CheckExecutionEngine {
           // No retry configured: return existing result
           return res;
         }
-        let needRerun = false;
-        let rerunEventOverride: import('./types/config').EventTrigger | undefined;
+        // Note: previously we re-ran the source check after goto to "re-validate with new state".
+        // This caused success→goto→re-run loops for unconditional gotos. We no longer re-run the
+        // source after goto; goto only schedules the target and returns.
         if (onSuccess) {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
@@ -731,7 +1737,45 @@ export class CheckExecutionEngine {
               );
             }
             for (const stepId of Array.from(new Set(runList))) {
-              await executeNamedCheckInline(stepId);
+              const tcfg = config!.checks?.[stepId] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              const mode =
+                tcfg?.fanout === 'map'
+                  ? 'map'
+                  : tcfg?.reduce
+                    ? 'reduce'
+                    : tcfg?.fanout || 'default';
+              const inItem = !!foreachContext;
+              const items =
+                checkConfig.forEach && Array.isArray(currentRouteOutput)
+                  ? (currentRouteOutput as unknown[])
+                  : [];
+              if (!inItem && mode === 'map' && items.length > 0) {
+                for (let i = 0; i < items.length; i++) {
+                  const itemScope: ScopePath = [{ check: checkName, index: i }];
+                  await this.runNamedCheck(stepId, itemScope, {
+                    config: config!,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap: resultsMap || new Map(),
+                    debug: !!debug,
+                    overlay: dependencyResults,
+                  });
+                }
+              } else {
+                const scopeForRun: ScopePath = foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : [];
+                await this.runNamedCheck(stepId, scopeForRun, {
+                  config: config!,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: resultsMap || new Map(),
+                  debug: !!debug,
+                  overlay: dependencyResults,
+                });
+              }
             }
           } else {
             // Provide a lightweight reason when nothing is scheduled via on_success.run
@@ -820,22 +1864,51 @@ export class CheckExecutionEngine {
                 };
                 for (const n of forwardSet) visit(n);
                 // Execute in order with event override, updating statistics per child
-                for (const stepId of order) {
-                  if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                  const childStart = this.recordIterationStart(stepId);
-                  const childRes = await executeNamedCheckInline(stepId, {
-                    eventOverride: onSuccess.goto_event,
-                  });
-                  const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                  const childSuccess = !this.hasFatal(childIssues);
-                  const childOutput: unknown = (childRes as any)?.output;
-                  this.recordIterationComplete(
-                    stepId,
-                    childStart,
-                    childSuccess,
-                    childIssues,
-                    childOutput
-                  );
+                const tcfg = cfgChecks[target];
+                const mode =
+                  tcfg?.fanout === 'map'
+                    ? 'map'
+                    : tcfg?.reduce
+                      ? 'reduce'
+                      : tcfg?.fanout || 'default';
+                const items =
+                  checkConfig.forEach && Array.isArray(currentRouteOutput)
+                    ? (currentRouteOutput as unknown[])
+                    : [];
+                const runChainOnce = async (scopeForRun: ScopePath) => {
+                  for (const stepId of order) {
+                    if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                    const childStart = this.recordIterationStart(stepId);
+                    const childRes = await this.runNamedCheck(stepId, scopeForRun, {
+                      config: config!,
+                      dependencyGraph,
+                      prInfo,
+                      resultsMap: resultsMap || new Map(),
+                      debug: !!debug,
+                      eventOverride: onSuccess.goto_event,
+                    });
+                    const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                    const childSuccess = !this.hasFatal(childIssues);
+                    const childOutput: unknown = (childRes as any)?.output;
+                    this.recordIterationComplete(
+                      stepId,
+                      childStart,
+                      childSuccess,
+                      childIssues,
+                      childOutput
+                    );
+                  }
+                };
+                if (!foreachContext && mode === 'map' && items.length > 0) {
+                  for (let i = 0; i < items.length; i++) {
+                    const itemScope: ScopePath = [{ check: checkName, index: i }];
+                    await runChainOnce(itemScope);
+                  }
+                } else {
+                  const scopeForRun: ScopePath = foreachContext
+                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                    : [];
+                  await runChainOnce(scopeForRun);
                 }
                 // Do NOT append forward-run child issues to the current check result.
                 // Child results are recorded independently in resultsMap and statistics,
@@ -850,29 +1923,47 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                 );
               }
-              await executeNamedCheckInline(target, { eventOverride: onSuccess.goto_event });
-              // After jumping back to an ancestor, re-run the current check to re-validate with new state
-              needRerun = true;
-              rerunEventOverride = onSuccess.goto_event;
+              {
+                const tcfg = config!.checks?.[target] as
+                  | import('./types/config').CheckConfig
+                  | undefined;
+                const mode =
+                  tcfg?.fanout === 'map'
+                    ? 'map'
+                    : tcfg?.reduce
+                      ? 'reduce'
+                      : tcfg?.fanout || 'default';
+                const items =
+                  checkConfig.forEach && Array.isArray(currentRouteOutput)
+                    ? (currentRouteOutput as unknown[])
+                    : [];
+                const scheduleOnce = async (scopeForRun: ScopePath) =>
+                  this.runNamedCheck(target, scopeForRun, {
+                    config: config!,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap: resultsMap || new Map(),
+                    debug: !!debug,
+                    eventOverride: onSuccess.goto_event,
+                    overlay: dependencyResults,
+                  });
+                if (!foreachContext && mode === 'map' && items.length > 0) {
+                  for (let i = 0; i < items.length; i++) {
+                    const itemScope: ScopePath = [{ check: checkName, index: i }];
+                    await scheduleOnce(itemScope);
+                  }
+                } else {
+                  const scopeForRun: ScopePath = foreachContext
+                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                    : [];
+                  await scheduleOnce(scopeForRun);
+                }
+              }
+              // Do not re-run the current check after goto; target (and its dependents) will run.
             }
           }
         }
-        if (needRerun) {
-          if (debug) log(`🔄 Debug: Re-running '${checkName}' after on_success.goto`);
-          try {
-            require('./logger').logger.info(`🔁 Re-running '${checkName}' after goto`);
-          } catch {}
-          // Apply same event override as goto (if any) for this re-run by setting routingEventOverride
-          const prev = this.routingEventOverride;
-          if (rerunEventOverride) this.routingEventOverride = rerunEventOverride;
-          attempt++;
-          // Loop will execute the check again with evaluateIfCondition seeing override
-          // Restore after loop iteration completes for safety
-          // We can't restore here; we'll restore at start of next iteration when override applied,
-          // but ensure no lingering by resetting immediately after attempt increment
-          this.routingEventOverride = prev;
-          continue;
-        }
+        // No re-run after goto
         return res;
       } catch (err) {
         // Failure path
@@ -902,7 +1993,13 @@ export class CheckExecutionEngine {
           }
           if (debug) log(`🔧 Debug: on_fail.run executing [${runList.join(', ')}]`);
           for (const stepId of runList) {
-            await executeNamedCheckInline(stepId);
+            await this.runNamedCheck(stepId, [], {
+              config: config!,
+              dependencyGraph,
+              prInfo,
+              resultsMap: resultsMap || new Map(),
+              debug: !!debug,
+            });
           }
         }
 
@@ -926,7 +2023,15 @@ export class CheckExecutionEngine {
                 `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
               );
             }
-            await executeNamedCheckInline(target, { eventOverride: onFail.goto_event });
+            await this.runNamedCheck(target, [], {
+              config: config!,
+              dependencyGraph,
+              prInfo,
+              resultsMap: resultsMap || new Map(),
+              debug: !!debug,
+              eventOverride: onFail.goto_event,
+              overlay: dependencyResults,
+            });
           }
         }
 
@@ -1038,6 +2143,10 @@ export class CheckExecutionEngine {
         logger.debug('Memory store initialized');
       }
 
+      // Reset per-run on_finish loop counters
+      this.onFinishLoopCounts.clear();
+      // Reset per-run forEach wave counters
+      this.forEachWaveCounts.clear();
       // Store webhook context if provided
       this.webhookContext = options.webhookContext;
 
@@ -1293,7 +2402,8 @@ export class CheckExecutionEngine {
         logFn,
         debug,
         maxParallelism,
-        failFast
+        failFast,
+        config?.tag_filter
       );
     }
 
@@ -1318,7 +2428,9 @@ export class CheckExecutionEngine {
           eventContext: this.enrichEventContext(prInfo.eventContext),
           ai: timeout ? { timeout } : undefined,
         };
+        const __provStart = Date.now();
         const result = await provider.execute(prInfo, providerConfig);
+        this.recordProviderDuration(checks[0], Date.now() - __provStart);
 
         // Prefix issues with check name for consistent grouping
         const prefixedIssues = (result.issues || []).map(issue => ({
@@ -1364,7 +2476,9 @@ export class CheckExecutionEngine {
         ai_model: config?.ai_model,
       };
 
+      const __provStart2 = Date.now();
       const result = await provider.execute(prInfo, providerConfig);
+      this.recordProviderDuration(checkName, Date.now() - __provStart2);
 
       // Prefix issues with check name for consistent grouping
       const prefixedIssues = (result.issues || []).map(issue => ({
@@ -1514,7 +2628,7 @@ export class CheckExecutionEngine {
         debug,
         maxParallelism,
         failFast,
-        _pauseGate
+        tagFilter
       );
     }
 
@@ -1529,8 +2643,7 @@ export class CheckExecutionEngine {
         timeout,
         config,
         logFn,
-        debug,
-        _pauseGate
+        debug
       );
 
       const groupedResults: GroupedCheckResults = {};
@@ -1557,8 +2670,7 @@ export class CheckExecutionEngine {
     timeout?: number,
     config?: import('./types/config').VisorConfig,
     logFn?: (message: string) => void,
-    debug?: boolean,
-    _pauseGate?: () => Promise<void>
+    debug?: boolean
   ): Promise<CheckResult> {
     if (!config?.checks?.[checkName]) {
       throw new Error(`No configuration found for check: ${checkName}`);
@@ -1575,7 +2687,6 @@ export class CheckExecutionEngine {
       focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
       schema: checkConfig.schema,
       group: checkConfig.group,
-      checkName, // propagate for fallback NDJSON attribution
       eventContext: this.enrichEventContext(prInfo.eventContext),
       ai: {
         timeout: timeout || 600000,
@@ -1593,7 +2704,9 @@ export class CheckExecutionEngine {
     };
     providerConfig.forEach = checkConfig.forEach;
 
+    const __provStart = Date.now();
     const result = await provider.execute(prInfo, providerConfig);
+    this.recordProviderDuration(checkName, Date.now() - __provStart);
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
     if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
@@ -1745,7 +2858,7 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    pauseGate?: () => Promise<void>
+    tagFilter?: import('./types/config').TagFilter
   ): Promise<ExecutionResult> {
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
@@ -1757,7 +2870,7 @@ export class CheckExecutionEngine {
       debug,
       maxParallelism,
       failFast,
-      pauseGate
+      tagFilter || config?.tag_filter
     );
 
     // Build execution statistics
@@ -2231,7 +3344,7 @@ export class CheckExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    pauseGate?: () => Promise<void>
+    tagFilter?: import('./types/config').TagFilter
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
 
@@ -2289,31 +3402,28 @@ export class CheckExecutionEngine {
       );
     }
 
-    // Validate dependencies for the initially requested checks first
-    const validation = DependencyResolver.validateDependencies(checks, dependencies);
-    if (!validation.valid) {
-      return {
-        issues: [
-          {
-            severity: 'error' as const,
-            message: `Dependency validation failed: ${validation.errors.join(', ')}`,
-            file: '',
-            line: 0,
-            ruleId: 'dependency-validation-error',
-            category: 'logic' as const,
-          },
-        ],
-      };
-    }
+    // (moved) dependency validation runs after we include transitive dependencies
 
     // Expand requested checks with transitive dependencies present in config for execution
     const expandWithTransitives = (rootChecks: string[]): string[] => {
       if (!config?.checks) return rootChecks;
       const set = new Set<string>(rootChecks);
+      const allowByTags = (name: string): boolean => {
+        if (!tagFilter) return true;
+        const cfg = config!.checks?.[name];
+        const tags: string[] = (cfg && (cfg as any).tags) || [];
+        if (tagFilter.exclude && tagFilter.exclude.some(t => tags.includes(t))) return false;
+        if (tagFilter.include && tagFilter.include.length > 0) {
+          return tagFilter.include.some(t => tags.includes(t));
+        }
+        return true;
+      };
       const visit = (name: string) => {
         const cfg = config.checks![name];
         if (!cfg || !cfg.depends_on) return;
         for (const dep of cfg.depends_on) {
+          if (!config.checks![dep]) continue;
+          if (!allowByTags(dep)) continue;
           if (!set.has(dep)) {
             set.add(dep);
             visit(dep);
@@ -2330,6 +3440,25 @@ export class CheckExecutionEngine {
     for (const checkName of checks) {
       const checkConfig = config.checks![checkName];
       dependencies[checkName] = checkConfig?.depends_on || [];
+    }
+
+    // Validate dependencies after expansion so transitive deps are considered
+    {
+      const validation2 = DependencyResolver.validateDependencies(checks, dependencies);
+      if (!validation2.valid) {
+        return {
+          issues: [
+            {
+              severity: 'error' as const,
+              message: `Dependency validation failed: ${validation2.errors.join(', ')}`,
+              file: '',
+              line: 0,
+              ruleId: 'dependency-validation-error',
+              category: 'logic' as const,
+            },
+          ],
+        };
+      }
     }
 
     // Build dependency graph
@@ -2388,21 +3517,45 @@ export class CheckExecutionEngine {
     ) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
 
-      // Check if any checks in this level require session reuse - if so, force sequential execution
+      // Check for session reuse conflicts - only force sequential execution when there are actual conflicts
       const checksInLevel = executionGroup.parallel;
-      const hasSessionReuseInLevel = checksInLevel.some(checkName =>
-        sessionReuseChecks.has(checkName)
+
+      // Group checks by their session parent
+      const sessionReuseGroups = new Map<string, string[]>();
+      checksInLevel.forEach(checkName => {
+        if (sessionReuseChecks.has(checkName)) {
+          const parentCheckName = sessionProviders.get(checkName);
+          if (parentCheckName) {
+            if (!sessionReuseGroups.has(parentCheckName)) {
+              sessionReuseGroups.set(parentCheckName, []);
+            }
+            sessionReuseGroups.get(parentCheckName)!.push(checkName);
+          }
+        }
+      });
+
+      // Only force sequential execution if multiple checks share the same session parent
+      const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values()).some(
+        group => group.length > 1
       );
 
       let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
-      if (hasSessionReuseInLevel) {
-        // Force sequential execution when session reuse is involved
+      if (hasConflictingSessionReuse) {
+        // Force sequential execution when there are actual session conflicts
         actualParallelism = 1;
         if (debug) {
+          const conflictingGroups = Array.from(sessionReuseGroups.entries())
+            .filter(([_, checks]) => checks.length > 1)
+            .map(([parent, checks]) => `${parent} -> [${checks.join(', ')}]`)
+            .join('; ');
           log(
-            `🔄 Debug: Level ${executionGroup.level} contains session reuse checks - forcing sequential execution (parallelism: 1)`
+            `🔄 Debug: Level ${executionGroup.level} has session conflicts (${conflictingGroups}) - forcing sequential execution (parallelism: 1)`
           );
         }
+      } else if (sessionReuseGroups.size > 0 && debug) {
+        log(
+          `✅ Debug: Level ${executionGroup.level} has session reuse but no conflicts - allowing parallel execution`
+        );
       }
 
       if (debug) {
@@ -2414,13 +3567,6 @@ export class CheckExecutionEngine {
       // Create task functions for checks in this level, skip those already completed inline
       const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
       const levelTaskFunctions = levelChecks.map(checkName => async () => {
-        if (pauseGate) {
-          try {
-            await pauseGate();
-          } catch {
-            return { checkName, error: '__STOP__', result: null, skipped: true };
-          }
-        }
         // Skip if this check was already completed by item-level branch scheduler
         if (results.has(checkName)) {
           if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -2699,7 +3845,11 @@ export class CheckExecutionEngine {
               // Skip to the end - don't execute this check
             } else {
               // Emit explicit debug to stdout so CLI e2e can assert it
-              if (debug) {
+              if (
+                debug &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'json' &&
+                process.env.VISOR_OUTPUT_FORMAT !== 'sarif'
+              ) {
                 console.log(
                   `🔄 Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
                 );
@@ -2774,89 +3924,24 @@ export class CheckExecutionEngine {
                     ]);
                   } catch {}
 
-                  // Build per-item dependency results for child, including transitive ancestors
-                  const childDepResults = new Map<string, ReviewSummary>();
-                  const childAllDeps = DependencyResolver.getAllDependencies(
-                    childName,
-                    dependencyGraph.nodes
-                  );
-                  for (const dep of childAllDeps) {
-                    const baseRes = baseDeps.get(dep);
-                    if (baseRes) {
-                      childDepResults.set(dep, baseRes);
-                      continue;
-                    }
-                    const globalRes = results.get(dep) as ExtendedReviewSummary | undefined;
-                    if (!globalRes) continue;
-                    if (
-                      globalRes &&
-                      (globalRes.isForEach ||
-                        Array.isArray(globalRes.forEachItemResults) ||
-                        Array.isArray((globalRes as any).output))
-                    ) {
-                      // Prefer precise per-item result when available
-                      if (
-                        Array.isArray(globalRes.forEachItemResults) &&
-                        globalRes.forEachItemResults[itemIndex]
-                      ) {
-                        childDepResults.set(dep, globalRes.forEachItemResults[itemIndex]!);
-                      } else if (
-                        Array.isArray((globalRes as any).output) &&
-                        (globalRes as any).output[itemIndex] !== undefined
-                      ) {
-                        childDepResults.set(dep, {
-                          issues: [],
-                          output: (globalRes as any).output[itemIndex],
-                        } as ReviewSummary);
-                      } else {
-                        childDepResults.set(dep, globalRes);
-                      }
-                    } else {
-                      childDepResults.set(dep, globalRes);
-                    }
-                  }
-
-                  // If the parent item had a fatal failure, skip this child for this branch
-                  const parentItemRes = childDepResults.get(parentName);
-                  if (parentItemRes) {
-                    // Skip when parent explicitly signaled error in its output for this item
-                    try {
-                      const pout: any = (parentItemRes as any).output;
-                      if (pout && typeof pout === 'object' && pout.error === true) {
-                        continue;
-                      }
-                    } catch {}
-
-                    const fatal = (parentItemRes.issues || []).some(issue => {
-                      const id = issue.ruleId || '';
-                      const sev = issue.severity || 'error';
-                      return (
-                        sev === 'error' ||
-                        sev === 'critical' ||
-                        id === 'command/execution_error' ||
-                        id.endsWith('/command/execution_error') ||
-                        id === 'command/timeout' ||
-                        id.endsWith('/command/timeout') ||
-                        id === 'command/transform_js_error' ||
-                        id.endsWith('/command/transform_js_error') ||
-                        id === 'command/transform_error' ||
-                        id.endsWith('/command/transform_error') ||
-                        id.endsWith('/forEach/iteration_error') ||
-                        id === 'forEach/undefined_output' ||
-                        id.endsWith('/forEach/undefined_output') ||
-                        id.endsWith('_fail_if') ||
-                        id.endsWith('/global_fail_if')
-                      );
-                    });
-                    if (fatal) {
-                      continue;
-                    }
+                  // If the parent item had a fatal failure per mask, skip this child for this branch
+                  const parentAgg = results.get(parentName) as ExtendedReviewSummary | undefined;
+                  const maskFatal =
+                    !!parentAgg?.forEachFatalMask &&
+                    parentAgg!.forEachFatalMask![itemIndex] === true;
+                  if (maskFatal) {
+                    continue;
                   }
 
                   // Evaluate per-item if condition
                   if (childCfg.if) {
-                    const condResults = new Map(results);
-                    for (const [k, v] of childDepResults) condResults.set(k, v);
+                    const itemScope: ScopePath = [{ check: parentName, index: itemIndex }];
+                    const condResults = this.buildSnapshotDependencyResults(
+                      itemScope,
+                      undefined,
+                      prInfo.eventType
+                    );
+                    for (const [k, v] of baseDeps.entries()) condResults.set(k, v);
                     const shouldRunChild = await this.evaluateCheckCondition(
                       childName,
                       childCfg.if,
@@ -2871,13 +3956,22 @@ export class CheckExecutionEngine {
 
                   // Execute child for this item (record stats)
                   const childIterStart = this.recordIterationStart(childName);
+                  // Build snapshot-based dependency view for this item scope
+                  const itemScope: ScopePath = [{ check: parentName, index: itemIndex }];
+                  const snapshotDeps = this.buildSnapshotDependencyResults(
+                    itemScope,
+                    undefined,
+                    prInfo.eventType
+                  );
+                  for (const [k, v] of baseDeps.entries()) snapshotDeps.set(k, v);
+
                   const childItemRes = await this.executeWithRouting(
                     childName,
                     childCfg,
                     childProv,
                     childProviderConfig,
                     prInfo,
-                    childDepResults,
+                    snapshotDeps,
                     sessionInfo,
                     config,
                     dependencyGraph,
@@ -2950,13 +4044,6 @@ export class CheckExecutionEngine {
               // Create task functions (not executed yet) - these will be executed with controlled concurrency
               // via executeWithLimitedParallelism to respect maxParallelism setting
               const itemTasks = forEachItems.map((item, itemIndex) => async () => {
-                if (pauseGate) {
-                  try {
-                    await pauseGate();
-                  } catch {
-                    throw new Error('__STOP__');
-                  }
-                }
                 try {
                   emitNdjsonSpanWithEvents(
                     'visor.foreach.item',
@@ -2968,119 +4055,23 @@ export class CheckExecutionEngine {
                     []
                   );
                 } catch {}
-
-                // Capture forEach state in active OTEL span
-                try {
-                  const span = trace.getSpan(otContext.active());
-                  if (span) {
-                    captureForEachState(span, forEachItems, itemIndex, item);
-                  }
-                } catch {
-                  // Ignore telemetry errors
-                }
-
-                // Create modified dependency results with current item
-                // For forEach branching: unwrap ALL forEach parents to create isolated execution branch
-                const forEachDependencyResults = new Map<string, ReviewSummary>();
-                for (const [depName, depResult] of dependencyResults) {
-                  if (forEachParents.includes(depName)) {
-                    // This is a forEach parent - unwrap its output for this iteration
-                    const depForEachResult = depResult as ReviewSummary & {
-                      output?: unknown;
-                      forEachItems?: unknown[];
-                      forEachItemResults?: ReviewSummary[];
-                    };
-
-                    if (
-                      Array.isArray(depForEachResult.forEachItemResults) &&
-                      depForEachResult.forEachItemResults[itemIndex]
-                    ) {
-                      // Use precise per-item result (includes issues + output)
-                      forEachDependencyResults.set(
-                        depName,
-                        depForEachResult.forEachItemResults[itemIndex]!
-                      );
-                      // Also provide -raw access to the full array
-                      const rawResult: ReviewSummary & { output?: unknown } = {
-                        issues: [],
-                        output: depForEachResult.output,
-                      };
-                      forEachDependencyResults.set(`${depName}-raw`, rawResult);
-                    } else if (
-                      Array.isArray(depForEachResult.output) &&
-                      (depForEachResult as any).output[itemIndex] !== undefined
-                    ) {
-                      // Fallback to output-only unwrapping
-                      const modifiedResult: ReviewSummary & { output?: unknown } = {
-                        issues: [],
-                        output: (depForEachResult as any).output[itemIndex],
-                      };
-
-                      forEachDependencyResults.set(depName, modifiedResult);
-                      const rawResult: ReviewSummary & { output?: unknown } = {
-                        issues: [],
-                        output: depForEachResult.output,
-                      };
-                      forEachDependencyResults.set(`${depName}-raw`, rawResult);
-                    } else {
-                      // Fallback: use the result as-is
-                      forEachDependencyResults.set(depName, depResult);
-                    }
-                  } else {
-                    forEachDependencyResults.set(depName, depResult);
-                  }
-                }
+                // Build snapshot-based dependency view for this item scope (no per-item cloning)
+                const itemScope: ScopePath = [{ check: forEachParentName!, index: itemIndex }];
+                const snapshotDeps = this.buildSnapshotDependencyResults(
+                  itemScope,
+                  undefined,
+                  prInfo.eventType
+                );
 
                 // Per-item dependency gating for forEach parents: if a dependency failed for this item, skip this iteration
                 if ((checkConfig.depends_on || []).length > 0) {
                   const directDeps = checkConfig.depends_on || [];
                   for (const depId of directDeps) {
                     if (!forEachParents.includes(depId)) continue;
-                    const depItemRes = forEachDependencyResults.get(depId);
-                    if (!depItemRes) continue;
-                    const wasSkippedDep = (depItemRes.issues || []).some(i =>
-                      (i.ruleId || '').endsWith('/__skipped')
-                    );
-                    let hasFatalDepFailure = (depItemRes.issues || []).some(issue => {
-                      const id = issue.ruleId || '';
-                      return (
-                        id === 'command/execution_error' ||
-                        id.endsWith('/command/execution_error') ||
-                        id === 'command/timeout' ||
-                        id.endsWith('/command/timeout') ||
-                        id === 'command/transform_js_error' ||
-                        id.endsWith('/command/transform_js_error') ||
-                        id === 'command/transform_error' ||
-                        id.endsWith('/command/transform_error') ||
-                        id.endsWith('/forEach/iteration_error') ||
-                        id === 'forEach/undefined_output' ||
-                        id.endsWith('/forEach/undefined_output') ||
-                        id.endsWith('_fail_if') ||
-                        id.endsWith('/global_fail_if')
-                      );
-                    });
-                    if (
-                      !hasFatalDepFailure &&
-                      config &&
-                      (config.fail_if || config.checks![depId]?.fail_if)
-                    ) {
-                      try {
-                        const depFailures = await this.evaluateFailureConditions(
-                          depId,
-                          depItemRes,
-                          config,
-                          prInfo,
-                          results
-                        );
-                        hasFatalDepFailure = depFailures.some(f => f.failed);
-                      } catch {}
-                    }
-                    const depAgg = dependencyResults.get(depId) as
-                      | ExtendedReviewSummary
-                      | undefined;
+                    const depAgg = results.get(depId) as ExtendedReviewSummary | undefined;
                     const maskFatal =
                       !!depAgg?.forEachFatalMask && depAgg!.forEachFatalMask![itemIndex] === true;
-                    if (wasSkippedDep || hasFatalDepFailure || maskFatal) {
+                    if (maskFatal) {
                       if (debug) {
                         log(
                           `🔄 Debug: Skipping item ${itemIndex + 1}/${forEachItems.length} for check "${checkName}" due to failed dependency '${depId}'`
@@ -3097,17 +4088,11 @@ export class CheckExecutionEngine {
 
                 // Evaluate if condition for this forEach item
                 if (checkConfig.if) {
-                  // Merge current results with forEach-specific dependency results for condition evaluation
-                  const conditionResults = new Map(results);
-                  for (const [depName, depResult] of forEachDependencyResults) {
-                    conditionResults.set(depName, depResult);
-                  }
-
                   const shouldRun = await this.evaluateCheckCondition(
                     checkName,
                     checkConfig.if,
                     prInfo,
-                    conditionResults,
+                    snapshotDeps,
                     debug
                   );
 
@@ -3142,7 +4127,7 @@ export class CheckExecutionEngine {
                   provider,
                   providerConfig,
                   prInfo,
-                  forEachDependencyResults,
+                  snapshotDeps,
                   sessionInfo,
                   config,
                   dependencyGraph,
@@ -3233,7 +4218,6 @@ export class CheckExecutionEngine {
 
                 const perItemDone = new Set<string>([...forEachParents, checkName]);
                 const perItemDepMap = new Map<string, ReviewSummary>();
-                for (const [k, v] of forEachDependencyResults) perItemDepMap.set(k, v);
                 perItemDepMap.set(checkName, itemResult);
 
                 const isFatal = (r: ReviewSummary | undefined): boolean => {
@@ -3249,50 +4233,50 @@ export class CheckExecutionEngine {
                     if (!nodeCfg) continue;
                     const deps = dependencies[node] || [];
 
-                    // Are all deps satisfied for this item?
+                    // Are all deps satisfied for this item according to aggregate visibility/masks?
                     let ready = true;
-                    const childDepsMap = new Map<string, ReviewSummary>();
                     for (const d of deps) {
-                      // Prefer per-item result if already computed in this branch
+                      // If we have a per-item result for this dependency, honor its fatality
                       const perItemRes = perItemDepMap.get(d);
                       if (perItemRes) {
                         if (isFatal(perItemRes)) {
                           ready = false;
                           break;
                         }
-                        childDepsMap.set(d, perItemRes);
                         continue;
                       }
-
+                      // If this dependency was executed earlier in this item's chain, it's satisfied
+                      if (perItemDone.has(d)) continue;
                       const agg = results.get(d) as ExtendedReviewSummary | undefined;
-                      // If dependency is a forEach-capable result, require per-item unwrap
-                      if (agg && (agg.isForEach || Array.isArray(agg.forEachItemResults))) {
-                        const r =
-                          (agg.forEachItemResults && agg.forEachItemResults[itemIndex]) ||
-                          undefined;
-                        const maskFatal =
-                          !!agg.forEachFatalMask && agg.forEachFatalMask[itemIndex] === true;
-                        if (!r || maskFatal || isFatal(r)) {
-                          ready = false;
-                          break;
-                        }
-                        childDepsMap.set(d, r);
-                        continue;
-                      }
-
-                      // Fallback: use global dependency result (non-forEach)
-                      if (!agg || isFatal(agg)) {
+                      if (!agg) {
                         ready = false;
                         break;
                       }
-                      childDepsMap.set(d, agg);
+                      if (agg.isForEach || Array.isArray(agg.forEachItemResults)) {
+                        const maskFatal =
+                          !!agg.forEachFatalMask && agg.forEachFatalMask[itemIndex] === true;
+                        if (maskFatal) {
+                          ready = false;
+                          break;
+                        }
+                      } else {
+                        if (isFatal(agg)) {
+                          ready = false;
+                          break;
+                        }
+                      }
                     }
                     if (!ready) continue;
 
                     // if condition per item
                     if (nodeCfg.if) {
-                      const condResults = new Map(results);
-                      for (const [k, v] of childDepsMap) condResults.set(k, v);
+                      const itemScope: ScopePath = [{ check: forEachParentName, index: itemIndex }];
+                      const condResults = this.buildSnapshotDependencyResults(
+                        itemScope,
+                        undefined,
+                        prInfo.eventType
+                      );
+                      for (const [k, v] of perItemDepMap.entries()) condResults.set(k, v);
                       const shouldRun = await this.evaluateCheckCondition(
                         node,
                         nodeCfg.if,
@@ -3328,48 +4312,14 @@ export class CheckExecutionEngine {
                     };
 
                     const iterStart = this.recordIterationStart(node);
-                    // Expand dependency map for execution context to include transitive ancestors
-                    const execDepMap = new Map<string, ReviewSummary>(childDepsMap);
-                    const nodeAllDeps = DependencyResolver.getAllDependencies(
-                      node,
-                      dependencyGraph.nodes
+                    // Build snapshot-based dependency map at item scope
+                    const itemScope: ScopePath = [{ check: forEachParentName, index: itemIndex }];
+                    const execDepMap = this.buildSnapshotDependencyResults(
+                      itemScope,
+                      undefined,
+                      prInfo.eventType
                     );
-                    for (const dep of nodeAllDeps) {
-                      if (execDepMap.has(dep)) continue;
-                      // Prefer per-item map first
-                      const perItemRes = perItemDepMap.get(dep);
-                      if (perItemRes) {
-                        execDepMap.set(dep, perItemRes);
-                        continue;
-                      }
-                      const agg = results.get(dep) as ExtendedReviewSummary | undefined;
-                      if (!agg) continue;
-                      if (
-                        agg &&
-                        (agg.isForEach ||
-                          Array.isArray(agg.forEachItemResults) ||
-                          Array.isArray((agg as any).output))
-                      ) {
-                        if (
-                          Array.isArray(agg.forEachItemResults) &&
-                          agg.forEachItemResults[itemIndex]
-                        ) {
-                          execDepMap.set(dep, agg.forEachItemResults[itemIndex]!);
-                        } else if (
-                          Array.isArray((agg as any).output) &&
-                          (agg as any).output[itemIndex] !== undefined
-                        ) {
-                          execDepMap.set(dep, {
-                            issues: [],
-                            output: (agg as any).output[itemIndex],
-                          } as ReviewSummary);
-                        } else {
-                          execDepMap.set(dep, agg);
-                        }
-                      } else {
-                        execDepMap.set(dep, agg);
-                      }
-                    }
+                    for (const [k, v] of perItemDepMap.entries()) execDepMap.set(k, v);
 
                     const nodeItemRes = await this.executeWithRouting(
                       node,
@@ -3973,20 +4923,6 @@ export class CheckExecutionEngine {
         const result = levelResults[i];
         const checkConfig = config.checks![checkName];
 
-        // Stop signal propagation
-        if (result.status === 'fulfilled' && (result.value as any)?.error === '__STOP__') {
-          shouldStopExecution = true;
-          break;
-        }
-        if (
-          result.status === 'rejected' &&
-          result.reason instanceof Error &&
-          (result.reason as Error).message === '__STOP__'
-        ) {
-          shouldStopExecution = true;
-          break;
-        }
-
         if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
           if ((result.value as any).skipped) {
@@ -4051,6 +4987,10 @@ export class CheckExecutionEngine {
             // Store the array for iteration by dependent checks
             reviewSummaryWithOutput.forEachItems = normalizedOutput;
             reviewSummaryWithOutput.isForEach = true;
+            try {
+              const st = this.executionStats.get(checkName);
+              if (st) st.outputsProduced = normalizedOutput.length;
+            } catch {}
           }
 
           try {
@@ -4067,23 +5007,32 @@ export class CheckExecutionEngine {
           }
 
           results.set(checkName, reviewResult);
-
-          // Capture state snapshot after check completion
-          try {
-            const span = trace.getSpan(otContext.active());
-            if (span) {
-              const allOutputs: Record<string, unknown> = {};
-              results.forEach((result, name) => {
-                if ((result as any).output !== undefined) {
-                  allOutputs[name] = (result as any).output;
-                }
-              });
-              const memoryStore = MemoryStore.getInstance();
-              const memoryData = await memoryStore.getAll();
-              captureStateSnapshot(span, checkName, allOutputs, memoryData);
+          // Phase 4: commit aggregate and per-item entries for forEach checks; else single aggregate
+          const agg = reviewResult as ExtendedReviewSummary;
+          if (
+            checkConfig?.forEach &&
+            (Array.isArray(agg.forEachItems) || Array.isArray((agg as any).output))
+          ) {
+            // Commit aggregate at root scope
+            this.commitJournal(checkName, agg, prInfo.eventType, []);
+            const items: unknown[] = Array.isArray(agg.forEachItems)
+              ? (agg.forEachItems as unknown[])
+              : Array.isArray((agg as any).output)
+                ? ((agg as any).output as unknown[])
+                : [];
+            for (let i = 0; i < items.length; i++) {
+              const item = items[i];
+              try {
+                this.commitJournal(
+                  checkName,
+                  { issues: [], output: item } as ExtendedReviewSummary,
+                  prInfo.eventType,
+                  [{ check: checkName, index: i }]
+                );
+              } catch {}
             }
-          } catch {
-            // Ignore telemetry errors
+          } else {
+            this.commitJournal(checkName, reviewResult as ExtendedReviewSummary, prInfo.eventType);
           }
         } else {
           // Store error result for dependency tracking
@@ -4108,6 +5057,8 @@ export class CheckExecutionEngine {
             ],
           };
           results.set(checkName, errorSummary);
+          // Phase 0: commit to journal (with event scoping)
+          this.commitJournal(checkName, errorSummary as ExtendedReviewSummary, prInfo.eventType);
 
           // Check if we should stop execution due to fail-fast
           if (effectiveFailFast) {
@@ -4154,6 +5105,11 @@ export class CheckExecutionEngine {
       } else {
         log(`✅ Dependency-aware execution completed successfully for all ${results.size} checks`);
       }
+    }
+
+    // Handle on_finish hooks for forEach checks after ALL dependents complete
+    if (!shouldStopExecution) {
+      await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
     }
 
     // Cleanup sessions BEFORE printing summary to avoid mixing debug logs with table output
@@ -4255,7 +5211,7 @@ export class CheckExecutionEngine {
                   : 'manual'
             : 'issue_comment';
           const commenterAssoc = resolveAssociationFromEvent(
-            (prInfo as any)?.eventContext,
+            prInfo.eventContext,
             prInfo.authorAssociation
           );
           const shouldRun = await this.failureEvaluator.evaluateIfCondition(
@@ -4522,7 +5478,7 @@ export class CheckExecutionEngine {
       aggregatedIssues.push(...nonInternalIssues);
 
       const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
-      const resultContent = (resultSummary as any).content;
+      const resultContent = (resultSummary as { content?: string }).content;
       if (typeof resultContent === 'string' && resultContent.trim()) {
         contentMap[checkName] = resultContent.trim();
       }
@@ -5625,6 +6581,7 @@ export class CheckExecutionEngine {
       failedRuns: 0,
       skipped: false,
       totalDuration: 0,
+      providerDurationMs: 0,
       issuesFound: 0,
       issuesBySeverity: {
         critical: 0,
@@ -5680,6 +6637,15 @@ export class CheckExecutionEngine {
     if (output !== undefined) {
       stats.outputsProduced = (stats.outputsProduced || 0) + 1;
     }
+  }
+
+  /**
+   * Record provider/self execution time (in milliseconds) for a check
+   */
+  private recordProviderDuration(checkName: string, ms: number): void {
+    const stats = this.executionStats.get(checkName);
+    if (!stats) return;
+    stats.providerDurationMs = (stats.providerDurationMs || 0) + Math.max(0, Math.floor(ms));
   }
 
   /**
@@ -5840,18 +6806,27 @@ export class CheckExecutionEngine {
       return '⏭';
     }
 
-    if (stats.totalRuns === 0) return '-';
+    // Prefer history length when it indicates more actual executions than our counter
+    const historyLen = (() => {
+      try {
+        return this.outputHistory.get(stats.checkName)?.length || 0;
+      } catch {
+        return 0;
+      }
+    })();
+    const totalRuns = Math.max(stats.totalRuns || 0, historyLen);
+    if (totalRuns === 0) return '-';
 
     const symbol = stats.failedRuns === 0 ? '✔' : stats.successfulRuns === 0 ? '✖' : '✔/✖';
 
     // Show iteration count if > 1
-    if (stats.totalRuns > 1) {
+    if (totalRuns > 1) {
       if (stats.failedRuns > 0 && stats.successfulRuns > 0) {
         // Partial success
-        return `${symbol} ${stats.successfulRuns}/${stats.totalRuns}`;
+        return `${symbol} ${stats.successfulRuns}/${totalRuns}`;
       } else {
         // All success or all failed
-        return `${symbol} ×${stats.totalRuns}`;
+        return `${symbol} ×${totalRuns}`;
       }
     }
 
@@ -5861,8 +6836,17 @@ export class CheckExecutionEngine {
   /**
    * Format the Details column for execution summary table
    */
-  private formatDetailsColumn(stats: CheckExecutionStats): string {
+  private formatDetailsColumn(stats: CheckExecutionStats, _isForEachParent?: boolean): string {
     const parts: string[] = [];
+
+    // Simpler summary: do not show passes/items here to avoid confusion.
+    // Status column already shows ×N when runs > 1.
+
+    // Show self/provider time to disambiguate inclusive duration in the main column
+    if (typeof stats.providerDurationMs === 'number' && stats.providerDurationMs > 0) {
+      const selfSec = (stats.providerDurationMs / 1000).toFixed(1);
+      parts.unshift(`self:${selfSec}s`);
+    }
 
     // Outputs produced (forEach)
     if (stats.outputsProduced && stats.outputsProduced > 0) {
@@ -5917,7 +6901,7 @@ export class CheckExecutionEngine {
     });
 
     summaryTable.push(
-      [`Execution Complete (${durationSec}s)`],
+      [`Checks Complete (${durationSec}s)`],
       [`Checks: ${stats.totalChecksConfigured} configured → ${stats.totalExecutions} executions`],
       [
         `Status: ${stats.successfulExecutions} ✔ │ ${stats.failedExecutions} ✖ │ ${stats.skippedChecks} ⏭`,
@@ -5941,7 +6925,7 @@ export class CheckExecutionEngine {
 
     const detailsTable = new (require('cli-table3'))({
       head: ['Check', 'Duration', 'Status', 'Details'],
-      colWidths: [21, 10, 10, 21],
+      colWidths: [21, 18, 10, 21],
       style: {
         head: ['cyan'],
         border: ['grey'],
@@ -5949,16 +6933,28 @@ export class CheckExecutionEngine {
     });
 
     for (const checkStats of stats.checks) {
-      const duration = checkStats.skipped
-        ? '-'
-        : `${(checkStats.totalDuration / 1000).toFixed(1)}s`;
+      const isForEachParent = !!this.config?.checks?.[checkStats.checkName]?.forEach;
+      // Show only the self/provider total time across all runs.
+      const selfMs =
+        typeof checkStats.providerDurationMs === 'number' && checkStats.providerDurationMs > 0
+          ? checkStats.providerDurationMs
+          : checkStats.totalDuration; // fallback if provider time missing
+      const duration = checkStats.skipped ? '-' : `${(selfMs / 1000).toFixed(1)}s`;
       const status = this.formatStatusColumn(checkStats);
-      const details = this.formatDetailsColumn(checkStats);
+      const details = this.formatDetailsColumn(checkStats, isForEachParent);
 
       detailsTable.push([checkStats.checkName, duration, status, details]);
     }
 
     logger.info(detailsTable.toString());
+
+    // Clarify that we will finalize GitHub check runs after the table (if enabled)
+    try {
+      if (this.checkRunMap && this.checkRunMap.size > 0) {
+        logger.info('');
+        logger.info('⏳ Finalizing GitHub check runs...');
+      }
+    } catch {}
 
     // Legend
     logger.info('');

@@ -1,0 +1,362 @@
+# Fact Validator Example Configuration
+#
+# This example demonstrates a complete fact validation system using the on_finish hook
+# with forEach checks. It implements a feedback loop where:
+# 1. An AI assistant generates a response
+# 2. Facts are extracted from the response
+# 3. Each fact is validated individually (forEach)
+# 4. Results are aggregated
+# 5. If validation fails, the assistant is retried with correction context
+#
+# This is a reference implementation for Phase 3 of the fact validator feature.
+#
+# Features demonstrated:
+# - Memory initialization and namespace isolation
+# - forEach with on_finish hook
+# - Dynamic routing with goto_js
+# - Event preservation with goto_event
+# - Memory-based retry logic
+# - Aggregation of forEach results
+# - Conditional posting based on validation state
+#
+# Usage:
+#   visor --config examples/fact-validator.yaml --event issue_opened --debug
+
+version: "1.0"
+
+# Environment variables
+env:
+  ENABLE_FACT_VALIDATION: "true"
+
+# Routing configuration
+routing:
+  max_loops: 3  # Prevent infinite retry loops
+
+# Memory configuration
+memory:
+  storage: memory
+  namespace: default
+
+checks:
+  # ============================================================================
+  # TASK 3.1: Memory Initialization
+  # ============================================================================
+  # Initialize the fact validation attempt counter
+  # This tracks how many times we've retried the assistant with correction context
+  init-fact-validation:
+    type: memory
+    operation: set
+    key: fact_validation_attempt
+    value: 0
+    namespace: fact-validation
+    on: [issue_opened, issue_comment]
+    # Note: In production, you would use: if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    # For this example, we run unconditionally
+
+  # ============================================================================
+  # TASK 3.2-3.3: Issue and Comment Assistants with Retry Context
+  # ============================================================================
+  # Generate response to GitHub issue
+  # For this demo, we use a command provider that simulates an AI response
+  # In production, this would be type: ai with a real prompt
+  issue-assistant:
+    type: command
+    group: dynamic
+    depends_on: [init-fact-validation]
+    on: [issue_opened]
+    exec: |
+      # Simulate AI assistant response
+      # Check if we have validation issues from a previous attempt
+      HAS_ISSUES=$(echo '{{ memory.has("fact_validation_issues", "fact-validation") }}' | tr '[:upper:]' '[:lower:]')
+
+      if [ "$HAS_ISSUES" = "true" ]; then
+        # Corrected response (second attempt)
+        echo "Welcome to Visor! The default configuration file is .visor.yaml (not visor.config.yaml). You can find examples in the examples/ directory. Visor supports multiple AI providers including Claude, Gemini, and OpenAI."
+      else
+        # Initial response with intentional factual error
+        echo "Welcome to Visor! The default configuration file is visor.config.yaml. You can find examples in the config/ directory. Visor only supports Claude AI."
+      fi
+
+  # Generate response to GitHub comment
+  # Similar to issue-assistant but for comment events
+  comment-assistant:
+    type: command
+    group: dynamic
+    depends_on: [init-fact-validation]
+    on: [issue_comment]
+    exec: |
+      # Simulate AI assistant response to comment
+      HAS_ISSUES=$(echo '{{ memory.has("fact_validation_issues", "fact-validation") }}' | tr '[:upper:]' '[:lower:]')
+
+      if [ "$HAS_ISSUES" = "true" ]; then
+        # Corrected response
+        echo "Visor can run as both a GitHub Action and a CLI tool. The binary name is 'visor' as defined in package.json. Tests use Jest with TypeScript support."
+      else
+        # Initial response with errors
+        echo "Visor only runs as a GitHub Action. The binary name is 'visor-cli'. Tests use Mocha."
+      fi
+
+  # ============================================================================
+  # TASK 3.4: Extract Facts (forEach with on_finish) - THE KEY CHECK
+  # ============================================================================
+  # Extract verifiable facts from the assistant response
+  # This is a forEach check, meaning it outputs an array and dependent checks
+  # will run once for each item in the array.
+  #
+  # The on_finish hook runs ONCE after ALL dependent checks (validate-fact) complete.
+  extract-facts:
+    type: command
+    group: fact-validation
+    depends_on: [issue-assistant, comment-assistant]
+    on: [issue_opened, issue_comment]
+
+    # Simulate fact extraction (normally this would be an AI prompt)
+    # Output: JSON array of fact objects
+    # For this demo, we detect which response we have and output the appropriate facts
+    exec: >
+      {% if outputs['issue-assistant'] %}
+      {% assign response = outputs['issue-assistant'] %}
+      {% else %}
+      {% assign response = outputs['comment-assistant'] %}
+      {% endif %}
+      {% if response contains "visor.config.yaml" %}
+      echo '[{"id":"fact-1","category":"Configuration","claim":"The default config file is visor.config.yaml","verifiable":true},{"id":"fact-2","category":"Documentation","claim":"Examples are in the config/ directory","verifiable":true},{"id":"fact-3","category":"Feature","claim":"Visor only supports Claude AI","verifiable":true}]'
+      {% elsif response contains ".visor.yaml" %}
+      echo '[{"id":"fact-1","category":"Configuration","claim":"The default config file is .visor.yaml","verifiable":true},{"id":"fact-2","category":"Documentation","claim":"Examples are in the examples/ directory","verifiable":true},{"id":"fact-3","category":"Feature","claim":"Visor supports multiple AI providers","verifiable":true}]'
+      {% elsif response contains "visor-cli" %}
+      echo '[{"id":"fact-1","category":"Configuration","claim":"Visor can run as both a GitHub Action and a CLI tool","verifiable":true},{"id":"fact-2","category":"Configuration","claim":"The binary name is visor-cli","verifiable":true},{"id":"fact-3","category":"Testing","claim":"Tests use Mocha","verifiable":true}]'
+      {% else %}
+      echo '[{"id":"fact-1","category":"Configuration","claim":"Visor can run as both a GitHub Action and a CLI tool","verifiable":true},{"id":"fact-2","category":"Configuration","claim":"The binary name is visor","verifiable":true},{"id":"fact-3","category":"Testing","claim":"Tests use Jest with TypeScript support","verifiable":true}]'
+      {% endif %}
+
+    # Parse the JSON output automatically
+    output_format: json
+
+    # Enable forEach - this check outputs an array and dependents will iterate
+    forEach: true
+
+    # ✅ on_finish: Runs ONCE after ALL validate-fact iterations complete
+    on_finish:
+      # First, run the aggregation check to collect results
+      run: [aggregate-validations]
+
+      # Then, make routing decision based on aggregated validation results
+      goto_js: |
+        // Get aggregation results from memory
+        const allValid = memory.get('all_facts_valid', 'fact-validation');
+        const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
+
+        log('🔍 Fact validation complete - allValid:', allValid, 'attempt:', attempt);
+
+        // If all facts are valid, continue to posting
+        if (allValid) {
+          log('✅ All facts valid, proceeding to post verified response');
+          return null;  // Continue normal flow to post-verified-response
+        }
+
+        // If we've already retried once, give up and post warning
+        if (attempt >= 1) {
+          log('⚠️  Max attempts reached, giving up and posting warning');
+          return null;  // Continue to post-unverified-warning
+        }
+
+        // Retry the assistant with validation context
+        log('🔄 Facts invalid, retrying assistant with correction context');
+        memory.increment('fact_validation_attempt', 1, 'fact-validation');
+
+        // Route back to extract-facts to re-run the full validation cycle
+        // This creates a feedback loop: extract → validate → retry → extract
+        // The assistant will run again because extract-facts depends on it
+        return 'extract-facts';
+
+      # Preserve the original event type when routing back
+      # This ensures the retried assistant runs with the correct event context
+      goto_event: issue_opened
+
+  # ============================================================================
+  # TASK 3.5: Validate Each Fact (Dependent Check)
+  # ============================================================================
+  # Validate a single fact (runs N times via forEach propagation)
+  # This check depends on extract-facts, so it inherits the forEach behavior
+  # and runs once for each fact in the array
+  validate-fact:
+    type: command
+    group: fact-validation
+    depends_on: [extract-facts]
+    on: [issue_opened, issue_comment]
+
+    # Simulate fact validation (normally this would be an AI with MCP tools)
+    # In production, the AI would use code search, file reading, etc.
+    exec: >
+      {% assign claim = outputs['extract-facts'].claim %}
+      {% assign fact_id = outputs['extract-facts'].id %}
+      {% if claim contains "visor.config.yaml" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"Checked defaults/.visor.yaml - the correct filename is .visor.yaml","correction":"The default configuration file is .visor.yaml"}'
+      {% elsif claim contains "config/ directory" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"Directory listing shows examples/ not config/","correction":"Examples are in the examples/ directory"}'
+      {% elsif claim contains "only supports Claude" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"Found support for multiple providers in src/ai-review-service.ts","correction":"Visor supports multiple AI providers"}'
+      {% elsif claim contains "visor-cli" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"package.json bin field specifies visor not visor-cli","correction":"The binary name is visor"}'
+      {% elsif claim contains "Mocha" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"Found Jest configuration in package.json","correction":"Tests use Jest with TypeScript support"}'
+      {% elsif claim contains "only runs as a GitHub Action" %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":false,"confidence":"high","evidence":"Found both src/index.ts (Action) and src/cli-main.ts (CLI)","correction":"Visor can run as both a GitHub Action and a CLI tool"}'
+      {% else %}
+      echo '{"fact_id":"{{ fact_id }}","claim":"{{ claim }}","is_valid":true,"confidence":"high","evidence":"Verified against codebase","correction":null}'
+      {% endif %}
+
+    # Parse validation result as JSON
+    output_format: json
+
+  # ============================================================================
+  # TASK 3.6: Aggregate Validation Results
+  # ============================================================================
+  # Aggregate all validation results from forEach iterations
+  # This check is triggered by the on_finish hook after all validate-fact runs complete
+  aggregate-validations:
+    type: memory
+    operation: exec_js
+    namespace: fact-validation
+    on: [issue_opened, issue_comment]
+
+    # Complex aggregation logic using memory_js
+    memory_js: |
+      // Get ALL validation results from forEach iterations
+      // outputs.history['validate-fact'] contains all N validation results
+      const validations = outputs.history['validate-fact'] || [];
+
+      log('📊 Aggregating', validations.length, 'validation results');
+
+      // Analyze results
+      const invalid = validations.filter(v => !v.is_valid);
+      const lowConfidence = validations.filter(v => v.confidence === 'low');
+      const allValid = invalid.length === 0 && lowConfidence.length === 0;
+
+      log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),
+          'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
+
+      // Store results in memory for use by posting checks and goto_js
+      memory.set('all_facts_valid', allValid, 'fact-validation');
+      memory.set('validation_results', validations, 'fact-validation');
+      memory.set('invalid_facts', invalid, 'fact-validation');
+      memory.set('low_confidence_facts', lowConfidence, 'fact-validation');
+
+      // Store issues for retry context
+      // These will be shown to the AI on the next attempt
+      if (!allValid) {
+        const issues = [...invalid, ...lowConfidence].map(v => ({
+          claim: v.claim,
+          issue: v.is_valid ? 'low confidence' : 'incorrect',
+          evidence: v.evidence,
+          correction: v.correction
+        }));
+        memory.set('fact_validation_issues', issues, 'fact-validation');
+        log('⚠️  Stored', issues.length, 'validation issues for retry');
+      }
+
+      // Return summary (this becomes the check output)
+      return {
+        total: validations.length,
+        valid: validations.filter(v => v.is_valid && v.confidence !== 'low').length,
+        invalid: invalid.length,
+        low_confidence: lowConfidence.length,
+        all_valid: allValid,
+        summary: allValid
+          ? 'All facts validated successfully ✅'
+          : 'Found ' + invalid.length + ' invalid and ' + lowConfidence.length + ' low-confidence facts ⚠️'
+      };
+
+  # ============================================================================
+  # TASK 3.7: Post Verified Response
+  # ============================================================================
+  # Post the assistant response if all facts are valid
+  # This check only runs if validation passed
+  post-verified-response:
+    type: log
+    # In production, this would be: type: github, op: comment.create
+    group: github-output
+    depends_on: [extract-facts]
+    on: [issue_opened, issue_comment]
+    if: "memory.get('all_facts_valid', 'fact-validation') === true"
+    message: |
+      ✅ **Posting Verified Response**
+
+      All facts have been validated. The response is safe to post.
+
+      **Original Response:**
+      {{ outputs['issue-assistant'] || outputs['comment-assistant'] }}
+
+      **Validation Summary:**
+      {% assign summary = "validation_results" | memory_get: "fact-validation" %}
+      - Total facts checked: {{ summary.size }}
+      - All facts valid: ✅
+
+  # ============================================================================
+  # TASK 3.8: Post Unverified Warning
+  # ============================================================================
+  # Post a warning if validation failed after max retries
+  # This check only runs if validation failed AND we've exhausted retry attempts
+  post-unverified-warning:
+    type: log
+    # In production, this would be: type: github, op: comment.create
+    group: github-output
+    depends_on: [extract-facts]
+    on: [issue_opened, issue_comment]
+    if: |
+      memory.get('all_facts_valid', 'fact-validation') === false &&
+      memory.get('fact_validation_attempt', 'fact-validation') >= 1
+    message: |
+      ⚠️  **Fact Validation Warning**
+
+      I attempted to respond to your {{ event.name == 'issue_opened' ? 'issue' : 'comment' }},
+      but could not verify all factual claims after {{ "fact_validation_attempt" | memory_get: "fact-validation" }} validation attempts.
+
+      **Issues Found:**
+      {% assign invalid = "invalid_facts" | memory_get: "fact-validation" %}
+      {% for fact in invalid %}
+      - **{{ fact.claim }}**: {{ fact.evidence }}
+        {% if fact.correction %}
+        - ✏️  Correction: {{ fact.correction }}
+        {% endif %}
+      {% endfor %}
+
+      {% assign lowConf = "low_confidence_facts" | memory_get: "fact-validation" %}
+      {% if lowConf.size > 0 %}
+
+      **Low Confidence Facts:**
+      {% for fact in lowConf %}
+      - **{{ fact.claim }}**: {{ fact.evidence }}
+      {% endfor %}
+      {% endif %}
+
+      **Recommendation:** A human team member should review this to provide accurate information.
+
+      **Attempted Response:**
+      {{ outputs['issue-assistant'] || outputs['comment-assistant'] }}
+
+  # ============================================================================
+  # TASK 3.9: Post Direct Response (Validation Disabled)
+  # ============================================================================
+  # Post the assistant response directly without validation
+  # This check only runs if fact validation is disabled
+  # Note: This check is disabled in the example because we always run validation
+  # In production, you would use: if: "env.ENABLE_FACT_VALIDATION !== 'true'"
+  # post-direct-response:
+  #   type: log
+  #   # In production, this would be: type: github, op: comment.create
+  #   group: github-output
+  #   depends_on: [issue-assistant, comment-assistant]
+  #   on: [issue_opened, issue_comment]
+  #   if: "false"  # Disabled for example
+  #   message: |
+  #     **Posting Direct Response (Validation Disabled)**
+  #
+  #     {{ outputs['issue-assistant'] || outputs['comment-assistant'] }}
+
+# Output configuration
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false

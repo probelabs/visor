@@ -378,7 +378,40 @@ export class MemoryCheckProvider extends CheckProvider {
       },
     };
 
+    try {
+      if (
+        (config as any).checkName === 'aggregate-validations' ||
+        (config as any).checkName === 'aggregate' ||
+        (config as any).checkName === 'aggregate'
+      ) {
+        const hist = (enhancedContext as any)?.outputs?.history || {};
+        const keys = Object.keys(hist);
+        console.log('[MemoryProvider]', (config as any).checkName, ': history keys =', keys);
+        const vf = (hist as any)['validate-fact'];
+        console.log(
+          '[MemoryProvider]',
+          (config as any).checkName,
+          ': validate-fact history length =',
+          Array.isArray(vf) ? vf.length : 'n/a'
+        );
+      }
+    } catch {}
+
     const result = this.evaluateJavaScriptBlock(script, enhancedContext);
+    try {
+      if ((config as any).checkName === 'aggregate-validations') {
+        const tv = store.get('total_validations', 'fact-validation');
+        const av = store.get('all_valid', 'fact-validation');
+        console.error(
+          '[MemoryProvider] post-exec',
+          (config as any).checkName,
+          'total_validations=',
+          tv,
+          'all_valid=',
+          av
+        );
+      }
+    } catch {}
 
     // Execute pending async operations
     if (
@@ -503,12 +536,20 @@ export class MemoryCheckProvider extends CheckProvider {
 
     // Add dependency outputs - always create outputs object even if no dependencies
     const outputs: Record<string, unknown> = {};
+    const outputsRaw: Record<string, unknown> = {};
     const history: Record<string, unknown[]> = {};
 
     if (dependencyResults) {
       for (const [checkName, result] of dependencyResults.entries()) {
+        // Defensive: some callers may accidentally provide non-string keys
+        if (typeof checkName !== 'string') continue;
         const summary = result as ReviewSummary & { output?: unknown };
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
+          const name = checkName.slice(0, -4);
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        } else {
+          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        }
       }
     }
 
@@ -523,6 +564,10 @@ export class MemoryCheckProvider extends CheckProvider {
     (outputs as any).history = history;
 
     context.outputs = outputs;
+    // Alias for consistency: outputs_history mirrors outputs.history
+    (context as any).outputs_history = history;
+    // New: outputs_raw exposes aggregate values for forEach parents
+    (context as any).outputs_raw = outputsRaw;
 
     // Add memory accessor
     if (memoryStore) {
@@ -531,7 +576,26 @@ export class MemoryCheckProvider extends CheckProvider {
         has: (key: string, ns?: string) => memoryStore.has(key, ns),
         list: (ns?: string) => memoryStore.list(ns),
         getAll: (ns?: string) => memoryStore.getAll(ns),
-      };
+        set: (key: string, value: unknown, ns?: string) => {
+          const nsName = ns || memoryStore.getDefaultNamespace();
+          if (!(memoryStore as any)['data'].has(nsName)) {
+            (memoryStore as any)['data'].set(nsName, new Map());
+          }
+          (memoryStore as any)['data'].get(nsName)!.set(key, value);
+          return true;
+        },
+        increment: (key: string, amount: number = 1, ns?: string) => {
+          const nsName = ns || memoryStore.getDefaultNamespace();
+          const current = memoryStore.get(key, nsName);
+          const numCurrent = typeof current === 'number' ? (current as number) : 0;
+          const newValue = numCurrent + amount;
+          if (!(memoryStore as any)['data'].has(nsName)) {
+            (memoryStore as any)['data'].set(nsName, new Map());
+          }
+          (memoryStore as any)['data'].get(nsName)!.set(key, newValue);
+          return newValue;
+        },
+      } as Record<string, unknown>;
     }
 
     // SECURITY: Do NOT expose process.env to user-controlled scripts

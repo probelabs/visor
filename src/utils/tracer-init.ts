@@ -29,7 +29,7 @@ export async function initializeTracer(
     } catch {
       try {
         // Fallback to CJS require if available
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
+
         ProbeLib = require('@probelabs/probe') as ProbeModule;
       } catch {
         ProbeLib = {} as unknown as ProbeModule;

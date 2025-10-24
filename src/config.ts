@@ -51,7 +51,6 @@ export class ConfigManager {
     'memory',
     'noop',
     'log',
-    'memory',
     'github',
     'human-input',
   ];
@@ -776,6 +775,17 @@ export class ConfigManager {
               value: tag,
             });
           }
+        });
+      }
+    }
+
+    // Validate on_finish configuration
+    if (checkConfig.on_finish !== undefined) {
+      if (!checkConfig.forEach) {
+        errors.push({
+          field: `checks.${checkName}.on_finish`,
+          message: `Check "${checkName}" has on_finish but forEach is not true. on_finish is only valid on forEach checks.`,
+          value: checkConfig.on_finish,
         });
       }
     }

@@ -144,10 +144,12 @@ export class LogCheckProvider extends CheckProvider {
     if (dependencyResults) {
       const dependencies: Record<string, unknown> = {};
       const outputs: Record<string, unknown> = {};
+      const outputsRaw: Record<string, unknown> = {};
       const history: Record<string, unknown[]> = {};
       context.dependencyCount = dependencyResults.size;
 
       for (const [checkName, result] of dependencyResults.entries()) {
+        if (typeof checkName !== 'string') continue;
         dependencies[checkName] = {
           issueCount: result.issues?.length || 0,
           suggestionCount: 0,
@@ -156,7 +158,12 @@ export class LogCheckProvider extends CheckProvider {
 
         // Add outputs namespace for accessing dependency results directly
         const summary = result as import('../reviewer').ReviewSummary & { output?: unknown };
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
+          const name = checkName.slice(0, -4);
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        } else {
+          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        }
       }
 
       // Add history for each check if available
@@ -171,6 +178,10 @@ export class LogCheckProvider extends CheckProvider {
 
       context.dependencies = dependencies;
       context.outputs = outputs;
+      // Alias: outputs_history mirrors outputs.history for consistency
+      (context as any).outputs_history = history;
+      // New: outputs_raw exposes aggregate values (e.g., arrays) for forEach parents
+      (context as any).outputs_raw = outputsRaw;
     }
 
     if (includeMetadata) {
