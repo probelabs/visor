@@ -2563,7 +2563,17 @@ var init_reviewer = __esm({
       }
       async postReviewComment(owner, repo, prNumber, groupedResults, options = {}) {
         for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-          const filteredResults = options.config ? await this.filterCommentGeneratingChecks(checkResults, options.config) : checkResults;
+          let filteredResults = options.config ? await this.filterCommentGeneratingChecks(checkResults, options.config) : checkResults;
+          if (groupName === "github-output" && filteredResults && filteredResults.length > 1) {
+            const byName = /* @__PURE__ */ new Map();
+            for (const cr of filteredResults) byName.set(cr.checkName, cr);
+            let collapsed = Array.from(byName.values());
+            const hasVerified = collapsed.some((r) => r.checkName === "post-verified-response");
+            if (hasVerified) {
+              collapsed = collapsed.filter((r) => r.checkName !== "post-unverified-warning");
+            }
+            filteredResults = collapsed;
+          }
           if (!filteredResults || filteredResults.length === 0) {
             continue;
           }
@@ -8375,13 +8385,15 @@ var init_memory_check_provider = __esm({
           }
         };
         try {
-          if (config.checkName === "aggregate-validations") {
+          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate" || config.checkName === "aggregate") {
             const hist = enhancedContext?.outputs?.history || {};
             const keys = Object.keys(hist);
-            console.log("[MemoryProvider] aggregate-validations: history keys =", keys);
+            console.log("[MemoryProvider]", config.checkName, ": history keys =", keys);
             const vf = hist["validate-fact"];
             console.log(
-              "[MemoryProvider] aggregate-validations: validate-fact history length =",
+              "[MemoryProvider]",
+              config.checkName,
+              ": validate-fact history length =",
               Array.isArray(vf) ? vf.length : "n/a"
             );
           }
@@ -8393,7 +8405,9 @@ var init_memory_check_provider = __esm({
             const tv = store.get("total_validations", "fact-validation");
             const av = store.get("all_valid", "fact-validation");
             console.error(
-              "[MemoryProvider] post-exec aggregate-validations total_validations=",
+              "[MemoryProvider] post-exec",
+              config.checkName,
+              "total_validations=",
               tv,
               "all_valid=",
               av
@@ -11432,6 +11446,10 @@ var init_check_execution_engine = __esm({
       executionStats = /* @__PURE__ */ new Map();
       // Track history of all outputs for each check (useful for loops and goto)
       outputHistory = /* @__PURE__ */ new Map();
+      // Track on_finish loop counts per forEach parent during a single execution run
+      onFinishLoopCounts = /* @__PURE__ */ new Map();
+      // Track how many times a forEach parent check has produced an array during this run ("waves")
+      forEachWaveCounts = /* @__PURE__ */ new Map();
       // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
       journal = new ExecutionJournal();
       sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -11588,6 +11606,7 @@ var init_check_execution_engine = __esm({
           scope
         } = context2;
         const log2 = (msg) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+        const origin = context2.origin || "inline";
         const checkConfig = config?.checks?.[checkId];
         if (!checkConfig) {
           throw new Error(`on_finish referenced unknown check '${checkId}'`);
@@ -11727,8 +11746,10 @@ var init_check_execution_engine = __esm({
         }
         if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
           const forEachItems = enrichedWithOutput.output;
+          const wave = (this.forEachWaveCounts.get(checkId) || 0) + 1;
+          this.forEachWaveCounts.set(checkId, wave);
           log2(
-            `\u{1F504} forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration`
+            `\u{1F504} forEach check '${checkId}' returned ${forEachItems.length} items - starting iteration (wave #${wave}, origin=${origin})`
           );
           if (debug) {
             log2(
@@ -11744,12 +11765,27 @@ var init_check_execution_engine = __esm({
             }))
           };
           enriched = forEachResult;
+          try {
+            resultsMap?.set(checkId, enriched);
+          } catch {
+          }
           this.commitJournal(
             checkId,
             enriched,
             prInfoForInline.eventType || prInfo.eventType,
             []
           );
+          const maxLoops = config?.routing?.max_loops ?? 10;
+          if (wave > maxLoops) {
+            try {
+              logger.warn(
+                `\u26D4 forEach wave guard: '${checkId}' exceeded max_loops=${maxLoops} (wave #${wave}); skipping dependents and routing`
+              );
+            } catch {
+            }
+            resultsMap?.set(checkId, enriched);
+            return enriched;
+          }
           const dependentChecks = Object.keys(config?.checks || {}).filter((name) => {
             const cfg = config?.checks?.[name];
             return cfg?.depends_on?.includes(checkId);
@@ -11775,13 +11811,19 @@ var init_check_execution_engine = __esm({
               continue;
             }
             try {
-              log2(`\u{1F504} Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items`);
+              const wave2 = this.forEachWaveCounts.get(checkId) || 1;
+              log2(
+                `\u{1F504} Executing forEach dependent '${depCheckName}' for ${forEachItems.length} items (wave #${wave2})`
+              );
             } catch {
             }
             const depResults2 = [];
             for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
               const item = forEachItems[itemIndex];
-              log2(`  \u{1F504} Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}'`);
+              const wave2 = this.forEachWaveCounts.get(checkId) || 1;
+              log2(
+                `  \u{1F504} Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}' (wave #${wave2})`
+              );
               const itemScope = [{ check: checkId, index: itemIndex }];
               try {
                 this.commitJournal(
@@ -11802,6 +11844,7 @@ var init_check_execution_engine = __esm({
                   prInfoForInline.eventType || prInfo.eventType
                 );
                 const res = await this.runNamedCheck(depCheckName, itemScope, {
+                  origin: "foreach",
                   config,
                   dependencyGraph: context2.dependencyGraph,
                   prInfo,
@@ -11868,7 +11911,7 @@ var init_check_execution_engine = __esm({
         } = opts;
         const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
         const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
-        const overlayForExec = eventOverride ? /* @__PURE__ */ new Map() : depOverlaySanitized;
+        const overlayForExec = eventOverride && eventOverride !== (prInfo.eventType || "manual") ? /* @__PURE__ */ new Map() : depOverlaySanitized;
         if (!this.executionStats.has(target)) this.initializeCheckStats(target);
         const startTs = this.recordIterationStart(target);
         try {
@@ -11885,7 +11928,8 @@ var init_check_execution_engine = __esm({
               sessionInfo,
               debug,
               eventOverride,
-              scope
+              scope,
+              origin: opts.origin || "inline"
             }
           );
           const issues = (res.issues || []).map((i) => ({ ...i }));
@@ -11951,14 +11995,14 @@ var init_check_execution_engine = __esm({
             logger.info(`\u25B6 on_finish: processing for "${checkName}"`);
             const outputsForContext = {};
             for (const [name, result] of results.entries()) {
-              outputsForContext[name] = result.output;
+              const r = result;
+              outputsForContext[name] = r.output !== void 0 ? r.output : r;
             }
             const outputsHistoryForContext = {};
             try {
               for (const [check, history] of this.outputHistory.entries()) {
                 outputsHistoryForContext[check] = history;
               }
-              outputsForContext.history = outputsHistoryForContext;
             } catch {
             }
             const forEachStats = {
@@ -12009,11 +12053,15 @@ var init_check_execution_engine = __esm({
               }
             } catch {
             }
+            const outputsMergedForContext = {
+              ...outputsForContext,
+              history: outputsHistoryForContext
+            };
             const onFinishContext = {
               step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
               attempt: 1,
               loop: 0,
-              outputs: outputsForContext,
+              outputs: outputsMergedForContext,
               // Provide explicit alias for templates that prefer snake_case
               outputs_history: outputsHistoryForContext,
               outputs_raw: outputsRawForContext,
@@ -12030,6 +12078,21 @@ var init_check_execution_engine = __esm({
               env: getSafeEnvironmentVariables(),
               event: { name: prInfo.eventType || "manual" }
             };
+            try {
+              const ns = "fact-validation";
+              const attemptNow = Number(memoryStore.get("fact_validation_attempt", ns) || 0);
+              const usedBudget = this.onFinishLoopCounts.get(checkName) || 0;
+              const maxBudget = config?.routing?.max_loops ?? 10;
+              logger.info(
+                `\u{1F9ED} on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} attempt=${attemptNow} budget=${usedBudget}/${maxBudget}`
+              );
+              const vfHist = outputsHistoryForContext["validate-fact"] || [];
+              if (vfHist.length) {
+                logger.debug(`\u{1F9ED} on_finish: outputs.history['validate-fact'] length=${vfHist.length}`);
+              }
+            } catch {
+            }
+            let lastRunOutput = void 0;
             {
               const maxLoops = config?.routing?.max_loops ?? 10;
               let loopCount = 0;
@@ -12080,7 +12143,8 @@ ${js}
                   }
                   if (debug) log2(`\u{1F527} Debug: on_finish.run executing check '${runCheckId}'`);
                   logger.info(`  \u25B6 Executing on_finish check: ${runCheckId}`);
-                  await this.runNamedCheck(runCheckId, [], {
+                  const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
+                    origin: "on_finish",
                     config,
                     dependencyGraph,
                     prInfo,
@@ -12090,6 +12154,10 @@ ${js}
                     eventOverride: onFinish.goto_event,
                     overlay: new Map(results)
                   });
+                  try {
+                    lastRunOutput = __onFinishRes?.output;
+                  } catch {
+                  }
                   logger.info(`  \u2713 Completed on_finish check: ${runCheckId}`);
                 }
                 if (runList.length > 0) {
@@ -12103,6 +12171,27 @@ ${js}
                 }
                 throw error;
               }
+            }
+            try {
+              const vfNow = this.outputHistory.get("validate-fact") || [];
+              if (Array.isArray(vfNow) && forEachItems.length > 0 && vfNow.length >= forEachItems.length) {
+                const lastWave = vfNow.slice(-forEachItems.length);
+                const ok = lastWave.every(
+                  (v) => v && (v.is_valid === true || v.valid === true)
+                );
+                await MemoryStore.getInstance(this.config?.memory).set(
+                  "all_valid",
+                  ok,
+                  "fact-validation"
+                );
+                try {
+                  logger.info(
+                    `\u{1F9EE} on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
+                  );
+                } catch {
+                }
+              }
+            } catch {
             }
             let gotoTarget = null;
             if (onFinish.goto_js) {
@@ -12143,17 +12232,101 @@ ${onFinish.goto_js}
               logger.info(`\u25B6 on_finish.goto: routing to '${gotoTarget}' for "${checkName}"`);
             }
             if (gotoTarget) {
-              const maxLoops = config?.routing?.max_loops ?? 10;
-              if (maxLoops <= 0) {
-                throw new Error(
-                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`
-                );
+              try {
+                const memDbg = MemoryStore.getInstance(this.config?.memory);
+                const dbgVal = memDbg.get("all_valid", "fact-validation");
+                try {
+                  logger.info(`  \u{1F9EA} on_finish.goto: mem all_valid currently=${String(dbgVal)}`);
+                } catch {
+                }
+              } catch {
               }
-              logger.info(`\u25B6 on_finish: routing from "${checkName}" to "${gotoTarget}"`);
+              try {
+                const mem = MemoryStore.getInstance(this.config?.memory);
+                const allValidMem = mem.get("all_valid", "fact-validation");
+                const lro = lastRunOutput && typeof lastRunOutput === "object" ? lastRunOutput : void 0;
+                const allValidOut = lro ? lro["all_valid"] === true || lro["allValid"] === true : false;
+                try {
+                  logger.info(
+                    `  \u{1F512} on_finish.goto guard: gotoTarget=${String(gotoTarget)} allValidMem=${String(allValidMem)} allValidOut=${String(allValidOut)}`
+                  );
+                } catch {
+                }
+                if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
+                  logger.info(`\u2713 on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
+                  gotoTarget = null;
+                }
+              } catch {
+              }
+              try {
+                const __h = this.outputHistory.get("validate-fact");
+                logger.info(
+                  `  \u{1F9EA} on_finish.goto: validate-fact history now len=${Array.isArray(__h) ? __h.length : 0}`
+                );
+              } catch {
+              }
+              try {
+                if (gotoTarget === checkName) {
+                  const vfHistNow = this.outputHistory.get("validate-fact") || [];
+                  if (Array.isArray(vfHistNow) && forEachItems.length > 0) {
+                    const verdicts = vfHistNow.map((v) => v && typeof v === "object" ? v : void 0).filter(
+                      (v) => v && (typeof v.is_valid === "boolean" || typeof v.valid === "boolean")
+                    ).map((v) => v.is_valid === true || v.valid === true);
+                    if (verdicts.length >= forEachItems.length) {
+                      const lastVerdicts = verdicts.slice(-forEachItems.length);
+                      const allTrue = lastVerdicts.every(Boolean);
+                      if (allTrue) {
+                        try {
+                          logger.info(
+                            `\u2713 on_finish.goto: history verdicts all valid; skipping routing to '${gotoTarget}'`
+                          );
+                        } catch {
+                        }
+                        gotoTarget = null;
+                      }
+                    }
+                  }
+                }
+              } catch {
+              }
+              if (!gotoTarget) {
+                try {
+                  logger.info(`\u2713 on_finish.goto: no routing needed for "${checkName}"`);
+                } catch {
+                }
+                continue;
+              }
+              try {
+                if (gotoTarget === checkName) {
+                  const vfHist = this.outputHistory.get("validate-fact");
+                  const arr = Array.isArray(vfHist) ? vfHist : [];
+                  const allOk = arr.length > 0 && arr.every((v) => v && v.is_valid === true);
+                  if (allOk) {
+                    logger.info(
+                      `\u2713 on_finish.goto: validate-fact history all valid; skipping routing to '${gotoTarget}'`
+                    );
+                    continue;
+                  }
+                }
+              } catch {
+              }
+              const maxLoops = config?.routing?.max_loops ?? 10;
+              const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
+              if (used > maxLoops) {
+                logger.warn(
+                  `\u26A0\uFE0F on_finish: loop budget exceeded for "${checkName}" (max_loops=${maxLoops}); last goto='${gotoTarget}'. Skipping further routing.`
+                );
+                continue;
+              }
+              this.onFinishLoopCounts.set(checkName, used);
+              logger.info(
+                `\u25B6 on_finish: routing from "${checkName}" to "${gotoTarget}" (budget ${used}/${maxLoops})`
+              );
               try {
                 const tcfg = config.checks?.[gotoTarget];
                 const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                 const scheduleOnce = async (scopeForRun) => this.runNamedCheck(gotoTarget, scopeForRun, {
+                  origin: "on_finish",
                   config,
                   dependencyGraph,
                   prInfo,
@@ -12173,15 +12346,6 @@ ${onFinish.goto_js}
                 }
                 logger.info(`  \u2713 Routed to: ${gotoTarget}`);
                 logger.info(`  Event override: ${onFinish.goto_event || "(none)"}`);
-                try {
-                  await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug);
-                } catch (e) {
-                  if (debug) {
-                    log2(
-                      `\u26A0\uFE0F Debug: recursive on_finish processing after goto failed: ${e instanceof Error ? e.message : String(e)}`
-                    );
-                  }
-                }
               } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 logger.error(
@@ -12852,6 +13016,8 @@ ${expr}`;
             await memoryStore.initialize();
             logger.debug("Memory store initialized");
           }
+          this.onFinishLoopCounts.clear();
+          this.forEachWaveCounts.clear();
           this.webhookContext = options.webhookContext;
           const logFn = (msg) => logger.info(msg);
           if (options.githubChecks?.enabled && options.githubChecks.octokit) {
