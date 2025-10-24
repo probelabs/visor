@@ -291,10 +291,12 @@ export async function main(): Promise<void> {
       });
 
       console.log(`✅ Debug visualizer running at http://localhost:${port}`);
-      console.log(`   Opening browser...`);
 
-      // Open browser
-      await open(`http://localhost:${port}`);
+      // Open browser unless VISOR_NOBROWSER is set (useful for CI/tests)
+      if (process.env.VISOR_NOBROWSER !== 'true') {
+        console.log(`   Opening browser...`);
+        await open(`http://localhost:${port}`);
+      }
 
       console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
     }
