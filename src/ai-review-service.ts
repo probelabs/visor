@@ -41,6 +41,8 @@ export interface AIReviewConfig {
   tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
   // Pass-through MCP server configuration for ProbeAgent
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
+  // Enable delegate tool for task distribution to subagents
+  enableDelegate?: boolean;
 }
 
 export interface AIDebugInfo {
