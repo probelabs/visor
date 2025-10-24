@@ -1411,7 +1411,7 @@ ${schemaString}`);
           } else if (schema === "plain") {
             log(`\u{1F4CB} Using plain schema - no JSON validation will be applied`);
           }
-          const schemaOptions = schemaString ? { schema: schemaString } : void 0;
+          const schemaOptions = schemaString ? schemaString : void 0;
           if (debugInfo && schemaOptions) {
             debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
           }
@@ -1565,7 +1565,7 @@ ${"=".repeat(60)}
             response = await agentAny.tracer.withSpan(
               "visor.ai_check_reuse",
               async () => {
-                return await agent.answer(prompt, void 0, schemaOptions);
+                return await agent.answer(prompt, [], schemaOptions);
               },
               {
                 "check.name": _checkName || "unknown",
@@ -1575,7 +1575,7 @@ ${"=".repeat(60)}
               }
             );
           } else {
-            response = await agent.answer(prompt, void 0, schemaOptions);
+            response = schemaOptions ? await agent.answer(prompt, [], schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent session reuse completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -1810,7 +1810,7 @@ ${schemaString}`);
           } else if (schema === "plain") {
             log(`\u{1F4CB} Using plain schema - no JSON validation will be applied`);
           }
-          const schemaOptions = schemaString ? { schema: schemaString } : void 0;
+          const schemaOptions = schemaString ? schemaString : void 0;
           if (debugInfo && schemaOptions) {
             debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
           }
@@ -1937,7 +1937,7 @@ $ ${cliCommand}
             response = await tracer.withSpan(
               "visor.ai_check",
               async () => {
-                return await agent.answer(prompt, void 0, schemaOptions);
+                return await agent.answer(prompt, [], schemaOptions);
               },
               {
                 "check.name": _checkName || "unknown",
@@ -1947,7 +1947,7 @@ $ ${cliCommand}
               }
             );
           } else {
-            response = await agent.answer(prompt, void 0, schemaOptions);
+            response = schemaOptions ? await agent.answer(prompt, [], schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -2262,7 +2262,8 @@ ${"=".repeat(60)}
               }
             }
           }
-          const isCustomSchema = _schema === "custom" || _schema && (_schema.startsWith("./") || _schema.endsWith(".json")) || _schema && _schema !== "code-review" && !_schema.includes("output/");
+          const looksLikeTextOutput = reviewData && typeof reviewData === "object" && typeof reviewData.text === "string" && String(reviewData.text).trim().length > 0;
+          const isCustomSchema = _schema === "custom" || _schema && (_schema.startsWith("./") || _schema.endsWith(".json")) || _schema && _schema !== "code-review" && !_schema.includes("output/") || !_schema && looksLikeTextOutput;
           const _debugSchemaLogging = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === "true";
           if (_debugSchemaLogging) {
             const details = {

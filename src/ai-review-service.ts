@@ -1106,7 +1106,9 @@ ${this.escapeXml(processedFallbackDiff)}
           }
         );
       } else {
-        response = await agent.answer(prompt, undefined, schemaOptions);
+        response = schemaOptions
+          ? await agent.answer(prompt, undefined, schemaOptions)
+          : await agent.answer(prompt);
       }
 
       log('✅ ProbeAgent session reuse completed successfully');
@@ -1551,7 +1553,9 @@ ${'='.repeat(60)}
           }
         );
       } else {
-        response = await agent.answer(prompt, undefined, schemaOptions);
+        response = schemaOptions
+          ? await agent.answer(prompt, undefined, schemaOptions)
+          : await agent.answer(prompt);
       }
 
       log('✅ ProbeAgent completed successfully');
