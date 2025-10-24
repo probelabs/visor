@@ -701,7 +701,6 @@ steps:
     namespace: fact-validation
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    fanout: reduce
     on_success:
       goto_js: |
         // Route back to the appropriate assistant if there are issues
