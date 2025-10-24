@@ -865,6 +865,19 @@ var init_ai_review_service = __esm({
               debugInfo.errors = [errorMessage];
               debugInfo.processingTime = Date.now() - startTime;
               debugInfo.rawResponse = "API call not attempted - no API key configured";
+              const isCustomSchema = typeof schema === "string" && schema !== "code-review" || typeof schema === "object";
+              if (isCustomSchema) {
+                const out = {
+                  // Provide a friendly, bounded fallback so built-in templates render
+                  text: "\u26A0\uFE0F AI provider is not configured for this run. Set GOOGLE_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY or AWS credentials to enable real responses.\n\nThis is a placeholder response so your workflow still posts a comment."
+                };
+                const res = {
+                  issues: [],
+                  output: out,
+                  debug: debugInfo
+                };
+                return res;
+              }
               return {
                 issues: [
                   {
