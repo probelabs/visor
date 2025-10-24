@@ -621,7 +621,9 @@ export class CheckExecutionEngine {
       const maxLoops = config?.routing?.max_loops ?? 10;
       if (wave > maxLoops) {
         try {
-          logger.warn(`⛔ forEach wave guard: '${checkId}' exceeded max_loops=${maxLoops} (wave #${wave}); skipping dependents and routing`);
+          logger.warn(
+            `⛔ forEach wave guard: '${checkId}' exceeded max_loops=${maxLoops} (wave #${wave}); skipping dependents and routing`
+          );
         } catch {}
         // Store and return aggregated result
         resultsMap?.set(checkId, enriched);
@@ -706,7 +708,8 @@ export class CheckExecutionEngine {
             );
 
             // Use unified helper to ensure stats and history are tracked for each item run
-            const res = await this.runNamedCheck(depCheckName, itemScope, { origin: 'foreach',
+            const res = await this.runNamedCheck(depCheckName, itemScope, {
+              origin: 'foreach',
               config: config!,
               dependencyGraph: context.dependencyGraph,
               prInfo,
@@ -802,7 +805,10 @@ export class CheckExecutionEngine {
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
     const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
     // For event overrides, avoid leaking cross-event results via overlay; rely on snapshot-only view
-    const overlayForExec = (eventOverride && eventOverride !== (prInfo.eventType || 'manual')) ? new Map<string, ReviewSummary>() : depOverlaySanitized;
+    const overlayForExec =
+      eventOverride && eventOverride !== (prInfo.eventType || 'manual')
+        ? new Map<string, ReviewSummary>()
+        : depOverlaySanitized;
     if (!this.executionStats.has(target)) this.initializeCheckStats(target);
     const startTs = this.recordIterationStart(target);
     try {
@@ -855,7 +861,6 @@ export class CheckExecutionEngine {
     debug: boolean
   ): Promise<void> {
     const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
-
 
     // Find all checks with forEach: true and on_finish configured
     const forEachChecksWithOnFinish: Array<{
@@ -1082,7 +1087,8 @@ export class CheckExecutionEngine {
               if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
               logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
 
-              await this.runNamedCheck(runCheckId, [], { origin: 'on_finish',
+              await this.runNamedCheck(runCheckId, [], {
+                origin: 'on_finish',
                 config,
                 dependencyGraph,
                 prInfo,
@@ -1176,7 +1182,8 @@ export class CheckExecutionEngine {
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
             const scheduleOnce = async (scopeForRun: ScopePath) =>
-              this.runNamedCheck(gotoTarget!, scopeForRun, { origin: 'on_finish',
+              this.runNamedCheck(gotoTarget!, scopeForRun, {
+                origin: 'on_finish',
                 config,
                 dependencyGraph,
                 prInfo,
