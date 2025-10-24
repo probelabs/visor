@@ -276,9 +276,24 @@ export class PRReviewer {
       // Only checks with comment-generating schemas should post PR comments
       // AI checks (ai, claude-code) generate comments by default
       // Other types need explicit comment-generating schemas
-      const filteredResults = options.config
+      let filteredResults = options.config
         ? await this.filterCommentGeneratingChecks(checkResults, options.config)
         : checkResults;
+
+      // Collapse results to avoid concatenating mutually-exclusive or duplicate posts.
+      // For fact-validation flow, both 'post-verified-response' and 'post-unverified-warning'
+      // can appear across waves. Prefer the final intended output and drop earlier entries.
+      if (groupName === 'github-output' && filteredResults && filteredResults.length > 1) {
+        // Keep only the last occurrence per checkName.
+        const byName = new Map<string, any>();
+        for (const cr of filteredResults) byName.set(cr.checkName, cr);
+        let collapsed = Array.from(byName.values());
+        const hasVerified = collapsed.some((r: any) => r.checkName === 'post-verified-response');
+        if (hasVerified) {
+          collapsed = collapsed.filter((r: any) => r.checkName !== 'post-unverified-warning');
+        }
+        filteredResults = collapsed as any;
+      }
 
       // If nothing to report after filtering, skip this group
       if (!filteredResults || filteredResults.length === 0) {
