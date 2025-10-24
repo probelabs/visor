@@ -379,13 +379,19 @@ export class MemoryCheckProvider extends CheckProvider {
     };
 
     try {
-      if ((config as any).checkName === 'aggregate-validations') {
+      if (
+        (config as any).checkName === 'aggregate-validations' ||
+        (config as any).checkName === 'aggregate' ||
+        (config as any).checkName === 'aggregate'
+      ) {
         const hist = (enhancedContext as any)?.outputs?.history || {};
         const keys = Object.keys(hist);
-        console.log('[MemoryProvider] aggregate-validations: history keys =', keys);
+        console.log('[MemoryProvider]', (config as any).checkName, ': history keys =', keys);
         const vf = (hist as any)['validate-fact'];
         console.log(
-          '[MemoryProvider] aggregate-validations: validate-fact history length =',
+          '[MemoryProvider]',
+          (config as any).checkName,
+          ': validate-fact history length =',
           Array.isArray(vf) ? vf.length : 'n/a'
         );
       }
@@ -397,7 +403,9 @@ export class MemoryCheckProvider extends CheckProvider {
         const tv = store.get('total_validations', 'fact-validation');
         const av = store.get('all_valid', 'fact-validation');
         console.error(
-          '[MemoryProvider] post-exec aggregate-validations total_validations=',
+          '[MemoryProvider] post-exec',
+          (config as any).checkName,
+          'total_validations=',
           tv,
           'all_valid=',
           av

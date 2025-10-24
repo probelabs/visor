@@ -1124,6 +1124,32 @@ export class CheckExecutionEngine {
           }
         }
 
+        // After on_finish.run completes, recompute an authoritative 'all_valid' flag from
+        // the latest validate-fact history and persist it to memory. This ensures goto_js
+        // sees a consistent value even if a prior aggregate step ran out of order.
+        try {
+          const vfNow = (this.outputHistory.get('validate-fact') || []) as unknown[];
+          if (
+            Array.isArray(vfNow) &&
+            forEachItems.length > 0 &&
+            vfNow.length >= forEachItems.length
+          ) {
+            const lastWave = vfNow.slice(-forEachItems.length);
+            const ok = lastWave.every(
+              (v: any) => v && (v.is_valid === true || (v as any).valid === true)
+            );
+            await MemoryStore.getInstance(this.config?.memory).set(
+              'all_valid',
+              ok,
+              'fact-validation'
+            );
+            try {
+              logger.info(
+                `🧮 on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
+              );
+            } catch {}
+          }
+        } catch {}
         // Evaluate on_finish.goto_js for routing decision
         let gotoTarget: string | null = null;
 
@@ -1174,6 +1200,15 @@ export class CheckExecutionEngine {
         // Execute routing if we have a target
         if (gotoTarget) {
           // Special safety: check memory flag and last aggregator output
+
+          try {
+            const memDbg = MemoryStore.getInstance(this.config?.memory);
+            const dbgVal = memDbg.get('all_valid', 'fact-validation');
+            try {
+              logger.info(`  🧪 on_finish.goto: mem all_valid currently=${String(dbgVal)}`);
+            } catch {}
+          } catch {}
+
           try {
             const mem = MemoryStore.getInstance(this.config?.memory);
             const allValidMem = mem.get('all_valid', 'fact-validation');
@@ -1184,9 +1219,49 @@ export class CheckExecutionEngine {
             const allValidOut = lro
               ? lro['all_valid'] === true || (lro as Record<string, unknown>)['allValid'] === true
               : false;
+
+            try {
+              logger.info(
+                `  🔒 on_finish.goto guard: gotoTarget=${String(gotoTarget)} allValidMem=${String(allValidMem)} allValidOut=${String(allValidOut)}`
+              );
+            } catch {}
             if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
               logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
               gotoTarget = null as any;
+            }
+          } catch {}
+
+          // Extra deterministic guard: if the last wave of validate-fact is all valid,
+          try {
+            const __h = this.outputHistory.get('validate-fact');
+            logger.info(
+              `  🧪 on_finish.goto: validate-fact history now len=${Array.isArray(__h) ? __h.length : 0}`
+            );
+          } catch {}
+          // skip routing back to the forEach parent even if goto_js requested it.
+          try {
+            if (gotoTarget === checkName) {
+              const vfHistNow = (this.outputHistory.get('validate-fact') || []) as unknown[];
+              if (Array.isArray(vfHistNow) && forEachItems.length > 0) {
+                const verdicts = vfHistNow
+                  .map(v => (v && typeof v === 'object' ? (v as any) : undefined))
+                  .filter(
+                    v => v && (typeof v.is_valid === 'boolean' || typeof v.valid === 'boolean')
+                  )
+                  .map(v => v.is_valid === true || v.valid === true);
+                if (verdicts.length >= forEachItems.length) {
+                  const lastVerdicts = verdicts.slice(-forEachItems.length);
+                  const allTrue = lastVerdicts.every(Boolean);
+                  if (allTrue) {
+                    try {
+                      logger.info(
+                        `✓ on_finish.goto: history verdicts all valid; skipping routing to '${gotoTarget}'`
+                      );
+                    } catch {}
+                    gotoTarget = null as any;
+                  }
+                }
+              }
             }
           } catch {}
 

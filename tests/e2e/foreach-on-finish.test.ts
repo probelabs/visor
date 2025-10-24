@@ -598,7 +598,8 @@ output:
       // Should post directly without retry
       expect(result).toContain('Posted verified response');
       // Should not route back (no retry)
-      expect(result).not.toMatch(/loop.*2|attempt.*1/i);
+      expect(result).not.toMatch(/Routed to:/i);
+      expect(result).toMatch(/Checks:\s*4 configured\s*→\s*7 executions/);
     });
 
     it('should handle some facts invalid → retry → validate → post', () => {
