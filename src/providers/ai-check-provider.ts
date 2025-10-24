@@ -496,6 +496,9 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.debug !== undefined) {
         aiConfig.debug = config.ai.debug as boolean;
       }
+      if (config.ai.enableDelegate !== undefined) {
+        aiConfig.enableDelegate = config.ai.enableDelegate as boolean;
+      }
       if (config.ai.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
@@ -746,6 +749,7 @@ export class AICheckProvider extends CheckProvider {
       'ai.apiKey',
       'ai.timeout',
       'ai.mcpServers',
+      'ai.enableDelegate',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',
