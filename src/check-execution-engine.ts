@@ -923,7 +923,8 @@ export class CheckExecutionEngine {
         // Build context for on_finish evaluation
         const outputsForContext: Record<string, unknown> = {};
         for (const [name, result] of results.entries()) {
-          outputsForContext[name] = (result as any).output;
+          const r = result as import('./reviewer').ReviewSummary & { output?: unknown };
+          outputsForContext[name] = r.output !== undefined ? r.output : r;
         }
         // Also expose output history for each check (parity with docs/examples)
         const outputsHistoryForContext: Record<string, unknown[]> = {};
@@ -934,7 +935,7 @@ export class CheckExecutionEngine {
             outputsHistoryForContext[check] = history as unknown[];
           }
           // Attach to outputs as a nested property for `outputs.history[...]`
-          (outputsForContext as any).history = outputsHistoryForContext;
+          /* outputs.history available via outputsMergedForContext */
         } catch {}
 
         // Create forEach stats
@@ -996,11 +997,13 @@ export class CheckExecutionEngine {
         } catch {}
 
         // Build full context for on_finish evaluation
+        const outputsMergedForContext: Record<string, unknown> = { ...outputsForContext, history: outputsHistoryForContext };
+
         const onFinishContext = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
           attempt: 1,
           loop: 0,
-          outputs: outputsForContext,
+          outputs: outputsMergedForContext,
           // Provide explicit alias for templates that prefer snake_case
           outputs_history: outputsHistoryForContext,
           outputs_raw: outputsRawForContext,
@@ -1032,6 +1035,8 @@ export class CheckExecutionEngine {
             logger.debug(`🧭 on_finish: outputs.history['validate-fact'] length=${vfHist.length}`);
           }
         } catch {}
+
+        let lastRunOutput: unknown = undefined;
 
         // Execute on_finish.run (static + dynamic via run_js) sequentially
         {
@@ -1078,7 +1083,6 @@ export class CheckExecutionEngine {
           }
 
           try {
-            let lastRunOutput: unknown = undefined;
             for (const runCheckId of runList) {
               if (++loopCount > maxLoops) {
                 throw new Error(
@@ -1166,15 +1170,14 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
-          // Special safety: common aggregator pattern sets memory 'all_valid' in 'fact-validation'.
-          // If it's true, skip routing back to the forEach parent to avoid unintended extra waves.
+          // Special safety: check memory flag and last aggregator output
           try {
             const mem = MemoryStore.getInstance(this.config?.memory);
-            const allValid = mem.get('all_valid', 'fact-validation');
-            if (gotoTarget === checkName && allValid === true) {
-              logger.info(
-                `✓ on_finish.goto: skipping routing to '${gotoTarget}' because memory.fact-validation.all_valid=true`
-              );
+            const allValidMem = mem.get('all_valid', 'fact-validation');
+            const lro = (lastRunOutput && typeof lastRunOutput === "object") ? (lastRunOutput as Record<string, unknown>) : undefined;
+            const allValidOut = lro ? (lro['all_valid'] === true or lro['allValid'] === true) : false;
+            if (gotoTarget === checkName && (allValidMem === true or allValidOut === true)) {
+              logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
               gotoTarget = null as any;
             }
           } catch {}
