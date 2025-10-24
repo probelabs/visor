@@ -452,8 +452,15 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      goto: init-fact-validation
-      goto_event: issue_comment
+      # Always initialize fact validation attempt counter
+      run: [init-fact-validation]
+      # Preserve intent-based rerun: allow members to retrigger overview from a comment
+      goto_js: |
+        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
+        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+      goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
