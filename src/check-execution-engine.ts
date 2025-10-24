@@ -1078,6 +1078,7 @@ export class CheckExecutionEngine {
           }
 
           try {
+            let lastRunOutput: unknown = undefined;
             for (const runCheckId of runList) {
               if (++loopCount > maxLoops) {
                 throw new Error(
@@ -1087,7 +1088,7 @@ export class CheckExecutionEngine {
               if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
               logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
 
-              await this.runNamedCheck(runCheckId, [], {
+              const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
                 origin: 'on_finish',
                 config,
                 dependencyGraph,
@@ -1098,6 +1099,9 @@ export class CheckExecutionEngine {
                 eventOverride: onFinish.goto_event,
                 overlay: new Map(results),
               });
+              try {
+                lastRunOutput = (__onFinishRes as any)?.output;
+              } catch {}
               logger.info(`  ✓ Completed on_finish check: ${runCheckId}`);
             }
             if (runList.length > 0) {
