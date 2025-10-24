@@ -712,9 +712,12 @@ steps:
 
       log('📊 Aggregating', validations.length, 'validation results');
 
+      // Only HIGH confidence counts as valid. Everything else returns to loop.
+      const validHigh = validations.filter(v => v.is_valid && v.confidence === 'high');
+      const problems = validations.filter(v => !(v.is_valid && v.confidence === 'high'));
+      const lowConfidence = validations.filter(v => v.is_valid && v.confidence !== 'high');
       const invalid = validations.filter(v => !v.is_valid);
-      const lowConfidence = validations.filter(v => v.confidence === 'low');
-      const allValid = invalid.length === 0 && lowConfidence.length === 0;
+      const allValid = problems.length === 0;
 
       log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),
           'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
@@ -737,7 +740,7 @@ steps:
 
       return {
         total: validations.length,
-        valid: validations.filter(v => v.is_valid && v.confidence !== 'low').length,
+        valid: validHigh.length,
         invalid: invalid.length,
         low_confidence: lowConfidence.length,
         all_valid: allValid,
