@@ -513,7 +513,6 @@ steps:
     namespace: fact-validation
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
 
   # Extract verifiable facts from assistant responses
   # This is a forEach check that triggers validation for each fact
@@ -552,8 +551,7 @@ steps:
         required: [id, category, claim, verifiable]
     depends_on: [init-fact-validation, issue-assistant, comment-assistant]
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    # Always extract facts when assistants produce text
+    # Only when validation is enabled and assistants produced text
     if: "env.ENABLE_FACT_VALIDATION === 'true' && (outputs['issue-assistant'] || outputs['comment-assistant'])"
     ai:
       skip_code_context: true
@@ -702,7 +700,6 @@ steps:
     operation: exec_js
     namespace: fact-validation
     on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     fanout: reduce
     on_success:
