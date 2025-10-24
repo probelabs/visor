@@ -200,12 +200,30 @@ export class AIReviewService {
         const errorMessage =
           'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).';
 
-        // In debug mode, return a review with the error captured
+        // In debug mode, return a result that still renders for custom schemas
         if (debugInfo) {
           debugInfo.errors = [errorMessage];
           debugInfo.processingTime = Date.now() - startTime;
           debugInfo.rawResponse = 'API call not attempted - no API key configured';
 
+          // Detect custom schemas (issue-assistant, overview, inline, file-based)
+          const isCustomSchema =
+            (typeof schema === 'string' && schema !== 'code-review') || typeof schema === 'object';
+
+          if (isCustomSchema) {
+            const out = {
+              // Provide a friendly, bounded fallback so built-in templates render
+              text: '⚠️ AI provider is not configured for this run. Set GOOGLE_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY or AWS credentials to enable real responses.\n\nThis is a placeholder response so your workflow still posts a comment.',
+            } as Record<string, unknown>;
+            const res: any = {
+              issues: [],
+              output: out,
+              debug: debugInfo,
+            };
+            return res;
+          }
+
+          // Non-custom schemas: return error as an issue (previous behavior)
           return {
             issues: [
               {
@@ -1960,20 +1978,53 @@ ${'='.repeat(60)}
       }
 
       if (isCustomSchema) {
-        // For custom schemas, preserve ALL fields from the parsed JSON
-        // Don't force the response into the standard ReviewSummary format
+        // For custom schemas, preserve ALL fields from the parsed JSON and make sure
+        // we always have something renderable in templates (e.g., output.text).
         log('📋 Custom schema detected - preserving all fields from parsed JSON');
         log(`📊 Schema: ${_schema}`);
-        log(`📊 Custom schema keys: ${Object.keys(reviewData).join(', ')}`);
+        try {
+          log(`📊 Custom schema keys: ${Object.keys(reviewData).join(', ')}`);
+        } catch {}
 
-        // Return the full parsed data as the output, with an empty issues array
-        // This allows downstream checks to access all custom fields via outputs
+        // Ensure "output" is an object and has a sensible text fallback for templates
+        const out: Record<string, unknown> =
+          reviewData && typeof reviewData === 'object' ? (reviewData as any) : ({} as any);
+
+        const hasText =
+          typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
+        if (!hasText) {
+          // Build a fallback string from the raw response or issue messages if available
+          let fallbackText = '';
+          try {
+            if (
+              Array.isArray((reviewData as any)?.issues) &&
+              (reviewData as any).issues.length > 0
+            ) {
+              // Join issue messages into a readable block
+              fallbackText = (reviewData as any).issues
+                .map((i: any) => (i && (i.message || i.text || i.response)) as string)
+                .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+                .join('\n');
+            }
+          } catch {}
+          if (!fallbackText && typeof response === 'string' && response.trim()) {
+            // Use raw provider response (trim and bound length for safety)
+            fallbackText = response.trim().slice(0, 60000);
+          }
+          if (fallbackText) {
+            (out as any).text = fallbackText;
+          }
+        }
+
         const result: ReviewSummary & { output?: unknown } = {
-          issues: [], // Empty array for custom schemas (no code review issues)
-          output: reviewData, // Preserve ALL custom schema fields here
+          // Keep issues empty for custom-schema rendering; consumers read from output.*
+          issues: [],
+          output: out,
         };
 
-        log('✅ Successfully created ReviewSummary with custom schema output');
+        log(
+          '✅ Successfully created ReviewSummary with custom schema output (with fallback text when needed)'
+        );
         return result;
       }
 
