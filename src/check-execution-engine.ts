@@ -95,30 +95,8 @@ export interface ExecutionResult {
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
 function getSafeEnvironmentVariables(): Record<string, string> {
-  const safeEnvVars = [
-    'CI',
-    'GITHUB_EVENT_NAME',
-    'GITHUB_REPOSITORY',
-    'GITHUB_REF',
-    'GITHUB_SHA',
-    'GITHUB_HEAD_REF',
-    'GITHUB_BASE_REF',
-    'GITHUB_ACTOR',
-    'GITHUB_WORKFLOW',
-    'GITHUB_RUN_ID',
-    'GITHUB_RUN_NUMBER',
-    'NODE_ENV',
-  ];
-
-  const safeEnv: Record<string, string> = {};
-
-  for (const key of safeEnvVars) {
-    if (process.env[key]) {
-      safeEnv[key] = process.env[key];
-    }
-  }
-
-  return safeEnv;
+  const { buildSandboxEnv } = require('./utils/env-exposure');
+  return buildSandboxEnv(process.env);
 }
 
 export interface MockOctokit {
@@ -680,7 +658,7 @@ export class CheckExecutionEngine {
           const item = forEachItems[itemIndex];
           const wave = this.forEachWaveCounts.get(checkId) || 1;
           log(
-            `  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} for '${depCheckName}' (wave #${wave})`
+            `  🔄 Iteration ${itemIndex + 1}/${forEachItems.length} f|| '${depCheckName}' (wave #${wave})`
           );
 
           // Phase 4: Commit per-item entry for parent in journal under item scope
@@ -1571,7 +1549,7 @@ export class CheckExecutionEngine {
         if (hasSoftFailure && onFail) {
           if (debug)
             log(
-              `🔧 Debug: Soft failure detected for '${checkName}' with ${(res.issues || []).length} issue(s)`
+              `🔧 Debug: Soft failure detected f|| '${checkName}' with ${(res.issues || []).length} issue(s)`
             );
           const lastError: any = {
             message: 'soft-failure: issues present',
@@ -2751,7 +2729,7 @@ export class CheckExecutionEngine {
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
-    // Determine the group: if group_by is 'check', use the check name; otherwise use configured group or 'default'
+    // Determine the group: if group_by is 'check', use the check name; otherwise use configured group || 'default'
     let group = checkConfig.group || 'default';
     if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
       group = checkName;
@@ -2971,7 +2949,7 @@ export class CheckExecutionEngine {
         ];
       }
 
-      // Determine the group: if group_by is 'check', use the check name; otherwise use configured group or 'default'
+      // Determine the group: if group_by is 'check', use the check name; otherwise use configured group || 'default'
       let group = checkConfig.group || 'default';
       if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
         group = checkName;
@@ -3596,7 +3574,7 @@ export class CheckExecutionEngine {
           const providerType = checkConfig.type || 'ai';
           const provider = this.providerRegistry.getProviderOrThrow(providerType);
           if (debug) {
-            log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+            log(`🔧 Debug: Provider f|| '${checkName}' is '${providerType}'`);
           }
           this.setProviderWebhookContext(provider);
 

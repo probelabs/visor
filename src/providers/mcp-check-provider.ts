@@ -489,14 +489,14 @@ export class McpCheckProvider extends CheckProvider {
    */
   private getSafeEnvironmentVariables(): Record<string, string> {
     const safeVars: Record<string, string> = {};
-    const allowedPrefixes = ['CI_', 'GITHUB_', 'RUNNER_', 'NODE_', 'npm_', 'PATH', 'HOME', 'USER'];
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const allowedPrefixes: string[] = []; // replaced by buildSandboxEnv
 
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && allowedPrefixes.some(prefix => key.startsWith(prefix))) {
-        safeVars[key] = value;
-      }
+    const { buildSandboxEnv } = require('../utils/env-exposure');
+    const merged = buildSandboxEnv(process.env);
+    for (const [key, value] of Object.entries(merged)) {
+      safeVars[key] = String(value);
     }
-
     safeVars['PWD'] = process.cwd();
     return safeVars;
   }
