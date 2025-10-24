@@ -997,7 +997,10 @@ export class CheckExecutionEngine {
         } catch {}
 
         // Build full context for on_finish evaluation
-        const outputsMergedForContext: Record<string, unknown> = { ...outputsForContext, history: outputsHistoryForContext };
+        const outputsMergedForContext: Record<string, unknown> = {
+          ...outputsForContext,
+          history: outputsHistoryForContext,
+        };
 
         const onFinishContext = {
           step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
@@ -1174,9 +1177,14 @@ export class CheckExecutionEngine {
           try {
             const mem = MemoryStore.getInstance(this.config?.memory);
             const allValidMem = mem.get('all_valid', 'fact-validation');
-            const lro = (lastRunOutput && typeof lastRunOutput === "object") ? (lastRunOutput as Record<string, unknown>) : undefined;
-            const allValidOut = lro ? (lro['all_valid'] === true or lro['allValid'] === true) : false;
-            if (gotoTarget === checkName && (allValidMem === true or allValidOut === true)) {
+            const lro =
+              lastRunOutput && typeof lastRunOutput === 'object'
+                ? (lastRunOutput as Record<string, unknown>)
+                : undefined;
+            const allValidOut = lro
+              ? lro['all_valid'] === true || (lro as Record<string, unknown>)['allValid'] === true
+              : false;
+            if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
               logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
               gotoTarget = null as any;
             }
