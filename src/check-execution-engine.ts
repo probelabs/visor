@@ -95,34 +95,61 @@ export interface ExecutionResult {
  * Filter environment variables to only include safe ones for sandbox evaluation
  */
 function getSafeEnvironmentVariables(): Record<string, string> {
-  const baseAllow = [
-    'CI',
-    'GITHUB_EVENT_NAME',
-    'GITHUB_REPOSITORY',
-    'GITHUB_REF',
-    'GITHUB_SHA',
-    'GITHUB_HEAD_REF',
-    'GITHUB_BASE_REF',
-    'GITHUB_ACTOR',
-    'GITHUB_WORKFLOW',
-    'GITHUB_RUN_ID',
-    'GITHUB_RUN_NUMBER',
-    'NODE_ENV',
+  // Default: expose all env vars except a conservative denylist.
+  // If VISOR_ALLOW_ENV is set and not '*', restrict to that allowlist.
+  // VISOR_DENY_ENV can further mask exact keys or prefix* patterns.
+  const denyDefaults = [
+    'GITHUB_TOKEN',
+    'INPUT_GITHUB-TOKEN',
+    'ACTIONS_RUNTIME_TOKEN',
+    'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'AZURE_CLIENT_SECRET',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'HUGGINGFACE_API_KEY',
+    'CLAUDE_CODE_API_KEY',
+    'PROBE_API_KEY',
   ];
-
-  const productAllow = ['ENABLE_FACT_VALIDATION'];
-  const dynamicAllow = (process.env.VISOR_ALLOW_ENV || '')
+  const denyExtra = (process.env.VISOR_DENY_ENV || '')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
-
-  const allow = Array.from(new Set([...baseAllow, ...productAllow, ...dynamicAllow]));
-
+  const deny = Array.from(new Set([...denyDefaults, ...denyExtra]));
+  const allowSpec = (process.env.VISOR_ALLOW_ENV || '*').trim();
   const safeEnv: Record<string, string> = {};
-  for (const key of allow) {
-    if (key && process.env[key] !== undefined) {
-      safeEnv[key] = String(process.env[key]);
+  const denyMatch = (key: string): boolean => {
+    for (const pat of deny) {
+      if (!pat) continue;
+      if (pat.endsWith('*')) {
+        const prefix = pat.slice(0, -1);
+        if (key.startsWith(prefix)) return true;
+      } else if (key === pat) {
+        return true;
+      }
     }
+    if (/(_TOKEN|_SECRET|_PASSWORD|_PRIVATE_KEY)$/i.test(key)) return true;
+    return false;
+  };
+  if (allowSpec !== '*') {
+    const allow = allowSpec
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    for (const key of allow) {
+      if (key && process.env[key] !== undefined && !denyMatch(key)) {
+        safeEnv[key] = String(process.env[key]);
+      }
+    }
+    return safeEnv;
+  }
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || value === null) continue;
+    if (denyMatch(key)) continue;
+    safeEnv[key] = String(value);
   }
   return safeEnv;
 }
