@@ -1162,6 +1162,19 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
+          // Special safety: common aggregator pattern sets memory 'all_valid' in 'fact-validation'.
+          // If it's true, skip routing back to the forEach parent to avoid unintended extra waves.
+          try {
+            const mem = MemoryStore.getInstance(this.config?.memory);
+            const allValid = mem.get('all_valid', 'fact-validation');
+            if (gotoTarget === checkName && allValid === true) {
+              logger.info(
+                `✓ on_finish.goto: skipping routing to '${gotoTarget}' because memory.fact-validation.all_valid=true`
+              );
+              gotoTarget = null as any;
+            }
+          } catch {}
+
           // Count toward loop budget similar to other routing paths (per-parent on_finish)
           const maxLoops = config?.routing?.max_loops ?? 10;
           const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
