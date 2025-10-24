@@ -1796,18 +1796,32 @@ ${'='.repeat(60)}
       throw new Error('Invalid schema name');
     }
 
-    // Construct path to built-in schema file
-    const schemaPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
+    // Built-in schemas are bundled under dist/output when running as a GitHub Action.
+    // In local dev (ts-node/jest), schemas may live under project/output.
+    // Try dist-relative first, then fall back to CWD.
+    const candidatePaths = [
+      // When bundled with ncc, __dirname points to dist/. We copy output/ into dist/output/.
+      path.join(__dirname, 'output', sanitizedSchemaName, 'schema.json'),
+      // Fallback for local development / simulator
+      path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json'),
+    ];
 
-    try {
-      // Return the schema as a string, not parsed JSON
-      const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-      return schemaContent.trim();
-    } catch (error) {
-      throw new Error(
-        `Failed to load schema from ${schemaPath}: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+    for (const schemaPath of candidatePaths) {
+      try {
+        const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+        return schemaContent.trim();
+      } catch {
+        // try next
+      }
     }
+
+    // If neither path works, surface a helpful error
+    const distPath = path.join(__dirname, 'output', sanitizedSchemaName, 'schema.json');
+    const cwdPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
+    throw new Error(
+      `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath} and ${cwdPath}. ` +
+        `Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
+    );
   }
 
   /**

@@ -41,6 +41,8 @@ High‑priority backlog (outside phases)
 ---
 
 ## Quick Wins For PR #146 (Low Risk)
+- [x] Fix built-in schema lookup for Action runs (load from dist/output via __dirname with cwd fallback).
+
 Checklist targets polish and parity; can be merged ahead of the snapshot work.
 
 - [x] Expose `outputs.history` (or `outputs_history`) in `on_finish.goto_js` sandbox to match docs and examples.

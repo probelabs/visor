@@ -200,20 +200,27 @@ export class PRReviewer {
           return false;
         }
 
-        // Construct path to built-in schema file
-        const schemaPath = path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json');
+        // Locate built-in schema JSON. In Actions, schemas live under dist/output (relative to __dirname).
+        // In local dev/tests, schemas live under project/output (relative to CWD).
+        const candidatePaths = [
+          path.join(__dirname, 'output', sanitizedSchemaName, 'schema.json'),
+          path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json'),
+        ];
 
-        try {
-          const schemaContent = await fs.readFile(schemaPath, 'utf-8');
-          const schemaObj = JSON.parse(schemaContent);
+        for (const schemaPath of candidatePaths) {
+          try {
+            const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+            const schemaObj = JSON.parse(schemaContent);
 
-          // Check if schema has a "text" field in properties
-          const properties = schemaObj.properties as Record<string, unknown> | undefined;
-          return !!(properties && 'text' in properties);
-        } catch {
-          // Schema file not found or invalid, return false
-          return false;
+            // Check if schema has a "text" field in properties
+            const properties = schemaObj.properties as Record<string, unknown> | undefined;
+            return !!(properties && 'text' in properties);
+          } catch {
+            // try next location
+          }
         }
+        // Schema file not found in any known location, not comment-generating
+        return false;
       } else {
         // Inline schema object - check if it has a "text" field in properties
         const properties = schema.properties as Record<string, unknown> | undefined;
