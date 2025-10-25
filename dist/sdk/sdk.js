@@ -13828,7 +13828,7 @@ ${expr}`;
         } else {
           schemaName = checkConfig.schema || "plain";
         }
-        let templateContent;
+        let templateContent = "";
         let enrichAssistantContext = false;
         if (checkConfig.template) {
           if (checkConfig.template.content) {
@@ -13846,8 +13846,26 @@ ${expr}`;
           if (!sanitizedSchema) {
             throw new Error("Invalid schema name");
           }
-          const templatePath = path16.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-          templateContent = await fs14.readFile(templatePath, "utf-8");
+          const candidateTemplatePaths = [
+            path16.join(__dirname, `output/${sanitizedSchema}/template.liquid`),
+            path16.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`)
+          ];
+          let foundTemplate;
+          for (const p of candidateTemplatePaths) {
+            try {
+              templateContent = await fs14.readFile(p, "utf-8");
+              foundTemplate = p;
+              break;
+            } catch {
+            }
+          }
+          if (!foundTemplate) {
+            const distPath = path16.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
+            const cwdPath = path16.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`);
+            throw new Error(
+              `Template file not found for schema '${sanitizedSchema}'. Tried: ${distPath} and ${cwdPath}.`
+            );
+          }
           if (sanitizedSchema === "issue-assistant") {
             enrichAssistantContext = true;
           }
