@@ -251,6 +251,28 @@ export async function run(): Promise<void> {
       }
     }
 
+    // Determine AI provider overrides and fallbacks for issue flows
+    const hasAnyAIKey = Boolean(
+      process.env.GOOGLE_API_KEY ||
+        process.env.ANTHROPIC_API_KEY ||
+        process.env.OPENAI_API_KEY ||
+        (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+        process.env.AWS_BEDROCK_API_KEY
+    );
+    // Honor Action inputs if provided
+    if (inputs['ai-provider']) {
+      (config as any).ai_provider = inputs['ai-provider'];
+    }
+    if (inputs['ai-model']) {
+      (config as any).ai_model = inputs['ai-model'];
+    }
+    // If no keys and no explicit provider/model, fall back to mock to ensure assistants produce output
+    if (!hasAnyAIKey && !(config as any).ai_provider && !(config as any).ai_model) {
+      (config as any).ai_provider = 'mock';
+      (config as any).ai_model = 'mock';
+      console.log('🎭 No AI API key detected; using mock AI provider for assistant checks');
+    }
+
     // Determine which event we're handling and run appropriate checks
     await handleEvent(octokit, inputs, eventName, context, config);
   } catch (error) {
