@@ -1411,7 +1411,7 @@ ${schemaString}`);
           } else if (schema === "plain") {
             log(`\u{1F4CB} Using plain schema - no JSON validation will be applied`);
           }
-          const schemaOptions = schemaString ? schemaString : void 0;
+          const schemaOptions = schemaString ? { schema: schemaString } : void 0;
           if (debugInfo && schemaOptions) {
             debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
           }
@@ -1565,7 +1565,7 @@ ${"=".repeat(60)}
             response = await agentAny.tracer.withSpan(
               "visor.ai_check_reuse",
               async () => {
-                return await agent.answer(prompt, [], schemaOptions);
+                return await agent.answer(prompt, void 0, schemaOptions);
               },
               {
                 "check.name": _checkName || "unknown",
@@ -1575,7 +1575,7 @@ ${"=".repeat(60)}
               }
             );
           } else {
-            response = schemaOptions ? await agent.answer(prompt, [], schemaOptions) : await agent.answer(prompt);
+            response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent session reuse completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -1810,7 +1810,7 @@ ${schemaString}`);
           } else if (schema === "plain") {
             log(`\u{1F4CB} Using plain schema - no JSON validation will be applied`);
           }
-          const schemaOptions = schemaString ? schemaString : void 0;
+          const schemaOptions = schemaString ? { schema: schemaString } : void 0;
           if (debugInfo && schemaOptions) {
             debugInfo.schema = JSON.stringify(schemaOptions, null, 2);
           }
@@ -1937,7 +1937,7 @@ $ ${cliCommand}
             response = await tracer.withSpan(
               "visor.ai_check",
               async () => {
-                return await agent.answer(prompt, [], schemaOptions);
+                return await agent.answer(prompt, void 0, schemaOptions);
               },
               {
                 "check.name": _checkName || "unknown",
@@ -1947,7 +1947,7 @@ $ ${cliCommand}
               }
             );
           } else {
-            response = schemaOptions ? await agent.answer(prompt, [], schemaOptions) : await agent.answer(prompt);
+            response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -2143,9 +2143,11 @@ ${"=".repeat(60)}
           throw new Error("Invalid schema name");
         }
         const candidatePaths = [
-          // When bundled with ncc, __dirname points to dist/. We copy output/ into dist/output/.
+          // GitHub Action bundle location
           path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
-          // Fallback for local development / simulator
+          // Historical fallback when src/output was inadvertently bundled as output1/
+          path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          // Local dev (repo root)
           path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
@@ -2156,9 +2158,10 @@ ${"=".repeat(60)}
           }
         }
         const distPath = path16.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
         const cwdPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
-          `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath} and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
+          `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
       }
       /**
