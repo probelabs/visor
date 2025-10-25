@@ -49,11 +49,24 @@ if (probeVersion === 'unknown') {
 // Path to the bundled file
 const distPath = path.join(__dirname, '../dist/index.js');
 
+// Determine commit SHA for this build (use git if available)
+let commitSha = 'unknown';
+let commitShort = 'unknown';
+try {
+  const full = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  const short = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+  if (full) commitSha = full;
+  if (short) commitShort = short;
+  console.log(`🔢 Using commit: ${commitShort} (${commitSha})`);
+} catch {
+  // not a git repo (e.g., pnpm pack); leave as unknown
+}
+
 // Read the bundled file
 let content = fs.readFileSync(distPath, 'utf8');
 
 // Inject version at the beginning of the file (after shebang will be added)
-const versionInjection = `process.env.VISOR_VERSION = '${version}';\nprocess.env.PROBE_VERSION = '${probeVersion}';\n`;
+const versionInjection = `process.env.VISOR_VERSION = '${version}';\nprocess.env.PROBE_VERSION = '${probeVersion}';\nprocess.env.VISOR_COMMIT_SHA = '${commitSha}';\nprocess.env.VISOR_COMMIT_SHORT = '${commitShort}';\n`;
 
 // Write back with version injected
 fs.writeFileSync(distPath, versionInjection + content);

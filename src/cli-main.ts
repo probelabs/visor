@@ -212,6 +212,7 @@ export async function main(): Promise<void> {
     try {
       const visorVersion =
         process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
+      const commitShort = process.env.VISOR_COMMIT_SHORT || '';
       let probeVersion = process.env.PROBE_VERSION || 'unknown';
       if (!process.env.PROBE_VERSION) {
         try {
@@ -220,7 +221,8 @@ export async function main(): Promise<void> {
           // ignore if dependency metadata not available (tests, local)
         }
       }
-      logger.info(`Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
+      const visorPart = commitShort ? `${visorVersion} (${commitShort})` : visorVersion;
+      logger.info(`Visor ${visorPart} • Probe ${probeVersion} • Node ${process.version}`);
     } catch {
       // If anything goes wrong reading versions, do not block execution
     }

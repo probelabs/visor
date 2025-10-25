@@ -194,13 +194,15 @@ export async function run(): Promise<void> {
     try {
       const visorVersion =
         process.env.VISOR_VERSION || (require('../package.json')?.version ?? 'dev');
+      const commitShort = process.env.VISOR_COMMIT_SHORT || '';
       let probeVersion = process.env.PROBE_VERSION || 'unknown';
       if (!process.env.PROBE_VERSION) {
         try {
           probeVersion = require('@probelabs/probe/package.json')?.version ?? 'unknown';
         } catch {}
       }
-      console.log(`ℹ️ Visor ${visorVersion} • Probe ${probeVersion} • Node ${process.version}`);
+      const visorPart = commitShort ? `${visorVersion} (${commitShort})` : visorVersion;
+      console.log(`ℹ️ Visor ${visorPart} • Probe ${probeVersion} • Node ${process.version}`);
     } catch {}
 
     // Load config to determine which checks should run for this event
