@@ -62,7 +62,9 @@
     "workshop:pdf": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter",
     "workshop:pdf:ci": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args=\"--no-sandbox --disable-dev-shm-usage\"",
     "workshop:pdf:a4": "reveal-md workshop/slides.md --print workshop/Visor-Workshop-A4.pdf --print-size A4",
-    "workshop:build": "npm run workshop:export && npm run workshop:pdf"
+    "workshop:build": "npm run workshop:export && npm run workshop:pdf",
+    "simulate:issue": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issues --action opened --debug",
+    "simulate:comment": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issue_comment --action created --debug"
   },
   "keywords": [
     "code-review",

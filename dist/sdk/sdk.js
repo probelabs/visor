@@ -1575,7 +1575,7 @@ ${"=".repeat(60)}
               }
             );
           } else {
-            response = await agent.answer(prompt, void 0, schemaOptions);
+            response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent session reuse completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -1947,7 +1947,7 @@ $ ${cliCommand}
               }
             );
           } else {
-            response = await agent.answer(prompt, void 0, schemaOptions);
+            response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
           }
           log("\u2705 ProbeAgent completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
@@ -2128,9 +2128,9 @@ ${"=".repeat(60)}
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath2 = path16.resolve(process.cwd(), schema);
-            log(`\u{1F4CB} Loading custom schema from file: ${schemaPath2}`);
-            const schemaContent = await fs14.readFile(schemaPath2, "utf-8");
+            const schemaPath = path16.resolve(process.cwd(), schema);
+            log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
+            const schemaContent = await fs14.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -2142,15 +2142,27 @@ ${"=".repeat(60)}
         if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
           throw new Error("Invalid schema name");
         }
-        const schemaPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
-        try {
-          const schemaContent = await fs14.readFile(schemaPath, "utf-8");
-          return schemaContent.trim();
-        } catch (error) {
-          throw new Error(
-            `Failed to load schema from ${schemaPath}: ${error instanceof Error ? error.message : "Unknown error"}`
-          );
+        const candidatePaths = [
+          // GitHub Action bundle location
+          path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          // Historical fallback when src/output was inadvertently bundled as output1/
+          path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          // Local dev (repo root)
+          path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+        ];
+        for (const schemaPath of candidatePaths) {
+          try {
+            const schemaContent = await fs14.readFile(schemaPath, "utf-8");
+            return schemaContent.trim();
+          } catch {
+          }
         }
+        const distPath = path16.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        throw new Error(
+          `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
+        );
       }
       /**
        * Parse AI response JSON
@@ -2253,7 +2265,8 @@ ${"=".repeat(60)}
               }
             }
           }
-          const isCustomSchema = _schema === "custom" || _schema && (_schema.startsWith("./") || _schema.endsWith(".json")) || _schema && _schema !== "code-review" && !_schema.includes("output/");
+          const looksLikeTextOutput = reviewData && typeof reviewData === "object" && typeof reviewData.text === "string" && String(reviewData.text).trim().length > 0;
+          const isCustomSchema = _schema === "custom" || _schema && (_schema.startsWith("./") || _schema.endsWith(".json")) || _schema && _schema !== "code-review" && !_schema.includes("output/") || !_schema && looksLikeTextOutput;
           const _debugSchemaLogging = this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === "true";
           if (_debugSchemaLogging) {
             const details = {
@@ -2559,15 +2572,20 @@ var init_reviewer = __esm({
             if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
               return false;
             }
-            const schemaPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
-            try {
-              const schemaContent = await fs14.readFile(schemaPath, "utf-8");
-              const schemaObj = JSON.parse(schemaContent);
-              const properties = schemaObj.properties;
-              return !!(properties && "text" in properties);
-            } catch {
-              return false;
+            const candidatePaths = [
+              path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+              path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+            ];
+            for (const schemaPath of candidatePaths) {
+              try {
+                const schemaContent = await fs14.readFile(schemaPath, "utf-8");
+                const schemaObj = JSON.parse(schemaContent);
+                const properties = schemaObj.properties;
+                return !!(properties && "text" in properties);
+              } catch {
+              }
             }
+            return false;
           } else {
             const properties = schema.properties;
             return !!(properties && "text" in properties);
