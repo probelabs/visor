@@ -748,6 +748,32 @@ async function handleIssueEvent(
 
         console.log(`✅ Posted issue assistant results to issue #${issue.number}`);
       } else {
+        // No content to post. Before exiting quietly, surface any rendering/critical errors
+        // that occurred during execution so users can see what went wrong.
+        try {
+          const errorLines: string[] = [];
+          for (const checks of Object.values(results)) {
+            for (const check of checks) {
+              for (const issue of check.issues || []) {
+                const id = String(issue.ruleId || '');
+                const sev = String((issue as any).severity || '');
+                const isRenderError = id.endsWith('/render-error');
+                const isError =
+                  isRenderError || sev === 'error' || sev === 'critical' || id.endsWith('/error');
+                if (isError) {
+                  errorLines.push(`   - [${check.checkName}] ${id}: ${issue.message}`);
+                }
+              }
+            }
+          }
+          if (errorLines.length > 0) {
+            console.error(
+              '❌ No content to post. Errors encountered during check rendering/execution:'
+            );
+            for (const line of errorLines.slice(0, 50)) console.error(line);
+            if (errorLines.length > 50) console.error(`   ... and ${errorLines.length - 50} more`);
+          }
+        } catch {}
         console.log('ℹ️ No content to post - all checks returned empty results');
       }
     } else {

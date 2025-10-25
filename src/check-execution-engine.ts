@@ -3147,7 +3147,7 @@ export class CheckExecutionEngine {
       schemaName = checkConfig.schema || 'plain';
     }
 
-    let templateContent: string;
+    let templateContent: string = '';
     let enrichAssistantContext = false;
 
     if (checkConfig.template) {
@@ -3170,8 +3170,31 @@ export class CheckExecutionEngine {
       if (!sanitizedSchema) {
         throw new Error('Invalid schema name');
       }
-      const templatePath = path.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs.readFile(templatePath, 'utf-8');
+      // Locate built-in template. In GitHub Action bundle templates live under dist/output.
+      // In local dev (ts-node/jest) templates live under project/output.
+      // Also try historical dist/output1 fallback.
+      const candidateTemplatePaths = [
+        path.join(__dirname, `output/${sanitizedSchema}/template.liquid`),
+        path.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`),
+      ];
+
+      let foundTemplate: string | undefined;
+      for (const p of candidateTemplatePaths) {
+        try {
+          templateContent = await fs.readFile(p, 'utf-8');
+          foundTemplate = p;
+          break;
+        } catch {
+          // try next candidate
+        }
+      }
+      if (!foundTemplate) {
+        const distPath = path.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
+        const cwdPath = path.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`);
+        throw new Error(
+          `Template file not found for schema '${sanitizedSchema}'. Tried: ${distPath} and ${cwdPath}.`
+        );
+      }
       // Only enrich built-in issue-assistant with event/permission context
       if (sanitizedSchema === 'issue-assistant') {
         enrichAssistantContext = true;
