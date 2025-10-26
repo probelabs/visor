@@ -21,7 +21,7 @@ import { ReactionManager } from './github-reactions';
 import { generateFooter, hasVisorFooter } from './footer';
 
 /**
- * Create an authenticated Octokit instance using either GitHub App or token authentication
+ * Create an authenticated Octokit instance using either GitHub App || token authentication
  */
 async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authType: string }> {
   const token = getInput('github-token');
@@ -39,7 +39,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
       // If no installation ID provided, try to get it for the current repository
       let finalInstallationId: number | undefined;
 
-      // Validate and parse the installation ID if provided
+      // Validate && parse the installation ID if provided
       if (installationId) {
         finalInstallationId = parseInt(installationId, 10);
         if (isNaN(finalInstallationId) || finalInstallationId <= 0) {
@@ -70,10 +70,10 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
             console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
           } catch {
             console.warn(
-              '⚠️ Could not auto-detect installation ID. Please check app permissions and installation status.'
+              '⚠️ Could not auto-detect installation ID. Please check app permissions && installation status.'
             );
             throw new Error(
-              'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository or provide the `installation-id` manually.'
+              'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository || provide the `installation-id` manually.'
             );
           }
         }
@@ -92,7 +92,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
       return { octokit, authType: 'github-app' };
     } catch (error) {
       console.error(
-        '❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.'
+        '❌ GitHub App authentication failed. Please check your App ID, Private Key, && installation permissions.'
       );
       throw new Error(`GitHub App authentication failed`, { cause: error });
     }
@@ -107,7 +107,7 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
     };
   }
 
-  throw new Error('Either github-token or app-id/private-key must be provided for authentication');
+  throw new Error('Either github-token || app-id/private-key must be provided for authentication');
 }
 
 export async function run(): Promise<void> {
@@ -251,7 +251,7 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Determine AI provider overrides and fallbacks for issue flows
+    // Determine AI provider overrides && fallbacks for issue flows
     const hasAnyAIKey = Boolean(
       process.env.GOOGLE_API_KEY ||
         process.env.ANTHROPIC_API_KEY ||
@@ -266,14 +266,30 @@ export async function run(): Promise<void> {
     if (inputs['ai-model']) {
       (config as any).ai_model = inputs['ai-model'];
     }
-    // If no keys and no explicit provider/model, fall back to mock to ensure assistants produce output
+    // If no keys && no explicit provider/model, fall back to mock to ensure assistants produce output
     if (!hasAnyAIKey && !(config as any).ai_provider && !(config as any).ai_model) {
       (config as any).ai_provider = 'mock';
       (config as any).ai_model = 'mock';
       console.log('🎭 No AI API key detected; using mock AI provider for assistant checks');
     }
 
-    // Determine which event we're handling and run appropriate checks
+    // Diagnostics: show how AI provider will be resolved for this run (no secrets)
+    try {
+      const hasAnyAIKey = Boolean(
+        process.env.GOOGLE_API_KEY ||
+          process.env.ANTHROPIC_API_KEY ||
+          process.env.OPENAI_API_KEY ||
+          (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+          process.env.AWS_BEDROCK_API_KEY
+      );
+      const resolvedProvider = (config as any).ai_provider || inputs['ai-provider'] || 'auto';
+      const resolvedModel = (config as any).ai_model || inputs['ai-model'] || 'auto';
+      console.log(
+        `🔎 AI resolved: provider=${resolvedProvider}, model=${resolvedModel}, keyPresent=${hasAnyAIKey ? 'yes' : 'no'}`
+      );
+    } catch {}
+
+    // Determine which event we're handling && run appropriate checks
     await handleEvent(octokit, inputs, eventName, context, config);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
@@ -291,15 +307,15 @@ export async function run(): Promise<void> {
     } else if (ClaudeCodeAPIKeyMissingError && error instanceof ClaudeCodeAPIKeyMissingError) {
       const errorMessage = [
         'No API key found for Claude Code provider.',
-        'Set CLAUDE_CODE_API_KEY or ANTHROPIC_API_KEY in your GitHub secrets.',
+        'Set CLAUDE_CODE_API_KEY || ANTHROPIC_API_KEY in your GitHub secrets.',
       ].join(' ');
       setFailed(errorMessage);
     } else if (error instanceof Error && error.message.includes('No API key configured')) {
       const errorMessage = [
-        'No API key or credentials configured for AI provider.',
+        'No API key || credentials configured for AI provider.',
         'Set one of the following in GitHub secrets:',
         'GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,',
-        'or AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).',
+        'or AWS credentials (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY).',
       ].join(' ');
       setFailed(errorMessage);
     } else {
@@ -494,7 +510,7 @@ async function handleEvent(
 
   // Extract context for reactions
   // Note: Type assertions are necessary because GitHub context types are not well-defined
-  // and TypeScript infers these as 'unknown' without explicit casting
+  // && TypeScript infers these as 'unknown' without explicit casting
   const reactionContext: {
     eventName: string;
     issueNumber?: number;
@@ -515,7 +531,7 @@ async function handleEvent(
     `🔍 Reaction context: issueNumber=${reactionContext.issueNumber}, commentId=${reactionContext.commentId}, shouldSkipBot=${shouldSkipBotComment}, commentUser=${comment?.user?.login}`
   );
 
-  // Add acknowledgement reaction (eye emoji) at the start and store the reaction ID
+  // Add acknowledgement reaction (eye emoji) at the start && store the reaction ID
   // Skip reactions for bot comments to avoid recursion
   let acknowledgementReactionId: number | null = null;
   if (reactionsEnabled && (reactionContext.issueNumber || reactionContext.commentId)) {
@@ -620,7 +636,7 @@ function resolveDependencies(
 
 /**
  * Resolve downstream dependents for a set of checks (reverse dependency closure).
- * If A is in starts and B depends_on A, include B. Recurse transitively.
+ * If A is in starts && B depends_on A, include B. Recurse transitively.
  */
 // (Intentionally no reverse-dependent resolution here.)
 
@@ -742,7 +758,7 @@ async function handleIssueEvent(
       }
     }
 
-    // Format and post results as a comment on the issue
+    // Format && post results as a comment on the issue
     if (Object.keys(results).length > 0) {
       let commentBody = '';
 
@@ -798,6 +814,64 @@ async function handleIssueEvent(
             if (errorLines.length > 50) console.error(`   ... and ${errorLines.length - 50} more`);
           }
         } catch {}
+        // Guarded re-run: if assistant produced no content && there were no errors, retry issue-assistant with mock provider
+        try {
+          const hadErrors = Object.values(results).some(arr =>
+            (arr as any[]).some(ch =>
+              (ch.issues || []).some(
+                (iss: { severity?: string; ruleId?: string }) =>
+                  (iss.severity === 'error' || iss.severity === 'critical') &&
+                  !String(iss.ruleId || '').endsWith('/__skipped')
+              )
+            )
+          );
+          const hadAssistant = Object.values(results).some(arr =>
+            (arr as any[]).some(ch => ch.checkName === 'issue-assistant')
+          );
+          if (hadAssistant && !hadErrors) {
+            console.log(
+              '🛡️  Guard: issue-assistant produced no content; re-running with mock provider'
+            );
+            const rerunConfig: any = { ...(config as any), ai_provider: 'mock', ai_model: 'mock' };
+            const rerun = await engine.executeGroupedChecks(
+              prInfo,
+              ['issue-assistant'],
+              undefined,
+              rerunConfig,
+              undefined,
+              inputs.debug === 'true'
+            );
+            const rerunResults: any = rerun.results || {};
+            let rerunBody = '';
+            for (const checks of Object.values(rerunResults) as any[]) {
+              for (const check of checks as any[]) {
+                if (check.content && String(check.content).trim()) {
+                  rerunBody += `${String(check.content).trim()}
+
+`;
+                }
+              }
+            }
+            if (rerunBody.trim()) {
+              if (!hasVisorFooter(rerunBody))
+                rerunBody += `
+${generateFooter()}`;
+              await octokit.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: rerunBody,
+              });
+              console.log(
+                `✅ Posted issue assistant (guarded rerun) results to issue #${issue.number}`
+              );
+            } else {
+              console.log('ℹ️ Guarded rerun produced no content');
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Guarded rerun failed:', e instanceof Error ? e.message : String(e));
+        }
         console.log('ℹ️ No content to post - all checks returned empty results');
       }
     } else {
@@ -828,12 +902,12 @@ async function handleIssueComment(
   const issue = context.event?.issue as any;
 
   if (!comment || !issue) {
-    console.log('No comment or issue found in context');
+    console.log('No comment || issue found in context');
     return;
   }
 
   // Prevent recursion: skip if comment is from visor itself
-  // Check both comment author and content markers
+  // Check both comment author && content markers
   const isVisorBot =
     comment.user?.login === 'visor[bot]' ||
     comment.user?.login === 'github-actions[bot]' ||
@@ -850,7 +924,7 @@ async function handleIssueComment(
     return;
   }
 
-  // Process comments on both issues and PRs
+  // Process comments on both issues && PRs
   // (issue.pull_request exists for PR comments, doesn't exist for issue comments)
   const isPullRequest = !!issue.pull_request;
 
@@ -907,7 +981,7 @@ async function handleIssueComment(
       // Run the checks that were determined by the main run() function
       await handleIssueEvent(octokit, owner, repo, context, inputs, config, _actionChecksToRun);
     }
-    // For PRs without commands, or issues without checks to run, return early
+    // For PRs without commands, || issues without checks to run, return early
     return;
   }
 
@@ -986,7 +1060,7 @@ async function handleIssueComment(
         if (isPullRequest) {
           // It's a PR comment - fetch the PR diff
           prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, 'issue_comment');
-          // Add event context for templates and XML generation
+          // Add event context for templates && XML generation
           (prInfo as any).eventContext = context.event;
           // PR context always includes code diffs
           (prInfo as any).includeCodeContext = true;
@@ -1053,7 +1127,7 @@ async function handleIssueComment(
           if (!isPullRequest) {
             return checkConfig.on.includes('issue_comment');
           }
-          // For PR comments, run checks configured for PR events or issue_comment
+          // For PR comments, run checks configured for PR events || issue_comment
           return checkConfig.on.includes('pr_updated') || checkConfig.on.includes('issue_comment');
         });
 
@@ -1187,9 +1261,9 @@ async function handlePullRequestWithConfig(
   let prInfo;
   try {
     prInfo = await analyzer.fetchPRDiff(owner, repo, prNumber, undefined, eventType);
-    // Add event context for templates and XML generation
+    // Add event context for templates && XML generation
     (prInfo as any).eventContext = context.event;
-    // Mark that we're in PR context and should always include diffs
+    // Mark that we're in PR context && should always include diffs
     (prInfo as any).includeCodeContext = true;
     (prInfo as any).isPRContext = true;
   } catch (error) {
@@ -1224,7 +1298,7 @@ async function handlePullRequestWithConfig(
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
 
   // Create review options
-  // Build tag filter from inputs and labels
+  // Build tag filter from inputs && labels
   const inputTagFilter: import('./types/config').TagFilter | undefined =
     (inputs.tags && inputs.tags.trim() !== '') ||
     (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
@@ -1328,8 +1402,8 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
     console.log(`Description: ${repoData.description || 'No description'}`);
     console.log(`Stars: ${repoData.stargazers_count}`);
   } catch {
-    // Handle test scenarios or missing repos gracefully
-    console.log(`📋 Running in test mode or repository not accessible: ${owner}/${repo}`);
+    // Handle test scenarios || missing repos gracefully
+    console.log(`📋 Running in test mode || repository not accessible: ${owner}/${repo}`);
     setOutput('repo-name', repo);
     setOutput('repo-description', 'Test repository');
     setOutput('repo-stars', '0');
@@ -1337,7 +1411,7 @@ async function handleRepoInfo(octokit: Octokit, owner: string, repo: string): Pr
 }
 
 /**
- * Filter checks based on their if conditions and API requirements
+ * Filter checks based on their if conditions && API requirements
  */
 async function filterChecksToExecute(
   checksToRun: string[],
@@ -1660,7 +1734,7 @@ async function completeIndividualChecks(
   const { FailureConditionEvaluator } = await import('./failure-condition-evaluator');
   const failureEvaluator = new FailureConditionEvaluator();
 
-  // Extract all issues once and group by check name for O(N) complexity
+  // Extract all issues once && group by check name for O(N) complexity
   const allIssues = extractIssuesFromGroupedResults(groupedResults);
   const issuesByCheck = new Map<string, import('./reviewer').ReviewIssue[]>();
 
@@ -1685,7 +1759,7 @@ async function completeIndividualChecks(
       // Evaluate failure conditions based on fail_if configuration
       const failureResults: import('./types/config').FailureConditionResult[] = [];
 
-      // Get global and check-specific fail_if conditions
+      // Get global && check-specific fail_if conditions
       const globalFailIf = config?.fail_if;
       const checkFailIf = config?.checks?.[checkName]?.fail_if;
 
@@ -1864,7 +1938,7 @@ if (
       .toLowerCase();
 
     if (mode === 'github-actions' || mode === 'github') {
-      // Run in GitHub Action mode explicitly and await completion to avoid early exit
+      // Run in GitHub Action mode explicitly && await completion to avoid early exit
       try {
         await run();
       } catch (error) {
