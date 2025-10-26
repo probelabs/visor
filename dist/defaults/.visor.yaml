@@ -620,7 +620,7 @@ steps:
     on_finish:
       run: [aggregate-validations]
       goto_js: |
-        const allValid = memory.get('all_facts_valid', 'fact-validation');
+        const allValid = memory.get('all_valid', 'fact-validation');
         const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
 
         log('🔍 Fact validation complete - allValid:', allValid, 'attempt:', attempt);
@@ -722,7 +722,8 @@ steps:
       log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),
           'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
 
-      memory.set('all_facts_valid', allValid, 'fact-validation');
+      memory.set('all_valid', allValid, 'fact-validation');
+      memory.set('total_validations', validations.length, 'fact-validation');
       memory.set('validation_results', validations, 'fact-validation');
       memory.set('invalid_facts', invalid, 'fact-validation');
       memory.set('low_confidence_facts', lowConfidence, 'fact-validation');
