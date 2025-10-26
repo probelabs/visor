@@ -748,16 +748,9 @@ async function handleIssueEvent(
       const fvEnabled = process.env.ENABLE_FACT_VALIDATION === 'true';
       if (fvEnabled && Object.keys(results).length > 0) {
         let sawAggregate = false;
-        let sawExtractItems = false;
         let allValid: boolean | undefined = undefined;
         for (const checks of Object.values(results)) {
           for (const check of checks) {
-            if ((check as any).checkName === 'extract-facts') {
-              const arr = Array.isArray((check as any).output)
-                ? ((check as any).output as unknown[])
-                : [];
-              if (arr.length > 0) sawExtractItems = true;
-            }
             if ((check as any).checkName === 'aggregate-validations') {
               const out = (check as any).output as any;
               if (out && typeof out === 'object') {
@@ -767,7 +760,7 @@ async function handleIssueEvent(
             }
           }
         }
-        if (sawExtractItems && sawAggregate && allValid === false) {
+        if (sawAggregate && allValid === false) {
           shouldPost = false;
           console.log(
             '🛡️  Fact-validation gate: suppressing issue comment until all facts validate'
