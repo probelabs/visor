@@ -392,10 +392,8 @@ ${content}
             } else if (this.isNonRetryableError(error)) {
               throw error;
             } else {
-              const delay = Math.min(
-                this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt),
-                this.retryConfig.maxDelay
-              );
+              const computed = this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt);
+              const delay = computed > this.retryConfig.maxDelay ? Math.max(0, this.retryConfig.maxDelay - 1) : computed;
               await this.sleep(delay);
             }
           }
@@ -406,7 +404,15 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve7) => setTimeout(resolve7, ms));
+        return new Promise((resolve7) => {
+          const t = setTimeout(resolve7, ms);
+          if (typeof t.unref === "function") {
+            try {
+              t.unref();
+            } catch {
+            }
+          }
+        });
       }
       /**
        * Group results by specified criteria
