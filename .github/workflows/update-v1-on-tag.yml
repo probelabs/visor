@@ -1,4 +1,4 @@
-name: Update v1 branch on v1.*.* tags
+name: Update v1 from nightly on v1.*.* tags
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref (tag or SHA) to publish to v1'
+        description: 'Optional tag name to update to nightly tip'
         required: false
         type: string
 
@@ -15,72 +15,53 @@ permissions:
   contents: write
 
 jobs:
-  release-v1:
+  point-v1-to-nightly:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine ref
-        id: ref
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.ref }}" ]; then
-            echo "ref=${{ github.event.inputs.ref }}" >> $GITHUB_OUTPUT
-          else
-            echo "ref=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Checkout at ref
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.ref.outputs.ref }}
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install deps and build
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install
-          npm install --no-save @rollup/rollup-linux-x64-gnu || true
-          npm run build
-
       - name: Prepare git
         run: |
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch origin +refs/heads/nightly:refs/remotes/origin/nightly +refs/tags/*:refs/tags/*
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
 
-      - name: Create/reset v1 to ref
+      - name: Determine tag and nightly SHA
+        id: vars
         run: |
-          # Create a branch at the exact source ref (tag commit) and add dist on top
-          git checkout -B v1
-
-      - name: Commit dist on v1
-        run: |
-          test -d dist || { echo "dist missing after build"; exit 1; }
-          git add -f dist/
-          if ! git diff --cached --quiet; then
-            SOURCE_REF=${{ steps.ref.outputs.ref }}
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            git commit -m "build(v1): bundle dist for ${SOURCE_REF} (based on ${SHORT_SHA})"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.ref }}" ]; then
+            TAG_NAME="${{ github.event.inputs.ref }}"
           else
-            echo "ℹ️ No changes to commit"
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
           fi
+          NIGHTLY_SHA=$(git rev-parse refs/remotes/origin/nightly)
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "nightly_sha=$NIGHTLY_SHA" >> $GITHUB_OUTPUT
+          echo "Using nightly @$NIGHTLY_SHA for $TAG_NAME"
 
-      - name: Push v1 (force-with-lease)
+      - name: Update v1 branch to nightly
         run: |
-          git push --force-with-lease origin v1
+          NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+          # Create local v1 at nightly and push
+          git update-ref refs/heads/v1 "$NIGHTLY_SHA"
+          git push --force-with-lease origin refs/heads/v1
 
-      - name: Update moving tag v1 (optional)
-        env:
-          UPDATE_MAJOR_TAG: 'true'
+      - name: Move tag to nightly (ensures the tag contains dist)
         run: |
-          if [ "$UPDATE_MAJOR_TAG" = "true" ]; then
-            git tag -f v1
+          TAG_NAME="${{ steps.vars.outputs.tag }}"
+          NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+          git tag -f "$TAG_NAME" "$NIGHTLY_SHA"
+          git push -f origin "refs/tags/$TAG_NAME"
+
+      - name: Update moving major tag v1
+        run: |
+          TAG_NAME="${{ steps.vars.outputs.tag }}"
+          if echo "$TAG_NAME" | grep -qE '^v1\.'; then
+            # Point lightweight tag 'v1' to the same commit
+            NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+            git tag -f v1 "$NIGHTLY_SHA"
             git push -f origin refs/tags/v1
-            echo "✅ Updated tag v1 to latest v1 branch tip"
+            echo "✅ Updated floating tag v1"
           else
-            echo "Skipping moving tag update"
+            echo "Skipping major tag update for non-v1 tag: $TAG_NAME"
           fi
-

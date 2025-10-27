@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: build-dist-main
+      cancel-in-progress: true
 
     steps:
       - name: Checkout code
@@ -118,3 +121,12 @@ jobs:
           else
             echo "ℹ️ No changes to dist files"
           fi
+
+      - name: Mirror current commit to nightly
+        run: |
+          # Push the same commit to nightly so it always mirrors main (with dist)
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "Mirroring commit $CURRENT_SHA to nightly"
+          # Create/force-update nightly to the current HEAD
+          git push --force-with-lease origin HEAD:refs/heads/nightly
+          echo "✅ Nightly updated"
