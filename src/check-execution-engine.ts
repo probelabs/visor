@@ -298,8 +298,9 @@ export class CheckExecutionEngine {
    */
   private enrichEventContext(eventContext?: Record<string, unknown>): Record<string, unknown> {
     const baseContext = eventContext || {};
-    if (this.actionContext?.octokit) {
-      return { ...baseContext, octokit: this.actionContext.octokit };
+    const injected = this.actionContext?.octokit || (baseContext as any).octokit;
+    if (injected) {
+      return { ...baseContext, octokit: injected };
     }
     return baseContext;
   }
@@ -2683,7 +2684,12 @@ export class CheckExecutionEngine {
     providerConfig.forEach = checkConfig.forEach;
 
     const __provStart = Date.now();
-    const result = await provider.execute(prInfo, providerConfig);
+    const result = await provider.execute(
+      prInfo,
+      providerConfig,
+      undefined,
+      this.executionContext
+    );
     this.recordProviderDuration(checkName, Date.now() - __provStart);
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
@@ -3597,7 +3603,9 @@ export class CheckExecutionEngine {
           const providerType = checkConfig.type || 'ai';
           const provider = this.providerRegistry.getProviderOrThrow(providerType);
           if (debug) {
-            log(`🔧 Debug: Provider f|| '${checkName}' is '${providerType}'`);
+            log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+          } else if (process.env.VISOR_DEBUG === 'true') {
+            try { console.log(`[engine] provider for ${checkName} -> ${providerType}`); } catch {}
           }
           this.setProviderWebhookContext(provider);
 
@@ -3625,6 +3633,8 @@ export class CheckExecutionEngine {
             message: extendedCheckConfig.message,
             env: checkConfig.env,
             forEach: checkConfig.forEach,
+            // Provide output history so providers can access latest outputs for Liquid rendering
+            __outputHistory: this.outputHistory,
             // Pass through any provider-specific keys (e.g., op/values for github provider)
             ...checkConfig,
             ai: {
@@ -6659,6 +6669,17 @@ export class CheckExecutionEngine {
       this.outputHistory.set(checkName, []);
     }
     this.outputHistory.get(checkName)!.push(output);
+  }
+
+  /**
+   * Snapshot of output history per step for test assertions
+   */
+  public getOutputHistorySnapshot(): Record<string, unknown[]> {
+    const out: Record<string, unknown[]> = {};
+    for (const [k, v] of this.outputHistory.entries()) {
+      out[k] = Array.isArray(v) ? [...v] : [];
+    }
+    return out;
   }
 
   /**

@@ -729,3 +729,13 @@ steps:
 ```
 
 See docs: docs/github-ops.md
+## Integration Tests (Great DX)
+
+Visor ships a YAML‑native integration test runner so you can describe user flows, mocks, and assertions alongside your config.
+
+- Start here: docs/testing/getting-started.md
+- CLI details: docs/testing/cli.md
+- Fixtures and mocks: docs/testing/fixtures-and-mocks.md
+- Assertions reference: docs/testing/assertions.md
+
+Example suite: defaults/.visor.tests.yaml

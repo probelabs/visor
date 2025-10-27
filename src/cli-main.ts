@@ -110,6 +110,102 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
 }
 
 /**
+ * Handle the test subcommand (Milestone 0: discovery only)
+ */
+async function handleTestCommand(argv: string[]): Promise<void> {
+  // Minimal flag parsing: --config <path>, --only <name>, --bail
+  const getArg = (name: string): string | undefined => {
+    const i = argv.indexOf(name);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  const hasFlag = (name: string): boolean => argv.includes(name);
+
+  const testsPath = getArg('--config');
+  const only = getArg('--only');
+  const bail = hasFlag('--bail');
+  const listOnly = hasFlag('--list');
+  const validateOnly = hasFlag('--validate');
+  const progress = (getArg('--progress') as 'compact' | 'detailed' | undefined) || 'compact';
+  const jsonOut = getArg('--json'); // path or '-' for stdout
+  const reportArg = getArg('--report'); // e.g. junit:path.xml
+  const summaryArg = getArg('--summary'); // e.g. md:path.md
+  const maxParallelRaw = getArg('--max-parallel');
+  const promptMaxCharsRaw = getArg('--prompt-max-chars');
+  const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
+  const promptMaxChars = promptMaxCharsRaw ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1) : undefined;
+
+  // Configure logger for concise console output
+  configureLoggerFromCli({ output: 'table', debug: false, verbose: false, quiet: false });
+
+  console.log('🧪 Visor Test Runner');
+  try {
+    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import('./test-runner/index');
+    if (validateOnly) {
+      const errors = await validateTestsOnly({ testsPath });
+      process.exit(errors > 0 ? 1 : 0);
+    }
+    if (listOnly) {
+      await discoverAndPrint({ testsPath });
+      if (only) console.log(`\nFilter: --only ${only}`);
+      if (bail) console.log('Mode: --bail (stop on first failure)');
+      process.exit(0);
+    }
+    // Run and capture structured results
+    const runner = new (VisorTestRunner as any)();
+    const tpath = runner.resolveTestsPath(testsPath);
+    const suite = runner.loadSuite(tpath);
+    const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
+    const failures = runRes.failures;
+    // Basic reporters (Milestone 7): write minimal JSON/JUnit/Markdown summaries
+    try {
+      if (jsonOut) {
+        const fs = require('fs');
+        const payload = { failures, results: runRes.results };
+        const data = JSON.stringify(payload, null, 2);
+        if (jsonOut === '-' || jsonOut === 'stdout') console.log(data);
+        else {
+          fs.writeFileSync(jsonOut, data, 'utf8');
+          console.error(`📝 JSON report written to ${jsonOut}`);
+        }
+      }
+    } catch {}
+    try {
+      if (reportArg && reportArg.startsWith('junit:')) {
+        const fs = require('fs');
+        const dest = reportArg.slice('junit:'.length);
+        const tests = (runRes.results || []).length;
+        const failed = (runRes.results || []).filter((r: any) => !r.passed).length;
+        const detail = (runRes.results || [])
+          .map((r: any) => {
+            const errs = (r.errors || []).concat(...(r.stages || []).map((s: any) => s.errors || []));
+            return `<testcase classname=\"visor\" name=\"${r.name}\"${errs.length>0?'':''}>${errs
+              .map((e: string) => `<failure message=\"${e.replace(/\"/g,'&quot;')}\"></failure>`) 
+              .join('')}</testcase>`; 
+          })
+          .join('\n  ');
+        const xml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"visor\" tests=\"${tests}\" failures=\"${failed}\">\n  ${detail}\n</testsuite>`;
+        fs.writeFileSync(dest, xml, 'utf8');
+        console.error(`📝 JUnit report written to ${dest}`);
+      }
+    } catch {}
+    try {
+      if (summaryArg && summaryArg.startsWith('md:')) {
+        const fs = require('fs');
+        const dest = summaryArg.slice('md:'.length);
+        const lines = (runRes.results || []).map((r: any) => `- ${r.passed ? '✅' : '❌'} ${r.name}${r.stages? ' ('+r.stages.length+' stage'+(r.stages.length!==1?'s':'')+')':''}`);
+        const content = `# Visor Test Summary\n\n- Failures: ${failures}\n\n${lines.join('\n')}`;
+        fs.writeFileSync(dest, content, 'utf8');
+        console.error(`📝 Markdown summary written to ${dest}`);
+      }
+    } catch {}
+    process.exit(failures > 0 ? 1 : 0);
+  } catch (err) {
+    console.error('❌ test: ' + (err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+}
+
+/**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
@@ -149,6 +245,11 @@ export async function main(): Promise<void> {
     // Check for validate subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'validate') {
       await handleValidateCommand(filteredArgv, configManager);
+      return;
+    }
+    // Check for test subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
+      await handleTestCommand(filteredArgv);
       return;
     }
 

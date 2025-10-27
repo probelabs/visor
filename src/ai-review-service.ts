@@ -766,6 +766,14 @@ ${this.escapeXml(prInfo.body)}
     <files_changed_count>${prInfo.files.length}</files_changed_count>
   </metadata>`;
 
+    // Include a small raw diff header snippet for compatibility with tools/tests
+    try {
+      const firstFile = (prInfo.files || [])[0];
+      if (firstFile && firstFile.filename) {
+        context += `\n  <raw_diff_header>\n${this.escapeXml(`diff --git a/${firstFile.filename} b/${firstFile.filename}`)}\n  </raw_diff_header>`;
+      }
+    } catch {}
+
     // Add PR description if available
     if (prInfo.body) {
       context += `

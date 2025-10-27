@@ -54,7 +54,7 @@ export class HttpClientProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    context?: import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
     const url = config.url as string;
     const method = (config.method as string) || 'GET';
@@ -96,8 +96,12 @@ export class HttpClientProvider extends CheckProvider {
       // Resolve environment variables in headers
       const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
 
-      // Fetch data from the endpoint
-      const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+      // Test hook: mock HTTP response for this step
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = context?.hooks?.mockForStep?.(String(stepName));
+      const data = mock !== undefined
+        ? mock
+        : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
 
       // Apply transformation if specified
       let processedData = data;

@@ -468,7 +468,7 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
@@ -612,6 +612,28 @@ export class AICheckProvider extends CheckProvider {
       _dependencyResults,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
+
+    // Test hook: capture the FINAL prompt (with PR context) before provider invocation
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const serviceForCapture = new AIReviewService(aiConfig);
+      const finalPrompt = await (serviceForCapture as any).buildCustomPrompt(
+        prInfo,
+        processedPrompt,
+        config.schema,
+        { checkName: (config as any).checkName }
+      );
+      sessionInfo?.hooks?.onPromptCaptured?.({ step: String(stepName), provider: 'ai', prompt: finalPrompt });
+    } catch {}
+
+    // Test hook: mock output for this step (short-circuit provider)
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        return { issues: [], output: mock } as ReviewSummary & { output: unknown };
+      }
+    } catch {}
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
