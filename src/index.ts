@@ -742,33 +742,6 @@ async function handleIssueEvent(
 
     const { results } = executionResult;
 
-    // Fact-validation gate: if enabled, suppress posting until all facts validate
-    let shouldPost = true;
-    try {
-      const fvEnabled = process.env.ENABLE_FACT_VALIDATION === 'true';
-      if (fvEnabled && Object.keys(results).length > 0) {
-        let sawAggregate = false;
-        let allValid: boolean | undefined = undefined;
-        for (const checks of Object.values(results)) {
-          for (const check of checks) {
-            if ((check as any).checkName === 'aggregate-validations') {
-              const out = (check as any).output as any;
-              if (out && typeof out === 'object') {
-                allValid = out.all_valid === true || out.allValid === true;
-              }
-              sawAggregate = true;
-            }
-          }
-        }
-        if (sawAggregate && allValid === false) {
-          shouldPost = false;
-          console.log(
-            '🛡️  Fact-validation gate: suppressing issue comment until all facts validate'
-          );
-        }
-      }
-    } catch {}
-
     // Log execution results for debugging (only in debug mode)
     if (inputs.debug === 'true') {
       console.log(`📊 Check execution completed: ${Object.keys(results).length} group(s)`);
@@ -786,7 +759,7 @@ async function handleIssueEvent(
     }
 
     // Format && post results as a comment on the issue
-    if (Object.keys(results).length > 0 && shouldPost) {
+    if (Object.keys(results).length > 0) {
       let commentBody = '';
 
       // Directly use check content without adding extra headers
@@ -855,7 +828,7 @@ async function handleIssueEvent(
           const hadAssistant = Object.values(results).some(arr =>
             (arr as any[]).some(ch => ch.checkName === 'issue-assistant')
           );
-          if (hadAssistant && !hadErrors && shouldPost) {
+          if (hadAssistant && !hadErrors) {
             console.log(
               '🛡️  Guard: issue-assistant produced no content; re-running with mock provider'
             );

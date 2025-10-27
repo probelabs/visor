@@ -595,8 +595,6 @@ steps:
       - AVOID duplicates - if same fact appears multiple times, extract it once
       - Group related info when it's the SAME fact (e.g., "value is 3 at lines 100 and 200")
       - Each fact should be atomic and independently verifiable
-      - For triage/metadata (type/priority/complexity/labels, author, status), set `verifiable` = false
-      - For documentation references, only include refs that exist in the repository. If unsure, omit refs or set `verifiable` = false
 
       Example of GOOD claims:
         - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
