@@ -1,6 +1,24 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
+# Guard: never allow committing generated dist artifacts locally.
+# Set SKIP_DIST_GUARD=1 to bypass in rare cases.
+if [ "${SKIP_DIST_GUARD:-}" != "1" ]; then
+  # List staged files that would be committed (added/modified/renamed/type-changed)
+  STAGED_DIST_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^dist/' || true)
+  if [ -n "$STAGED_DIST_FILES" ]; then
+    echo "\n❌ Commit blocked: changes under dist/ must not be committed." >&2
+    echo "These files are staged:" >&2
+    echo "$STAGED_DIST_FILES" | sed 's/^/  - /' >&2
+    echo "\nHow to fix:" >&2
+    echo "  1) Unstage them: git reset HEAD -- $STAGED_DIST_FILES" >&2
+    echo "  2) Revert local changes if needed: git checkout -- $STAGED_DIST_FILES" >&2
+    echo "\nIf you really need to bypass (e.g., special release flow), run:" >&2
+    echo "  SKIP_DIST_GUARD=1 git commit ..." >&2
+    exit 1
+  fi
+fi
+
 # Run lint-staged for linting and formatting
 npx lint-staged || exit 1
 
