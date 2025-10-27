@@ -16,7 +16,7 @@ Visor now supports GitHub Checks API integration, allowing each configured check
 ### Action Inputs
 
 ```yaml
-- uses: your-org/visor@main
+- uses: probelabs/visor@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     # Enable/disable GitHub check runs (default: true)
@@ -138,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: your-org/visor@main
+      - uses: probelabs/visor@nightly
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           config-path: '.visor.yaml'
@@ -147,7 +147,7 @@ jobs:
 ### With GitHub App Authentication
 
 ```yaml
-- uses: your-org/visor@main
+- uses: probelabs/visor@v1
   with:
     app-id: ${{ secrets.VISOR_APP_ID }}
     private-key: ${{ secrets.VISOR_PRIVATE_KEY }}
@@ -157,7 +157,7 @@ jobs:
 ### Disable GitHub Checks
 
 ```yaml
-- uses: your-org/visor@main
+- uses: probelabs/visor@nightly
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     create-check: 'false'  # Disable GitHub checks

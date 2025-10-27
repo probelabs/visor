@@ -1,0 +1,86 @@
+name: Update v1 branch on v1.*.* tags
+
+on:
+  push:
+    tags:
+      - 'v1.*.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (tag or SHA) to publish to v1'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-v1:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.ref }}" ]; then
+            echo "ref=${{ github.event.inputs.ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout at ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps and build
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install
+          npm install --no-save @rollup/rollup-linux-x64-gnu || true
+          npm run build
+
+      - name: Prepare git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+
+      - name: Create/reset v1 to ref
+        run: |
+          # Create a branch at the exact source ref (tag commit) and add dist on top
+          git checkout -B v1
+
+      - name: Commit dist on v1
+        run: |
+          test -d dist || { echo "dist missing after build"; exit 1; }
+          git add -f dist/
+          if ! git diff --cached --quiet; then
+            SOURCE_REF=${{ steps.ref.outputs.ref }}
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            git commit -m "build(v1): bundle dist for ${SOURCE_REF} (based on ${SHORT_SHA})"
+          else
+            echo "ℹ️ No changes to commit"
+          fi
+
+      - name: Push v1 (force-with-lease)
+        run: |
+          git push --force-with-lease origin v1
+
+      - name: Update moving tag v1 (optional)
+        env:
+          UPDATE_MAJOR_TAG: 'true'
+        run: |
+          if [ "$UPDATE_MAJOR_TAG" = "true" ]; then
+            git tag -f v1
+            git push -f origin refs/tags/v1
+            echo "✅ Updated tag v1 to latest v1 branch tip"
+          else
+            echo "Skipping moving tag update"
+          fi
+

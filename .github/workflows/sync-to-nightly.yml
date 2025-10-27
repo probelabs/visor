@@ -1,0 +1,58 @@
+name: Sync main → nightly (with dist)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # 02:00 UTC nightly
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync-nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps and build
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install
+          npm install --no-save @rollup/rollup-linux-x64-gnu || true
+          npm run build
+
+      - name: Prepare git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin +refs/heads/*:refs/remotes/origin/*
+
+      - name: Create/reset nightly to main tip
+        run: |
+          git checkout -B nightly origin/main
+
+      - name: Commit dist on nightly
+        run: |
+          test -d dist || { echo "dist missing after build"; exit 1; }
+          git add -f dist/
+          if ! git diff --cached --quiet; then
+            SHORT_SHA=$(git rev-parse --short origin/main)
+            git commit -m "build(nightly): update dist for main@${SHORT_SHA}"
+          else
+            echo "ℹ️ No changes to commit"
+          fi
+
+      - name: Push nightly (force-with-lease)
+        run: |
+          git push --force-with-lease origin nightly
+
