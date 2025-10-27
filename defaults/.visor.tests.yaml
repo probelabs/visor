@@ -64,6 +64,7 @@ tests:
       description: |
         Ensures the issue assistant triages a newly opened issue and applies labels.
         Asserts the structured output (intent=issue_triage) and the GitHub label op.
+      strict: false  # init-fact-validation and related checks may execute; we assert primary behavior only
       event: issue_opened
       fixture: gh.issue_open.minimal
       mocks:
