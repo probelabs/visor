@@ -12,12 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: build-dist-main
+      cancel-in-progress: true
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
@@ -66,7 +69,7 @@ jobs:
             echo "✅ Copied SDK build artifacts to bundle"
           fi
 
-      - name: Update dist files
+      - name: Update dist files and commit to main
         run: |
           # Configure git
           git config --local user.email "action@github.com"
@@ -110,18 +113,20 @@ jobs:
           # Add bundled files to git (force add since dist/ is in .gitignore)
           git add -f dist/
 
-          # Check if there are changes to commit
+          # Commit and push only if there are changes
           if ! git diff --cached --quiet; then
-            git commit --no-verify -m "$(cat <<'EOF'
-          build: update bundled dist files
-
-          🤖 Generated with [Claude Code](https://claude.ai/code)
-
-          Co-Authored-By: Claude <noreply@anthropic.com>
-          EOF
-          )"
+            git commit --no-verify -m "build: update bundled dist files"
             git push origin main
-            echo "✅ Bundled files updated"
+            echo "✅ Bundled files updated on main"
           else
             echo "ℹ️ No changes to dist files"
           fi
+
+      - name: Mirror current commit to nightly
+        run: |
+          # Push the same commit to nightly so it always mirrors main (with dist)
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "Mirroring commit $CURRENT_SHA to nightly"
+          # Create/force-update nightly to the current HEAD
+          git push --force-with-lease origin HEAD:refs/heads/nightly
+          echo "✅ Nightly updated"

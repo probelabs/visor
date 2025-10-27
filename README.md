@@ -65,6 +65,7 @@ steps:  # or 'checks' (legacy, both work identically)
 ```
 
 Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
+For latest changes, use `uses: probelabs/visor@nightly`. The `@main` ref is maintained for compatibility but may change frequently and is not recommended for production.
 
 ## Requirements
 
