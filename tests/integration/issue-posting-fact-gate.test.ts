@@ -23,7 +23,7 @@ jest.mock('@octokit/rest', () => {
   };
 });
 
-describe.skip('Issue assistant posting is gated by fact validation (issue_opened)', () => {
+describe('Issue assistant posting is gated by fact validation (issue_opened)', () => {
   beforeEach(() => {
     checksCreate.mockReset();
     checksUpdate.mockReset();
@@ -115,10 +115,10 @@ none
     depends_on: [extract-facts]
     on: [issue_opened]
     memory_js: |
-      const NS='fact-validation';
+      const NS = 'fact-validation';
       const f = outputs['extract-facts'];
       const attempt = Number(memory.get('attempt', NS) || 0);
-      const is_valid = ${allValid ? 'true' : 'false'}, confidence: 'high', evidence: ${allValid ? "'ok'" : "'bad'"} };
+      const is_valid = ${allValid ? 'true' : 'false'}; return { fact_id: f.id, claim: f.claim, is_valid, confidence: '${allValid ? "'ok'" : "'bad'"} };
 
   aggregate-validations:
     type: memory
