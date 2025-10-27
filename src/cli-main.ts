@@ -126,6 +126,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const listOnly = hasFlag('--list');
   const validateOnly = hasFlag('--validate');
   const progress = (getArg('--progress') as 'compact' | 'detailed' | undefined) || 'compact';
+  void progress; // currently parsed but not changing output detail yet
   const jsonOut = getArg('--json'); // path or '-' for stdout
   const reportArg = getArg('--report'); // e.g. junit:path.xml
   const summaryArg = getArg('--summary'); // e.g. md:path.md

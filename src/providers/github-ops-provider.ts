@@ -57,8 +57,7 @@ export class GitHubOpsProvider extends CheckProvider {
       | undefined;
     if (process.env.VISOR_DEBUG === 'true') {
       try {
-        // eslint-disable-next-line no-console
-        console.error(`[github-ops] pre-fallback octokit? ${!!octokit}`);
+        logger.debug(`[github-ops] pre-fallback octokit? ${!!octokit}`);
       } catch {}
     }
     // Test runner fallback: use global recorder if eventContext is missing octokit
@@ -192,8 +191,7 @@ export class GitHubOpsProvider extends CheckProvider {
             // If Liquid fails, surface as a provider error
             const msg = e instanceof Error ? e.message : String(e);
             if (process.env.VISOR_DEBUG === 'true') {
-              // eslint-disable-next-line no-console
-              console.error(`[github-ops] liquid_render_error: ${msg}`);
+              logger.warn(`[github-ops] liquid_render_error: ${msg}`);
             }
             return Promise.reject({
               issues: [
@@ -242,8 +240,7 @@ export class GitHubOpsProvider extends CheckProvider {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (process.env.VISOR_DEBUG === 'true') {
-          // eslint-disable-next-line no-console
-          console.error(`[github-ops] value_js_error: ${msg}`);
+          logger.warn(`[github-ops] value_js_error: ${msg}`);
         }
         return {
           issues: [
@@ -264,13 +261,13 @@ export class GitHubOpsProvider extends CheckProvider {
     if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
       try {
         const derived: string[] = [];
-        for (const [name, result] of dependencyResults.entries()) {
-          const out = (result as any)?.output || result;
-          const tags = out?.tags;
+        for (const result of dependencyResults.values()) {
+          const out = (result as (ReviewSummary & { output?: unknown }))?.output ?? result;
+          const tags = (out as Record<string, unknown>)?.['tags'] as Record<string, unknown> | undefined;
           if (tags && typeof tags === 'object') {
-            const label = (tags as any).label;
-            const effort = (tags as any)['review-effort'];
-            if (label) derived.push(String(label));
+            const label = tags['label'];
+            const effort = (tags as Record<string, unknown>)['review-effort'];
+            if (label != null) derived.push(String(label));
             if (effort !== undefined && effort !== null) derived.push(`review/effort:${String(effort)}`);
           }
         }
