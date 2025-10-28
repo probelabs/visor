@@ -2020,12 +2020,24 @@ ${'='.repeat(60)}
         } catch {}
 
         // Ensure "output" is an object and has a sensible text fallback for templates
-        const out: Record<string, unknown> =
-          reviewData && typeof reviewData === 'object' ? (reviewData as any) : ({} as any);
+        // Normalize arrays and primitive types into an object with a string fallback.
+        let out: Record<string, unknown> = {} as any;
+        if (reviewData && typeof reviewData === 'object' && !Array.isArray(reviewData)) {
+          out = reviewData as any;
+        }
 
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
         if (!hasText) {
+          // Common provider shape: { content: string } – treat as text
+          try {
+            const contentField = (out as any).content;
+            if (typeof contentField === 'string' && contentField.trim()) {
+              (out as any).text = contentField.trim();
+            }
+          } catch {}
+
+          // If still no text, build a fallback
           // Build a fallback string from the raw response or issue messages if available
           let fallbackText = '';
           try {
@@ -2044,7 +2056,10 @@ ${'='.repeat(60)}
             // Use raw provider response (trim and bound length for safety)
             fallbackText = response.trim().slice(0, 60000);
           }
-          if (fallbackText) {
+          // Avoid surfacing meaningless JSON placeholders like [] or {}
+          const looksLikeEmptyJson =
+            fallbackText && /^(\[\s*\]|\{\s*\})$/.test(fallbackText.trim());
+          if (fallbackText && !looksLikeEmptyJson) {
             (out as any).text = fallbackText;
           }
         }
@@ -2269,6 +2284,17 @@ ${'='.repeat(60)}
       const text = '### Assistant Reply';
       const intent = name.includes('issue') ? 'issue_triage' : 'comment_reply';
       return JSON.stringify({ text, intent });
+    }
+    // Overview (text-style) – align with output/overview/schema.json
+    if (name.includes('overview') || _schema === 'overview') {
+      return JSON.stringify({
+        text: '## PR Overview\n\nThis is a mock overview generated for testing. It summarizes the changes and impact.\n\n- Files changed: 0\n- Additions/Deletions: 0/0',
+        tags: { 'review-effort': 2, label: 'enhancement' },
+      });
+    }
+    // Code-review schema – return a minimal, valid structure
+    if (_schema === 'code-review' || /^(security|architecture|performance|quality)$/.test(name)) {
+      return JSON.stringify({ issues: [] });
     }
     // Fallback
     const mockResponse = { content: JSON.stringify({ issues: [], summary: { totalIssues: 0 } }) };
