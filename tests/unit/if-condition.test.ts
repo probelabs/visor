@@ -291,7 +291,7 @@ describe('If condition evaluation', () => {
   });
 
   describe('Error handling', () => {
-    it('should default to true when expression is invalid', async () => {
+    it('should default to false (fail-secure) when expression is invalid', async () => {
       const invalidExpression = await evaluator.evaluateIfCondition(
         'test-check',
         'this is not valid expression syntax ++',
@@ -301,8 +301,8 @@ describe('If condition evaluation', () => {
           filesChanged: [],
         }
       );
-      // Should default to true (run the check) when evaluation fails
-      expect(invalidExpression).toBe(true);
+      // Fail-secure: should default to false when evaluation fails
+      expect(invalidExpression).toBe(false);
     });
 
     it('should handle missing context gracefully', async () => {
