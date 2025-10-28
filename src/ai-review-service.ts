@@ -117,30 +117,36 @@ export class AIReviewService {
 
     this.sessionRegistry = SessionRegistry.getInstance();
 
-    // Auto-detect provider and API key from environment
-    if (!this.config.apiKey) {
-      if (process.env.CLAUDE_CODE_API_KEY) {
-        this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
-        this.config.provider = 'claude-code';
-      } else if (process.env.GOOGLE_API_KEY) {
-        this.config.apiKey = process.env.GOOGLE_API_KEY;
-        this.config.provider = 'google';
-      } else if (process.env.ANTHROPIC_API_KEY) {
-        this.config.apiKey = process.env.ANTHROPIC_API_KEY;
-        this.config.provider = 'anthropic';
-      } else if (process.env.OPENAI_API_KEY) {
-        this.config.apiKey = process.env.OPENAI_API_KEY;
-        this.config.provider = 'openai';
-      } else if (
-        // Check for AWS Bedrock credentials
-        (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
-        process.env.AWS_BEDROCK_API_KEY
-      ) {
-        // For Bedrock, we don't set apiKey as it uses AWS credentials
-        // ProbeAgent will handle the authentication internally
-        this.config.provider = 'bedrock';
-        // Set a placeholder to pass validation
-        this.config.apiKey = 'AWS_CREDENTIALS';
+    // Respect explicit provider if set (e.g., 'mock' during tests) — do not override from env
+    const providerExplicit =
+      typeof this.config.provider === 'string' && this.config.provider.length > 0;
+
+    // Auto-detect provider and API key from environment only when provider not explicitly set
+    if (!providerExplicit) {
+      if (!this.config.apiKey) {
+        if (process.env.CLAUDE_CODE_API_KEY) {
+          this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+          this.config.provider = 'claude-code';
+        } else if (process.env.GOOGLE_API_KEY) {
+          this.config.apiKey = process.env.GOOGLE_API_KEY;
+          this.config.provider = 'google';
+        } else if (process.env.ANTHROPIC_API_KEY) {
+          this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+          this.config.provider = 'anthropic';
+        } else if (process.env.OPENAI_API_KEY) {
+          this.config.apiKey = process.env.OPENAI_API_KEY;
+          this.config.provider = 'openai';
+        } else if (
+          // Check for AWS Bedrock credentials
+          (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+          process.env.AWS_BEDROCK_API_KEY
+        ) {
+          // For Bedrock, we don't set apiKey as it uses AWS credentials
+          // ProbeAgent will handle the authentication internally
+          this.config.provider = 'bedrock';
+          // Set a placeholder to pass validation
+          this.config.apiKey = 'AWS_CREDENTIALS';
+        }
       }
     }
 

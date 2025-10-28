@@ -16,6 +16,9 @@ export class RecordingOctokit {
 
   public readonly rest: any;
   private readonly mode?: { errorCode?: number; timeoutMs?: number };
+  private comments: Map<number, Array<{ id: number; body: string; updated_at: string }>> =
+    new Map();
+  private nextCommentId = 1;
 
   constructor(opts?: { errorCode?: number; timeoutMs?: number }) {
     this.mode = opts;
@@ -69,16 +72,55 @@ export class RecordingOctokit {
         )
       );
     }
-    if (op === 'issues.createComment' || op === 'issues.updateComment') {
+    if (op === 'issues.createComment') {
+      const issueNum = Number((args as any).issue_number || 0);
+      const body = String((args as any).body || '');
+      const id = this.nextCommentId++;
+      const rec = { id, body, updated_at: new Date().toISOString() };
+      if (!this.comments.has(issueNum)) this.comments.set(issueNum, []);
+      this.comments.get(issueNum)!.push(rec);
+      return {
+        data: { id, body, html_url: '', user: { login: 'bot' }, created_at: rec.updated_at },
+      };
+    }
+    if (op === 'issues.updateComment') {
+      const id = Number((args as any).comment_id || 0);
+      const body = String((args as any).body || '');
+      for (const [, arr] of this.comments.entries()) {
+        const found = arr.find(c => c.id === id);
+        if (found) {
+          found.body = body;
+          found.updated_at = new Date().toISOString();
+          break;
+        }
+      }
       return {
         data: {
-          id: 1,
-          body: String((args as any).body || ''),
+          id,
+          body,
           html_url: '',
           user: { login: 'bot' },
-          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
       };
+    }
+    if (op === 'issues.listComments') {
+      const issueNum = Number((args as any).issue_number || 0);
+      const items = (this.comments.get(issueNum) || []).map(c => ({
+        id: c.id,
+        body: c.body,
+        updated_at: c.updated_at,
+      }));
+      return { data: items };
+    }
+    if (op === 'issues.getComment') {
+      const id = Number((args as any).comment_id || 0);
+      for (const [, arr] of this.comments.entries()) {
+        const found = arr.find(c => c.id === id);
+        if (found)
+          return { data: { id: found.id, body: found.body, updated_at: found.updated_at } };
+      }
+      return { data: { id, body: '', updated_at: new Date().toISOString() } };
     }
     if (op === 'issues.addLabels') {
       return { data: { labels: (args as any).labels || [] } };

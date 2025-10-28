@@ -40,6 +40,37 @@ function isObject(v: unknown): v is Record<string, unknown> {
 export class VisorTestRunner {
   constructor(private readonly cwd: string = process.cwd()) {}
 
+  private line(title = '', char = '─', width = 60): string {
+    if (!title) return char.repeat(width);
+    const pad = Math.max(1, width - title.length - 2);
+    return `${char.repeat(2)} ${title} ${char.repeat(pad)}`;
+  }
+
+  private printCaseHeader(name: string, kind: 'flow' | 'single', event?: string): void {
+    console.log('\n' + this.line(`Case: ${name}`));
+    const meta: string[] = [`type=${kind}`];
+    if (event) meta.push(`event=${event}`);
+    console.log(`  ${meta.join('  ·  ')}`);
+  }
+
+  private printStageHeader(
+    flowName: string,
+    stageName: string,
+    event?: string,
+    fixture?: string
+  ): void {
+    console.log('\n' + this.line(`${flowName} — ${stageName}`));
+    const meta: string[] = [];
+    if (event) meta.push(`event=${event}`);
+    if (fixture) meta.push(`fixture=${fixture}`);
+    if (meta.length) console.log(`  ${meta.join('  ·  ')}`);
+  }
+
+  private printSelectedChecks(checks: string[]): void {
+    if (!checks || checks.length === 0) return;
+    console.log(`  checks: ${checks.join(', ')}`);
+  }
+
   /**
    * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/.visor.tests.yaml
    */
@@ -140,9 +171,18 @@ export class VisorTestRunner {
   }> {
     // Save defaults for flow runner access
     (this as any).suiteDefaults = suite.tests.defaults || {};
-    const only = options.only?.toLowerCase();
+    // Support --only "case" and --only "case#stage"
+    let onlyCase = options.only?.toLowerCase();
+    let stageFilter: string | undefined;
+    if (onlyCase && onlyCase.includes('#')) {
+      const parts = onlyCase.split('#');
+      onlyCase = parts[0];
+      stageFilter = (parts[1] || '').trim();
+    }
     const allCases = suite.tests.cases;
-    const selected = only ? allCases.filter(c => c.name.toLowerCase().includes(only)) : allCases;
+    const selected = onlyCase
+      ? allCases.filter(c => c.name.toLowerCase().includes(onlyCase as string))
+      : allCases;
     if (selected.length === 0) {
       console.log('No matching cases.');
       return { failures: 0, results: [] };
@@ -188,7 +228,14 @@ export class VisorTestRunner {
     for (const name of Object.keys(cfg.checks || {})) {
       const chk = cfg.checks[name] || {};
       if ((chk.type || 'ai') === 'ai') {
-        chk.ai = { ...(chk.ai || {}), provider: aiProviderDefault };
+        const prev = (chk.ai || {}) as Record<string, unknown>;
+        chk.ai = {
+          ...prev,
+          provider: aiProviderDefault,
+          skip_code_context: true,
+          disable_tools: true,
+          timeout: Math.min(15000, (prev.timeout as number) || 15000),
+        } as any;
         cfg.checks[name] = chk;
       }
     }
@@ -200,15 +247,34 @@ export class VisorTestRunner {
       errors?: string[];
       stages?: Array<{ name: string; errors?: string[] }>;
     }> = [];
+    // Header: show suite path for clarity
+    try {
+      const rel = path.relative(this.cwd, testsPath) || testsPath;
+      console.log(`Suite: ${rel}`);
+    } catch {}
 
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
+      // Case header for clarity
+      const isFlow = Array.isArray((_case as any).flow) && (_case as any).flow.length > 0;
+      const caseEvent = (_case as any).event as string | undefined;
+      this.printCaseHeader(
+        (_case as any).name || '(unnamed)',
+        isFlow ? 'flow' : 'single',
+        caseEvent
+      );
+      if ((_case as any).skip) {
+        console.log(`⏭ SKIP ${(_case as any).name}`);
+        caseResults.push({ name: _case.name, passed: true });
+        return { name: _case.name, failed: 0 };
+      }
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
         const flowRes = await this.runFlowCase(
           _case,
           cfg,
           defaultStrict,
           options.bail || false,
-          defaultPromptCap
+          defaultPromptCap,
+          stageFilter
         );
         const failed = flowRes.failures;
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
@@ -277,11 +343,16 @@ export class VisorTestRunner {
         const desiredSteps = new Set<string>(
           (expect.calls || []).map(c => c.step).filter(Boolean) as string[]
         );
-        const checksToRun = this.computeChecksToRun(
+        let checksToRun = this.computeChecksToRun(
           cfg,
           eventForCase,
           desiredSteps.size > 0 ? desiredSteps : undefined
         );
+        this.printSelectedChecks(checksToRun);
+        if (checksToRun.length === 0) {
+          // Fallback: run all checks for this event when filtered set is empty
+          checksToRun = this.computeChecksToRun(cfg, eventForCase, undefined);
+        }
         // Include all tagged checks by default in test mode: build tagFilter.include = union of all tags
         const allTags: string[] = Array.from(
           new Set(
@@ -295,6 +366,8 @@ export class VisorTestRunner {
           (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
         } catch {}
 
+        const prevTestMode = process.env.VISOR_TEST_MODE;
+        process.env.VISOR_TEST_MODE = 'true';
         const res = await engine.executeGroupedChecks(
           prInfo,
           checksToRun,
@@ -306,6 +379,8 @@ export class VisorTestRunner {
           false,
           { include: allTags }
         );
+        if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
+        else process.env.VISOR_TEST_MODE = prevTestMode;
         const outHistory = engine.getOutputHistorySnapshot();
 
         const caseFailures = this.evaluateCase(
@@ -318,6 +393,14 @@ export class VisorTestRunner {
           res.results,
           outHistory
         );
+        // Warn about unmocked AI/command steps that executed
+        try {
+          const mocksUsed =
+            typeof (_case as any).mocks === 'object' && (_case as any).mocks
+              ? ((_case as any).mocks as Record<string, unknown>)
+              : {};
+          this.warnUnmockedProviders(res.statistics, cfg, mocksUsed);
+        } catch {}
         this.printCoverage(_case.name, res.statistics, expect);
         if (caseFailures.length === 0) {
           console.log(`✅ PASS ${_case.name}`);
@@ -380,7 +463,8 @@ export class VisorTestRunner {
     cfg: any,
     defaultStrict: boolean,
     bail: boolean,
-    promptCap?: number
+    promptCap?: number,
+    stageFilter?: string
   ): Promise<{ failures: number; stages: Array<{ name: string; errors?: string[] }> }> {
     const suiteDefaults: any = (this as any).suiteDefaults || {};
     const ghRec = suiteDefaults.github_recorder as
@@ -402,7 +486,7 @@ export class VisorTestRunner {
 
     // Shared prompts map across flow; we will compute per-stage deltas
     const prompts: Record<string, string[]> = {};
-    const stageMocks =
+    let stageMocks: Record<string, unknown> =
       typeof flowCase.mocks === 'object' && flowCase.mocks
         ? (flowCase.mocks as Record<string, unknown>)
         : {};
@@ -422,9 +506,21 @@ export class VisorTestRunner {
     } as any);
 
     // Run each stage
+    // Normalize stage filter
+    const sf = (stageFilter || '').trim().toLowerCase();
+    const sfIndex = sf && /^\d+$/.test(sf) ? parseInt(sf, 10) : undefined;
+    let anyStageRan = false;
     for (let i = 0; i < flowCase.flow.length; i++) {
       const stage = flowCase.flow[i];
       const stageName = `${flowName}#${stage.name || `stage-${i + 1}`}`;
+      // Apply stage filter if provided: match by name substring or 1-based index
+      if (sf) {
+        const nm = String(stage.name || `stage-${i + 1}`).toLowerCase();
+        const idxMatch = sfIndex !== undefined && sfIndex === i + 1;
+        const nameMatch = nm.includes(sf);
+        if (!(idxMatch || nameMatch)) continue;
+      }
+      anyStageRan = true;
       const strict = (
         typeof flowCase.strict === 'boolean' ? flowCase.strict : defaultStrict
       ) as boolean;
@@ -449,6 +545,15 @@ export class VisorTestRunner {
         }
       }
 
+      // Merge per-stage mocks over flow-level defaults (stage overrides flow)
+      try {
+        const perStage =
+          typeof (stage as any).mocks === 'object' && (stage as any).mocks
+            ? ((stage as any).mocks as Record<string, unknown>)
+            : {};
+        stageMocks = { ...(flowCase.mocks || {}), ...perStage } as Record<string, unknown>;
+      } catch {}
+
       // Baselines for deltas
       const promptBase: Record<string, number> = {};
       for (const [k, arr] of Object.entries(prompts)) promptBase[k] = arr.length;
@@ -462,14 +567,24 @@ export class VisorTestRunner {
 
       try {
         const eventForStage = this.mapEventFromFixtureName(fixtureInput?.builtin);
+        this.printStageHeader(
+          flowName,
+          stage.name || `stage-${i + 1}`,
+          eventForStage,
+          fixtureInput?.builtin
+        );
         const desiredSteps = new Set<string>(
           ((stage.expect || {}).calls || []).map((c: any) => c.step).filter(Boolean) as string[]
         );
-        const checksToRun = this.computeChecksToRun(
+        let checksToRun = this.computeChecksToRun(
           cfg,
           eventForStage,
           desiredSteps.size > 0 ? desiredSteps : undefined
         );
+        this.printSelectedChecks(checksToRun);
+        if (!checksToRun || checksToRun.length === 0) {
+          checksToRun = this.computeChecksToRun(cfg, eventForStage, undefined);
+        }
         const allTags: string[] = Array.from(
           new Set(
             Object.values(cfg.checks || {})
@@ -481,6 +596,10 @@ export class VisorTestRunner {
         try {
           (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
         } catch {}
+        // Mark test mode for the engine to enable non-network side-effects (e.g., posting PR comments
+        // through the injected recording Octokit). Restore after the run.
+        const prevTestMode = process.env.VISOR_TEST_MODE;
+        process.env.VISOR_TEST_MODE = 'true';
         const res = await engine.executeGroupedChecks(
           prInfo,
           checksToRun,
@@ -492,6 +611,8 @@ export class VisorTestRunner {
           false,
           { include: allTags }
         );
+        if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
+        else process.env.VISOR_TEST_MODE = prevTestMode;
 
         // Build stage-local prompts map (delta)
         const stagePrompts: Record<string, string[]> = {};
@@ -507,11 +628,56 @@ export class VisorTestRunner {
           stageHist[k] = (arr as unknown[]).slice(start);
         }
 
+        // Derive stage-local execution statistics from current invocation only.
+        // We cannot use res.statistics because the engine accumulates stats across stages.
+        // Instead, infer executed checks from grouped results and history deltas.
+        // Determine executed steps for this stage from grouped results only (engine-scoped to this call)
+        const stageExecutedNames = new Set<string>();
+        try {
+          for (const checks of Object.values(res.results || {})) {
+            for (const chk of checks as any[]) {
+              if (chk && typeof chk.checkName === 'string') stageExecutedNames.add(chk.checkName);
+            }
+          }
+        } catch {}
+        // Include any steps for which we captured prompts in this stage (AI/command providers)
+        try {
+          for (const [k, arr] of Object.entries(stagePrompts)) {
+            if (k === 'unknown') continue;
+            if (Array.isArray(arr) && arr.length > 0) stageExecutedNames.add(k);
+          }
+        } catch {}
+        // Build minimal per-stage stats with run counts based on output history delta (fallback to 1)
+        const stageStats: import('../check-execution-engine').ExecutionStatistics = {
+          totalChecksConfigured: stageExecutedNames.size,
+          totalExecutions: 0,
+          successfulExecutions: 0,
+          failedExecutions: 0,
+          skippedChecks: 0,
+          totalDuration: 0,
+          checks: Array.from(stageExecutedNames).map(name => {
+            const histArr = stageHist[name];
+            let runs = Array.isArray(histArr) ? histArr.length : 1;
+            if (runs === 0) runs = 1; // Treat executed-without-output steps as 1 run
+            return {
+              checkName: name,
+              totalRuns: runs,
+              successfulRuns: runs, // per-stage we treat all as successful unless fail_if surfaced separately
+              failedRuns: 0,
+              skipped: false,
+              totalDuration: 0,
+              issuesFound: 0,
+              issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+              perIterationDuration: [],
+            } as any;
+          }),
+        } as any;
+
         // Evaluate stage expectations
         const expect = stage.expect || {};
         const caseFailures = this.evaluateCase(
           stageName,
-          res.statistics,
+          stageStats,
           // Use only call delta for stage
           { calls: recorder.calls.slice(callBase) } as any,
           expect,
@@ -520,7 +686,20 @@ export class VisorTestRunner {
           res.results,
           stageHist
         );
-        this.printCoverage(stageName, res.statistics, expect);
+        // Warn about unmocked AI/command steps that executed (stage-specific mocks)
+        try {
+          const stageMocksLocal =
+            typeof (stage as any).mocks === 'object' && (stage as any).mocks
+              ? ((stage as any).mocks as Record<string, unknown>)
+              : {};
+          const merged = { ...(flowCase.mocks || {}), ...stageMocksLocal } as Record<
+            string,
+            unknown
+          >;
+          this.warnUnmockedProviders(stageStats, cfg, merged);
+        } catch {}
+        // Use stage-local stats for coverage to avoid cross-stage bleed
+        this.printCoverage(stageName, stageStats, expect);
         if (caseFailures.length === 0) {
           console.log(`✅ PASS ${stageName}`);
           stagesSummary.push({ name: stageName });
@@ -550,6 +729,9 @@ export class VisorTestRunner {
     }
 
     // Summary line for flow
+    if (!anyStageRan && stageFilter) {
+      console.log(`⚠️  No stage matched filter '${stageFilter}' in flow '${flowName}'`);
+    }
     if (failures === 0) console.log(`✅ FLOW PASS ${flowName}`);
     else
       console.log(`❌ FLOW FAIL ${flowName} (${failures} stage error${failures > 1 ? 's' : ''})`);
@@ -564,6 +746,31 @@ export class VisorTestRunner {
     if (name.includes('issue_comment')) return 'issue_comment';
     if (name.includes('issue_open')) return 'issue_opened';
     return 'manual';
+  }
+
+  // Print warnings when AI or command steps execute without mocks in tests
+  private warnUnmockedProviders(
+    stats: import('../check-execution-engine').ExecutionStatistics,
+    cfg: any,
+    mocks: Record<string, unknown>
+  ): void {
+    try {
+      const executed = stats.checks
+        .filter(s => !s.skipped && (s.totalRuns || 0) > 0)
+        .map(s => s.checkName);
+      for (const name of executed) {
+        const chk = (cfg.checks || {})[name] || {};
+        const t = chk.type || 'ai';
+        // Suppress warnings for AI steps explicitly running under the mock provider
+        const aiProv = (chk.ai && (chk.ai as any).provider) || undefined;
+        if (t === 'ai' && aiProv === 'mock') continue;
+        if ((t === 'ai' || t === 'command') && mocks[name] === undefined) {
+          console.warn(
+            `⚠️  Unmocked ${t} step executed: ${name} (add mocks:\n  ${name}: <mock content>)`
+          );
+        }
+      }
+    } catch {}
   }
 
   private buildPrInfoFromFixture(
@@ -642,6 +849,11 @@ export class VisorTestRunner {
         }
       }
     }
+    // Test mode: avoid heavy diff processing and file reads
+    try {
+      (prInfo as any).includeCodeContext = false;
+      (prInfo as any).isPRContext = false;
+    } catch {}
     return prInfo;
   }
 
@@ -962,7 +1174,15 @@ export class VisorTestRunner {
     };
     for (const n of desired) visit(n);
     // Intersect with event filter to avoid off-event execution
-    return byEvent.filter(n => selected.has(n));
+    const res = byEvent.filter(n => selected.has(n));
+    if (res.length === 0 && process.env.VISOR_DEBUG === 'true') {
+      try {
+        console.error(
+          `[runner] computeChecksToRun: event=${event} desired=${Array.from(desired).join(', ')} byEvent=${byEvent.join(', ')}`
+        );
+      } catch {}
+    }
+    return res;
   }
 
   private printCoverage(

@@ -452,8 +452,9 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # Always initialize fact validation attempt counter
-      run: [init-fact-validation]
+      # Initialize fact validation attempt counter only when validation is enabled
+      run_js: |
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['init-fact-validation'] : []
       # Preserve intent-based rerun: allow members to retrigger overview from a comment
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
@@ -702,10 +703,16 @@ steps:
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     on_success:
+      run_js: |
+        // Schedule a single correction pass when not all facts are valid
+        if (!output || output.all_valid) return [];
+        return ['comment-assistant'];
       goto_js: |
-        // Route back to the appropriate assistant if there are issues
+        // Additionally, keep a conservative goto to the appropriate assistant for completeness
         if (!output || output.all_valid) return null;
-        const hasComment = !!(outputs['comment-assistant']) || (outputs.history && (outputs.history['comment-assistant'] || []).length > 0);
+        if (event && event.name === 'issue_comment') return 'comment-assistant';
+        if (event && event.name === 'issue_opened') return 'issue-assistant';
+        const hasComment = !!(outputs['comment-assistant']) || (outputs_history && (outputs_history['comment-assistant'] || []).length > 0);
         return hasComment ? 'comment-assistant' : 'issue-assistant';
     memory_js: |
       const validations = outputs.history['validate-fact'] || [];
