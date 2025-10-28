@@ -670,7 +670,12 @@ export class CheckExecutionEngine {
               prInfoForInline.eventType || prInfo.eventType,
               itemScope
             );
-          } catch {}
+          } catch (error) {
+            try {
+              const msg = error instanceof Error ? `${error.message}` : String(error);
+              logger.error(`Failed to commit per-item journal for ${checkId}: ${msg}`);
+            } catch {}
+          }
 
           try {
             // Build provider + config for dependent and execute with full routing semantics
@@ -830,7 +835,39 @@ export class CheckExecutionEngine {
           return skipped;
         }
       }
-    } catch {}
+    } catch (error) {
+      try {
+        const msg = error instanceof Error ? `${error.message}` : String(error);
+        logger.error(`Failed to evaluate if condition for ${target}: ${msg}`);
+      } catch {}
+      // Fail secure: if condition evaluation fails, skip execution
+      const skipped: ReviewSummary = {
+        issues: [
+          {
+            file: '',
+            line: 0,
+            ruleId: `${target}/__skipped`,
+            message: `Skipped due to condition evaluation error`,
+            severity: 'info',
+            category: 'logic',
+          },
+        ],
+      } as ReviewSummary;
+      try {
+        const cond =
+          (opts.config.checks?.[target] as import('./types/config').CheckConfig | undefined)?.if ||
+          '';
+        this.recordSkip(target, 'if_condition', cond);
+      } catch {}
+      this.commitJournal(
+        target,
+        skipped as any,
+        opts.eventOverride || opts.prInfo.eventType,
+        scope || []
+      );
+      opts.resultsMap?.set(target, skipped);
+      return skipped;
+    }
 
     // Build context overlay from current results; prefer snapshot visibility for scope (Phase 4)
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
