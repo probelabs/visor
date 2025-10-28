@@ -174,6 +174,9 @@ export class CheckExecutionEngine {
   private onFinishLoopCounts: Map<string, number> = new Map();
   // Track how many times a forEach parent check has produced an array during this run ("waves")
   private forEachWaveCounts: Map<string, number> = new Map();
+  // One-shot guards for post on_finish scheduling to avoid duplicate replies when
+  // multiple signals (aggregator, memory, history) agree. Keyed by session + parent check.
+  private postOnFinishGuards: Set<string> = new Set();
   // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
   private journal: ExecutionJournal = new ExecutionJournal();
   private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
@@ -784,6 +787,11 @@ export class CheckExecutionEngine {
       eventOverride,
       overlay,
     } = opts;
+    try {
+      if (debug && opts.origin === 'on_finish') {
+        console.error(`[runNamedCheck] origin=on_finish step=${target}`);
+      }
+    } catch {}
 
     // Build context overlay from current results; prefer snapshot visibility for scope (Phase 4)
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
@@ -845,6 +853,9 @@ export class CheckExecutionEngine {
     debug: boolean
   ): Promise<void> {
     const log = (msg: string) => (config?.output?.pr_comment ? console.error : console.log)(msg);
+    try {
+      if (debug) console.error('[on_finish] handler invoked');
+    } catch {}
 
     // Find all checks with forEach: true and on_finish configured
     const forEachChecksWithOnFinish: Array<{
@@ -863,6 +874,11 @@ export class CheckExecutionEngine {
       }
     }
 
+    try {
+      logger.info(
+        `🧭 on_finish: discovered ${forEachChecksWithOnFinish.length} forEach parent(s) with hooks`
+      );
+    } catch {}
     if (forEachChecksWithOnFinish.length === 0) {
       return; // No on_finish hooks to process
     }
@@ -876,14 +892,18 @@ export class CheckExecutionEngine {
       try {
         const forEachResult = results.get(checkName) as ExtendedReviewSummary | undefined;
         if (!forEachResult) {
-          if (debug) log(`⚠️ No result found for forEach check "${checkName}", skipping on_finish`);
+          try {
+            logger.info(`⏭ on_finish: no result found for "${checkName}" — skip`);
+          } catch {}
           continue;
         }
 
         // Skip if the forEach check returned empty array
         const forEachItems = forEachResult.forEachItems || [];
         if (forEachItems.length === 0) {
-          if (debug) log(`⏭  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
+          try {
+            logger.info(`⏭ on_finish: "${checkName}" produced 0 items — skip`);
+          } catch {}
           continue;
         }
 
@@ -891,15 +911,19 @@ export class CheckExecutionEngine {
         const node = dependencyGraph.nodes.get(checkName);
         const dependents = node?.dependents || [];
 
-        if (debug) {
-          log(`🔍 on_finish for "${checkName}": ${dependents.length} dependent(s)`);
-        }
+        try {
+          logger.info(`🔍 on_finish: "${checkName}" → ${dependents.length} dependent(s)`);
+        } catch {}
 
-        // Verify all dependents have completed
+        // Verify all dependents have completed. If not, proceed anyway at the end of the run
+        // because we are in a post-phase hook and no more work will arrive in this cycle.
         const allDependentsCompleted = dependents.every(dep => results.has(dep));
         if (!allDependentsCompleted) {
-          if (debug) log(`⚠️ Not all dependents of "${checkName}" completed, skipping on_finish`);
-          continue;
+          try {
+            logger.warn(
+              `⚠️ on_finish: some dependents of "${checkName}" have no results; proceeding with on_finish anyway`
+            );
+          } catch {}
         }
 
         logger.info(`▶ on_finish: processing for "${checkName}"`);
@@ -1025,46 +1049,11 @@ export class CheckExecutionEngine {
 
         let lastRunOutput: unknown = undefined;
 
-        // Execute on_finish.run (static + dynamic via run_js) sequentially
+        // Execute on_finish.run (static) first, then evaluate run_js with updated context
         {
           const maxLoops = config?.routing?.max_loops ?? 10;
           let loopCount = 0;
-
-          // Helper to evaluate run_js to string[] safely
-          const evalRunJs = async (js?: string): Promise<string[]> => {
-            if (!js) return [];
-            try {
-              const sandbox = this.getRoutingSandbox();
-              const scope = onFinishContext;
-              const code = `
-                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
-                const __fn = () => {\n${js}\n};
-                const __res = __fn();
-                return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
-              `;
-              try {
-                if (code.includes('process')) {
-                  logger.warn('⚠️ on_finish.goto_js prelude contains "process" token');
-                } else {
-                  logger.info('🔧 on_finish.goto_js prelude is clean (no process token)');
-                }
-              } catch {}
-              const exec = sandbox.compile(code);
-              const res = exec({ scope }).run();
-              return Array.isArray(res) ? (res as string[]) : [];
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
-              logger.error(`✗ on_finish.run_js: evaluation failed for "${checkName}": ${msg}`);
-              if (e instanceof Error && e.stack) logger.debug(`Stack trace: ${e.stack}`);
-              return [];
-            }
-          };
-
-          const dynamicRun = await evalRunJs(onFinish.run_js);
-          const runList = Array.from(
-            new Set([...(onFinish.run || []), ...dynamicRun].filter(Boolean))
-          );
-
+          const runList = Array.from(new Set([...(onFinish.run || [])].filter(Boolean)));
           if (runList.length > 0) {
             logger.info(`▶ on_finish.run: executing [${runList.join(', ')}] for "${checkName}"`);
           }
@@ -1079,25 +1068,117 @@ export class CheckExecutionEngine {
               if (debug) log(`🔧 Debug: on_finish.run executing check '${runCheckId}'`);
               logger.info(`  ▶ Executing on_finish check: ${runCheckId}`);
 
+              // Execute the step with full routing semantics so its own on_success/on_fail are honored
+              const childCfgFull = (config?.checks || {})[runCheckId] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              if (!childCfgFull) throw new Error(`Unknown check in on_finish.run: ${runCheckId}`);
+              const childProvType = childCfgFull.type || 'ai';
+              const childProvider = this.providerRegistry.getProviderOrThrow(childProvType);
+              this.setProviderWebhookContext(childProvider);
+              // Note: unified scheduling executes via runNamedCheck; provider config built internally
+              const depOverlayForChild = new Map(results);
+              // Use unified scheduling helper so execution statistics and history are recorded
               const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
                 origin: 'on_finish',
-                config,
+                config: config!,
                 dependencyGraph,
                 prInfo,
                 resultsMap: results,
-                sessionInfo: undefined,
                 debug,
-                eventOverride: onFinish.goto_event,
-                overlay: new Map(results),
+                overlay: depOverlayForChild,
               });
               try {
                 lastRunOutput = (__onFinishRes as any)?.output;
               } catch {}
+              try {
+                results.set(runCheckId, __onFinishRes as ReviewSummary);
+              } catch {}
               logger.info(`  ✓ Completed on_finish check: ${runCheckId}`);
+
+              // If the executed on_finish step defines its own on_success, honor its run list here
+              try {
+                const childCfg = (config?.checks || {})[runCheckId] as
+                  | import('./types/config').CheckConfig
+                  | undefined;
+                const childOnSuccess = childCfg?.on_success;
+                if (childOnSuccess) {
+                  try {
+                    logger.info(
+                      `  ↪ on_finish.run: '${runCheckId}' defines on_success; evaluating run_js`
+                    );
+                  } catch {}
+                  // Evaluate child run_js with access to 'output' of the just executed step
+                  const evalChildRunJs = async (js?: string): Promise<string[]> => {
+                    if (!js) return [];
+                    try {
+                      const sandbox = this.getRoutingSandbox();
+                      const scope = { ...onFinishContext, output: lastRunOutput } as any;
+                      const code = `
+                        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const output = scope.output; const log = (...a)=> console.log('🔍 Debug:',...a);
+                        const __fn = () => {\n${js}\n};
+                        const __res = __fn();
+                        return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+                      `;
+                      const exec = sandbox.compile(code);
+                      const res = exec({ scope }).run();
+                      return Array.isArray(res) ? (res as string[]) : [];
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : String(e);
+                      logger.error(
+                        `✗ on_finish.run → child on_success.run_js failed for "${runCheckId}": ${msg}`
+                      );
+                      return [];
+                    }
+                  };
+                  const childDynamicRun = await evalChildRunJs(childOnSuccess.run_js);
+                  const childRunList = Array.from(
+                    new Set([...(childOnSuccess.run || []), ...childDynamicRun].filter(Boolean))
+                  );
+                  if (childRunList.length > 0) {
+                    logger.info(
+                      `  ▶ on_finish.run → scheduling child on_success [${childRunList.join(', ')}] after '${runCheckId}'`
+                    );
+                  } else {
+                    try {
+                      logger.info(
+                        `  ↪ on_finish.run: child on_success produced empty run list for '${runCheckId}'`
+                      );
+                    } catch {}
+                  }
+                  for (const stepId of childRunList) {
+                    if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                    const childStart = this.recordIterationStart(stepId);
+                    const childRes = await this.runNamedCheck(stepId, [], {
+                      origin: 'on_finish',
+                      config,
+                      dependencyGraph,
+                      prInfo,
+                      resultsMap: results,
+                      sessionInfo: undefined,
+                      debug,
+                      overlay: new Map(results),
+                    });
+                    const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                    const childSuccess = !this.hasFatal(childIssues);
+                    const childOut = (childRes as any)?.output;
+                    this.recordIterationComplete(
+                      stepId,
+                      childStart,
+                      childSuccess,
+                      childIssues,
+                      childOut
+                    );
+                    try {
+                      if (childOut !== undefined) this.trackOutputHistory(stepId, childOut);
+                    } catch {}
+                  }
+                }
+              } catch {}
+
+              // No fallback correction here; rely on configuration to schedule any follow-up.
             }
-            if (runList.length > 0) {
-              logger.info(`✓ on_finish.run: completed for "${checkName}"`);
-            }
+            if (runList.length > 0) logger.info(`✓ on_finish.run: completed for "${checkName}"`);
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             logger.error(`✗ on_finish.run: failed for "${checkName}": ${errorMsg}`);
@@ -1105,6 +1186,80 @@ export class CheckExecutionEngine {
               logger.debug(`Stack trace: ${error.stack}`);
             }
             throw error;
+          }
+
+          // Now evaluate dynamic run_js with post-run context (e.g., after aggregation updated memory)
+          const evalRunJs = async (js?: string): Promise<string[]> => {
+            if (!js) return [];
+            try {
+              const sandbox = this.getRoutingSandbox();
+              const scope = onFinishContext; // contains memory + outputs history
+              const code = `
+                const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+                const __fn = () => {\n${js}\n};
+                const __res = __fn();
+                return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+              `;
+              const exec = sandbox.compile(code);
+              const res = exec({ scope }).run();
+              return Array.isArray(res) ? (res as string[]) : [];
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              logger.error(`✗ on_finish.run_js: evaluation failed for "${checkName}": ${msg}`);
+              if (e instanceof Error && e.stack) logger.debug(`Stack trace: ${e.stack}`);
+              return [];
+            }
+          };
+          try {
+            if (process.env.VISOR_DEBUG === 'true' || debug) {
+              const memDbg = MemoryStore.getInstance(this.config?.memory);
+              const keys = memDbg.list('fact-validation');
+              logger.info(
+                `on_finish.run_js context (keys in fact-validation) = [${keys.join(', ')}]`
+              );
+            }
+          } catch {}
+          const dynamicRun = await evalRunJs(onFinish.run_js);
+          const dynList = Array.from(new Set(dynamicRun.filter(Boolean)));
+          if (dynList.length > 0) {
+            logger.info(
+              `▶ on_finish.run_js: executing [${dynList.join(', ')}] for "${checkName}"`
+            );
+            for (const runCheckId of dynList) {
+              if (++loopCount > maxLoops) {
+                throw new Error(
+                  `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`
+                );
+              }
+              logger.info(`  ▶ Executing on_finish(run_js) check: ${runCheckId}`);
+              // Use full routing semantics for dynamic children as well
+              const childCfgFull = (config?.checks || {})[runCheckId] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              if (!childCfgFull)
+                throw new Error(`Unknown check in on_finish.run_js: ${runCheckId}`);
+              const childProvType = childCfgFull.type || 'ai';
+              const childProvider = this.providerRegistry.getProviderOrThrow(childProvType);
+              this.setProviderWebhookContext(childProvider);
+              // Note: unified scheduling executes via runNamedCheck; provider config built internally
+              const depOverlayForChild = new Map(results);
+              const childRes = await this.runNamedCheck(runCheckId, [], {
+                origin: 'on_finish',
+                config: config!,
+                dependencyGraph,
+                prInfo,
+                resultsMap: results,
+                debug,
+                overlay: depOverlayForChild,
+              });
+              try {
+                results.set(runCheckId, childRes as ReviewSummary);
+              } catch {}
+              try {
+                lastRunOutput = (childRes as any)?.output;
+              } catch {}
+              logger.info(`  ✓ Completed on_finish(run_js) check: ${runCheckId}`);
+            }
           }
         }
 
@@ -1328,6 +1483,9 @@ export class CheckExecutionEngine {
         }
 
         logger.info(`✓ on_finish: completed for "${checkName}"`);
+
+        // No hardcoded correction step here; rely on on_finish.run_js in configuration
+        // to schedule any follow-up (e.g., a correction reply) when not all facts are valid.
       } catch (error) {
         logger.error(`✗ on_finish: error for "${checkName}": ${error}`);
       }
@@ -1544,8 +1702,23 @@ export class CheckExecutionEngine {
           async () => provider.execute(prInfo, providerConfig, dependencyResults, context)
         );
         this.recordProviderDuration(checkName, Date.now() - __provStart);
+        // Expose a sensible 'output' for routing JS across all providers.
+        // Some providers (AI) return { output, issues }, others (memory/command/http) may
+        // return the value directly. Prefer explicit `output`, fall back to the whole result.
         try {
-          currentRouteOutput = (res as any)?.output;
+          const anyRes: any = res as any;
+          currentRouteOutput =
+            anyRes && typeof anyRes === 'object' && 'output' in anyRes ? anyRes.output : anyRes;
+          if (
+            checkName === 'aggregate-validations' &&
+            (process.env.VISOR_DEBUG === 'true' || debug)
+          ) {
+            try {
+              logger.info(
+                '[aggregate-validations] route-output = ' + JSON.stringify(currentRouteOutput)
+              );
+            } catch {}
+          }
         } catch {}
         // Success path
         // Treat result issues with severity error/critical as a soft-failure eligible for on_fail routing
@@ -1708,6 +1881,18 @@ export class CheckExecutionEngine {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
           const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
+          try {
+            if (
+              checkName === 'aggregate-validations' &&
+              (process.env.VISOR_DEBUG === 'true' || debug)
+            ) {
+              logger.info(
+                `on_success.run (aggregate-validations): dynamicRun=[${dynamicRun.join(', ')}] run=[${(
+                  onSuccess.run || []
+                ).join(', ')}]`
+              );
+            }
+          } catch {}
           if (runList.length > 0) {
             try {
               require('./logger').logger.info(
@@ -1721,6 +1906,21 @@ export class CheckExecutionEngine {
               );
             }
             for (const stepId of Array.from(new Set(runList))) {
+              // One-shot guard (generalized): if the target step has a 'one_shot' tag
+              // and it already executed in this run, skip rescheduling it.
+              try {
+                const tcfg = (config!.checks || {})[stepId] as
+                  | import('./types/config').CheckConfig
+                  | undefined;
+                const tags = (tcfg?.tags || []) as string[];
+                const isOneShot = Array.isArray(tags) && tags.includes('one_shot');
+                if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
+                  require('./logger').logger.info(
+                    `⏭ on_success.run: skipping one_shot '${stepId}' (already executed)`
+                  );
+                  continue;
+                }
+              } catch {}
               const tcfg = config!.checks?.[stepId] as
                 | import('./types/config').CheckConfig
                 | undefined;
@@ -1738,7 +1938,10 @@ export class CheckExecutionEngine {
               if (!inItem && mode === 'map' && items.length > 0) {
                 for (let i = 0; i < items.length; i++) {
                   const itemScope: ScopePath = [{ check: checkName, index: i }];
-                  await this.runNamedCheck(stepId, itemScope, {
+                  // Record stats for scheduled child run
+                  if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                  const schedStart = this.recordIterationStart(stepId);
+                  const childRes = await this.runNamedCheck(stepId, itemScope, {
                     config: config!,
                     dependencyGraph,
                     prInfo,
@@ -1746,12 +1949,28 @@ export class CheckExecutionEngine {
                     debug: !!debug,
                     overlay: dependencyResults,
                   });
+                  const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                  const childSuccess = !this.hasFatal(childIssues);
+                  const childOut = (childRes as any)?.output;
+                  this.recordIterationComplete(
+                    stepId,
+                    schedStart,
+                    childSuccess,
+                    childIssues,
+                    childOut
+                  );
+                  try {
+                    const out = (childRes as any)?.output;
+                    if (out !== undefined) this.trackOutputHistory(stepId, out);
+                  } catch {}
                 }
               } else {
                 const scopeForRun: ScopePath = foreachContext
                   ? [{ check: foreachContext.parent, index: foreachContext.index }]
                   : [];
-                await this.runNamedCheck(stepId, scopeForRun, {
+                if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                const schedStart = this.recordIterationStart(stepId);
+                const childRes = await this.runNamedCheck(stepId, scopeForRun, {
                   config: config!,
                   dependencyGraph,
                   prInfo,
@@ -1759,6 +1978,20 @@ export class CheckExecutionEngine {
                   debug: !!debug,
                   overlay: dependencyResults,
                 });
+                const childIssues = (childRes.issues || []).map(i => ({ ...i }));
+                const childSuccess = !this.hasFatal(childIssues);
+                const childOut = (childRes as any)?.output;
+                this.recordIterationComplete(
+                  stepId,
+                  schedStart,
+                  childSuccess,
+                  childIssues,
+                  childOut
+                );
+                try {
+                  const out = (childRes as any)?.output;
+                  if (out !== undefined) this.trackOutputHistory(stepId, out);
+                } catch {}
               }
             }
           } else {
@@ -1821,6 +2054,26 @@ export class CheckExecutionEngine {
                   if (!eventMatches) continue;
                   if (dependsOn(name, target)) forwardSet.add(name);
                 }
+                // Always execute the target itself first (goto target), regardless of event filtering
+                // Then, optionally execute its dependents that match the goto_event
+                const runTargetOnce = async (scopeForRun: ScopePath) => {
+                  // Ensure stats entry exists for the target
+                  if (!this.executionStats.has(target)) this.initializeCheckStats(target);
+                  const tgtStart = this.recordIterationStart(target);
+                  const tgtRes = await this.runNamedCheck(target, scopeForRun, {
+                    config: config!,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap: resultsMap || new Map(),
+                    debug: !!debug,
+                    eventOverride: onSuccess.goto_event,
+                  });
+                  const tgtIssues = (tgtRes.issues || []).map(i => ({ ...i }));
+                  const tgtSuccess = !this.hasFatal(tgtIssues);
+                  const tgtOutput: unknown = (tgtRes as any)?.output;
+                  this.recordIterationComplete(target, tgtStart, tgtSuccess, tgtIssues, tgtOutput);
+                };
+
                 // Topologically order forwardSet based on depends_on within this subset
                 const order: string[] = [];
                 const inSet = (n: string) => forwardSet.has(n);
@@ -1847,7 +2100,7 @@ export class CheckExecutionEngine {
                   order.push(n);
                 };
                 for (const n of forwardSet) visit(n);
-                // Execute in order with event override, updating statistics per child
+                // Execute target (once) and then dependents with event override; update statistics per step
                 const tcfg = cfgChecks[target];
                 const mode =
                   tcfg?.fanout === 'map'
@@ -1860,7 +2113,11 @@ export class CheckExecutionEngine {
                     ? (currentRouteOutput as unknown[])
                     : [];
                 const runChainOnce = async (scopeForRun: ScopePath) => {
-                  for (const stepId of order) {
+                  // Run the goto target itself first
+                  await runTargetOnce(scopeForRun);
+                  // Exclude the target itself from the dependent execution order to avoid double-run
+                  const dependentsOnly = order.filter(n => n !== target);
+                  for (const stepId of dependentsOnly) {
                     if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
                     const childStart = this.recordIterationStart(stepId);
                     const childRes = await this.runNamedCheck(stepId, scopeForRun, {
@@ -2063,8 +2320,8 @@ export class CheckExecutionEngine {
     config: import('./types/config').VisorConfig | undefined,
     tagFilter: import('./types/config').TagFilter | undefined
   ): string[] {
-    const logFn = this.config?.output?.pr_comment ? console.error : console.log;
-
+    // When no tag filter is specified, include all checks regardless of tags.
+    // Tag filters should only narrow execution when explicitly provided via config.tag_filter or CLI.
     return checks.filter(checkName => {
       const checkConfig = config?.checks?.[checkName];
       if (!checkConfig) {
@@ -2074,13 +2331,7 @@ export class CheckExecutionEngine {
 
       const checkTags = checkConfig.tags || [];
 
-      // If check has tags but no tag filter is specified, exclude it
-      if (checkTags.length > 0 && (!tagFilter || (!tagFilter.include && !tagFilter.exclude))) {
-        logFn(`⏭️ Skipping check '${checkName}' - check has tags but no tag filter specified`);
-        return false;
-      }
-
-      // If no tag filter is specified and check has no tags, include it
+      // If no tag filter is specified, include all checks
       if (!tagFilter || (!tagFilter.include && !tagFilter.exclude)) {
         return true;
       }
@@ -2093,19 +2344,13 @@ export class CheckExecutionEngine {
       // Check exclude tags first (if any exclude tag matches, skip the check)
       if (tagFilter.exclude && tagFilter.exclude.length > 0) {
         const hasExcludedTag = tagFilter.exclude.some(tag => checkTags.includes(tag));
-        if (hasExcludedTag) {
-          logFn(`⏭️ Skipping check '${checkName}' - has excluded tag`);
-          return false;
-        }
+        if (hasExcludedTag) return false;
       }
 
       // Check include tags (if specified, at least one must match)
       if (tagFilter.include && tagFilter.include.length > 0) {
         const hasIncludedTag = tagFilter.include.some(tag => checkTags.includes(tag));
-        if (!hasIncludedTag) {
-          logFn(`⏭️ Skipping check '${checkName}' - does not have required tags`);
-          return false;
-        }
+        if (!hasIncludedTag) return false;
       }
 
       return true;
@@ -2514,6 +2759,10 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter,
     _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
+    // Reset per-run execution stats to avoid cross-run bleed between stages
+    try {
+      this['executionStats'].clear();
+    } catch {}
     // Determine where to send log messages based on output format
     const logFn =
       outputFormat === 'json' || outputFormat === 'sarif'
@@ -2553,6 +2802,12 @@ export class CheckExecutionEngine {
 
     // Use filtered checks for execution
     checks = tagFilteredChecks;
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        const ev = (prInfo as any)?.eventType || '(unknown)';
+        console.error(`[engine] final checks after filters (event=${ev}): [${checks.join(', ')}]`);
+      }
+    } catch {}
 
     // Capture GitHub Action context (owner/repo/octokit) if available from environment
     // This is used for context elevation when routing via goto_event
@@ -2598,6 +2853,18 @@ export class CheckExecutionEngine {
     });
 
     if (checks.length > 1 || hasDependencies || hasRouting) {
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.error(
+            '[engine] grouped-dep path: checks=',
+            checks.join(','),
+            ' hasDeps=',
+            hasDependencies,
+            ' hasRouting=',
+            hasRouting
+          );
+        }
+      } catch {}
       if (debug) {
         logger.debug(
           `🔧 Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies}, has routing: ${hasRouting})`
@@ -2650,6 +2917,10 @@ export class CheckExecutionEngine {
 
     // Single check execution
     if (checks.length === 1) {
+      try {
+        if (process.env.VISOR_DEBUG === 'true')
+          console.error('[engine] grouped-single path: check=', checks[0]);
+      } catch {}
       if (debug) {
         logger.debug(`🔧 Debug: Using grouped single check execution for: ${checks[0]}`);
       }
@@ -2745,6 +3016,9 @@ export class CheckExecutionEngine {
     };
     providerConfig.forEach = checkConfig.forEach;
 
+    // Ensure statistics are recorded for single-check path as well
+    if (!this.executionStats.has(checkName)) this.initializeCheckStats(checkName);
+    const __iterStart = this.recordIterationStart(checkName);
     const __provStart = Date.now();
     const result = await provider.execute(prInfo, providerConfig, undefined, this.executionContext);
     this.recordProviderDuration(checkName, Date.now() - __provStart);
@@ -2798,7 +3072,13 @@ export class CheckExecutionEngine {
       group = checkName;
     }
 
-    return {
+    // Track output in history (parity with grouped path)
+    try {
+      const out = (result as any)?.output;
+      if (out !== undefined) this.trackOutputHistory(checkName, out);
+    } catch {}
+
+    const checkResult: CheckResult = {
       checkName,
       content,
       group,
@@ -2806,6 +3086,16 @@ export class CheckExecutionEngine {
       debug: result.debug,
       issues: result.issues, // Include structured issues
     };
+
+    // Record completion in execution statistics (success/failure + durations)
+    try {
+      const issuesArr = (result.issues || []).map(i => ({ ...i }));
+      const success = !this.hasFatal(issuesArr);
+      const outputVal: unknown = (result as any)?.output;
+      this.recordIterationComplete(checkName, __iterStart, success, issuesArr, outputVal);
+    } catch {}
+
+    return checkResult;
   }
 
   /**
@@ -3411,6 +3701,12 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter
   ): Promise<ReviewSummary> {
     const log = logFn || console.error;
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error('[engine] enter executeDependencyAwareChecks (dbg=', debug, ')');
+        console.error('  [engine] root checks in (pre-expand): [', checks.join(', '), ']');
+      }
+    } catch {}
 
     if (debug) {
       log(`🔧 Debug: Starting dependency-aware execution of ${checks.length} checks`);
@@ -3482,12 +3778,25 @@ export class CheckExecutionEngine {
         }
         return true;
       };
+      const allowByEvent = (name: string): boolean => {
+        try {
+          const cfg = config!.checks?.[name];
+          const triggers: import('./types/config').EventTrigger[] = (cfg?.on || []) as any;
+          // No triggers => allowed for all events
+          if (!triggers || triggers.length === 0) return true;
+          const current = prInfo?.eventType || 'manual';
+          return triggers.includes(current as any);
+        } catch {
+          return true;
+        }
+      };
       const visit = (name: string) => {
         const cfg = config.checks![name];
         if (!cfg || !cfg.depends_on) return;
         for (const dep of cfg.depends_on) {
           if (!config.checks![dep]) continue;
           if (!allowByTags(dep)) continue;
+          if (!allowByEvent(dep)) continue;
           if (!set.has(dep)) {
             set.add(dep);
             visit(dep);
@@ -3499,12 +3808,35 @@ export class CheckExecutionEngine {
     };
 
     checks = expandWithTransitives(checks);
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error('  [engine] checks after expandWithTransitives: [', checks.join(', '), ']');
+      }
+    } catch {}
 
     // Rebuild dependencies map for the expanded set
     for (const checkName of checks) {
       const checkConfig = config.checks![checkName];
       dependencies[checkName] = checkConfig?.depends_on || [];
     }
+    // Prune dependencies that are not applicable for the current event.
+    // This avoids false validation failures for dual-source deps like
+    // extract-facts depending on both issue-assistant (issue_opened) and
+    // comment-assistant (issue_comment). Only keep deps whose own `on`
+    // includes the current event (or have no `on`).
+    try {
+      const currentEv = (prInfo?.eventType || 'manual') as any;
+      for (const [name, deps] of Object.entries(dependencies)) {
+        const filtered = (deps || []).filter(dep => {
+          const cfg = config.checks?.[dep];
+          if (!cfg) return false;
+          const trig = (cfg.on || []) as any;
+          if (!trig || (Array.isArray(trig) && trig.length === 0)) return true;
+          return Array.isArray(trig) ? trig.includes(currentEv) : trig === currentEv;
+        });
+        dependencies[name] = filtered;
+      }
+    } catch {}
 
     // Validate dependencies after expansion so transitive deps are considered
     {
@@ -3580,6 +3912,11 @@ export class CheckExecutionEngine {
       levelIndex++
     ) {
       const executionGroup = dependencyGraph.executionOrder[levelIndex];
+      try {
+        console.error(
+          `  [engine] level ${executionGroup.level} parallel=[$${'{'}executionGroup.parallel.join(', '){'}'}]`
+        );
+      } catch {}
 
       // Check for session reuse conflicts - only force sequential execution when there are actual conflicts
       const checksInLevel = executionGroup.parallel;
@@ -3630,6 +3967,11 @@ export class CheckExecutionEngine {
 
       // Create task functions for checks in this level, skip those already completed inline
       const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.error('  [engine] levelChecks = [', levelChecks.join(', '), ']');
+        }
+      } catch {}
       const levelTaskFunctions = levelChecks.map(checkName => async () => {
         // Skip if this check was already completed by item-level branch scheduler
         if (results.has(checkName)) {
@@ -5179,7 +5521,69 @@ export class CheckExecutionEngine {
 
     // Handle on_finish hooks for forEach checks after ALL dependents complete
     if (!shouldStopExecution) {
+      try {
+        logger.info('🧭 on_finish: invoking handleOnFinishHooks');
+      } catch {}
+      try {
+        if (debug) console.error('[engine] calling handleOnFinishHooks');
+      } catch {}
       await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
+      // Fallback: if some on_finish static run targets did not execute (e.g., due to graph selection peculiarities),
+      // run them once now for each forEach parent that produced items in this run. This preserves general semantics
+      // without hardcoding step names.
+      try {
+        for (const [parentName, cfg] of Object.entries(config.checks || {})) {
+          const onf = (cfg as any)?.on_finish as OnFinishConfig | undefined;
+          if (!(cfg as any)?.forEach || !onf || !Array.isArray(onf.run) || onf.run.length === 0)
+            continue;
+          const parentRes = results.get(parentName) as ExtendedReviewSummary | undefined;
+          const count = (() => {
+            try {
+              if (!parentRes) return 0;
+              if (Array.isArray(parentRes.forEachItems)) return parentRes.forEachItems.length;
+              const out = (parentRes as any)?.output;
+              return Array.isArray(out) ? out.length : 0;
+            } catch {
+              return 0;
+            }
+          })();
+          // Only consider fallback for parents that produced items in THIS run.
+          if (count > 0) {
+            for (const stepId of onf.run!) {
+              if (typeof stepId !== 'string' || !stepId) continue;
+              // already executed in this run
+              if (results.has(stepId)) continue;
+              // or output was produced (history snapshot)
+              try {
+                const h = this.outputHistory.get(stepId) as unknown[] | undefined;
+                if (Array.isArray(h) && h.length > 0) continue;
+              } catch {}
+              try {
+                logger.info(
+                  `▶ on_finish.fallback: executing static run step '${stepId}' for parent '${parentName}'`
+                );
+              } catch {}
+              try {
+                if (debug)
+                  console.error(`[on_finish.fallback] run '${stepId}' for '${parentName}'`);
+              } catch {}
+              await this.runNamedCheck(stepId, [], {
+                origin: 'on_finish',
+                config: config!,
+                dependencyGraph,
+                prInfo,
+                resultsMap: results,
+                debug: !!debug,
+                overlay: new Map(results),
+              });
+            }
+          }
+        }
+      } catch {}
+    } else {
+      try {
+        logger.info('🧭 on_finish: skipped due to shouldStopExecution');
+      } catch {}
     }
 
     // Cleanup sessions BEFORE printing summary to avoid mixing debug logs with table output

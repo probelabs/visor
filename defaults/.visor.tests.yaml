@@ -247,12 +247,12 @@ tests:
               intent: comment_reply
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
-            validate-fact:
-              fact_id: f1
-              claim: "max_parallelism defaults to 4"
-              is_valid: true
-              confidence: high
-              evidence: "defaults/.visor.yaml:11"
+            validate-fact[]:
+              - fact_id: f1
+                claim: "max_parallelism defaults to 4"
+                is_valid: true
+                confidence: high
+                evidence: "defaults/.visor.yaml:11"
           expect:
             calls:
               - step: comment-assistant
@@ -282,17 +282,17 @@ tests:
               intent: comment_reply
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
-            validate-fact:
-              fact_id: f1
-              claim: "max_parallelism defaults to 4"
-              is_valid: false
-              confidence: high
-              evidence: "defaults/.visor.yaml:11 does not set 4"
-              correction: "max_parallelism defaults to 3"
+            validate-fact[]:
+              - fact_id: f1
+                claim: "max_parallelism defaults to 4"
+                is_valid: false
+                confidence: high
+                evidence: "defaults/.visor.yaml:11 does not set 4"
+                correction: "max_parallelism defaults to 3"
           expect:
             calls:
               - step: comment-assistant
-                exactly: 1
+                exactly: 2
               - step: extract-facts
                 exactly: 1
               - step: validate-fact
@@ -301,6 +301,61 @@ tests:
                 exactly: 1
               - step: init-fact-validation
                 exactly: 1
+            prompts:
+              - step: comment-assistant
+                index: last
+                contains:
+                  - "<previous_response>"
+                  - "max_parallelism defaults to 4"
+                  - "Correction: max_parallelism defaults to 3"
+
+        - name: facts-two-items
+          description: |
+            Two facts extracted; only the invalid fact should appear in the correction pass.
+          event: issue_comment
+          fixture: gh.issue_comment.visor_help
+          env:
+            ENABLE_FACT_VALIDATION: "true"
+          mocks:
+            comment-assistant:
+              text: "We rely on defaults/.visor.yaml for concurrency defaults."
+              intent: comment_reply
+            extract-facts:
+              - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
+              - { id: f2, category: Feature,       claim: "Fast mode is enabled by default", verifiable: true }
+            validate-fact[]:
+              - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: false, confidence: high, evidence: "defaults/.visor.yaml:11", correction: "max_parallelism defaults to 3" }
+              - { fact_id: f2, claim: "Fast mode is enabled by default", is_valid: true, confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
+          expect:
+            calls:
+              - step: comment-assistant
+                exactly: 2
+              - step: extract-facts
+                exactly: 1
+              - step: validate-fact
+                exactly: 2
+              - step: aggregate-validations
+                exactly: 1
+              - step: init-fact-validation
+                exactly: 1
+            outputs:
+              - step: validate-fact
+                where: { path: fact_id, equals: f1 }
+                path: is_valid
+                equals: false
+              - step: validate-fact
+                where: { path: fact_id, equals: f2 }
+                path: is_valid
+                equals: true
+            prompts:
+              - step: comment-assistant
+                index: last
+                contains:
+                  - "<previous_response>"
+                  - "max_parallelism defaults to 4"
+                  - "Correction: max_parallelism defaults to 3"
+                not_contains:
+                  - "Fast mode is enabled by default"
 
         - name: facts-disabled
           description: |
@@ -333,9 +388,14 @@ tests:
             calls:
               - step: overview
                 exactly: 1
-              - provider: github
-                op: issues.updateComment
-                at_least: 1
+              - step: security
+                exactly: 1
+              - step: architecture
+                exactly: 1
+              - step: performance
+                exactly: 1
+              - step: quality
+                exactly: 1
 
     - name: security-fail-if
       description: |
@@ -481,13 +541,13 @@ tests:
           intent: comment_reply
         extract-facts:
           - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
-        validate-fact:
-          fact_id: f1
-          claim: "max_parallelism defaults to 4"
-          is_valid: false
-          confidence: high
-          evidence: "defaults/.visor.yaml:11 does not set 4"
-          correction: "max_parallelism defaults to 3"
+        validate-fact[]:
+          - fact_id: f1
+            claim: "max_parallelism defaults to 4"
+            is_valid: false
+            confidence: high
+            evidence: "defaults/.visor.yaml:11 does not set 4"
+            correction: "max_parallelism defaults to 3"
       expect:
         calls:
           - step: comment-assistant

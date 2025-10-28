@@ -381,34 +381,36 @@ export class MemoryCheckProvider extends CheckProvider {
     try {
       if (
         (config as any).checkName === 'aggregate-validations' ||
-        (config as any).checkName === 'aggregate' ||
         (config as any).checkName === 'aggregate'
       ) {
-        const hist = (enhancedContext as any)?.outputs?.history || {};
-        const keys = Object.keys(hist);
-        console.log('[MemoryProvider]', (config as any).checkName, ': history keys =', keys);
-        const vf = (hist as any)['validate-fact'];
-        console.log(
-          '[MemoryProvider]',
-          (config as any).checkName,
-          ': validate-fact history length =',
-          Array.isArray(vf) ? vf.length : 'n/a'
-        );
+        if (process.env.VISOR_DEBUG === 'true') {
+          const hist = (enhancedContext as any)?.outputs?.history || {};
+          const keys = Object.keys(hist);
+          logger.debug(
+            `[MemoryProvider] ${(config as any).checkName}: history keys = [${keys.join(', ')}]`
+          );
+          const vf = (hist as any)['validate-fact'];
+          logger.debug(
+            `[MemoryProvider] ${(config as any).checkName}: validate-fact history length = ${
+              Array.isArray(vf) ? vf.length : 'n/a'
+            }`
+          );
+        }
       }
     } catch {}
 
     const result = this.evaluateJavaScriptBlock(script, enhancedContext);
     try {
-      if ((config as any).checkName === 'aggregate-validations') {
+      if (
+        (config as any).checkName === 'aggregate-validations' &&
+        process.env.VISOR_DEBUG === 'true'
+      ) {
         const tv = store.get('total_validations', 'fact-validation');
         const av = store.get('all_valid', 'fact-validation');
-        console.error(
-          '[MemoryProvider] post-exec',
-          (config as any).checkName,
-          'total_validations=',
-          tv,
-          'all_valid=',
-          av
+        logger.debug(
+          `[MemoryProvider] post-exec ${(config as any).checkName} total_validations=${String(
+            tv
+          )} all_valid=${String(av)}`
         );
       }
     } catch {}

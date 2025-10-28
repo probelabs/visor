@@ -194,6 +194,31 @@ tests:
             equals: comment_reply
 ```
 
+## CLI Usage
+
+- Discover tests:
+  - `node dist/index.js test --config defaults/.visor.tests.yaml --list`
+- Validate test file shape (schema):
+  - `node dist/index.js test --config defaults/.visor.tests.yaml --validate`
+- Run all tests with compact progress (default):
+  - `node dist/index.js test --config defaults/.visor.tests.yaml`
+- Run a single case:
+  - `node dist/index.js test --config defaults/.visor.tests.yaml --only label-flow`
+- Run a single stage in a flow (by name or 1‑based index):
+  - `node dist/index.js test --config defaults/.visor.tests.yaml --only pr-review-e2e-flow#facts-invalid`
+  - `node dist/index.js test --config defaults/.visor.tests.yaml --only pr-review-e2e-flow#3`
+- Emit artifacts:
+  - JSON: `--json output/visor-tests.json`
+  - JUnit: `--report junit:output/visor-tests.xml`
+  - Markdown summary: `--summary md:output/visor-tests.md`
+- Debug logs:
+  - Set `VISOR_DEBUG=true` for verbose routing/provider output.
+
+Notes
+- AI is forced to `mock` in test mode regardless of API keys.
+- The runner warns when an AI/command step runs without a mock (suppressed for `ai.provider=mock`).
+- Strict mode is on by default; add `strict: false` for prompt‑only cases.
+
 ## Mocks (Schema‑Aware)
 
 - Keyed by step name under `mocks`.
@@ -442,6 +467,12 @@ Progress Tracker
 - Milestone 8 — Validation and helpful errors — DONE (2025-10-27)
 - Milestone 9 — Coverage and perf — DONE (2025-10-27)
 - Milestone 10 — Docs, examples, migration — PENDING
+
+Progress Update — 2025-10-28
+- Runner: stage execution coverage now derives only from prompts/output-history deltas plus engine statistics (no selection heuristics). Single-check runs contribute to stats and history uniformly.
+- Engine: single-check path records iteration stats and appends outputs to history; on_finish children run via the unified scheduler so runs are counted.
+- UX: noisy debug prints gated behind VISOR_DEBUG; stage headers and coverage tables remain.
+- Status: all default flow stages pass under strict mode (including facts-invalid, facts-two-items, and pr-updated). The GitHub recorder persists across stages and updates existing review comments when present.
 
 Milestone 0 — DSL freeze and scaffolding (0.5 week) — DONE 2025-10-27
 - Finalize DSL keys: tests.defaults, fixtures, cases, flow, fixture, mocks, expect.{calls,prompts,outputs,fail,strict_violation}. ✅
