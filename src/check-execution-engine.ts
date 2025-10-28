@@ -671,10 +671,9 @@ export class CheckExecutionEngine {
               itemScope
             );
           } catch (error) {
-            try {
-              const msg = error instanceof Error ? `${error.message}` : String(error);
-              logger.error(`Failed to commit per-item journal for ${checkId}: ${msg}`);
-            } catch {}
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`Failed to commit per-item journal for ${checkId}: ${msg}`);
+            // Non-fatal: journal is best-effort; continue without retry.
           }
 
           try {
@@ -814,7 +813,10 @@ export class CheckExecutionEngine {
           try {
             this.recordSkip(target, 'if_condition', tcfg.if);
             logger.info(`⏭  Skipped (if: ${this.truncate(tcfg.if, 40)})`);
-          } catch {}
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`Failed to record skip for ${target}: ${msg}`);
+          }
           // Commit a minimal journal entry to make downstream visibility consistent
           this.commitJournal(
             target,
@@ -827,10 +829,8 @@ export class CheckExecutionEngine {
         }
       }
     } catch (error) {
-      try {
-        const msg = error instanceof Error ? `${error.message}` : String(error);
-        logger.error(`Failed to evaluate if condition for ${target}: ${msg}`);
-      } catch {}
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`Failed to evaluate if condition for ${target}: ${msg}`);
       // Fail secure: if condition evaluation fails, skip execution
       const skipped: ReviewSummary = {
         issues: [
