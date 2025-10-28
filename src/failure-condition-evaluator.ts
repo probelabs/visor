@@ -200,8 +200,8 @@ export class FailureConditionEvaluator {
       return this.evaluateExpression(expression, context);
     } catch (error) {
       console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
-      // Default to running the check if evaluation fails
-      return true;
+      // Fail-secure: do not run the check on evaluation errors
+      return false;
     }
   }
 
