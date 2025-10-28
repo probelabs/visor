@@ -779,6 +779,59 @@ export class CheckExecutionEngine {
       overlay,
     } = opts;
 
+    // Evaluate 'if' condition for checks executed via routing (run/goto).
+    try {
+      const tcfg = opts.config.checks?.[target] as import('./types/config').CheckConfig | undefined;
+      if (tcfg && tcfg.if) {
+        const shouldRun = await this.failureEvaluator.evaluateIfCondition(target, tcfg.if, {
+          branch: opts.prInfo.head,
+          baseBranch: opts.prInfo.base,
+          filesChanged: opts.prInfo.files.map(f => f.filename),
+          event: (opts.prInfo.eventType || 'manual').startsWith('pr_')
+            ? 'pull_request'
+            : (opts.prInfo.eventType || 'manual').startsWith('issue_')
+              ? opts.prInfo.eventType === 'issue_comment'
+                ? 'issue_comment'
+                : 'issues'
+              : 'manual',
+          environment: getSafeEnvironmentVariables(),
+          previousResults: opts.resultsMap,
+          authorAssociation: resolveAssociationFromEvent(
+            (opts.prInfo as any).eventContext,
+            opts.prInfo.authorAssociation
+          ),
+        });
+        if (!shouldRun) {
+          // Record a skipped marker compatible with summary rendering
+          const skipped: ReviewSummary = {
+            issues: [
+              {
+                file: '',
+                line: 0,
+                ruleId: `${target}/__skipped`,
+                message: `Skipped by if condition: ${tcfg.if}`,
+                severity: 'info',
+                category: 'logic',
+              },
+            ],
+          } as ReviewSummary;
+          try {
+            this.recordSkip(target, 'if_condition', tcfg.if);
+            logger.info(`⏭  Skipped (if: ${this.truncate(tcfg.if, 40)})`);
+          } catch {}
+          // Commit a minimal journal entry to make downstream visibility consistent
+          this.commitJournal(
+            target,
+            skipped as any,
+            opts.eventOverride || opts.prInfo.eventType,
+            scope || []
+          );
+          opts.resultsMap?.set(target, skipped);
+          return skipped;
+        }
+      }
+    } catch {}
+
     // Build context overlay from current results; prefer snapshot visibility for scope (Phase 4)
     const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
     const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
