@@ -82,7 +82,12 @@ Run `visor test --validate` to get precise YAML-path errors and suggestions:
 ```
 
 Next steps:
-- See `docs/testing/fixtures-and-mocks.md` to simulate inputs.
-- See `docs/testing/assertions.md` to write robust checks.
+- Core reference: `docs/testing/dsl-reference.md`
+- Flows: `docs/testing/flows.md`
+- Mocks & fixtures: `docs/testing/fixtures-and-mocks.md`
+- Assertions: `docs/testing/assertions.md`
+- Cookbook: `docs/testing/cookbook.md`
+- CLI & reporters: `docs/testing/cli.md`
+- CI integration: `docs/testing/ci.md`
+- Troubleshooting: `docs/testing/troubleshooting.md`
 - Browse `defaults/.visor.tests.yaml` for full examples.
-

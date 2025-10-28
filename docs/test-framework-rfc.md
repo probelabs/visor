@@ -15,6 +15,17 @@ Key ideas:
 - Simple mocks keyed by step name; schema‑aware AI outputs (objects/arrays for structured schemas; `text` for plain).
 - Support multi‑event “flows” that preserve memory and outputs across events.
 
+DX resources
+- Getting started: docs/testing/getting-started.md
+- DSL reference: docs/testing/dsl-reference.md
+- Flows: docs/testing/flows.md
+- Fixtures & mocks: docs/testing/fixtures-and-mocks.md
+- Assertions: docs/testing/assertions.md
+- Cookbook: docs/testing/cookbook.md
+- CLI & reporters: docs/testing/cli.md
+- CI integration: docs/testing/ci.md
+- Troubleshooting: docs/testing/troubleshooting.md
+
 ## Motivation
 
 - Keep tests next to config and use the same mental model: events → checks → outputs → effects.

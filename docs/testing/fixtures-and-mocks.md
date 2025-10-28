@@ -66,9 +66,24 @@ mocks:
   unit-tests:
     stdout: '{"passed": 128, "failed": 0}'
     exit_code: 0
+
+### Per‑call list mocks (for forEach children)
+
+When a step runs once per item (e.g., `validate-fact` depends on `extract-facts`), provide a list under the `[]` suffix:
+
+```yaml
+mocks:
+  extract-facts:
+    - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
+    - { id: f2, category: Feature,       claim: "Fast mode is enabled by default", verifiable: true }
+  validate-fact[]:
+    - { fact_id: f1, is_valid: false, confidence: high, evidence: "defaults/.visor.yaml:11", correction: "max_parallelism defaults to 3" }
+    - { fact_id: f2, is_valid: true,  confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
+```
+
+The runner distributes items in order; if the list is shorter than invocations, the last entry is reused.
 ```
 
 Notes:
 - No `returns:` key; provide values directly.
 - For HTTP/Command providers, mocks bypass real execution and are recorded for assertions.
-

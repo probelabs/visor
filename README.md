@@ -127,6 +127,20 @@ Additional guides:
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 - live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
 
+## 🧪 Integration Tests (DX‑friendly)
+
+Write and run integration tests for your Visor config in YAML. No network, built‑in GitHub fixtures, strict by default, and great CLI output.
+
+- Getting started: [docs/testing/getting-started.md](docs/testing/getting-started.md)
+- DSL reference: [docs/testing/dsl-reference.md](docs/testing/dsl-reference.md)
+- Flows: [docs/testing/flows.md](docs/testing/flows.md)
+- Fixtures & mocks: [docs/testing/fixtures-and-mocks.md](docs/testing/fixtures-and-mocks.md)
+- Assertions: [docs/testing/assertions.md](docs/testing/assertions.md)
+- Cookbook: [docs/testing/cookbook.md](docs/testing/cookbook.md)
+- CLI & reporters: [docs/testing/cli.md](docs/testing/cli.md)
+- CI integration: [docs/testing/ci.md](docs/testing/ci.md)
+- Troubleshooting: [docs/testing/troubleshooting.md](docs/testing/troubleshooting.md)
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
