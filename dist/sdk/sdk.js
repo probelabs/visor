@@ -10379,7 +10379,7 @@ var init_failure_condition_evaluator = __esm({
           return this.evaluateExpression(expression, context2);
         } catch (error) {
           console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
-          return true;
+          return false;
         }
       }
       /**
@@ -11938,7 +11938,9 @@ var init_check_execution_engine = __esm({
                   prInfoForInline.eventType || prInfo.eventType,
                   itemScope
                 );
-              } catch {
+              } catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                logger.error(`Failed to commit per-item journal for ${checkId}: ${msg}`);
               }
               try {
                 const depProviderType = depCheckConfig.type || "ai";
@@ -12015,6 +12017,78 @@ var init_check_execution_engine = __esm({
           eventOverride,
           overlay
         } = opts;
+        try {
+          const tcfg = opts.config.checks?.[target];
+          if (tcfg && tcfg.if) {
+            const gate = await this.shouldRunCheck(
+              target,
+              tcfg.if,
+              opts.prInfo,
+              opts.resultsMap || /* @__PURE__ */ new Map(),
+              !!debug,
+              opts.eventOverride,
+              /* failSecure */
+              true
+            );
+            if (!gate.shouldRun) {
+              const skipped = {
+                issues: [
+                  {
+                    file: "",
+                    line: 0,
+                    ruleId: `${target}/__skipped`,
+                    message: `Skipped by if condition: ${tcfg.if}`,
+                    severity: "info",
+                    category: "logic"
+                  }
+                ]
+              };
+              try {
+                this.recordSkip(target, "if_condition", tcfg.if);
+                logger.info(`\u23ED  Skipped (if: ${this.truncate(tcfg.if, 40)})`);
+              } catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                logger.error(`Failed to record skip for ${target}: ${msg}`);
+              }
+              this.commitJournal(
+                target,
+                skipped,
+                opts.eventOverride || opts.prInfo.eventType,
+                scope || []
+              );
+              opts.resultsMap?.set(target, skipped);
+              return skipped;
+            }
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          logger.error(`Failed to evaluate if condition for ${target}: ${msg}`);
+          const skipped = {
+            issues: [
+              {
+                file: "",
+                line: 0,
+                ruleId: `${target}/__skipped`,
+                message: `Skipped due to condition evaluation error`,
+                severity: "info",
+                category: "logic"
+              }
+            ]
+          };
+          try {
+            const cond = opts.config.checks?.[target]?.if || "";
+            this.recordSkip(target, "if_condition", cond);
+          } catch {
+          }
+          this.commitJournal(
+            target,
+            skipped,
+            opts.eventOverride || opts.prInfo.eventType,
+            scope || []
+          );
+          opts.resultsMap?.set(target, skipped);
+          return skipped;
+        }
         const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
         const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
         const overlayForExec = eventOverride && eventOverride !== (prInfo.eventType || "manual") ? /* @__PURE__ */ new Map() : depOverlaySanitized;
@@ -13779,34 +13853,45 @@ ${expr}`;
         return resolvedPath;
       }
       /**
-       * Evaluate `if` condition for a check
-       * @param checkName Name of the check
-       * @param condition The condition string to evaluate
-       * @param prInfo PR information
-       * @param results Current check results
-       * @param debug Whether debug mode is enabled
-       * @returns true if the check should run, false if it should be skipped
+       * Unified helper to evaluate a check's `if` condition with optional fail-secure behavior.
+       * Returns a struct indicating whether to run; when failSecure=true, any evaluation error
+       * results in shouldRun=false with an error message.
        */
-      async evaluateCheckCondition(checkName, condition, prInfo, results, debug) {
-        const override = this.routingEventOverride;
-        const eventName = override ? override.startsWith("pr_") ? "pull_request" : override === "issue_comment" ? "issue_comment" : override.startsWith("issue_") ? "issues" : "manual" : "issue_comment";
-        const commenterAssoc = resolveAssociationFromEvent(
-          prInfo?.eventContext,
-          prInfo.authorAssociation
-        );
-        const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
-          branch: prInfo.head,
-          baseBranch: prInfo.base,
-          filesChanged: prInfo.files.map((f) => f.filename),
-          event: eventName,
-          environment: getSafeEnvironmentVariables(),
-          previousResults: results,
-          authorAssociation: commenterAssoc
-        });
-        if (!shouldRun && debug) {
-          logger.debug(`\u{1F527} Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+      async shouldRunCheck(checkName, condition, prInfo, results, debug, eventOverride, failSecure = false) {
+        try {
+          const eventName = eventOverride ? eventOverride.startsWith("pr_") ? "pull_request" : eventOverride === "issue_comment" ? "issue_comment" : eventOverride.startsWith("issue_") ? "issues" : "manual" : prInfo.eventType && prInfo.eventType.startsWith("pr_") ? "pull_request" : prInfo.eventType === "issue_comment" ? "issue_comment" : prInfo.eventType && prInfo.eventType.startsWith("issue_") ? "issues" : "manual";
+          const commenterAssoc = resolveAssociationFromEvent(
+            prInfo?.eventContext,
+            prInfo.authorAssociation
+          );
+          const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
+            branch: prInfo.head,
+            baseBranch: prInfo.base,
+            filesChanged: prInfo.files.map((f) => f.filename),
+            event: eventName,
+            environment: getSafeEnvironmentVariables(),
+            previousResults: results,
+            authorAssociation: commenterAssoc
+          });
+          if (!shouldRun && debug) {
+            logger.debug(`\u{1F527} Debug: Skipping check '${checkName}' - if condition evaluated to false`);
+          }
+          return { shouldRun };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (failSecure) {
+            try {
+              logger.error(`Failed to evaluate if condition for ${checkName}: ${msg}`);
+            } catch {
+            }
+            return { shouldRun: false, error: msg };
+          }
+          try {
+            if (debug) logger.debug(`\u26A0\uFE0F Debug: if evaluation error for ${checkName}: ${msg}`);
+          } catch {
+          }
+          return { shouldRun: true, error: msg };
         }
-        return shouldRun;
       }
       /**
        * Render check content using the appropriate template
@@ -14400,14 +14485,17 @@ ${expr}`;
                           prInfo.eventType
                         );
                         for (const [k, v] of baseDeps.entries()) condResults.set(k, v);
-                        const shouldRunChild = await this.evaluateCheckCondition(
+                        const gateChild = await this.shouldRunCheck(
                           childName,
                           childCfg.if,
                           prInfo,
                           condResults,
-                          debug
+                          debug,
+                          void 0,
+                          /* failSecure */
+                          true
                         );
-                        if (!shouldRunChild) {
+                        if (!gateChild.shouldRun) {
                           continue;
                         }
                       }
@@ -14521,14 +14609,17 @@ ${expr}`;
                       }
                     }
                     if (checkConfig.if) {
-                      const shouldRun = await this.evaluateCheckCondition(
+                      const gateItem = await this.shouldRunCheck(
                         checkName,
                         checkConfig.if,
                         prInfo,
                         snapshotDeps,
-                        debug
+                        debug,
+                        void 0,
+                        /* failSecure */
+                        true
                       );
-                      if (!shouldRun) {
+                      if (!gateItem.shouldRun) {
                         if (debug) {
                           log2(
                             `\u{1F504} Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
@@ -14670,14 +14761,17 @@ ${expr}`;
                             prInfo.eventType
                           );
                           for (const [k, v] of perItemDepMap.entries()) condResults.set(k, v);
-                          const shouldRun = await this.evaluateCheckCondition(
+                          const gateNode = await this.shouldRunCheck(
                             node,
                             nodeCfg.if,
                             prInfo,
                             condResults,
-                            debug
+                            debug,
+                            void 0,
+                            /* failSecure */
+                            true
                           );
-                          if (!shouldRun) {
+                          if (!gateNode.shouldRun) {
                             perItemDone.add(node);
                             progressed = true;
                             continue;
@@ -15015,14 +15109,17 @@ ${expr}`;
                 }
               } else {
                 if (checkConfig.if) {
-                  const shouldRun = await this.evaluateCheckCondition(
+                  const gate = await this.shouldRunCheck(
                     checkName,
                     checkConfig.if,
                     prInfo,
                     results,
-                    debug
+                    debug,
+                    void 0,
+                    /* failSecure */
+                    true
                   );
-                  if (!shouldRun) {
+                  if (!gate.shouldRun) {
                     this.recordSkip(checkName, "if_condition", checkConfig.if);
                     logger.info(`\u23ED  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
                     return {
@@ -15376,28 +15473,17 @@ ${error.stack || ""}` : String(error);
               `\u{1F527} Debug: Starting check: ${checkName} with prompt type: ${typeof checkConfig.prompt}`
             );
             if (checkConfig.if) {
-              const override = this.routingEventOverride;
-              const eventName = override ? override.startsWith("pr_") ? "pull_request" : override === "issue_comment" ? "issue_comment" : override.startsWith("issue_") ? "issues" : "manual" : "issue_comment";
-              const commenterAssoc = resolveAssociationFromEvent(
-                prInfo.eventContext,
-                prInfo.authorAssociation
-              );
-              const shouldRun = await this.failureEvaluator.evaluateIfCondition(
+              const gate = await this.shouldRunCheck(
                 checkName,
                 checkConfig.if,
-                {
-                  branch: prInfo.head,
-                  baseBranch: prInfo.base,
-                  filesChanged: prInfo.files.map((f) => f.filename),
-                  event: eventName,
-                  // honor routing override if present
-                  environment: getSafeEnvironmentVariables(),
-                  previousResults: /* @__PURE__ */ new Map(),
-                  // No previous results in parallel execution
-                  authorAssociation: commenterAssoc
-                }
+                prInfo,
+                /* @__PURE__ */ new Map(),
+                debug,
+                this.routingEventOverride,
+                /* failSecure */
+                true
               );
-              if (!shouldRun) {
+              if (!gate.shouldRun) {
                 console.error(
                   `\u{1F527} Debug: Skipping check '${checkName}' - if condition evaluated to false`
                 );
