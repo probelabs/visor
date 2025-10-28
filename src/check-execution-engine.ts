@@ -4090,14 +4090,16 @@ export class CheckExecutionEngine {
                       prInfo.eventType
                     );
                     for (const [k, v] of baseDeps.entries()) condResults.set(k, v);
-                    const shouldRunChild = await this.evaluateCheckCondition(
+                    const gateChild = await this.shouldRunCheck(
                       childName,
                       childCfg.if,
                       prInfo,
                       condResults,
-                      debug
+                      debug,
+                      undefined,
+                      /* failSecure */ true
                     );
-                    if (!shouldRunChild) {
+                    if (!gateChild.shouldRun) {
                       continue;
                     }
                   }
@@ -4236,15 +4238,17 @@ export class CheckExecutionEngine {
 
                 // Evaluate if condition for this forEach item
                 if (checkConfig.if) {
-                  const shouldRun = await this.evaluateCheckCondition(
+                  const gateItem = await this.shouldRunCheck(
                     checkName,
                     checkConfig.if,
                     prInfo,
                     snapshotDeps,
-                    debug
+                    debug,
+                    undefined,
+                    /* failSecure */ true
                   );
 
-                  if (!shouldRun) {
+                  if (!gateItem.shouldRun) {
                     if (debug) {
                       log(
                         `🔄 Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
