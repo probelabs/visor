@@ -3134,35 +3134,6 @@ export class CheckExecutionEngine {
   }
 
   /**
-   * Evaluate `if` condition for a check
-   * @param checkName Name of the check
-   * @param condition The condition string to evaluate
-   * @param prInfo PR information
-   * @param results Current check results
-   * @param debug Whether debug mode is enabled
-   * @returns true if the check should run, false if it should be skipped
-   */
-  private async evaluateCheckCondition(
-    checkName: string,
-    condition: string,
-    prInfo: PRInfo,
-    results: Map<string, ReviewSummary>,
-    debug?: boolean
-  ): Promise<boolean> {
-    // Wrapper for backward-compatibility: delegate to shouldRunCheck (fail-open to preserve legacy behavior)
-    const gate = await this.shouldRunCheck(
-      checkName,
-      condition,
-      prInfo,
-      results,
-      debug,
-      this.routingEventOverride,
-      /* failSecure */ false
-    );
-    return !!gate.shouldRun;
-  }
-
-  /**
    * Unified helper to evaluate a check's `if` condition with optional fail-secure behavior.
    * Returns a struct indicating whether to run; when failSecure=true, any evaluation error
    * results in shouldRun=false with an error message.
