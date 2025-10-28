@@ -151,7 +151,10 @@ export class CommandCheckProvider extends CheckProvider {
         const m = mock as { stdout?: string; stderr?: string; exit_code?: number };
         let out: unknown = m.stdout ?? '';
         try {
-          if (typeof out === 'string' && (out.trim().startsWith('{') || out.trim().startsWith('['))) {
+          if (
+            typeof out === 'string' &&
+            (out.trim().startsWith('{') || out.trim().startsWith('['))
+          ) {
             out = JSON.parse(out);
           }
         } catch {}

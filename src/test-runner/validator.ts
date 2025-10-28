@@ -10,10 +10,7 @@ const schema: any = {
   properties: {
     version: { type: 'string' },
     extends: {
-      oneOf: [
-        { type: 'string' },
-        { type: 'array', items: { type: 'string' } },
-      ],
+      oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
     },
     tests: {
       type: 'object',
@@ -84,14 +81,7 @@ const schema: any = {
         },
         event: {
           type: 'string',
-          enum: [
-            'manual',
-            'pr_opened',
-            'pr_updated',
-            'pr_closed',
-            'issue_opened',
-            'issue_comment',
-          ],
+          enum: ['manual', 'pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment'],
         },
         fixture: { $ref: '#/$defs/fixtureRef' },
         env: {
@@ -101,11 +91,7 @@ const schema: any = {
         mocks: {
           type: 'object',
           additionalProperties: {
-            oneOf: [
-              { type: 'string' },
-              { type: 'array' },
-              { type: 'object' },
-            ],
+            oneOf: [{ type: 'string' }, { type: 'array' }, { type: 'object' }],
           },
         },
         expect: { $ref: '#/$defs/expectBlock' },
@@ -116,10 +102,7 @@ const schema: any = {
         },
       },
       required: ['name'],
-      anyOf: [
-        { required: ['event'] },
-        { required: ['flow'] },
-      ],
+      anyOf: [{ required: ['event'] }, { required: ['flow'] }],
     },
     flowStage: {
       type: 'object',
@@ -137,14 +120,7 @@ const schema: any = {
         },
         event: {
           type: 'string',
-          enum: [
-            'manual',
-            'pr_opened',
-            'pr_updated',
-            'pr_closed',
-            'issue_opened',
-            'issue_comment',
-          ],
+          enum: ['manual', 'pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment'],
         },
         fixture: { $ref: '#/$defs/fixtureRef' },
         env: {
@@ -154,11 +130,7 @@ const schema: any = {
         mocks: {
           type: 'object',
           additionalProperties: {
-            oneOf: [
-              { type: 'string' },
-              { type: 'array' },
-              { type: 'object' },
-            ],
+            oneOf: [{ type: 'string' }, { type: 'array' }, { type: 'object' }],
           },
         },
         expect: { $ref: '#/$defs/expectBlock' },
@@ -194,10 +166,7 @@ const schema: any = {
       properties: {
         step: { type: 'string' },
         index: {
-          oneOf: [
-            { type: 'number' },
-            { enum: ['first', 'last'] },
-          ],
+          oneOf: [{ type: 'number' }, { enum: ['first', 'last'] }],
         },
         contains: {
           type: 'array',
@@ -226,10 +195,7 @@ const schema: any = {
       properties: {
         step: { type: 'string' },
         index: {
-          oneOf: [
-            { type: 'number' },
-            { enum: ['first', 'last'] },
-          ],
+          oneOf: [{ type: 'number' }, { enum: ['first', 'last'] }],
         },
         path: { type: 'string' },
         equals: {},
@@ -262,7 +228,11 @@ const schema: any = {
           items: {
             type: 'object',
             additionalProperties: false,
-            properties: { step: { type: 'string' }, provider: { type: 'string' }, op: { type: 'string' } },
+            properties: {
+              step: { type: 'string' },
+              provider: { type: 'string' },
+              op: { type: 'string' },
+            },
           },
         },
         fail: {
@@ -287,7 +257,10 @@ const validate = ajv.compile(schema);
 function toYamlPath(instancePath: string): string {
   if (!instancePath) return 'tests';
   // Ajv instancePath starts with '/'
-  const parts = instancePath.split('/').slice(1).map(p => (p.match(/^\d+$/) ? `[${p}]` : `.${p}`));
+  const parts = instancePath
+    .split('/')
+    .slice(1)
+    .map(p => (p.match(/^\d+$/) ? `[${p}]` : `.${p}`));
   let out = parts.join('');
   if (out.startsWith('.')) out = out.slice(1);
   // Heuristic: put root under tests for nicer messages
@@ -296,18 +269,15 @@ function toYamlPath(instancePath: string): string {
 }
 
 function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length;
+  const m = a.length,
+    n = b.length;
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost,
-      );
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
     }
   }
   return dp[m][n];
@@ -315,19 +285,56 @@ function levenshtein(a: string, b: string): number {
 
 const knownKeys = new Set([
   // top-level
-  'version', 'extends', 'tests',
+  'version',
+  'extends',
+  'tests',
   // tests
-  'tests.defaults', 'tests.fixtures', 'tests.cases',
+  'tests.defaults',
+  'tests.fixtures',
+  'tests.cases',
   // defaults
-  'tests.defaults.strict', 'tests.defaults.ai_provider', 'tests.defaults.github_recorder', 'tests.defaults.macros', 'tests.defaults.fail_on_unexpected_calls',
+  'tests.defaults.strict',
+  'tests.defaults.ai_provider',
+  'tests.defaults.github_recorder',
+  'tests.defaults.macros',
+  'tests.defaults.fail_on_unexpected_calls',
   // case
-  'name', 'description', 'skip', 'strict', 'event', 'fixture', 'env', 'mocks', 'expect', 'flow',
+  'name',
+  'description',
+  'skip',
+  'strict',
+  'event',
+  'fixture',
+  'env',
+  'mocks',
+  'expect',
+  'flow',
   // expect
-  'expect.use', 'expect.calls', 'expect.prompts', 'expect.outputs', 'expect.no_calls', 'expect.fail', 'expect.strict_violation',
+  'expect.use',
+  'expect.calls',
+  'expect.prompts',
+  'expect.outputs',
+  'expect.no_calls',
+  'expect.fail',
+  'expect.strict_violation',
   // calls
-  'step', 'provider', 'op', 'exactly', 'at_least', 'at_most', 'args',
+  'step',
+  'provider',
+  'op',
+  'exactly',
+  'at_least',
+  'at_most',
+  'args',
   // prompts/outputs
-  'index', 'contains', 'not_contains', 'matches', 'path', 'equals', 'equalsDeep', 'where', 'contains_unordered',
+  'index',
+  'contains',
+  'not_contains',
+  'matches',
+  'path',
+  'equals',
+  'equalsDeep',
+  'where',
+  'contains_unordered',
 ]);
 
 function hintForAdditionalProperty(err: ErrorObject): string | undefined {

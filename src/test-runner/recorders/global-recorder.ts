@@ -9,4 +9,3 @@ export function setGlobalRecorder(r: RecordingOctokit | null): void {
 export function getGlobalRecorder(): RecordingOctokit | null {
   return __rec;
 }
-

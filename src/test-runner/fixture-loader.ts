@@ -12,7 +12,13 @@ export interface LoadedFixture {
   name: string;
   webhook: { name: string; action?: string; payload: Record<string, unknown> };
   git?: { branch?: string; baseBranch?: string };
-  files?: Array<{ path: string; content: string; status?: 'added'|'modified'|'removed'|'renamed'; additions?: number; deletions?: number }>;
+  files?: Array<{
+    path: string;
+    content: string;
+    status?: 'added' | 'modified' | 'removed' | 'renamed';
+    additions?: number;
+    deletions?: number;
+  }>;
   diff?: string; // unified diff text
   env?: Record<string, string>;
   time?: { now?: string };
@@ -127,18 +133,23 @@ export class FixtureLoader {
     };
   }
 
-  private buildUnifiedDiff(files: Array<{ path: string; content: string; status?: string }>): string {
+  private buildUnifiedDiff(
+    files: Array<{ path: string; content: string; status?: string }>
+  ): string {
     // Build a very small, stable unified diff suitable for prompts
     const chunks = files.map(f => {
-      const header = `diff --git a/${f.path} b/${f.path}\n` +
-        (f.status === 'added' ? 'index 0000000..1111111 100644\n--- /dev/null\n' : `index 1111111..2222222 100644\n--- a/${f.path}\n`) +
+      const header =
+        `diff --git a/${f.path} b/${f.path}\n` +
+        (f.status === 'added'
+          ? 'index 0000000..1111111 100644\n--- /dev/null\n'
+          : `index 1111111..2222222 100644\n--- a/${f.path}\n`) +
         `+++ b/${f.path}\n` +
         '@@\n';
       const body = f.content
         .split('\n')
         .map(line => (f.status === 'removed' ? `-${line}` : `+${line}`))
         .join('\n');
-    return header + body + '\n';
+      return header + body + '\n';
     });
     return chunks.join('\n');
   }

@@ -468,7 +468,10 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean } & import('./check-provider.interface').ExecutionContext
+    sessionInfo?: {
+      parentSessionId?: string;
+      reuseSession?: boolean;
+    } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
@@ -623,7 +626,11 @@ export class AICheckProvider extends CheckProvider {
         config.schema,
         { checkName: (config as any).checkName }
       );
-      sessionInfo?.hooks?.onPromptCaptured?.({ step: String(stepName), provider: 'ai', prompt: finalPrompt });
+      sessionInfo?.hooks?.onPromptCaptured?.({
+        step: String(stepName),
+        provider: 'ai',
+        prompt: finalPrompt,
+      });
     } catch {}
 
     // Test hook: mock output for this step (short-circuit provider)

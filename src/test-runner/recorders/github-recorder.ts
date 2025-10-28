@@ -41,11 +41,17 @@ export class RecordingOctokit {
     );
     (this.rest as any).pulls = new Proxy(
       {},
-      { get: (_t, p: string | symbol) => (typeof p === 'string' ? makeMethod(['pulls', p]) : undefined) }
+      {
+        get: (_t, p: string | symbol) =>
+          typeof p === 'string' ? makeMethod(['pulls', p]) : undefined,
+      }
     );
     (this.rest as any).checks = new Proxy(
       {},
-      { get: (_t, p: string | symbol) => (typeof p === 'string' ? makeMethod(['checks', p]) : undefined) }
+      {
+        get: (_t, p: string | symbol) =>
+          typeof p === 'string' ? makeMethod(['checks', p]) : undefined,
+      }
     );
   }
 
@@ -57,7 +63,10 @@ export class RecordingOctokit {
     }
     if (this.mode?.timeoutMs) {
       return new Promise((_resolve, reject) =>
-        setTimeout(() => reject(new Error(`Simulated GitHub timeout ${this.mode!.timeoutMs}ms`)), this.mode!.timeoutMs)
+        setTimeout(
+          () => reject(new Error(`Simulated GitHub timeout ${this.mode!.timeoutMs}ms`)),
+          this.mode!.timeoutMs
+        )
       );
     }
     if (op === 'issues.createComment' || op === 'issues.updateComment') {

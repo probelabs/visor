@@ -71,7 +71,9 @@ export class GitHubOpsProvider extends CheckProvider {
 
     if (!octokit) {
       if (process.env.VISOR_DEBUG === 'true') {
-        try { console.error('[github-ops] missing octokit after fallback — returning issue'); } catch {}
+        try {
+          console.error('[github-ops] missing octokit after fallback — returning issue');
+        } catch {}
       }
       return {
         issues: [
@@ -102,7 +104,9 @@ export class GitHubOpsProvider extends CheckProvider {
     }
     try {
       if (process.env.VISOR_DEBUG === 'true') {
-        logger.info(`[github-ops] context octokit? ${!!octokit} repo=${owner}/${repo} pr#=${prInfo?.number}`);
+        logger.info(
+          `[github-ops] context octokit? ${!!octokit} repo=${owner}/${repo} pr#=${prInfo?.number}`
+        );
       }
     } catch {}
     if (!owner || !repo || !prInfo?.number) {
@@ -175,8 +179,14 @@ export class GitHubOpsProvider extends CheckProvider {
           if (ov) {
             logger.info(`[github-ops] outputs.overview.keys=${Object.keys(ov).join(',')}`);
             if (ov.tags) {
-              logger.info(`[github-ops] outputs.overview.tags keys=${Object.keys(ov.tags).join(',')}`);
-              try { logger.info(`[github-ops] outputs.overview.tags['review-effort']=${String(ov.tags['review-effort'])}`); } catch {}
+              logger.info(
+                `[github-ops] outputs.overview.tags keys=${Object.keys(ov.tags).join(',')}`
+              );
+              try {
+                logger.info(
+                  `[github-ops] outputs.overview.tags['review-effort']=${String(ov.tags['review-effort'])}`
+                );
+              } catch {}
             }
           }
         }
@@ -262,13 +272,16 @@ export class GitHubOpsProvider extends CheckProvider {
       try {
         const derived: string[] = [];
         for (const result of dependencyResults.values()) {
-          const out = (result as (ReviewSummary & { output?: unknown }))?.output ?? result;
-          const tags = (out as Record<string, unknown>)?.['tags'] as Record<string, unknown> | undefined;
+          const out = (result as ReviewSummary & { output?: unknown })?.output ?? result;
+          const tags = (out as Record<string, unknown>)?.['tags'] as
+            | Record<string, unknown>
+            | undefined;
           if (tags && typeof tags === 'object') {
             const label = tags['label'];
             const effort = (tags as Record<string, unknown>)['review-effort'];
             if (label != null) derived.push(String(label));
-            if (effort !== undefined && effort !== null) derived.push(`review/effort:${String(effort)}`);
+            if (effort !== undefined && effort !== null)
+              derived.push(`review/effort:${String(effort)}`);
           }
         }
         values = derived;
@@ -293,7 +306,10 @@ export class GitHubOpsProvider extends CheckProvider {
       switch (cfg.op) {
         case 'labels.add': {
           if (values.length === 0) break; // no-op if nothing to add
-          try { if (process.env.VISOR_OUTPUT_FORMAT !== 'json') logger.step(`[github-ops] labels.add -> ${JSON.stringify(values)}`); } catch {}
+          try {
+            if (process.env.VISOR_OUTPUT_FORMAT !== 'json')
+              logger.step(`[github-ops] labels.add -> ${JSON.stringify(values)}`);
+          } catch {}
           await octokit.rest.issues.addLabels({
             owner,
             repo,
@@ -342,7 +358,9 @@ export class GitHubOpsProvider extends CheckProvider {
       return { issues: [] };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      try { logger.error(`[github-ops] op_failed ${cfg.op}: ${msg}`); } catch {}
+      try {
+        logger.error(`[github-ops] op_failed ${cfg.op}: ${msg}`);
+      } catch {}
       return {
         issues: [
           {

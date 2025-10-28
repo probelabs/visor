@@ -2684,12 +2684,7 @@ export class CheckExecutionEngine {
     providerConfig.forEach = checkConfig.forEach;
 
     const __provStart = Date.now();
-    const result = await provider.execute(
-      prInfo,
-      providerConfig,
-      undefined,
-      this.executionContext
-    );
+    const result = await provider.execute(prInfo, providerConfig, undefined, this.executionContext);
     this.recordProviderDuration(checkName, Date.now() - __provStart);
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
@@ -3605,7 +3600,9 @@ export class CheckExecutionEngine {
           if (debug) {
             log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
           } else if (process.env.VISOR_DEBUG === 'true') {
-            try { console.log(`[engine] provider for ${checkName} -> ${providerType}`); } catch {}
+            try {
+              console.log(`[engine] provider for ${checkName} -> ${providerType}`);
+            } catch {}
           }
           this.setProviderWebhookContext(provider);
 

@@ -116,7 +116,7 @@ export class VisorTestRunner {
     console.log('\nCases:');
     for (const c of suite.tests.cases) {
       const isFlow = Array.isArray(c.flow) && c.flow.length > 0;
-      const badge = isFlow ? 'flow' : (c.event || 'event');
+      const badge = isFlow ? 'flow' : c.event || 'event';
       console.log(` - ${c.name} [${badge}]`);
     }
     console.log('\nTip: run `visor test --only <name>` to filter, `--bail` to stop early.');
@@ -129,14 +129,20 @@ export class VisorTestRunner {
     testsPath: string,
     suite: TestSuite,
     options: { only?: string; bail?: boolean; maxParallel?: number; promptMaxChars?: number }
-  ): Promise<{ failures: number; results: Array<{ name: string; passed: boolean; errors?: string[]; stages?: Array<{ name: string; errors?: string[] }> }> }> {
+  ): Promise<{
+    failures: number;
+    results: Array<{
+      name: string;
+      passed: boolean;
+      errors?: string[];
+      stages?: Array<{ name: string; errors?: string[] }>;
+    }>;
+  }> {
     // Save defaults for flow runner access
     (this as any).suiteDefaults = suite.tests.defaults || {};
     const only = options.only?.toLowerCase();
     const allCases = suite.tests.cases;
-    const selected = only
-      ? allCases.filter(c => c.name.toLowerCase().includes(only))
-      : allCases;
+    const selected = only ? allCases.filter(c => c.name.toLowerCase().includes(only)) : allCases;
     if (selected.length === 0) {
       console.log('No matching cases.');
       return { failures: 0, results: [] };
@@ -164,9 +170,18 @@ export class VisorTestRunner {
     const defaultsAny: any = suite.tests.defaults || {};
     const defaultStrict = defaultsAny?.strict !== false;
     const aiProviderDefault = defaultsAny?.ai_provider || 'mock';
-    const ghRec = defaultsAny?.github_recorder as { error_code?: number; timeout_ms?: number } | undefined;
-    const defaultPromptCap: number | undefined = options.promptMaxChars || (typeof defaultsAny?.prompt_max_chars === 'number' ? defaultsAny.prompt_max_chars : undefined);
-    const caseMaxParallel = options.maxParallel || (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) || 1;
+    const ghRec = defaultsAny?.github_recorder as
+      | { error_code?: number; timeout_ms?: number }
+      | undefined;
+    const defaultPromptCap: number | undefined =
+      options.promptMaxChars ||
+      (typeof defaultsAny?.prompt_max_chars === 'number'
+        ? defaultsAny.prompt_max_chars
+        : undefined);
+    const caseMaxParallel =
+      options.maxParallel ||
+      (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) ||
+      1;
 
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
     const cfg = JSON.parse(JSON.stringify(config));
@@ -179,28 +194,45 @@ export class VisorTestRunner {
     }
 
     let failures = 0;
-    const caseResults: Array<{ name: string; passed: boolean; errors?: string[]; stages?: Array<{ name: string; errors?: string[] }> }> = [];
+    const caseResults: Array<{
+      name: string;
+      passed: boolean;
+      errors?: string[];
+      stages?: Array<{ name: string; errors?: string[] }>;
+    }> = [];
 
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
-        const flowRes = await this.runFlowCase(_case, cfg, defaultStrict, options.bail || false, defaultPromptCap);
+        const flowRes = await this.runFlowCase(
+          _case,
+          cfg,
+          defaultStrict,
+          options.bail || false,
+          defaultPromptCap
+        );
         const failed = flowRes.failures;
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
         return { name: _case.name, failed };
       }
-      const strict = (typeof (_case as any).strict === 'boolean' ? (_case as any).strict : defaultStrict) as boolean;
+      const strict = (
+        typeof (_case as any).strict === 'boolean' ? (_case as any).strict : defaultStrict
+      ) as boolean;
       const expect = ((_case as any).expect || {}) as ExpectBlock;
       // Fixture selection with optional overrides
-      const fixtureInput = (typeof (_case as any).fixture === 'object' && (_case as any).fixture)
-        ? (_case as any).fixture
-        : { builtin: (_case as any).fixture };
+      const fixtureInput =
+        typeof (_case as any).fixture === 'object' && (_case as any).fixture
+          ? (_case as any).fixture
+          : { builtin: (_case as any).fixture };
       const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
 
       // Inject recording Octokit into engine via actionContext using env owner/repo
       const prevRepo = process.env.GITHUB_REPOSITORY;
       process.env.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || 'owner/repo';
       // Apply case env overrides if present
-      const envOverrides = (typeof (_case as any).env === 'object' && (_case as any).env) ? (_case as any).env as Record<string,string> : undefined;
+      const envOverrides =
+        typeof (_case as any).env === 'object' && (_case as any).env
+          ? ((_case as any).env as Record<string, string>)
+          : undefined;
       const prevEnv: Record<string, string | undefined> = {};
       if (envOverrides) {
         for (const [k, v] of Object.entries(envOverrides)) {
@@ -208,23 +240,32 @@ export class VisorTestRunner {
           process.env[k] = String(v);
         }
       }
-      const ghRecCase = (typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder)
-        ? ((_case as any).github_recorder as { error_code?: number; timeout_ms?: number })
-        : undefined;
+      const ghRecCase =
+        typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder
+          ? ((_case as any).github_recorder as { error_code?: number; timeout_ms?: number })
+          : undefined;
       const rcOpts = ghRecCase || ghRec;
-      const recorder = new RecordingOctokit(rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined);
+      const recorder = new RecordingOctokit(
+        rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
+      );
       setGlobalRecorder(recorder);
-      const engine = new CheckExecutionEngine(undefined as any, (recorder as unknown) as any);
+      const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
 
       // Capture prompts per step
       const prompts: Record<string, string[]> = {};
-      const mocks = (typeof (_case as any).mocks === 'object' && (_case as any).mocks) ? (_case as any).mocks as Record<string, unknown> : {};
+      const mocks =
+        typeof (_case as any).mocks === 'object' && (_case as any).mocks
+          ? ((_case as any).mocks as Record<string, unknown>)
+          : {};
       engine.setExecutionContext({
         hooks: {
           onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
             const k = info.step;
             if (!prompts[k]) prompts[k] = [];
-            const p = defaultPromptCap && info.prompt.length > defaultPromptCap ? info.prompt.slice(0, defaultPromptCap) : info.prompt;
+            const p =
+              defaultPromptCap && info.prompt.length > defaultPromptCap
+                ? info.prompt.slice(0, defaultPromptCap)
+                : info.prompt;
             prompts[k].push(p);
           },
           mockForStep: (step: string) => mocks[step],
@@ -233,18 +274,26 @@ export class VisorTestRunner {
 
       try {
         const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
-        const desiredSteps = new Set<string>((expect.calls || []).map(c => c.step).filter(Boolean) as string[]);
-        const checksToRun = this.computeChecksToRun(cfg, eventForCase, desiredSteps.size > 0 ? desiredSteps : undefined);
+        const desiredSteps = new Set<string>(
+          (expect.calls || []).map(c => c.step).filter(Boolean) as string[]
+        );
+        const checksToRun = this.computeChecksToRun(
+          cfg,
+          eventForCase,
+          desiredSteps.size > 0 ? desiredSteps : undefined
+        );
         // Include all tagged checks by default in test mode: build tagFilter.include = union of all tags
         const allTags: string[] = Array.from(
           new Set(
             Object.values(cfg.checks || {})
-              .flatMap((c: any) => Array.isArray(c?.tags) ? c.tags : [])
+              .flatMap((c: any) => (Array.isArray(c?.tags) ? c.tags : []))
               .filter((t: any) => typeof t === 'string') as string[]
           )
         );
         // Inject octokit into eventContext so providers can perform real GitHub ops (recorded)
-        try { (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder }; } catch {}
+        try {
+          (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
+        } catch {}
 
         const res = await engine.executeGroupedChecks(
           prInfo,
@@ -281,7 +330,11 @@ export class VisorTestRunner {
         }
       } catch (err) {
         console.log(`❌ ERROR ${_case.name}: ${err instanceof Error ? err.message : String(err)}`);
-        caseResults.push({ name: _case.name, passed: false, errors: [err instanceof Error ? err.message : String(err)] });
+        caseResults.push({
+          name: _case.name,
+          passed: false,
+          errors: [err instanceof Error ? err.message : String(err)],
+        });
         return { name: _case.name, failed: 1 };
       } finally {
         if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
@@ -296,7 +349,7 @@ export class VisorTestRunner {
       return { name: _case.name, failed: 0 };
     };
 
-    if ((options.bail || false) || caseMaxParallel <= 1) {
+    if (options.bail || false || caseMaxParallel <= 1) {
       for (const _case of selected) {
         const r = await runOne(_case);
         failures += r.failed;
@@ -330,27 +383,38 @@ export class VisorTestRunner {
     promptCap?: number
   ): Promise<{ failures: number; stages: Array<{ name: string; errors?: string[] }> }> {
     const suiteDefaults: any = (this as any).suiteDefaults || {};
-    const ghRec = suiteDefaults.github_recorder as { error_code?: number; timeout_ms?: number } | undefined;
-    const ghRecCase = (typeof (flowCase as any).github_recorder === 'object' && (flowCase as any).github_recorder)
-      ? ((flowCase as any).github_recorder as { error_code?: number; timeout_ms?: number })
-      : undefined;
+    const ghRec = suiteDefaults.github_recorder as
+      | { error_code?: number; timeout_ms?: number }
+      | undefined;
+    const ghRecCase =
+      typeof (flowCase as any).github_recorder === 'object' && (flowCase as any).github_recorder
+        ? ((flowCase as any).github_recorder as { error_code?: number; timeout_ms?: number })
+        : undefined;
     const rcOpts = ghRecCase || ghRec;
-    const recorder = new RecordingOctokit(rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined);
+    const recorder = new RecordingOctokit(
+      rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
+    );
     setGlobalRecorder(recorder);
-    const engine = new CheckExecutionEngine(undefined as any, (recorder as unknown) as any);
+    const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
     const flowName = flowCase.name || 'flow';
     let failures = 0;
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
 
     // Shared prompts map across flow; we will compute per-stage deltas
     const prompts: Record<string, string[]> = {};
-    const stageMocks = (typeof (flowCase.mocks) === 'object' && flowCase.mocks) ? (flowCase.mocks as Record<string,unknown>) : {};
+    const stageMocks =
+      typeof flowCase.mocks === 'object' && flowCase.mocks
+        ? (flowCase.mocks as Record<string, unknown>)
+        : {};
     engine.setExecutionContext({
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
           const k = info.step;
           if (!prompts[k]) prompts[k] = [];
-          const p = promptCap && info.prompt.length > promptCap ? info.prompt.slice(0, promptCap) : info.prompt;
+          const p =
+            promptCap && info.prompt.length > promptCap
+              ? info.prompt.slice(0, promptCap)
+              : info.prompt;
           prompts[k].push(p);
         },
         mockForStep: (step: string) => stageMocks[step],
@@ -361,16 +425,22 @@ export class VisorTestRunner {
     for (let i = 0; i < flowCase.flow.length; i++) {
       const stage = flowCase.flow[i];
       const stageName = `${flowName}#${stage.name || `stage-${i + 1}`}`;
-      const strict = (typeof flowCase.strict === 'boolean' ? flowCase.strict : defaultStrict) as boolean;
+      const strict = (
+        typeof flowCase.strict === 'boolean' ? flowCase.strict : defaultStrict
+      ) as boolean;
 
       // Fixture + env
-      const fixtureInput = (typeof stage.fixture === 'object' && stage.fixture)
-        ? stage.fixture
-        : { builtin: stage.fixture };
+      const fixtureInput =
+        typeof stage.fixture === 'object' && stage.fixture
+          ? stage.fixture
+          : { builtin: stage.fixture };
       const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
 
       // Stage env overrides
-      const envOverrides = (typeof stage.env === 'object' && stage.env) ? (stage.env as Record<string,string>) : undefined;
+      const envOverrides =
+        typeof stage.env === 'object' && stage.env
+          ? (stage.env as Record<string, string>)
+          : undefined;
       const prevEnv: Record<string, string | undefined> = {};
       if (envOverrides) {
         for (const [k, v] of Object.entries(envOverrides)) {
@@ -392,18 +462,36 @@ export class VisorTestRunner {
 
       try {
         const eventForStage = this.mapEventFromFixtureName(fixtureInput?.builtin);
-        const desiredSteps = new Set<string>(((stage.expect || {}).calls || []).map((c: any) => c.step).filter(Boolean) as string[]);
-        const checksToRun = this.computeChecksToRun(cfg, eventForStage, desiredSteps.size > 0 ? desiredSteps : undefined);
+        const desiredSteps = new Set<string>(
+          ((stage.expect || {}).calls || []).map((c: any) => c.step).filter(Boolean) as string[]
+        );
+        const checksToRun = this.computeChecksToRun(
+          cfg,
+          eventForStage,
+          desiredSteps.size > 0 ? desiredSteps : undefined
+        );
         const allTags: string[] = Array.from(
           new Set(
             Object.values(cfg.checks || {})
-              .flatMap((c: any) => Array.isArray(c?.tags) ? c.tags : [])
+              .flatMap((c: any) => (Array.isArray(c?.tags) ? c.tags : []))
               .filter((t: any) => typeof t === 'string') as string[]
           )
         );
         // Ensure eventContext carries octokit for recorded GitHub ops
-        try { (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder }; } catch {}
-        const res = await engine.executeGroupedChecks(prInfo, checksToRun, 120000, cfg, 'json', false, undefined, false, { include: allTags });
+        try {
+          (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
+        } catch {}
+        const res = await engine.executeGroupedChecks(
+          prInfo,
+          checksToRun,
+          120000,
+          cfg,
+          'json',
+          false,
+          undefined,
+          false,
+          { include: allTags }
+        );
 
         // Build stage-local prompts map (delta)
         const stagePrompts: Record<string, string[]> = {};
@@ -446,12 +534,16 @@ export class VisorTestRunner {
       } catch (err) {
         failures += 1;
         console.log(`❌ ERROR ${stageName}: ${err instanceof Error ? err.message : String(err)}`);
-        stagesSummary.push({ name: stageName, errors: [err instanceof Error ? err.message : String(err)] });
+        stagesSummary.push({
+          name: stageName,
+          errors: [err instanceof Error ? err.message : String(err)],
+        });
         if (bail) break;
       } finally {
         if (envOverrides) {
           for (const [k, oldv] of Object.entries(prevEnv)) {
-            if (oldv === undefined) delete process.env[k]; else process.env[k] = oldv;
+            if (oldv === undefined) delete process.env[k];
+            else process.env[k] = oldv;
           }
         }
       }
@@ -459,7 +551,8 @@ export class VisorTestRunner {
 
     // Summary line for flow
     if (failures === 0) console.log(`✅ FLOW PASS ${flowName}`);
-    else console.log(`❌ FLOW FAIL ${flowName} (${failures} stage error${failures>1?'s':''})`);
+    else
+      console.log(`❌ FLOW FAIL ${flowName} (${failures} stage error${failures > 1 ? 's' : ''})`);
     return { failures, stages: stagesSummary };
   }
 
@@ -473,12 +566,16 @@ export class VisorTestRunner {
     return 'manual';
   }
 
-  private buildPrInfoFromFixture(fixtureName?: string, overrides?: Record<string, unknown>): PRInfo {
+  private buildPrInfoFromFixture(
+    fixtureName?: string,
+    overrides?: Record<string, unknown>
+  ): PRInfo {
     const eventType = this.mapEventFromFixtureName(fixtureName);
     const isIssue = eventType === 'issue_opened' || eventType === 'issue_comment';
     const number = 1;
     const loader = new FixtureLoader();
-    const fx = fixtureName && fixtureName.startsWith('gh.') ? loader.load(fixtureName as any) : undefined;
+    const fx =
+      fixtureName && fixtureName.startsWith('gh.') ? loader.load(fixtureName as any) : undefined;
     const title =
       (fx?.webhook.payload as any)?.pull_request?.title ||
       (fx?.webhook.payload as any)?.issue?.title ||
@@ -508,10 +605,19 @@ export class VisorTestRunner {
       isIssue,
       eventContext: {
         event_name:
-          fx?.webhook?.name || (isIssue ? (eventType === 'issue_comment' ? 'issue_comment' : 'issues') : 'pull_request'),
-        action: fx?.webhook?.action || (eventType === 'pr_opened' ? 'opened' : eventType === 'pr_updated' ? 'synchronize' : undefined),
+          fx?.webhook?.name ||
+          (isIssue ? (eventType === 'issue_comment' ? 'issue_comment' : 'issues') : 'pull_request'),
+        action:
+          fx?.webhook?.action ||
+          (eventType === 'pr_opened'
+            ? 'opened'
+            : eventType === 'pr_updated'
+              ? 'synchronize'
+              : undefined),
         issue: isIssue ? { number, title, body, user: { login: 'test-user' } } : undefined,
-        pull_request: !isIssue ? { number, title, head: { ref: 'feature/test' }, base: { ref: 'main' } } : undefined,
+        pull_request: !isIssue
+          ? { number, title, head: { ref: 'feature/test' }, base: { ref: 'main' } }
+          : undefined,
         repository: { owner: { login: 'owner' }, name: 'repo' },
         comment:
           eventType === 'issue_comment'
@@ -528,7 +634,11 @@ export class VisorTestRunner {
           (prInfo as any)[key] = v as any;
         } else if (k.startsWith('webhook.')) {
           const path = k.slice(8);
-          this.deepSet((prInfo as any).eventContext || ((prInfo as any).eventContext = {}), path, v);
+          this.deepSet(
+            (prInfo as any).eventContext || ((prInfo as any).eventContext = {}),
+            path,
+            v
+          );
         }
       }
     }
@@ -536,7 +646,7 @@ export class VisorTestRunner {
   }
 
   private deepSet(target: any, path: string, value: unknown): void {
-    const parts: (string|number)[] = [];
+    const parts: (string | number)[] = [];
     const regex = /\[(\d+)\]|\['([^']+)'\]|\["([^"]+)"\]|\.([^\.\[\]]+)/g;
     let m: RegExpExecArray | null;
     let cursor = 0;
@@ -585,9 +695,7 @@ export class VisorTestRunner {
     // Strict mode: every executed step must have an expect.calls entry
     if (strict) {
       const expectedSteps = new Set(
-        (expect.calls || [])
-          .filter(c => c.step)
-          .map(c => String(c.step))
+        (expect.calls || []).filter(c => c.step).map(c => String(c.step))
       );
       for (const step of Object.keys(executed)) {
         if (!expectedSteps.has(step)) {
@@ -618,7 +726,7 @@ export class VisorTestRunner {
       if (call.provider && String(call.provider).toLowerCase() === 'github') {
         validateCounts(call);
         const op = this.mapGithubOp(call.op || '');
-        const matched = recorder.calls.filter(c => (!op || c.op === op));
+        const matched = recorder.calls.filter(c => !op || c.op === op);
         const actual = matched.length;
         if (call.exactly !== undefined && actual !== call.exactly) {
           errors.push(`Expected github ${call.op} exactly ${call.exactly}, got ${actual}`);
@@ -645,8 +753,9 @@ export class VisorTestRunner {
     for (const nc of expect.no_calls || []) {
       if (nc.provider && String(nc.provider).toLowerCase() === 'github') {
         const op = this.mapGithubOp((nc as any).op || '');
-        const matched = recorder.calls.filter(c => (!op || c.op === op));
-        if (matched.length > 0) errors.push(`Expected no github ${nc.op} calls, but found ${matched.length}`);
+        const matched = recorder.calls.filter(c => !op || c.op === op);
+        if (matched.length > 0)
+          errors.push(`Expected no github ${nc.op} calls, but found ${matched.length}`);
       }
       if (nc.step && executed[nc.step] > 0) {
         errors.push(`Expected no step ${nc.step} calls, but executed ${executed[nc.step]}`);
@@ -669,17 +778,28 @@ export class VisorTestRunner {
               let pattern = where.matches;
               let flags = '';
               const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-              if (m) { flags = m[1]; pattern = pattern.slice(m[0].length); }
+              if (m) {
+                flags = m[1];
+                pattern = pattern.slice(m[0].length);
+              }
               const re = new RegExp(pattern, flags);
               ok = ok && re.test(candidate);
             } catch {
               ok = false;
             }
           }
-          if (ok) { prompt = candidate; break; }
+          if (ok) {
+            prompt = candidate;
+            break;
+          }
         }
       } else {
-        const idx = p.index === 'first' ? 0 : p.index === 'last' ? arr.length - 1 : (p.index as number) ?? arr.length - 1;
+        const idx =
+          p.index === 'first'
+            ? 0
+            : p.index === 'last'
+              ? arr.length - 1
+              : ((p.index as number) ?? arr.length - 1);
         prompt = arr[idx];
         if (!prompt) {
           errors.push(`No captured prompt for step ${p.step} at index ${idx}`);
@@ -705,7 +825,10 @@ export class VisorTestRunner {
           let pattern = p.matches;
           let flags = '';
           const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-          if (m) { flags = m[1]; pattern = pattern.slice(m[0].length); }
+          if (m) {
+            flags = m[1];
+            pattern = pattern.slice(m[0].length);
+          }
           const re = new RegExp(pattern, flags);
           if (!re.test(prompt)) errors.push(`Prompt for ${p.step} does not match: ${p.matches}`);
         } catch {
@@ -721,7 +844,8 @@ export class VisorTestRunner {
       const history = outputHistory[o.step] || [];
       if (process.env.VISOR_DEBUG === 'true') {
         try {
-          const preview = history.length > 0 ? JSON.stringify(history[history.length - 1]).slice(0, 200) : '[]';
+          const preview =
+            history.length > 0 ? JSON.stringify(history[history.length - 1]).slice(0, 200) : '[]';
           console.log(`[runner:outputs] step=${o.step} histLen=${history.length} last=${preview}`);
         } catch {}
       }
@@ -753,7 +877,12 @@ export class VisorTestRunner {
           continue;
         }
       } else {
-        const idx = o.index === 'first' ? 0 : o.index === 'last' ? history.length - 1 : (o.index as number) ?? history.length - 1;
+        const idx =
+          o.index === 'first'
+            ? 0
+            : o.index === 'last'
+              ? history.length - 1
+              : ((o.index as number) ?? history.length - 1);
         chosen = history[idx];
       }
       const val = deepGet(chosen, o.path);
@@ -764,7 +893,9 @@ export class VisorTestRunner {
       }
       if (o.equals !== undefined) {
         if ((val as any) !== (o.equals as any)) {
-          errors.push(`Output ${o.step}.${o.path} expected ${JSON.stringify(o.equals)} but got ${JSON.stringify(val)}`);
+          errors.push(
+            `Output ${o.step}.${o.path} expected ${JSON.stringify(o.equals)} but got ${JSON.stringify(val)}`
+          );
         }
       }
       if (o.matches) {
@@ -772,16 +903,22 @@ export class VisorTestRunner {
           let pattern = o.matches;
           let flags = '';
           const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-          if (m) { flags = m[1]; pattern = pattern.slice(m[0].length); }
+          if (m) {
+            flags = m[1];
+            pattern = pattern.slice(m[0].length);
+          }
           const re = new RegExp(pattern, flags);
-          if (!re.test(String(val))) errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
+          if (!re.test(String(val)))
+            errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
         } catch {
           errors.push(`Invalid regex for outputs.matches in ${o.step}`);
         }
       }
       if (o.contains_unordered) {
-        if (!Array.isArray(val)) errors.push(`Output ${o.step}.${o.path} not an array for contains_unordered`);
-        else if (!containsUnordered(val, o.contains_unordered)) errors.push(`Output ${o.step}.${o.path} missing elements (unordered)`);
+        if (!Array.isArray(val))
+          errors.push(`Output ${o.step}.${o.path} not an array for contains_unordered`);
+        else if (!containsUnordered(val, o.contains_unordered))
+          errors.push(`Output ${o.step}.${o.path} missing elements (unordered)`);
       }
     }
 
@@ -805,7 +942,7 @@ export class VisorTestRunner {
     const all = Object.keys(cfg.checks || {});
     const byEvent = all.filter(name => {
       const chk = cfg.checks[name] || {};
-      const triggers: string[] = Array.isArray(chk.on) ? chk.on : (chk.on ? [chk.on] : []);
+      const triggers: string[] = Array.isArray(chk.on) ? chk.on : chk.on ? [chk.on] : [];
       if (triggers.length === 0) return true;
       return triggers.includes(event);
     });
@@ -816,7 +953,11 @@ export class VisorTestRunner {
       if (selected.has(n) || depth > 50) return;
       selected.add(n);
       const chk = cfg.checks[n] || {};
-      const deps: string[] = Array.isArray(chk.depends_on) ? chk.depends_on : (chk.depends_on ? [chk.depends_on] : []);
+      const deps: string[] = Array.isArray(chk.depends_on)
+        ? chk.depends_on
+        : chk.depends_on
+          ? [chk.depends_on]
+          : [];
       for (const d of deps) visit(d, depth + 1);
     };
     for (const n of desired) visit(n);
@@ -834,22 +975,28 @@ export class VisorTestRunner {
       if (!s.skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
     }
     const expCalls = (expect.calls || []).filter(c => c.step);
-    const expectedSteps = new Map<string, { exactly?: number; at_least?: number; at_most?: number }>();
-    for (const c of expCalls) expectedSteps.set(c.step!, { exactly: c.exactly, at_least: c.at_least, at_most: c.at_most });
+    const expectedSteps = new Map<
+      string,
+      { exactly?: number; at_least?: number; at_most?: number }
+    >();
+    for (const c of expCalls)
+      expectedSteps.set(c.step!, { exactly: c.exactly, at_least: c.at_least, at_most: c.at_most });
     const rows: Array<{ step: string; want: string; got: number; status: string }> = [];
     for (const [step, want] of expectedSteps.entries()) {
       const got = executed[step] || 0;
       let status = 'ok';
-      if (want.exactly !== undefined) status = got === want.exactly ? 'ok' : got < want.exactly ? 'under' : 'over';
+      if (want.exactly !== undefined)
+        status = got === want.exactly ? 'ok' : got < want.exactly ? 'under' : 'over';
       else if (want.at_least !== undefined) status = got >= want.at_least ? 'ok' : 'under';
       else if (want.at_most !== undefined) status = got <= want.at_most ? 'ok' : 'over';
-      const wantStr = want.exactly !== undefined
-        ? `=${want.exactly}`
-        : want.at_least !== undefined
-          ? `≥${want.at_least}`
-          : want.at_most !== undefined
-            ? `≤${want.at_most}`
-            : '≥1';
+      const wantStr =
+        want.exactly !== undefined
+          ? `=${want.exactly}`
+          : want.at_least !== undefined
+            ? `≥${want.at_least}`
+            : want.at_most !== undefined
+              ? `≤${want.at_most}`
+              : '≥1';
       rows.push({ step, want: wantStr, got, status });
     }
     const unexpected = Object.keys(executed).filter(s => !expectedSteps.has(s));
@@ -857,7 +1004,9 @@ export class VisorTestRunner {
       console.log(`   Coverage (${label}):`);
       for (const r of rows) {
         const pad = (s: string, n: number) => (s + ' '.repeat(n)).slice(0, n);
-        console.log(`     • ${pad(r.step, 24)} want ${pad(r.want, 6)} got ${String(r.got).padStart(2)}  ${r.status}`);
+        console.log(
+          `     • ${pad(r.step, 24)} want ${pad(r.want, 6)} got ${String(r.got).padStart(2)}  ${r.status}`
+        );
       }
       if (unexpected.length > 0) console.log(`     • unexpected: ${unexpected.join(', ')}`);
     }
@@ -871,11 +1020,22 @@ export async function discoverAndPrint(options: DiscoverOptions = {}): Promise<v
   runner.printDiscovery(testsPath, suite);
 }
 
-export async function runMvp(options: { testsPath?: string; only?: string; bail?: boolean; maxParallel?: number; promptMaxChars?: number }): Promise<number> {
+export async function runMvp(options: {
+  testsPath?: string;
+  only?: string;
+  bail?: boolean;
+  maxParallel?: number;
+  promptMaxChars?: number;
+}): Promise<number> {
   const runner = new VisorTestRunner();
   const testsPath = runner.resolveTestsPath(options.testsPath);
   const suite = runner.loadSuite(testsPath);
-  const { failures } = await runner.runCases(testsPath, suite, { only: options.only, bail: !!options.bail, maxParallel: options.maxParallel, promptMaxChars: options.promptMaxChars });
+  const { failures } = await runner.runCases(testsPath, suite, {
+    only: options.only,
+    bail: !!options.bail,
+    maxParallel: options.maxParallel,
+    promptMaxChars: options.promptMaxChars,
+  });
   return failures;
 }
 

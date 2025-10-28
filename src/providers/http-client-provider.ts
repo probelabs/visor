@@ -99,9 +99,10 @@ export class HttpClientProvider extends CheckProvider {
       // Test hook: mock HTTP response for this step
       const stepName = (config as any).checkName || 'unknown';
       const mock = context?.hooks?.mockForStep?.(String(stepName));
-      const data = mock !== undefined
-        ? mock
-        : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+      const data =
+        mock !== undefined
+          ? mock
+          : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
 
       // Apply transformation if specified
       let processedData = data;

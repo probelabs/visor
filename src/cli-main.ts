@@ -133,14 +133,18 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const maxParallelRaw = getArg('--max-parallel');
   const promptMaxCharsRaw = getArg('--prompt-max-chars');
   const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
-  const promptMaxChars = promptMaxCharsRaw ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1) : undefined;
+  const promptMaxChars = promptMaxCharsRaw
+    ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1)
+    : undefined;
 
   // Configure logger for concise console output
   configureLoggerFromCli({ output: 'table', debug: false, verbose: false, quiet: false });
 
   console.log('🧪 Visor Test Runner');
   try {
-    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import('./test-runner/index');
+    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import(
+      './test-runner/index'
+    );
     if (validateOnly) {
       const errors = await validateTestsOnly({ testsPath });
       process.exit(errors > 0 ? 1 : 0);
@@ -178,10 +182,12 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         const failed = (runRes.results || []).filter((r: any) => !r.passed).length;
         const detail = (runRes.results || [])
           .map((r: any) => {
-            const errs = (r.errors || []).concat(...(r.stages || []).map((s: any) => s.errors || []));
-            return `<testcase classname=\"visor\" name=\"${r.name}\"${errs.length>0?'':''}>${errs
-              .map((e: string) => `<failure message=\"${e.replace(/\"/g,'&quot;')}\"></failure>`) 
-              .join('')}</testcase>`; 
+            const errs = (r.errors || []).concat(
+              ...(r.stages || []).map((s: any) => s.errors || [])
+            );
+            return `<testcase classname=\"visor\" name=\"${r.name}\"${errs.length > 0 ? '' : ''}>${errs
+              .map((e: string) => `<failure message=\"${e.replace(/\"/g, '&quot;')}\"></failure>`)
+              .join('')}</testcase>`;
           })
           .join('\n  ');
         const xml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"visor\" tests=\"${tests}\" failures=\"${failed}\">\n  ${detail}\n</testsuite>`;
@@ -193,7 +199,10 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (summaryArg && summaryArg.startsWith('md:')) {
         const fs = require('fs');
         const dest = summaryArg.slice('md:'.length);
-        const lines = (runRes.results || []).map((r: any) => `- ${r.passed ? '✅' : '❌'} ${r.name}${r.stages? ' ('+r.stages.length+' stage'+(r.stages.length!==1?'s':'')+')':''}`);
+        const lines = (runRes.results || []).map(
+          (r: any) =>
+            `- ${r.passed ? '✅' : '❌'} ${r.name}${r.stages ? ' (' + r.stages.length + ' stage' + (r.stages.length !== 1 ? 's' : '') + ')' : ''}`
+        );
         const content = `# Visor Test Summary\n\n- Failures: ${failures}\n\n${lines.join('\n')}`;
         fs.writeFileSync(dest, content, 'utf8');
         console.error(`📝 Markdown summary written to ${dest}`);
