@@ -3149,37 +3149,17 @@ export class CheckExecutionEngine {
     results: Map<string, ReviewSummary>,
     debug?: boolean
   ): Promise<boolean> {
-    // Determine event name for condition context, honoring any routing override
-    const override = this.routingEventOverride;
-    const eventName = override
-      ? override.startsWith('pr_')
-        ? 'pull_request'
-        : override === 'issue_comment'
-          ? 'issue_comment'
-          : override.startsWith('issue_')
-            ? 'issues'
-            : 'manual'
-      : 'issue_comment';
-
-    const commenterAssoc = resolveAssociationFromEvent(
-      (prInfo as any)?.eventContext,
-      prInfo.authorAssociation
+    // Wrapper for backward-compatibility: delegate to shouldRunCheck (fail-open to preserve legacy behavior)
+    const gate = await this.shouldRunCheck(
+      checkName,
+      condition,
+      prInfo,
+      results,
+      debug,
+      this.routingEventOverride,
+      /* failSecure */ false
     );
-    const shouldRun = await this.failureEvaluator.evaluateIfCondition(checkName, condition, {
-      branch: prInfo.head,
-      baseBranch: prInfo.base,
-      filesChanged: prInfo.files.map(f => f.filename),
-      event: eventName,
-      environment: getSafeEnvironmentVariables(),
-      previousResults: results,
-      authorAssociation: commenterAssoc,
-    });
-
-    if (!shouldRun && debug) {
-      logger.debug(`🔧 Debug: Skipping check '${checkName}' - if condition evaluated to false`);
-    }
-
-    return shouldRun;
+    return !!gate.shouldRun;
   }
 
   /**
@@ -4429,14 +4409,16 @@ export class CheckExecutionEngine {
                         prInfo.eventType
                       );
                       for (const [k, v] of perItemDepMap.entries()) condResults.set(k, v);
-                      const shouldRun = await this.evaluateCheckCondition(
+                      const gateNode = await this.shouldRunCheck(
                         node,
                         nodeCfg.if,
                         prInfo,
                         condResults,
-                        debug
+                        debug,
+                        undefined,
+                        /* failSecure */ true
                       );
-                      if (!shouldRun) {
+                      if (!gateNode.shouldRun) {
                         perItemDone.add(node);
                         progressed = true;
                         continue;
@@ -4878,7 +4860,7 @@ export class CheckExecutionEngine {
                 results,
                 debug,
                 undefined,
-                /* failSecure */ false
+                /* failSecure */ true
               );
 
               if (!gate.shouldRun) {
@@ -5360,7 +5342,7 @@ export class CheckExecutionEngine {
             new Map<string, ReviewSummary>(),
             debug,
             this.routingEventOverride,
-            /* failSecure */ false
+            /* failSecure */ true
           );
 
           if (!gate.shouldRun) {
