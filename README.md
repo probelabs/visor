@@ -127,7 +127,7 @@ Additional guides:
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 - live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
 
-## 🧪 Integration Tests (DX‑friendly)
+## 🧪 Integration Tests
 
 Write and run integration tests for your Visor config in YAML. No network, built‑in GitHub fixtures, strict by default, and great CLI output.
 
@@ -745,7 +745,7 @@ steps:
 ```
 
 See docs: docs/github-ops.md
-## Integration Tests (Great DX)
+## Integration Tests
 
 Visor ships a YAML‑native integration test runner so you can describe user flows, mocks, and assertions alongside your config.
 

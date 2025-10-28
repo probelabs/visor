@@ -1,6 +1,6 @@
 # Visor Tests — Getting Started
 
-This is the developer-facing guide for writing and running integration tests for your Visor config. It focuses on great DX: minimal setup, helpful errors, and clear output.
+This is the developer-facing guide for writing and running integration tests for your Visor config. It focuses on minimal setup, helpful errors, and clear output.
 
 ## TL;DR
 

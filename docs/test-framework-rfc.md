@@ -16,7 +16,7 @@ Key ideas:
 - Support multi‑event “flows” that preserve memory and outputs across events.
   (Docs use a “fact validation” workflow as an example pattern only; it is not a built‑in feature.)
 
-DX resources
+Developer Guides
 - Getting started: docs/testing/getting-started.md
 - DSL reference: docs/testing/dsl-reference.md
 - Flows: docs/testing/flows.md
