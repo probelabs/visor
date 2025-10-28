@@ -141,6 +141,8 @@ Write and run integration tests for your Visor config in YAML. No network, built
 - CI integration: [docs/testing/ci.md](docs/testing/ci.md)
 - Troubleshooting: [docs/testing/troubleshooting.md](docs/testing/troubleshooting.md)
 
+Note: examples use descriptive step names (e.g., `extract-facts`, `validate-fact`) to illustrate patterns. These are not built‑ins; the test runner works with whatever steps you define in `.visor.yaml`.
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).

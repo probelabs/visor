@@ -14,6 +14,7 @@ Key ideas:
 - Provider record mode by default: GitHub calls are intercepted and recorded (no network); assert them later.
 - Simple mocks keyed by step name; schema‑aware AI outputs (objects/arrays for structured schemas; `text` for plain).
 - Support multi‑event “flows” that preserve memory and outputs across events.
+  (Docs use a “fact validation” workflow as an example pattern only; it is not a built‑in feature.)
 
 DX resources
 - Getting started: docs/testing/getting-started.md

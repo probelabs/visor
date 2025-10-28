@@ -44,6 +44,8 @@ tests:
 
 Mocks are keyed by step name under `mocks`.
 
+Note: step names in examples (e.g., `extract-facts`, `validate-fact`) are not built‑ins — they are ordinary user‑defined checks in your `.visor.yaml`.
+
 Examples:
 
 ```yaml
@@ -81,7 +83,7 @@ mocks:
     - { fact_id: f2, is_valid: true,  confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
 ```
 
-The runner distributes items in order; if the list is shorter than invocations, the last entry is reused.
+The runner distributes items in order; if the list is shorter than invocations, the last entry is reused. This fits any forEach‑style step you define (naming is up to you).
 ```
 
 Notes:

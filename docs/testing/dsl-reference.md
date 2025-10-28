@@ -52,6 +52,21 @@ tests:
 - AI mocks may be structured JSON if a schema is configured for the step; otherwise use `text` and optional fields used by templates.
 - Command/HTTP mocks emulate provider shape (`stdout`, `exit_code`, or HTTP body/status headers) and bypass real execution.
 
+Inline example (AI with schema + list mocks):
+
+```yaml
+mocks:
+  overview:
+    text: "Overview body"
+    tags: { label: feature, review-effort: 2 }
+  extract-facts:
+    - { id: f1, claim: "max_parallelism defaults to 4" }
+    - { id: f2, claim: "Fast mode is enabled by default" }
+  validate-fact[]:
+    - { fact_id: f1, is_valid: false, correction: "max_parallelism defaults to 3" }
+    - { fact_id: f2, is_valid: true }
+```
+
 ## Expect block
 
 ```yaml
@@ -89,6 +104,26 @@ expect:
   strict_violation:             # assert strict failure for a missing expect on a step
     for_step: <name>
     message_contains: <string>
+
+Inline example (calls + prompts + outputs):
+
+```yaml
+expect:
+  calls:
+    - step: overview
+      exactly: 1
+    - provider: github
+      op: labels.add
+      at_least: 1
+      args: { contains: [feature] }
+  prompts:
+    - step: overview
+      contains: ["feat:", "diff --git a/"]
+  outputs:
+    - step: overview
+      path: "tags['review-effort']"
+      equals: 2
+```
 ```
 
 ## Strict mode semantics
@@ -108,4 +143,3 @@ expect:
 - Run one case: `visor test --only label-flow`
 - Run one stage: `visor test --only pr-review-e2e-flow#facts-invalid`
 - JSON/JUnit/Markdown reporters: `--json`, `--report junit:<path>`, `--summary md:<path>`
-
