@@ -666,8 +666,47 @@ export class AICheckProvider extends CheckProvider {
 
       let result: ReviewSummary;
 
-      // Check if we should use session reuse
-      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+      // Check if we should use session reuse (only if explicitly enabled on this check)
+      if (aiConfig.debug) {
+        try {
+          console.error(
+            `🔧 Debug: reuse_ai_session for ${config.checkName}: ${String(
+              (config as any).reuse_ai_session
+            )}`
+          );
+        } catch {}
+      }
+      const reuseEnabled =
+        (config as any).reuse_ai_session === true ||
+        typeof (config as any).reuse_ai_session === 'string';
+      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
+        // Safety: only reuse if the parent session actually exists
+        try {
+          const { SessionRegistry } = require('../session-registry');
+          const reg = SessionRegistry.getInstance();
+          if (!reg.hasSession(sessionInfo.parentSessionId)) {
+            if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
+              console.warn(
+                `⚠️  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+              );
+            }
+            // Fall back to new session
+            const fresh = await service.executeReview(
+              prInfo,
+              processedPrompt,
+              schema,
+              config.checkName,
+              config.sessionId
+            );
+            return {
+              ...fresh,
+              issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
+                fresh.issues || [],
+                process.cwd()
+              ),
+            };
+          }
+        } catch {}
         // Get session_mode from config, default to 'clone'
         const sessionMode = (config.session_mode as 'clone' | 'append') || 'clone';
 

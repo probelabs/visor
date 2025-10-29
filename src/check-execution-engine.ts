@@ -3791,7 +3791,19 @@ export class CheckExecutionEngine {
         dependencies[checkName] = checkConfig.depends_on || [];
 
         // Track checks that need session reuse
-        if (checkConfig.reuse_ai_session) {
+        if (debug) {
+          try {
+            log(
+              `🔧 Debug: reuse_ai_session for '${checkName}' → ${String(
+                (checkConfig as any).reuse_ai_session
+              )}`
+            );
+          } catch {}
+        }
+        if (
+          checkConfig.reuse_ai_session === true ||
+          typeof (checkConfig.reuse_ai_session as unknown) === 'string'
+        ) {
           sessionReuseChecks.add(checkName);
 
           // Determine the session provider check name
@@ -3879,16 +3891,19 @@ export class CheckExecutionEngine {
     // comment-assistant (issue_comment). Only keep deps whose own `on`
     // includes the current event (or have no `on`).
     try {
-      const currentEv = (prInfo?.eventType || 'manual') as any;
-      for (const [name, deps] of Object.entries(dependencies)) {
-        const filtered = (deps || []).filter(dep => {
-          const cfg = config.checks?.[dep];
-          if (!cfg) return false;
-          const trig = (cfg.on || []) as any;
-          if (!trig || (Array.isArray(trig) && trig.length === 0)) return true;
-          return Array.isArray(trig) ? trig.includes(currentEv) : trig === currentEv;
-        });
-        dependencies[name] = filtered;
+      // Only prune by event when we have an explicit event context (GitHub webhook path)
+      if (prInfo && (prInfo as any).eventType) {
+        const currentEv = ((prInfo as any).eventType || 'manual') as any;
+        for (const [name, deps] of Object.entries(dependencies)) {
+          const filtered = (deps || []).filter(dep => {
+            const cfg = config.checks?.[dep];
+            if (!cfg) return false;
+            const trig = (cfg.on || []) as any;
+            if (!trig || (Array.isArray(trig) && trig.length === 0)) return true;
+            return Array.isArray(trig) ? trig.includes(currentEv) : trig === currentEv;
+          });
+          dependencies[name] = filtered;
+        }
       }
     } catch {}
 
@@ -5660,6 +5675,14 @@ export class CheckExecutionEngine {
         }
       }
     }
+
+    // Ensure all AI sessions are cleaned up (safety net)
+    try {
+      if (sessionIds.size > 0) {
+        const { SessionRegistry } = require('./session-registry');
+        SessionRegistry.getInstance().clearAllSessions();
+      }
+    } catch {}
 
     // Build and log final execution summary
     const executionStatistics = this.buildExecutionStatistics();

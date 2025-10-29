@@ -201,6 +201,20 @@ export class AIReviewService {
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing - skipping API key validation');
     } else {
+      // Hydrate API key from environment even when provider is explicitly set
+      if (!this.config.apiKey) {
+        try {
+          if (this.config.provider === 'google' && process.env.GOOGLE_API_KEY) {
+            this.config.apiKey = process.env.GOOGLE_API_KEY;
+          } else if (this.config.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+            this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+          } else if (this.config.provider === 'openai' && process.env.OPENAI_API_KEY) {
+            this.config.apiKey = process.env.OPENAI_API_KEY;
+          } else if (this.config.provider === 'claude-code' && process.env.CLAUDE_CODE_API_KEY) {
+            this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+          }
+        } catch {}
+      }
       // Check if API key is available for real AI models
       if (!this.config.apiKey) {
         const errorMessage =
@@ -276,6 +290,20 @@ export class AIReviewService {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
+    // Ensure API key is hydrated from environment for explicit providers
+    if (!this.config.apiKey) {
+      try {
+        if (this.config.provider === 'google' && process.env.GOOGLE_API_KEY) {
+          this.config.apiKey = process.env.GOOGLE_API_KEY;
+        } else if (this.config.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+          this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+        } else if (this.config.provider === 'openai' && process.env.OPENAI_API_KEY) {
+          this.config.apiKey = process.env.OPENAI_API_KEY;
+        } else if (this.config.provider === 'claude-code' && process.env.CLAUDE_CODE_API_KEY) {
+          this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+        }
+      } catch {}
+    }
     // Get the existing session
     const existingAgent = this.sessionRegistry.getSession(parentSessionId);
     if (!existingAgent) {
@@ -367,6 +395,11 @@ export class AIReviewService {
       }
 
       const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+
+      // Expose the session ID used for this call so the engine can clean it up
+      try {
+        (result as any).sessionId = currentSessionId;
+      } catch {}
 
       if (debugInfo) {
         result.debug = debugInfo;
