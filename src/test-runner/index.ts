@@ -46,6 +46,195 @@ export class VisorTestRunner {
     return `${char.repeat(2)} ${title} ${char.repeat(pad)}`;
   }
 
+  // Extracted helper: prepare engine/recorder, prompts/mocks, env, and checksToRun for a single-event case
+  private setupTestCase(
+    _case: any,
+    cfg: any,
+    defaultStrict: boolean,
+    defaultPromptCap?: number,
+    ghRec?: { error_code?: number; timeout_ms?: number }
+  ): {
+    name: string;
+    strict: boolean;
+    expect: ExpectBlock;
+    prInfo: PRInfo;
+    engine: CheckExecutionEngine;
+    recorder: RecordingOctokit;
+    prompts: Record<string, string[]>;
+    mocks: Record<string, unknown>;
+    restoreEnv: () => void;
+    checksToRun: string[];
+  } {
+    const name = (_case as any).name || '(unnamed)';
+    const strict = (
+      typeof (_case as any).strict === 'boolean' ? (_case as any).strict : defaultStrict
+    ) as boolean;
+    const expect = ((_case as any).expect || {}) as ExpectBlock;
+    const fixtureInput =
+      typeof (_case as any).fixture === 'object' && (_case as any).fixture
+        ? (_case as any).fixture
+        : { builtin: (_case as any).fixture };
+    const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
+
+    // Inject recording Octokit and apply env overrides
+    const prevRepo = process.env.GITHUB_REPOSITORY;
+    process.env.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || 'owner/repo';
+    const envOverrides =
+      typeof (_case as any).env === 'object' && (_case as any).env
+        ? ((_case as any).env as Record<string, string>)
+        : undefined;
+    const prevEnv: Record<string, string | undefined> = {};
+    if (envOverrides) {
+      for (const [k, v] of Object.entries(envOverrides)) {
+        prevEnv[k] = process.env[k];
+        process.env[k] = String(v);
+      }
+    }
+
+    const ghRecCase =
+      typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder
+        ? ((_case as any).github_recorder as { error_code?: number; timeout_ms?: number })
+        : undefined;
+    const rcOpts = ghRecCase || ghRec;
+    const recorder = new RecordingOctokit(
+      rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
+    );
+    setGlobalRecorder(recorder);
+    const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
+
+    // Prompts and mocks setup
+    const prompts: Record<string, string[]> = {};
+    const mocks =
+      typeof (_case as any).mocks === 'object' && (_case as any).mocks
+        ? ((_case as any).mocks as Record<string, unknown>)
+        : {};
+    const mockCursors: Record<string, number> = {};
+    engine.setExecutionContext({
+      hooks: {
+        onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
+          const k = info.step;
+          if (!prompts[k]) prompts[k] = [];
+          const p =
+            defaultPromptCap && info.prompt.length > defaultPromptCap
+              ? info.prompt.slice(0, defaultPromptCap)
+              : info.prompt;
+          prompts[k].push(p);
+        },
+        mockForStep: (step: string) => {
+          const listKey = `${step}[]`;
+          const list = (mocks as any)[listKey];
+          if (Array.isArray(list)) {
+            const i = mockCursors[listKey] || 0;
+            const idx = i < list.length ? i : list.length - 1;
+            mockCursors[listKey] = i + 1;
+            return list[idx];
+          }
+          return (mocks as any)[step];
+        },
+      },
+    } as any);
+
+    // Determine checks to run for this event
+    const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
+    const desiredSteps = new Set<string>(
+      (expect.calls || []).map(c => c.step).filter(Boolean) as string[]
+    );
+    let checksToRun = this.computeChecksToRun(
+      cfg,
+      eventForCase,
+      desiredSteps.size > 0 ? desiredSteps : undefined
+    );
+    if (checksToRun.length === 0)
+      checksToRun = this.computeChecksToRun(cfg, eventForCase, undefined);
+
+    const restoreEnv = () => {
+      if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
+      else process.env.GITHUB_REPOSITORY = prevRepo;
+      if (envOverrides) {
+        for (const [k, oldv] of Object.entries(prevEnv)) {
+          if (oldv === undefined) delete process.env[k];
+          else process.env[k] = oldv;
+        }
+      }
+    };
+
+    return {
+      name,
+      strict,
+      expect,
+      prInfo,
+      engine,
+      recorder,
+      prompts,
+      mocks,
+      restoreEnv,
+      checksToRun,
+    };
+  }
+
+  // Extracted helper: execute a prepared single case, including on_finish static fallback
+  private async executeTestCase(
+    setup: ReturnType<VisorTestRunner['setupTestCase']>,
+    cfg: any
+  ): Promise<{ res: any; outHistory: Record<string, unknown[]> }> {
+    const { prInfo, engine, recorder, checksToRun } = setup;
+    const prevTestMode = process.env.VISOR_TEST_MODE;
+    process.env.VISOR_TEST_MODE = 'true';
+    let res = await engine.executeGroupedChecks(
+      prInfo,
+      checksToRun,
+      120000,
+      cfg,
+      'json',
+      process.env.VISOR_DEBUG === 'true',
+      undefined,
+      false,
+      {}
+    );
+    try {
+      const hist0 = engine.getOutputHistorySnapshot();
+      const parents = Object.entries(cfg.checks || {})
+        .filter(
+          ([name, c]: [string, any]) =>
+            checksToRun.includes(name) &&
+            c &&
+            c.forEach &&
+            c.on_finish &&
+            Array.isArray(c.on_finish.run) &&
+            c.on_finish.run.length > 0
+        )
+        .map(([name, c]: [string, any]) => ({ name, onFinish: c.on_finish }));
+      const missing: string[] = [];
+      for (const p of parents) {
+        for (const t of p.onFinish.run as string[]) {
+          if (!hist0[t] || (Array.isArray(hist0[t]) && hist0[t].length === 0)) missing.push(t);
+        }
+      }
+      const toRun = Array.from(new Set(missing.filter(n => !checksToRun.includes(n))));
+      if (toRun.length > 0) {
+        const fallbackRes = await engine.executeGroupedChecks(
+          prInfo,
+          toRun,
+          120000,
+          cfg,
+          'json',
+          process.env.VISOR_DEBUG === 'true',
+          undefined,
+          false,
+          {}
+        );
+        res = {
+          results: fallbackRes.results || res.results,
+          statistics: fallbackRes.statistics || res.statistics,
+        } as any;
+      }
+    } catch {}
+    if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
+    else process.env.VISOR_TEST_MODE = prevTestMode;
+    const outHistory = engine.getOutputHistorySnapshot();
+    return { res, outHistory };
+  }
+
   private printCaseHeader(name: string, kind: 'flow' | 'single', event?: string): void {
     console.log('\n' + this.line(`Case: ${name}`));
     const meta: string[] = [`type=${kind}`];
@@ -280,121 +469,20 @@ export class VisorTestRunner {
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
         return { name: _case.name, failed };
       }
-      const strict = (
-        typeof (_case as any).strict === 'boolean' ? (_case as any).strict : defaultStrict
-      ) as boolean;
-      const expect = ((_case as any).expect || {}) as ExpectBlock;
-      // Fixture selection with optional overrides
-      const fixtureInput =
-        typeof (_case as any).fixture === 'object' && (_case as any).fixture
-          ? (_case as any).fixture
-          : { builtin: (_case as any).fixture };
-      const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
-
-      // Inject recording Octokit into engine via actionContext using env owner/repo
-      const prevRepo = process.env.GITHUB_REPOSITORY;
-      process.env.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || 'owner/repo';
-      // Apply case env overrides if present
-      const envOverrides =
-        typeof (_case as any).env === 'object' && (_case as any).env
-          ? ((_case as any).env as Record<string, string>)
-          : undefined;
-      const prevEnv: Record<string, string | undefined> = {};
-      if (envOverrides) {
-        for (const [k, v] of Object.entries(envOverrides)) {
-          prevEnv[k] = process.env[k];
-          process.env[k] = String(v);
-        }
-      }
-      const ghRecCase =
-        typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder
-          ? ((_case as any).github_recorder as { error_code?: number; timeout_ms?: number })
-          : undefined;
-      const rcOpts = ghRecCase || ghRec;
-      const recorder = new RecordingOctokit(
-        rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
-      );
-      setGlobalRecorder(recorder);
-      const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
-
-      // Capture prompts per step
-      const prompts: Record<string, string[]> = {};
-      const mocks =
-        typeof (_case as any).mocks === 'object' && (_case as any).mocks
-          ? ((_case as any).mocks as Record<string, unknown>)
-          : {};
-      const mockCursors: Record<string, number> = {};
-      engine.setExecutionContext({
-        hooks: {
-          onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
-            const k = info.step;
-            if (!prompts[k]) prompts[k] = [];
-            const p =
-              defaultPromptCap && info.prompt.length > defaultPromptCap
-                ? info.prompt.slice(0, defaultPromptCap)
-                : info.prompt;
-            prompts[k].push(p);
-          },
-          mockForStep: (step: string) => {
-            // Support list form: '<step>[]' means per-call mocks for forEach children
-            const listKey = `${step}[]`;
-            const list = (mocks as any)[listKey];
-            if (Array.isArray(list)) {
-              const i = mockCursors[listKey] || 0;
-              const idx = i < list.length ? i : list.length - 1; // clamp to last
-              mockCursors[listKey] = i + 1;
-              return list[idx];
-            }
-            return (mocks as any)[step];
-          },
-        },
-      } as any);
+      const setup = this.setupTestCase(_case, cfg, defaultStrict, defaultPromptCap, ghRec);
 
       try {
-        const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
-        const desiredSteps = new Set<string>(
-          (expect.calls || []).map(c => c.step).filter(Boolean) as string[]
-        );
-        let checksToRun = this.computeChecksToRun(
-          cfg,
-          eventForCase,
-          desiredSteps.size > 0 ? desiredSteps : undefined
-        );
-        this.printSelectedChecks(checksToRun);
-        if (checksToRun.length === 0) {
-          // Fallback: run all checks for this event when filtered set is empty
-          checksToRun = this.computeChecksToRun(cfg, eventForCase, undefined);
-        }
+        this.printSelectedChecks(setup.checksToRun);
         // Do not pass an implicit tag filter during tests; let the engine honor config.
         // Inject octokit into eventContext so providers can perform real GitHub ops (recorded)
         try {
-          (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
+          (setup.prInfo as any).eventContext = {
+            ...(setup.prInfo as any).eventContext,
+            octokit: setup.recorder,
+          };
         } catch {}
-
-        const prevTestMode = process.env.VISOR_TEST_MODE;
-        process.env.VISOR_TEST_MODE = 'true';
-        if (process.env.VISOR_DEBUG === 'true') {
-          console.log(`  ⮕ executing main stage with checks=[${checksToRun.join(', ')}]`);
-          try {
-            const trig = checksToRun.map(n => {
-              const c = (cfg.checks || {})[n] || {};
-              const ev = Array.isArray(c.on) ? c.on.join(',') : c.on || '(none)';
-              return `${n}{on:[${ev}]}`;
-            });
-            console.log(`  ⮕ triggers: ${trig.join('  ')}`);
-          } catch {}
-        }
-        let res = await engine.executeGroupedChecks(
-          prInfo,
-          checksToRun,
-          120000,
-          cfg,
-          'json',
-          process.env.VISOR_DEBUG === 'true',
-          undefined,
-          false,
-          {}
-        );
+        const exec = await this.executeTestCase(setup, cfg);
+        const res = exec.res;
         if (process.env.VISOR_DEBUG === 'true') {
           try {
             const names = (res.statistics.checks || []).map(
@@ -404,82 +492,22 @@ export class VisorTestRunner {
           } catch {}
         }
         try {
-          const dbgHist = engine.getOutputHistorySnapshot();
+          const dbgHist = exec.outHistory;
           console.log(
             `  ⮕ stage base history keys: ${Object.keys(dbgHist).join(', ') || '(none)'}`
           );
         } catch {}
-        // After main stage run, ensure static on_finish.run targets for forEach parents executed.
-        try {
-          const hist0 = engine.getOutputHistorySnapshot();
-          if (process.env.VISOR_DEBUG === 'true') {
-            console.log(`  ⮕ history keys: ${Object.keys(hist0).join(', ') || '(none)'}`);
-          }
-          const parents = Object.entries(cfg.checks || {})
-            .filter(
-              ([name, c]: [string, any]) =>
-                checksToRun.includes(name) &&
-                c &&
-                c.forEach &&
-                c.on_finish &&
-                Array.isArray(c.on_finish.run) &&
-                c.on_finish.run.length > 0
-            )
-            .map(([name, c]: [string, any]) => ({ name, onFinish: c.on_finish }));
-          if (process.env.VISOR_DEBUG === 'true') {
-            console.log(
-              `  ⮕ forEach parents with on_finish: ${parents.map(p => p.name).join(', ') || '(none)'}`
-            );
-          }
-          const missing: string[] = [];
-          for (const p of parents) {
-            for (const t of p.onFinish.run as string[]) {
-              if (!hist0[t] || (Array.isArray(hist0[t]) && hist0[t].length === 0)) {
-                missing.push(t);
-              }
-            }
-          }
-          // Dedup missing and exclude anything already in checksToRun
-          const toRun = Array.from(new Set(missing.filter(n => !checksToRun.includes(n))));
-          if (toRun.length > 0) {
-            if (process.env.VISOR_DEBUG === 'true') {
-              console.log(`  ⮕ on_finish.fallback: running [${toRun.join(', ')}]`);
-            }
-            // Run once; reuse same engine instance so output history stays visible
-            if (process.env.VISOR_DEBUG === 'true') {
-              console.log(`  ⮕ executing on_finish.fallback with checks=[${toRun.join(', ')}]`);
-            }
-            const fallbackRes = await engine.executeGroupedChecks(
-              prInfo,
-              toRun,
-              120000,
-              cfg,
-              'json',
-              process.env.VISOR_DEBUG === 'true',
-              undefined,
-              false,
-              {}
-            );
-            // Optionally merge statistics (for stage coverage we rely on deltas + stats from last run)
-            res = {
-              results: fallbackRes.results || res.results,
-              statistics: fallbackRes.statistics || res.statistics,
-            } as any;
-          }
-        } catch {}
-        if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
-        else process.env.VISOR_TEST_MODE = prevTestMode;
-        const outHistory = engine.getOutputHistorySnapshot();
+        // (fallback for on_finish static targets handled inside executeTestCase)
 
         const caseFailures = this.evaluateCase(
           _case.name,
           res.statistics,
-          recorder,
-          expect,
-          strict,
-          prompts,
+          setup.recorder,
+          setup.expect,
+          setup.strict,
+          setup.prompts,
           res.results,
-          outHistory
+          exec.outHistory
         );
         // Warn about unmocked AI/command steps that executed
         try {
@@ -489,7 +517,7 @@ export class VisorTestRunner {
               : {};
           this.warnUnmockedProviders(res.statistics, cfg, mocksUsed);
         } catch {}
-        this.printCoverage(_case.name, res.statistics, expect);
+        this.printCoverage(_case.name, res.statistics, setup.expect);
         if (caseFailures.length === 0) {
           console.log(`✅ PASS ${_case.name}`);
           caseResults.push({ name: _case.name, passed: true });
@@ -508,14 +536,12 @@ export class VisorTestRunner {
         });
         return { name: _case.name, failed: 1 };
       } finally {
-        if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
-        else process.env.GITHUB_REPOSITORY = prevRepo;
-        if (envOverrides) {
-          for (const [k, oldv] of Object.entries(prevEnv)) {
-            if (oldv === undefined) delete process.env[k];
-            else process.env[k] = oldv;
-          }
-        }
+        try {
+          // Restore env for this case
+          // setup was created above; re-create to access cleanup
+          const s = this.setupTestCase(_case, cfg, defaultStrict, defaultPromptCap, ghRec);
+          s.restoreEnv();
+        } catch {}
       }
       return { name: _case.name, failed: 0 };
     };
