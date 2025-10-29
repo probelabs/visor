@@ -560,16 +560,28 @@ ${prContext}
 </review_request>`;
     }
 
-    // For non-code-review schemas, just provide instructions and context without review-specific wrapper
+    // For non-code-review schemas, provide instructions and context and explicitly request JSON that conforms to the schema
     if (skipPRContext) {
-      // Session reuse: just send new instructions
+      // Session reuse: just send new instructions with return-format reminder
       return `<instructions>
 ${customInstructions}
+
+<return_format>
+  <rule>Respond with a single JSON object that conforms to the provided schema for this check.</rule>
+  <rule>Do not include prose, explanations, or markdown outside of the JSON.</rule>
+  <rule>If the schema is 'overview', ensure the object includes a non-empty "text" field (markdown allowed) and optional "tags" if inferred.</rule>
+</return_format>
 </instructions>`;
     }
 
     return `<instructions>
 ${customInstructions}
+
+<return_format>
+  <rule>Respond with a single JSON object that conforms to the provided schema for this check.</rule>
+  <rule>Do not include prose, explanations, or markdown outside of the JSON.</rule>
+  <rule>If the schema is 'overview', ensure the object includes a non-empty "text" field (markdown allowed) and optional "tags" if inferred.</rule>
+</return_format>
 </instructions>
 
 <context>
@@ -2065,14 +2077,6 @@ ${'='.repeat(60)}
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
         if (!hasText) {
-          // Attempt to extract tool-call style attempt_completion result blocks
-          try {
-            const ac = this.extractAttemptCompletionText(response);
-            if (ac && ac.trim()) {
-              (out as any).text = ac.trim();
-            }
-          } catch {}
-
           // Normalize common fields some providers use instead of "text"
           try {
             const maybe =
@@ -2082,16 +2086,6 @@ ${'='.repeat(60)}
               (out as any).content;
             if (typeof maybe === 'string' && maybe.trim()) {
               (out as any).text = maybe.trim();
-            }
-          } catch {}
-
-          // As a last structured attempt, search nested objects for a plausible text field
-          try {
-            if (!(out as any).text || String((out as any).text).trim().length === 0) {
-              const candidate = this.findTextInObject(out);
-              if (candidate && candidate.trim()) {
-                (out as any).text = candidate.trim();
-              }
             }
           } catch {}
 
@@ -2242,73 +2236,6 @@ ${'='.repeat(60)}
     }
 
     return bestJson;
-  }
-
-  /**
-   * Extract plain text from tool-call wrappers like <attempt_completion>...</attempt_completion>.
-   * Supports either JSON payloads with a { result: string } shape or raw markdown between the tags.
-   */
-  private extractAttemptCompletionText(text: string): string | null {
-    try {
-      if (!text || typeof text !== 'string') return null;
-      const m = text.match(/<attempt_completion[^>]*>([\s\S]*?)<\/attempt_completion>/i);
-      if (!m || !m[1]) return null;
-      const inner = m[1].trim();
-      // Try to parse inner as JSON with a result field first
-      try {
-        const obj = JSON.parse(inner);
-        const r = (obj && (obj.result || obj.text || obj.message || obj.content)) as unknown;
-        if (typeof r === 'string' && r.trim()) return r.trim();
-      } catch {
-        // Not JSON; fall back to raw inner text
-        if (inner) return inner;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Heuristically find a suitable text value inside a nested object for overview-like output.
-   * Prioritizes keys: result, text, message, content, summary.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private findTextInObject(obj: any): string | null {
-    if (!obj || typeof obj !== 'object') return null;
-    const preferredKeys = ['result', 'text', 'message', 'content', 'summary'];
-    const seen = new Set<any>();
-    const queue: any[] = [obj];
-    let best: string | null = null;
-    let bestScore = 0;
-    const score = (s: string) => {
-      let sc = s.length;
-      if (/^\s*#/.test(s)) sc += 100; // markdown header
-      if (/\n/.test(s)) sc += 50; // multi-line
-      return sc;
-    };
-    while (queue.length) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cur: any = queue.shift();
-      if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
-      seen.add(cur);
-      // First pass: check preferred keys
-      for (const k of preferredKeys) {
-        if (typeof cur[k] === 'string' && cur[k].trim()) {
-          const val = String(cur[k]);
-          const sc = score(val);
-          if (sc > bestScore) {
-            best = val;
-            bestScore = sc;
-          }
-        }
-      }
-      // Enqueue children
-      for (const v of Object.values(cur)) {
-        if (v && typeof v === 'object') queue.push(v);
-      }
-    }
-    return best;
   }
 
   /**
