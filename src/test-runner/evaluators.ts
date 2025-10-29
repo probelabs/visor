@@ -1,5 +1,6 @@
 import { RecordingOctokit } from './recorders/github-recorder';
-import { validateCounts, type ExpectBlock } from './assertions';
+import { validateCounts, type ExpectBlock, deepEqual, containsUnordered } from './assertions';
+import { deepGet } from './utils/selectors';
 
 type ExecStats = import('../check-execution-engine').ExecutionStatistics;
 type GroupedResults = import('../reviewer').GroupedCheckResults;
@@ -161,37 +162,6 @@ export function evaluatePrompts(
   }
 }
 
-// Minimal deep-get and comparison helpers for outputs
-function deepGet(obj: any, path: string): any {
-  if (!path) return obj;
-  const parts = path
-    .replace(/\[(\d+)\]/g, '.$1')
-    .split('.')
-    .filter(Boolean);
-  let cur = obj;
-  for (const p of parts) {
-    if (cur == null) return undefined;
-    cur = cur[p as any];
-  }
-  return cur;
-}
-
-function deepEqual(a: any, b: any): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b) return false;
-  if (a && b && typeof a === 'object') {
-    if (Array.isArray(a)) {
-      if (!Array.isArray(b) || a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], (b as any)[i])) return false;
-      return true;
-    }
-    const keys = Array.from(new Set([...Object.keys(a), ...Object.keys(b)]));
-    for (const k of keys) if (!deepEqual(a[k], b[k])) return false;
-    return true;
-  }
-  return false;
-}
-
 export function evaluateOutputs(
   errors: string[],
   expect: ExpectBlock,
@@ -203,19 +173,53 @@ export function evaluateOutputs(
       errors.push(`No output history for step ${o.step}`);
       continue;
     }
-    const idx =
-      o.index === 'first'
-        ? 0
-        : o.index === 'last'
-          ? hist.length - 1
-          : ((o.index as number) ?? hist.length - 1);
-    const out = hist[idx];
-    if (o.path) {
-      const v = deepGet(out, o.path);
-      if (o.equals !== undefined && !deepEqual(v, o.equals))
-        errors.push(`outputs.path ${o.path} equals check failed`);
-      if (o.matches && !parseRegex(o.matches).test(String(v)))
-        errors.push(`outputs.path ${o.path} matches failed`);
+    let chosen: unknown | undefined;
+    if (o.where) {
+      for (const item of hist as any[]) {
+        const probe = deepGet(item, o.where.path as string);
+        if (o.where.equals !== undefined) {
+          if ((probe as any) === (o.where.equals as any) || deepEqual(probe, o.where.equals)) {
+            chosen = item;
+            break;
+          }
+        } else if (o.where.matches) {
+          const re = parseRegex(o.where.matches);
+          if (re.test(String(probe))) {
+            chosen = item;
+            break;
+          }
+        }
+      }
+      if (chosen === undefined) {
+        errors.push(`No output matched where selector for ${o.step}`);
+        continue;
+      }
+    } else {
+      const idx =
+        o.index === 'first'
+          ? 0
+          : o.index === 'last'
+            ? (hist as any[]).length - 1
+            : ((o.index as number) ?? (hist as any[]).length - 1);
+      chosen = (hist as any[])[idx];
+    }
+    const v = deepGet(chosen, o.path as string);
+    if (o.equalsDeep !== undefined && !deepEqual(v, o.equalsDeep)) {
+      errors.push(`Output ${o.step}.${o.path} deepEquals failed`);
+    }
+    if (o.equals !== undefined && (v as any) !== (o.equals as any)) {
+      errors.push(
+        `Output ${o.step}.${o.path} expected ${JSON.stringify(o.equals)} but got ${JSON.stringify(v)}`
+      );
+    }
+    if (o.matches && !parseRegex(o.matches).test(String(v))) {
+      errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
+    }
+    if (o.contains_unordered) {
+      if (!Array.isArray(v))
+        errors.push(`Output ${o.step}.${o.path} not an array for contains_unordered`);
+      else if (!containsUnordered(v as unknown[], o.contains_unordered))
+        errors.push(`Output ${o.step}.${o.path} missing elements (unordered)`);
     }
   }
 }
