@@ -8,7 +8,9 @@ import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
 import { setGlobalRecorder } from './recorders/global-recorder';
 // import { FixtureLoader } from './fixture-loader';
-import { validateCounts, type ExpectBlock } from './assertions';
+import { type ExpectBlock } from './assertions';
+import { FlowStage } from './core/flow-stage';
+// evaluators are required at call sites to avoid circular import during build
 import { EnvironmentManager } from './core/environment';
 import { MockManager } from './core/mocks';
 import { buildPrInfoFromFixture } from './core/fixture';
@@ -170,7 +172,7 @@ export class VisorTestRunner {
       process.env.VISOR_DEBUG === 'true',
       undefined,
       false,
-      {}
+      undefined
     );
     try {
       const hist0 = engine.getOutputHistorySnapshot();
@@ -202,7 +204,7 @@ export class VisorTestRunner {
           process.env.VISOR_DEBUG === 'true',
           undefined,
           false,
-          {}
+          undefined
         );
         res = {
           results: fallbackRes.results || res.results,
@@ -480,7 +482,7 @@ export class VisorTestRunner {
         } catch {}
         // (fallback for on_finish static targets handled inside executeTestCase)
 
-        const caseFailures = this.evaluateCase(
+        const caseFailures = require('./evaluators').evaluateCase(
           _case.name,
           res.statistics,
           setup.recorder,
@@ -518,10 +520,8 @@ export class VisorTestRunner {
         return { name: _case.name, failed: 1 };
       } finally {
         try {
-          // Restore env for this case
-          // setup was created above; re-create to access cleanup
-          const s = this.setupTestCase(_case, cfg, defaultStrict, defaultPromptCap, ghRec);
-          s.restoreEnv();
+          // Restore env for this case using original setup
+          setup.restoreEnv();
         } catch {}
       }
       return { name: _case.name, failed: 0 };
@@ -579,39 +579,18 @@ export class VisorTestRunner {
     let failures = 0;
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
 
-    // Shared prompts map across flow; we will compute per-stage deltas
+    // Shared prompts captured across the flow (FlowStage computes deltas per-stage)
     const prompts: Record<string, string[]> = {};
-    let stageMocks: Record<string, unknown> =
-      typeof flowCase.mocks === 'object' && flowCase.mocks
-        ? (flowCase.mocks as Record<string, unknown>)
-        : {};
-    const mockMgr = new MockManager(stageMocks);
-    engine.setExecutionContext({
-      hooks: {
-        onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
-          const k = info.step;
-          if (!prompts[k]) prompts[k] = [];
-          const p =
-            promptCap && info.prompt.length > promptCap
-              ? info.prompt.slice(0, promptCap)
-              : info.prompt;
-          prompts[k].push(p);
-        },
-        mockForStep: (step: string) => mockMgr.get(step),
-      },
-    } as any);
 
-    // Run each stage
-    // Normalize stage filter
+    // Stage filter (by name substring or 1-based index)
     const sf = (stageFilter || '').trim().toLowerCase();
     const sfIndex = sf && /^\d+$/.test(sf) ? parseInt(sf, 10) : undefined;
     let anyStageRan = false;
+
     for (let i = 0; i < flowCase.flow.length; i++) {
       const stage = flowCase.flow[i];
-      const stageName = `${flowName}#${stage.name || `stage-${i + 1}`}`;
-      // Apply stage filter if provided: match by name substring or 1-based index
+      const nm = String(stage.name || `stage-${i + 1}`).toLowerCase();
       if (sf) {
-        const nm = String(stage.name || `stage-${i + 1}`).toLowerCase();
         const idxMatch = sfIndex !== undefined && sfIndex === i + 1;
         const nameMatch = nm.includes(sf);
         if (!(idxMatch || nameMatch)) continue;
@@ -621,413 +600,41 @@ export class VisorTestRunner {
         typeof flowCase.strict === 'boolean' ? flowCase.strict : defaultStrict
       ) as boolean;
 
-      // Fixture + env
-      const fixtureInput =
-        typeof stage.fixture === 'object' && stage.fixture
-          ? stage.fixture
-          : { builtin: stage.fixture };
-      const prInfo = buildPrInfoFromFixture(
-        this.mapEventFromFixtureName.bind(this),
-        fixtureInput?.builtin,
-        fixtureInput?.overrides
-      );
-
-      // Stage env overrides
-      const envOverrides =
-        typeof stage.env === 'object' && stage.env
-          ? (stage.env as Record<string, string>)
-          : undefined;
-      const envMgr = new EnvironmentManager();
-      envMgr.apply(envOverrides);
-
-      // Merge per-stage mocks over flow-level defaults (stage overrides flow)
       try {
-        const perStage =
-          typeof (stage as any).mocks === 'object' && (stage as any).mocks
-            ? ((stage as any).mocks as Record<string, unknown>)
-            : {};
-        stageMocks = { ...(flowCase.mocks || {}), ...perStage } as Record<string, unknown>;
-        mockMgr.reset(stageMocks);
-      } catch {}
-
-      // Baselines for deltas
-      const promptBase: Record<string, number> = {};
-      for (const [k, arr] of Object.entries(prompts)) promptBase[k] = arr.length;
-      const callBase = recorder.calls.length;
-      const histBase: Record<string, number> = {};
-      // We need access to engine.outputHistory lengths; get snapshot
-      const baseHistSnap = (engine as any).outputHistory as Map<string, unknown[]> | undefined;
-      if (baseHistSnap) {
-        for (const [k, v] of baseHistSnap.entries()) histBase[k] = (v || []).length;
-      }
-
-      try {
-        const eventForStage = this.mapEventFromFixtureName(fixtureInput?.builtin);
-        this.printStageHeader(
+        const stageRunner = new FlowStage(
           flowName,
-          stage.name || `stage-${i + 1}`,
-          eventForStage,
-          fixtureInput?.builtin
-        );
-        // Select checks purely by event to preserve natural routing/dependencies
-        let checksToRun = this.computeChecksToRun(cfg, eventForStage, undefined);
-        // Defer on_finish targets: if a forEach parent declares on_finish.run: [targets]
-        // and both the parent and target are in the list, remove the target from the
-        // initial execution set so it executes in the correct order via on_finish.
-        try {
-          const parents = Object.entries(cfg.checks || {})
-            .filter(
-              ([_, c]: [string, any]) =>
-                c &&
-                c.forEach &&
-                c.on_finish &&
-                (Array.isArray(c.on_finish.run) || typeof c.on_finish.run_js === 'string')
-            )
-            .map(([name, c]: [string, any]) => ({ name, onFinish: c.on_finish }));
-          if (parents.length > 0 && checksToRun.length > 0) {
-            const removal = new Set<string>();
-            for (const p of parents) {
-              const staticTargets: string[] = Array.isArray(p.onFinish.run) ? p.onFinish.run : [];
-              // Only consider static targets here; dynamic run_js will still execute at runtime
-              for (const t of staticTargets) {
-                if (checksToRun.includes(p.name) && checksToRun.includes(t)) {
-                  removal.add(t);
-                }
-              }
-            }
-            if (removal.size > 0) {
-              checksToRun = checksToRun.filter(n => !removal.has(n));
-            }
-          }
-        } catch {}
-        this.printSelectedChecks(checksToRun);
-        if (!checksToRun || checksToRun.length === 0) {
-          checksToRun = this.computeChecksToRun(cfg, eventForStage, undefined);
-        }
-        // Do not pass an implicit tag filter during tests.
-        // Ensure eventContext carries octokit for recorded GitHub ops
-        try {
-          (prInfo as any).eventContext = { ...(prInfo as any).eventContext, octokit: recorder };
-        } catch {}
-        // Mark test mode for the engine to enable non-network side-effects (e.g., posting PR comments
-        // through the injected recording Octokit). Restore after the run.
-        const prevTestMode = process.env.VISOR_TEST_MODE;
-        process.env.VISOR_TEST_MODE = 'true';
-        let res = await engine.executeGroupedChecks(
-          prInfo,
-          checksToRun,
-          120000,
+          engine,
+          recorder,
           cfg,
-          'json',
-          process.env.VISOR_DEBUG === 'true',
-          undefined,
-          false,
-          undefined
+          prompts,
+          promptCap,
+          this.mapEventFromFixtureName.bind(this),
+          this.computeChecksToRun.bind(this),
+          this.printStageHeader.bind(this),
+          this.printSelectedChecks.bind(this),
+          this.warnUnmockedProviders.bind(this)
         );
-        // Ensure static on_finish.run targets for forEach parents executed in this stage
-        try {
-          const hist0 = engine.getOutputHistorySnapshot();
-          const parents = Object.entries(cfg.checks || {})
-            .filter(
-              ([name, c]: [string, any]) =>
-                checksToRun.includes(name) &&
-                c &&
-                c.forEach &&
-                c.on_finish &&
-                Array.isArray(c.on_finish.run) &&
-                c.on_finish.run.length > 0
-            )
-            .map(([name, c]: [string, any]) => ({ name, onFinish: c.on_finish }));
-          const missing: string[] = [];
-          for (const p of parents) {
-            for (const t of p.onFinish.run as string[]) {
-              if (!hist0[t] || (Array.isArray(hist0[t]) && hist0[t].length === 0)) missing.push(t);
-            }
-          }
-          const toRun = Array.from(new Set(missing.filter(n => !checksToRun.includes(n))));
-          if (toRun.length > 0) {
-            if (process.env.VISOR_DEBUG === 'true') {
-              console.log(`  ⮕ on_finish.fallback: running [${toRun.join(', ')}]`);
-            }
-            const fallbackRes = await engine.executeGroupedChecks(
-              prInfo,
-              toRun,
-              120000,
-              cfg,
-              'json',
-              process.env.VISOR_DEBUG === 'true',
-              undefined,
-              false,
-              undefined
-            );
-            res = {
-              results: fallbackRes.results || res.results,
-              statistics: fallbackRes.statistics || res.statistics,
-            } as any;
-          }
-          // If we observe any invalid validations in history but no second assistant reply yet,
-          // seed memory with issues and create a correction reply explicitly.
-          try {
-            const snap = engine.getOutputHistorySnapshot();
-            const vf = (snap['validate-fact'] || []) as Array<any>;
-            const hasInvalid =
-              Array.isArray(vf) && vf.some(v => v && (v.is_valid === false || v.valid === false));
-            // Fallback: also look at provided mocks for validate-fact[]
-            let mockInvalid: any[] | undefined;
-            try {
-              const list = (stageMocks as any)['validate-fact[]'];
-              if (Array.isArray(list)) {
-                const bad = list.filter(v => v && (v.is_valid === false || v.valid === false));
-                if (bad.length > 0) mockInvalid = bad;
-              }
-            } catch {}
-            if (hasInvalid || (mockInvalid && mockInvalid.length > 0)) {
-              // Seed memory so comment-assistant prompt includes <previous_response> + corrections
-              const issues = (hasInvalid ? vf : mockInvalid!)
-                .filter(v => v && (v.is_valid === false || v.valid === false))
-                .map(v => ({ claim: v.claim, evidence: v.evidence, correction: v.correction }));
-              const { MemoryStore } = await import('../memory-store');
-              const mem = MemoryStore.getInstance();
-              mem.set('fact_validation_issues', issues, 'fact-validation');
-              // Produce the correction reply but avoid re-initializing validation in this stage
-              const prevVal = process.env.ENABLE_FACT_VALIDATION;
-              process.env.ENABLE_FACT_VALIDATION = 'false';
-              try {
-                if (process.env.VISOR_DEBUG === 'true') {
-                  console.log('  ⮕ executing correction pass with checks=[comment-assistant]');
-                }
-                await engine.executeGroupedChecks(
-                  prInfo,
-                  ['comment-assistant'],
-                  120000,
-                  cfg,
-                  'json',
-                  process.env.VISOR_DEBUG === 'true',
-                  undefined,
-                  false,
-                  {}
-                );
-              } finally {
-                if (prevVal === undefined) delete process.env.ENABLE_FACT_VALIDATION;
-                else process.env.ENABLE_FACT_VALIDATION = prevVal;
-              }
-            }
-          } catch {}
-        } catch {}
-        if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
-        else process.env.VISOR_TEST_MODE = prevTestMode;
-
-        // Build stage-local prompts map (delta)
-        const stagePrompts: Record<string, string[]> = {};
-        for (const [k, arr] of Object.entries(prompts)) {
-          const start = promptBase[k] || 0;
-          stagePrompts[k] = arr.slice(start);
-        }
-        // Build stage-local output history (delta)
-        const histSnap = engine.getOutputHistorySnapshot();
-        const stageHist: Record<string, unknown[]> = {};
-        for (const [k, arr] of Object.entries(histSnap)) {
-          const start = histBase[k] || 0;
-          stageHist[k] = (arr as unknown[]).slice(start);
-        }
-
-        // Build stage-local execution view using:
-        //  - stage deltas (prompts + output history), and
-        //  - engine-reported statistics for this run (captures checks without prompts/outputs,
-        //    e.g., memory steps triggered in on_finish), and
-        //  - the set of checks we explicitly selected to run.
-        type ExecStat = import('../check-execution-engine').ExecutionStatistics;
-        const names = new Set<string>();
-        // Names from prompts delta
-        try {
-          for (const [k, arr] of Object.entries(stagePrompts)) {
-            if (k && Array.isArray(arr) && arr.length > 0) names.add(k);
-          }
-        } catch {}
-        // Names from output history delta
-        try {
-          for (const [k, arr] of Object.entries(stageHist)) {
-            if (k && Array.isArray(arr) && arr.length > 0) names.add(k);
-          }
-        } catch {}
-        // Names from engine stats for this run (include fallback runs)
-        try {
-          const statsList = [res.statistics];
-          // Attempt to reuse intermediate stats captured by earlier fallback runs if present
-          // We can’t reach into engine internals here, so rely on prompts/history for now.
-          for (const stats of statsList) {
-            for (const chk of stats.checks || []) {
-              if (chk && typeof chk.checkName === 'string' && (chk.totalRuns || 0) > 0) {
-                names.add(chk.checkName);
-              }
-            }
-          }
-        } catch {}
-        // Names we explicitly selected to run (in case a step executed without outputs/prompts or stats)
-        for (const n of checksToRun) names.add(n);
-
-        const checks = Array.from(names).map(name => {
-          const histArr = Array.isArray(stageHist[name]) ? (stageHist[name] as unknown[]) : [];
-          const histRuns = histArr.length;
-          const promptRuns = Array.isArray(stagePrompts[name]) ? stagePrompts[name].length : 0;
-          const inferred = Math.max(histRuns, promptRuns);
-          let statRuns = 0;
-          try {
-            const st = (res.statistics.checks || []).find(c => c.checkName === name);
-            statRuns = st ? st.totalRuns || 0 : 0;
-          } catch {}
-          // Prefer engine-reported run counts whenever available; it reflects actual
-          // executions in this grouped run (including on_finish/on_success scheduling).
-          // Fall back to inferred counts from stage-local deltas when stats are missing.
-          // Detect forEach-like execution from engine results
-          let isForEachLike = false;
-          try {
-            const r = (res.results as any)[name];
-            if (r && (Array.isArray((r as any).forEachItems) || (r as any).isForEach === true)) {
-              isForEachLike = true;
-            }
-          } catch {}
-          // If this check depends on a parent that produced an array in this stage,
-          // prefer the last wave size from that parent as the authoritative run count.
-          let depWaveSize = 0;
-          try {
-            const depList = ((cfg.checks || {})[name] || {}).depends_on || [];
-            for (const d of depList) {
-              const hist = stageHist[d];
-              if (Array.isArray(hist) && hist.length > 0) {
-                const last = hist[hist.length - 1];
-                if (Array.isArray(last) && last.length > 0) {
-                  depWaveSize = Math.max(depWaveSize, last.length);
-                }
-              }
-            }
-          } catch {}
-          // If history contains both per-item outputs (objects) and an aggregated array entry,
-          // prefer counting only the per-item outputs to avoid overcounting.
-          let histPerItemRuns = 0;
-          try {
-            if (histArr.length > 0) {
-              const nonArrays = histArr.filter(v => !Array.isArray(v));
-              const arrays = histArr.filter(v => Array.isArray(v));
-              if (nonArrays.length > 0 && arrays.length > 0) histPerItemRuns = nonArrays.length;
-            }
-          } catch {}
-          let runs = statRuns > 0 ? statRuns : inferred;
-          // If not forEach-like and this step produced concrete outputs in this stage,
-          // prefer the history-based count (e.g., single-output steps).
-          if (!isForEachLike && histRuns > 0) {
-            runs = histRuns;
-          }
-          if (histPerItemRuns > 0) {
-            runs = histPerItemRuns;
-          }
-          if (depWaveSize > 0) {
-            runs = depWaveSize;
-          }
-          return {
-            checkName: name,
-            totalRuns: runs,
-            successfulRuns: runs,
-            failedRuns: 0,
-            skipped: false,
-            totalDuration: 0,
-            issuesFound: 0,
-            issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
-            perIterationDuration: [],
-          } as any;
-        });
-        // Note: correction passes and fallback runs are captured via history/prompts deltas
-        // and engine statistics; we do not apply per-step heuristics here.
-        // Heuristic reconciliation: if GitHub createComment calls increased in this stage,
-        // reflect them as additional runs for 'comment-assistant' when present.
-        try {
-          const expectedCalls = new Map<string, number>();
-          for (const c of ((stage.expect || {}).calls || []) as any[]) {
-            if (c && typeof c.step === 'string' && typeof c.exactly === 'number') {
-              expectedCalls.set(c.step, c.exactly);
-            }
-          }
-          const newCalls = recorder.calls.slice(callBase);
-          const created = newCalls.filter(c => c && c.op === 'issues.createComment').length;
-          const idx = checks.findIndex(c => c.checkName === 'comment-assistant');
-          if (idx >= 0 && created > 0) {
-            const want = expectedCalls.get('comment-assistant');
-            const current = checks[idx].totalRuns || 0;
-            const reconciled = Math.max(current, created);
-            checks[idx].totalRuns =
-              typeof want === 'number' ? Math.min(want, reconciled) : reconciled;
-            checks[idx].successfulRuns = checks[idx].totalRuns;
-          }
-        } catch {}
-        if (process.env.VISOR_DEBUG === 'true') {
-          try {
-            const dbg = checks.map(c => `${c.checkName}:${c.totalRuns}`).join(', ');
-            console.error(`  [runner] stage computed runs → ${dbg}`);
-          } catch {}
-        }
-        const stageStats: ExecStat = {
-          totalChecksConfigured: checks.length,
-          totalExecutions: checks.reduce((a, c: any) => a + (c.totalRuns || 0), 0),
-          successfulExecutions: checks.reduce((a, c: any) => a + (c.successfulRuns || 0), 0),
-          failedExecutions: checks.reduce((a, c: any) => a + (c.failedRuns || 0), 0),
-          skippedChecks: 0,
-          totalDuration: 0,
-          checks,
-        } as any;
-
-        // Evaluate stage expectations
-        const expect = stage.expect || {};
-        const caseFailures = this.evaluateCase(
-          stageName,
-          stageStats,
-          // Use only call delta for stage
-          { calls: recorder.calls.slice(callBase) } as any,
-          expect,
-          strict,
-          stagePrompts,
-          res.results,
-          stageHist
-        );
-        // Warn about unmocked AI/command steps that executed (stage-specific mocks)
-        try {
-          const stageMocksLocal =
-            typeof (stage as any).mocks === 'object' && (stage as any).mocks
-              ? ((stage as any).mocks as Record<string, unknown>)
-              : {};
-          const merged = { ...(flowCase.mocks || {}), ...stageMocksLocal } as Record<
-            string,
-            unknown
-          >;
-          this.warnUnmockedProviders(stageStats, cfg, merged);
-        } catch {}
-        // Use stage-local stats for coverage to avoid cross-stage bleed
-        this.printCoverage(stageName, stageStats, expect);
-        if (caseFailures.length === 0) {
-          console.log(`✅ PASS ${stageName}`);
-          stagesSummary.push({ name: stageName });
+        const outcome = await stageRunner.run(stage, flowCase, strict);
+        const expect = (stage as any).expect || {};
+        if (outcome.stats) this.printCoverage(outcome.name, outcome.stats, expect);
+        if (!outcome.errors) {
+          console.log(`✅ PASS ${outcome.name}`);
+          stagesSummary.push({ name: outcome.name });
         } else {
           failures += 1;
-          console.log(`❌ FAIL ${stageName}`);
-          for (const f of caseFailures) console.log(`   - ${f}`);
-          stagesSummary.push({ name: stageName, errors: caseFailures });
+          console.log(`❌ FAIL ${outcome.name}`);
+          for (const f of outcome.errors) console.log(`   - ${f}`);
+          stagesSummary.push({ name: outcome.name, errors: outcome.errors });
           if (bail) break;
         }
       } catch (err) {
         failures += 1;
-        console.log(`❌ ERROR ${stageName}: ${err instanceof Error ? err.message : String(err)}`);
-        stagesSummary.push({
-          name: stageName,
-          errors: [err instanceof Error ? err.message : String(err)],
-        });
+        const name = `${flowName}#${stage.name || `stage-${i + 1}`}`;
+        console.log(`❌ ERROR ${name}: ${err instanceof Error ? err.message : String(err)}`);
+        stagesSummary.push({ name, errors: [err instanceof Error ? err.message : String(err)] });
         if (bail) break;
-      } finally {
-        try {
-          envMgr.restore();
-        } catch {}
       }
     }
-
-    // Summary line for flow
     if (!anyStageRan && stageFilter) {
       console.log(`⚠️  No stage matched filter '${stageFilter}' in flow '${flowName}'`);
     }
@@ -1074,237 +681,7 @@ export class VisorTestRunner {
 
   // buildPrInfoFromFixture and deepSet moved to src/test-runner/core/fixture.ts
 
-  private evaluateCase(
-    caseName: string,
-    stats: import('../check-execution-engine').ExecutionStatistics,
-    recorder: RecordingOctokit,
-    expect: ExpectBlock,
-    strict: boolean,
-    promptsByStep: Record<string, string[]>,
-    results: import('../reviewer').GroupedCheckResults,
-    outputHistory: Record<string, unknown[]>
-  ): string[] {
-    const errors: string[] = [];
-
-    // Build executed steps map
-    const executed: Record<string, number> = {};
-    for (const s of stats.checks) {
-      if (!s.skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
-    }
-
-    // Strict mode: every executed step must have an expect.calls entry
-    if (strict) {
-      const expectedSteps = new Set(
-        (expect.calls || []).filter(c => c.step).map(c => String(c.step))
-      );
-      for (const step of Object.keys(executed)) {
-        if (!expectedSteps.has(step)) {
-          errors.push(`Step executed without expect: ${step}`);
-        }
-      }
-    }
-
-    // Validate step count expectations
-    for (const call of expect.calls || []) {
-      if (call.step) {
-        validateCounts(call);
-        const actual = executed[call.step] || 0;
-        if (call.exactly !== undefined && actual !== call.exactly) {
-          errors.push(`Expected step ${call.step} exactly ${call.exactly}, got ${actual}`);
-        }
-        if (call.at_least !== undefined && actual < call.at_least) {
-          errors.push(`Expected step ${call.step} at_least ${call.at_least}, got ${actual}`);
-        }
-        if (call.at_most !== undefined && actual > call.at_most) {
-          errors.push(`Expected step ${call.step} at_most ${call.at_most}, got ${actual}`);
-        }
-      }
-    }
-
-    // Provider call expectations (GitHub)
-    for (const call of expect.calls || []) {
-      if (call.provider && String(call.provider).toLowerCase() === 'github') {
-        validateCounts(call);
-        const op = this.mapGithubOp(call.op || '');
-        const matched = recorder.calls.filter(c => !op || c.op === op);
-        const actual = matched.length;
-        if (call.exactly !== undefined && actual !== call.exactly) {
-          errors.push(`Expected github ${call.op} exactly ${call.exactly}, got ${actual}`);
-        }
-        if (call.at_least !== undefined && actual < call.at_least) {
-          errors.push(`Expected github ${call.op} at_least ${call.at_least}, got ${actual}`);
-        }
-        if (call.at_most !== undefined && actual > call.at_most) {
-          errors.push(`Expected github ${call.op} at_most ${call.at_most}, got ${actual}`);
-        }
-        // Simple args.contains support (arrays only)
-        if (call.args && (call.args as any).contains && op.endsWith('addLabels')) {
-          const want = (call.args as any).contains as unknown[];
-          const ok = matched.some(m => {
-            const labels = (m.args as any)?.labels || [];
-            return Array.isArray(labels) && want.every(w => labels.includes(w));
-          });
-          if (!ok) errors.push(`Expected github ${call.op} args.contains not satisfied`);
-        }
-      }
-    }
-
-    // no_calls assertions (provider-only basic)
-    for (const nc of expect.no_calls || []) {
-      if (nc.provider && String(nc.provider).toLowerCase() === 'github') {
-        const op = this.mapGithubOp((nc as any).op || '');
-        const matched = recorder.calls.filter(c => !op || c.op === op);
-        if (matched.length > 0)
-          errors.push(`Expected no github ${nc.op} calls, but found ${matched.length}`);
-      }
-      if (nc.step && executed[nc.step] > 0) {
-        errors.push(`Expected no step ${nc.step} calls, but executed ${executed[nc.step]}`);
-      }
-    }
-
-    // Helper: parse /(?flags)pattern/ prefix
-    const parseRegex = (raw: string): RegExp => {
-      try {
-        let pattern = raw;
-        let flags = '';
-        const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-        if (m) {
-          flags = m[1];
-          pattern = pattern.slice(m[0].length);
-        }
-        return new RegExp(pattern, flags);
-      } catch {
-        return new RegExp('(?!)');
-      }
-    };
-
-    // Prompt assertions (with optional where-selector)
-    for (const p of expect.prompts || []) {
-      const arr = promptsByStep[p.step] || [];
-      let prompt: string | undefined;
-      if (p.where) {
-        // Find first prompt matching where conditions
-        const where = p.where;
-        for (const candidate of arr) {
-          let ok = true;
-          if (where.contains) ok = ok && where.contains.every(s => candidate.includes(s));
-          if (where.not_contains) ok = ok && where.not_contains.every(s => !candidate.includes(s));
-          if (where.matches) {
-            const re = parseRegex(where.matches);
-            ok = ok && re.test(candidate);
-          }
-          if (ok) {
-            prompt = candidate;
-            break;
-          }
-        }
-      } else {
-        const idx =
-          p.index === 'first'
-            ? 0
-            : p.index === 'last'
-              ? arr.length - 1
-              : ((p.index as number) ?? arr.length - 1);
-        prompt = arr[idx];
-        if (!prompt) {
-          errors.push(`No captured prompt for step ${p.step} at index ${idx}`);
-          continue;
-        }
-      }
-      if (!prompt) {
-        errors.push(`No captured prompt for step ${p.step} matching where selector`);
-        continue;
-      }
-      if (p.contains) {
-        for (const s of p.contains) {
-          if (!prompt.includes(s)) errors.push(`Prompt for ${p.step} missing substring: ${s}`);
-        }
-      }
-      if (p.not_contains) {
-        for (const s of p.not_contains) {
-          if (prompt.includes(s)) errors.push(`Prompt for ${p.step} should not contain: ${s}`);
-        }
-      }
-      if (p.matches) {
-        const re = parseRegex(p.matches);
-        if (!re.test(prompt)) errors.push(`Prompt for ${p.step} does not match: ${p.matches}`);
-      }
-    }
-
-    // Outputs assertions with history and selectors
-    const { deepGet } = require('./utils/selectors');
-    const { deepEqual, containsUnordered } = require('./assertions');
-    for (const o of expect.outputs || []) {
-      const history = outputHistory[o.step] || [];
-      if (process.env.VISOR_DEBUG === 'true') {
-        try {
-          const preview =
-            history.length > 0 ? JSON.stringify(history[history.length - 1]).slice(0, 200) : '[]';
-          console.log(`[runner:outputs] step=${o.step} histLen=${history.length} last=${preview}`);
-        } catch {}
-      }
-      if (history.length === 0) {
-        errors.push(`No output history for step ${o.step}`);
-        continue;
-      }
-      let chosen: unknown | undefined;
-      if (o.where) {
-        for (const item of history) {
-          const probe = deepGet(item, o.where.path);
-          if (o.where.equals !== undefined) {
-            if ((probe as any) === (o.where.equals as any) || deepEqual(probe, o.where.equals)) {
-              chosen = item;
-              break;
-            }
-          } else if (o.where.matches) {
-            const re = parseRegex(o.where.matches);
-            if (re.test(String(probe))) {
-              chosen = item;
-              break;
-            }
-          }
-        }
-        if (chosen === undefined) {
-          errors.push(`No output matched where selector for ${o.step}`);
-          continue;
-        }
-      } else {
-        const idx =
-          o.index === 'first'
-            ? 0
-            : o.index === 'last'
-              ? history.length - 1
-              : ((o.index as number) ?? history.length - 1);
-        chosen = history[idx];
-      }
-      const val = deepGet(chosen, o.path);
-      if (o.equalsDeep !== undefined) {
-        if (!deepEqual(val, o.equalsDeep)) {
-          errors.push(`Output ${o.step}.${o.path} deepEquals failed`);
-        }
-      }
-      if (o.equals !== undefined) {
-        if ((val as any) !== (o.equals as any)) {
-          errors.push(
-            `Output ${o.step}.${o.path} expected ${JSON.stringify(o.equals)} but got ${JSON.stringify(val)}`
-          );
-        }
-      }
-      if (o.matches) {
-        const re = parseRegex(o.matches);
-        if (!re.test(String(val)))
-          errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
-      }
-      if (o.contains_unordered) {
-        if (!Array.isArray(val))
-          errors.push(`Output ${o.step}.${o.path} not an array for contains_unordered`);
-        else if (!containsUnordered(val, o.contains_unordered))
-          errors.push(`Output ${o.step}.${o.path} missing elements (unordered)`);
-      }
-    }
-
-    return errors;
-  }
+  // (legacy in-class evaluateCase removed; test runner now uses evaluators.ts)
 
   private mapGithubOp(op: string): string {
     if (!op) return '';
