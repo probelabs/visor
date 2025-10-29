@@ -926,16 +926,12 @@ ${this.escapeXml(processedFallbackDiff)}
     try {
       log('🚀 Calling existing ProbeAgent with answer()...');
 
-      // Load and pass the actual schema content ONLY for code-review.
-      // For overview/assistants/custom text schemas we do NOT pass a schema to ProbeAgent;
-      // those are rendered on our side via Liquid templates.
+      // Load and pass the actual schema content for all non-plain schemas (overview, code-review, custom).
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
-      const isCodeReviewSchema = typeof schema === 'string' && schema === 'code-review';
-
-      if (typeof schema === 'string' && schema === 'code-review') {
+      if (schema && schema !== 'plain') {
         try {
-          schemaString = await this.loadSchemaContent(schema as string);
+          schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
           log(`📄 Raw schema JSON:\n${schemaString}`);
         } catch (error) {

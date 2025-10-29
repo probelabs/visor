@@ -34,12 +34,14 @@ describe('AI schema passing to ProbeAgent', () => {
     lastAnswerArgs = [];
   });
 
-  it('does not pass schema options for overview', async () => {
-    const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: false });
-    await svc.executeReview(pr, 'prompt', 'overview', 'overview');
-    expect(lastAnswerArgs.length).toBeGreaterThanOrEqual(2);
-    const [, opts] = lastAnswerArgs;
-    expect(opts).toBeUndefined();
+  it('passes schema options for overview (debug schema populated)', async () => {
+    const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: true });
+    const res = await svc.executeReview(pr, 'prompt', 'overview', 'overview');
+    expect(res.debug).toBeDefined();
+    const schemaOptStr = (res.debug as any).schema as string;
+    expect(schemaOptStr).toBeDefined();
+    const schemaOpt = JSON.parse(schemaOptStr);
+    expect(typeof schemaOpt.schema).toBe('string');
   });
 
   it('passes schema options for code-review', async () => {
@@ -51,4 +53,3 @@ describe('AI schema passing to ProbeAgent', () => {
     expect(typeof opts.schema).toBe('string');
   });
 });
-

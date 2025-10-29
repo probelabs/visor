@@ -38,15 +38,13 @@ describe('AI schema resolution (built-in and custom paths)', () => {
     jest.resetModules();
   });
 
-  it('loads built-in overview schema from bundled output and passes it to ProbeAgent', async () => {
+  it('loads built-in overview schema from bundled output and passes it (debug schema populated)', async () => {
     const { AIReviewService } = require('../../src/ai-review-service');
-    const svc = new AIReviewService({ provider: 'mock', debug: false });
-
-    await svc.executeReview(makePR(), 'prompt', 'overview', 'check1');
-
-    expect(lastAnswerArgs.options).toBeDefined();
-    expect(typeof lastAnswerArgs.options.schema).toBe('string');
-    const parsed = JSON.parse(lastAnswerArgs.options.schema);
+    const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: true });
+    const res = await svc.executeReview(makePR(), 'prompt', 'overview', 'check1');
+    expect(res.debug).toBeDefined();
+    expect(typeof (res.debug as any).schema).toBe('string');
+    const parsed = JSON.parse((res.debug as any).schema).schema;
     // Basic shape check: should be a JSON schema object with type/object or properties
     expect(typeof parsed).toBe('object');
     expect(parsed.type || parsed.properties).toBeDefined();
@@ -56,13 +54,14 @@ describe('AI schema resolution (built-in and custom paths)', () => {
     const customPath = './output/overview/schema.json';
     const expected = fs.readFileSync(path.resolve(process.cwd(), customPath), 'utf-8').trim();
     const { AIReviewService } = require('../../src/ai-review-service');
-    const svc = new AIReviewService({ provider: 'mock', debug: false });
+    const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: true });
 
-    await svc.executeReview(makePR(), 'prompt', customPath, 'check2');
-
-    expect(lastAnswerArgs.options).toBeDefined();
-    expect(lastAnswerArgs.options.schema).toBeDefined();
-    expect(lastAnswerArgs.options.schema.trim()).toBe(expected);
+    const res = await svc.executeReview(makePR(), 'prompt', customPath, 'check2');
+    expect(res.debug).toBeDefined();
+    const schemaOptStr = (res.debug as any).schema as string;
+    expect(schemaOptStr).toBeDefined();
+    const schemaOpt = JSON.parse(schemaOptStr);
+    expect((schemaOpt.schema as string).trim()).toBe(expected);
   });
 
   it('falls back to CWD when dist (__dirname) path is unavailable', async () => {
@@ -82,11 +81,11 @@ describe('AI schema resolution (built-in and custom paths)', () => {
     });
 
     const { AIReviewService } = require('../../src/ai-review-service');
-    const svc = new AIReviewService({ provider: 'mock', debug: false });
+    const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: true });
 
-    await svc.executeReview(makePR(), 'prompt', 'overview', 'check3');
-    expect(lastAnswerArgs.options).toBeDefined();
-    expect(typeof lastAnswerArgs.options.schema).toBe('string');
+    const res = await svc.executeReview(makePR(), 'prompt', 'overview', 'check3');
+    expect(res.debug).toBeDefined();
+    expect(typeof (res.debug as any).schema).toBe('string');
     // If we got here, loader successfully fell back to CWD
   });
 });
