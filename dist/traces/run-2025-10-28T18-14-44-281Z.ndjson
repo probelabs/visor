@@ -1,4 +1,0 @@
-{"name":"visor.run","attributes":{"started":true}}
-{"name":"visor.provider","attributes":{"visor.check.id":"aggregate-validations","visor.provider.type":"memory"}}
-{"name":"visor.check","attributes":{"visor.check.id":"aggregate-validations"},"events":[{"name":"check.started"},{"name":"check.completed"}]}
-{"name":"visor.event","attributes":{},"events":[{"name":"fail_if.evaluated","attrs":{"check":"aggregate-validations","scope":"global","name":"global_fail_if","expression":"output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"}}]}

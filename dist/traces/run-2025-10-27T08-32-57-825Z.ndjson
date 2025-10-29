@@ -1,2 +1,0 @@
-{"name":"visor.run","attributes":{"started":true}}
-{"name":"visor.check","attributes":{"visor.check.id":"unknown","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"feat: add user search\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[{\"filename\":\"src/search.ts\",\"additions\":5,\"deletions\":0,\"changes\":5,\"status\":\"added\",\"patch\":\"@@\\n+export function search(q: string) {\\n+  return []\\n+}\\n\"}],\"outputs\":{}}"},"events":[]}

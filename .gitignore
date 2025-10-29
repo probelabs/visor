@@ -140,3 +140,7 @@ workshop/build/
 
 # Local NDJSON traces written by CLI tests or manual runs
 output/**/*.ndjson
+
+# NDJSON logs (global ignore)
+*.ndjson
+dist/output/**/*.ndjson
