@@ -928,7 +928,7 @@ ${this.escapeXml(processedFallbackDiff)}
 
       // Load and pass the actual schema content for all non-plain schemas (overview, code-review, custom).
       let schemaString: string | undefined = undefined;
-      let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      const effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
       if (schema && schema !== 'plain') {
         try {
           schemaString = await this.loadSchemaContent(schema);
@@ -1415,7 +1415,7 @@ ${'='.repeat(60)}
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content for all non-plain schemas (overview, code-review, custom)
       let schemaString: string | undefined = undefined;
-      let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      const effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -1778,15 +1778,15 @@ ${'='.repeat(60)}
     const path = require('path');
 
     // Check if schema is already an object (inline definition from YAML)
-      if (typeof schema === 'object' && schema !== null) {
-        // It's already a schema object, convert to JSON string
-        log('📋 Using inline schema object from configuration');
-        const s = JSON.stringify(schema);
-        try {
-          console.log(`📦 Loaded inline schema object (${s.length} bytes)`);
-        } catch {}
-        return s;
-      }
+    if (typeof schema === 'object' && schema !== null) {
+      // It's already a schema object, convert to JSON string
+      log('📋 Using inline schema object from configuration');
+      const s = JSON.stringify(schema);
+      try {
+        console.log(`📦 Loaded inline schema object (${s.length} bytes)`);
+      } catch {}
+      return s;
+    }
 
     // Check if schema string is already a JSON schema (inline JSON string)
     // This happens when a schema is passed directly as JSON instead of a reference
@@ -1847,7 +1847,9 @@ ${'='.repeat(60)}
       try {
         const schemaContent = await fs.readFile(schemaPath, 'utf-8');
         try {
-          console.log(`📦 Loaded schema from bundle: ${schemaPath} (${schemaContent.length} bytes)`);
+          console.log(
+            `📦 Loaded schema from bundle: ${schemaPath} (${schemaContent.length} bytes)`
+          );
         } catch {}
         return schemaContent.trim();
       } catch {

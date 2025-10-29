@@ -1,18 +1,11 @@
 import path from 'path';
 import fs from 'fs';
 
-// Capture schema passed to ProbeAgent.answer
-let lastAnswerArgs: { message?: string; images?: unknown; options?: any } = {};
-
 jest.mock('@probelabs/probe', () => {
   return {
-    // Minimal stub that records arguments and returns schema-shaped JSON
+    // Minimal stub that returns schema-shaped JSON
     ProbeAgent: jest.fn().mockImplementation(() => ({
-      answer: jest.fn().mockImplementation((message: string, images?: unknown, options?: any) => {
-        lastAnswerArgs = { message, images, options };
-        // Return JSON that is valid for text/overview schemas by default
-        return Promise.resolve('{"text":"ok"}');
-      }),
+      answer: jest.fn().mockResolvedValue('{"text":"ok"}'),
     })),
   };
 });
@@ -34,7 +27,6 @@ describe('AI schema resolution (built-in and custom paths)', () => {
   });
 
   beforeEach(() => {
-    lastAnswerArgs = {};
     jest.resetModules();
   });
 

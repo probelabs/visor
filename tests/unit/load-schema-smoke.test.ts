@@ -8,4 +8,3 @@ describe('loadSchemaContent smoke', () => {
     expect(s).toContain('Pull Request Overview');
   });
 });
-
