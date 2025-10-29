@@ -1159,9 +1159,7 @@ export class CheckExecutionEngine {
                     } catch {}
                   }
                   for (const stepId of childRunList) {
-                    if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                    const childStart = this.recordIterationStart(stepId);
-                    const childRes = await this.runNamedCheck(stepId, [], {
+                    await this.runNamedCheck(stepId, [], {
                       origin: 'on_finish',
                       config,
                       dependencyGraph,
@@ -1171,19 +1169,6 @@ export class CheckExecutionEngine {
                       debug,
                       overlay: new Map(results),
                     });
-                    const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                    const childSuccess = !this.hasFatal(childIssues);
-                    const childOut = (childRes as any)?.output;
-                    this.recordIterationComplete(
-                      stepId,
-                      childStart,
-                      childSuccess,
-                      childIssues,
-                      childOut
-                    );
-                    try {
-                      if (childOut !== undefined) this.trackOutputHistory(stepId, childOut);
-                    } catch {}
                   }
                 }
               } catch {}
@@ -1950,10 +1935,7 @@ export class CheckExecutionEngine {
               if (!inItem && mode === 'map' && items.length > 0) {
                 for (let i = 0; i < items.length; i++) {
                   const itemScope: ScopePath = [{ check: checkName, index: i }];
-                  // Record stats for scheduled child run
-                  if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                  const schedStart = this.recordIterationStart(stepId);
-                  const childRes = await this.runNamedCheck(stepId, itemScope, {
+                  await this.runNamedCheck(stepId, itemScope, {
                     config: config!,
                     dependencyGraph,
                     prInfo,
@@ -1961,28 +1943,12 @@ export class CheckExecutionEngine {
                     debug: !!debug,
                     overlay: dependencyResults,
                   });
-                  const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                  const childSuccess = !this.hasFatal(childIssues);
-                  const childOut = (childRes as any)?.output;
-                  this.recordIterationComplete(
-                    stepId,
-                    schedStart,
-                    childSuccess,
-                    childIssues,
-                    childOut
-                  );
-                  try {
-                    const out = (childRes as any)?.output;
-                    if (out !== undefined) this.trackOutputHistory(stepId, out);
-                  } catch {}
                 }
               } else {
                 const scopeForRun: ScopePath = foreachContext
                   ? [{ check: foreachContext.parent, index: foreachContext.index }]
                   : [];
-                if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                const schedStart = this.recordIterationStart(stepId);
-                const childRes = await this.runNamedCheck(stepId, scopeForRun, {
+                await this.runNamedCheck(stepId, scopeForRun, {
                   config: config!,
                   dependencyGraph,
                   prInfo,
@@ -1990,20 +1956,6 @@ export class CheckExecutionEngine {
                   debug: !!debug,
                   overlay: dependencyResults,
                 });
-                const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                const childSuccess = !this.hasFatal(childIssues);
-                const childOut = (childRes as any)?.output;
-                this.recordIterationComplete(
-                  stepId,
-                  schedStart,
-                  childSuccess,
-                  childIssues,
-                  childOut
-                );
-                try {
-                  const out = (childRes as any)?.output;
-                  if (out !== undefined) this.trackOutputHistory(stepId, out);
-                } catch {}
               }
             }
           } else {
@@ -2069,10 +2021,7 @@ export class CheckExecutionEngine {
                 // Always execute the target itself first (goto target), regardless of event filtering
                 // Then, optionally execute its dependents that match the goto_event
                 const runTargetOnce = async (scopeForRun: ScopePath) => {
-                  // Ensure stats entry exists for the target
-                  if (!this.executionStats.has(target)) this.initializeCheckStats(target);
-                  const tgtStart = this.recordIterationStart(target);
-                  const tgtRes = await this.runNamedCheck(target, scopeForRun, {
+                  await this.runNamedCheck(target, scopeForRun, {
                     config: config!,
                     dependencyGraph,
                     prInfo,
@@ -2080,10 +2029,6 @@ export class CheckExecutionEngine {
                     debug: !!debug,
                     eventOverride: onSuccess.goto_event,
                   });
-                  const tgtIssues = (tgtRes.issues || []).map(i => ({ ...i }));
-                  const tgtSuccess = !this.hasFatal(tgtIssues);
-                  const tgtOutput: unknown = (tgtRes as any)?.output;
-                  this.recordIterationComplete(target, tgtStart, tgtSuccess, tgtIssues, tgtOutput);
                 };
 
                 // Topologically order forwardSet based on depends_on within this subset
@@ -2130,9 +2075,7 @@ export class CheckExecutionEngine {
                   // Exclude the target itself from the dependent execution order to avoid double-run
                   const dependentsOnly = order.filter(n => n !== target);
                   for (const stepId of dependentsOnly) {
-                    if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                    const childStart = this.recordIterationStart(stepId);
-                    const childRes = await this.runNamedCheck(stepId, scopeForRun, {
+                    await this.runNamedCheck(stepId, scopeForRun, {
                       config: config!,
                       dependencyGraph,
                       prInfo,
@@ -2140,16 +2083,6 @@ export class CheckExecutionEngine {
                       debug: !!debug,
                       eventOverride: onSuccess.goto_event,
                     });
-                    const childIssues = (childRes.issues || []).map(i => ({ ...i }));
-                    const childSuccess = !this.hasFatal(childIssues);
-                    const childOutput: unknown = (childRes as any)?.output;
-                    this.recordIterationComplete(
-                      stepId,
-                      childStart,
-                      childSuccess,
-                      childIssues,
-                      childOutput
-                    );
                   }
                 };
                 if (!foreachContext && mode === 'map' && items.length > 0) {
