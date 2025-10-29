@@ -2068,6 +2068,9 @@ ${'='.repeat(60)}
             fallbackText && /^(\[\s*\]|\{\s*\})$/.test(fallbackText.trim());
           if (fallbackText && !looksLikeEmptyJson) {
             (out as any).text = fallbackText;
+          } else if (!hasText && looksLikeEmptyJson) {
+            // Provide a minimal, non-noisy placeholder so overview is not empty
+            (out as any).text = 'No overview content generated.';
           }
         }
 

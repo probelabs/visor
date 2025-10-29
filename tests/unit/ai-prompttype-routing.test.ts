@@ -41,11 +41,10 @@ describe('ProbeAgent promptType routing', () => {
     expect(lastOptions.promptType).toBeUndefined();
   });
 
-  it('sets promptType=code-review for code-review schema', async () => {
+  it('sets promptType=code-review-template for code-review schema', async () => {
     const svc = new AIReviewService({ provider: 'google', apiKey: 'x', debug: false });
     await svc.executeReview(pr, 'prompt', 'code-review', 'security');
     expect(lastOptions).toBeDefined();
-    expect(lastOptions.promptType).toBe('code-review');
+    expect(lastOptions.promptType).toBe('code-review-template');
   });
 });
-
