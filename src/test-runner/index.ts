@@ -548,8 +548,32 @@ export class VisorTestRunner {
     }
 
     // Summary
-    const passed = selected.length - failures;
-    console.log(`\nSummary: ${passed}/${selected.length} passed`);
+    const passedCount = caseResults.filter(r => r.passed).length;
+    const failedCases = caseResults.filter(r => !r.passed);
+    const passedCases = caseResults.filter(r => r.passed);
+    console.log('\n' + this.line('Summary'));
+    console.log(`  Passed: ${passedCount}/${selected.length}`);
+    if (passedCases.length > 0) {
+      const names = passedCases.map(r => r.name).join(', ');
+      console.log(`   • ${names}`);
+    }
+    console.log(`  Failed: ${failedCases.length}/${selected.length}`);
+    if (failedCases.length > 0) {
+      for (const fc of failedCases) {
+        console.log(`   • ${fc.name}`);
+        // If flow case, show failing stages
+        if (Array.isArray(fc.stages) && fc.stages.length > 0) {
+          const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
+          if (bad.length > 0) {
+            console.log(`     stages: ${bad.map(s => s.name).join(', ')}`);
+          }
+        }
+        if (Array.isArray(fc.errors) && fc.errors.length > 0) {
+          const first = fc.errors[0];
+          console.log(`     first error: ${first}`);
+        }
+      }
+    }
     return { failures, results: caseResults };
   }
 
