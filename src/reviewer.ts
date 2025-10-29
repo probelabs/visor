@@ -314,6 +314,18 @@ export class PRReviewer {
         commitSha: options.commitSha,
       });
 
+      // Diagnostics: trace overview comment content length and preview to aid CI debugging
+      try {
+        if (groupName === 'overview') {
+          const len = (comment || '').length;
+          console.log(`📤 Overview comment length: ${len}`);
+          if (len > 0) {
+            const preview = (comment || '').slice(0, 400);
+            console.log('📤 Overview comment preview:\n' + preview);
+          }
+        }
+      } catch {}
+
       // Generate comment ID - use unique ID for "dynamic" group
       let commentId: string;
       if (groupName === 'dynamic') {
