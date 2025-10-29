@@ -934,10 +934,15 @@ ${this.escapeXml(processedFallbackDiff)}
           schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
           log(`📄 Raw schema JSON:\n${schemaString}`);
+          try {
+            const nameStr = typeof schema === 'string' ? schema : 'custom';
+            console.log(`📦 Loaded schema '${nameStr}' (${schemaString.length} bytes)`);
+          } catch {}
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
-          effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          // Preserve effectiveSchema so downstream parsing still treats this as a text-style schema
+          // even if we couldn't load and supply the formal schema to the agent.
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -948,6 +953,22 @@ ${this.escapeXml(processedFallbackDiff)}
 
       // Pass schema in options object with 'schema' property
       const schemaOptions = schemaString ? { schema: schemaString } : undefined;
+      if (schemaOptions) {
+        try {
+          const nameStr = typeof schema === 'string' ? schema : 'custom';
+          console.log(
+            `🎯 Passing schema options to ProbeAgent (session reuse) (name='${nameStr}', bytes=${schemaString?.length || 0})`
+          );
+        } catch {}
+      }
+      if (schemaOptions) {
+        try {
+          const nameStr = typeof schema === 'string' ? schema : 'custom';
+          console.log(
+            `🎯 Passing schema options to ProbeAgent (name='${nameStr}', bytes=${schemaString?.length || 0})`
+          );
+        } catch {}
+      }
 
       // Store the exact schema options being passed to ProbeAgent in debug info
       if (debugInfo && schemaOptions) {
@@ -1404,7 +1425,7 @@ ${'='.repeat(60)}
         } catch (error) {
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
-          effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          // Preserve effectiveSchema for parsing; see note above.
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -1757,11 +1778,15 @@ ${'='.repeat(60)}
     const path = require('path');
 
     // Check if schema is already an object (inline definition from YAML)
-    if (typeof schema === 'object' && schema !== null) {
-      // It's already a schema object, convert to JSON string
-      log('📋 Using inline schema object from configuration');
-      return JSON.stringify(schema);
-    }
+      if (typeof schema === 'object' && schema !== null) {
+        // It's already a schema object, convert to JSON string
+        log('📋 Using inline schema object from configuration');
+        const s = JSON.stringify(schema);
+        try {
+          console.log(`📦 Loaded inline schema object (${s.length} bytes)`);
+        } catch {}
+        return s;
+      }
 
     // Check if schema string is already a JSON schema (inline JSON string)
     // This happens when a schema is passed directly as JSON instead of a reference
@@ -1788,6 +1813,9 @@ ${'='.repeat(60)}
         const schemaPath = path.resolve(process.cwd(), schema);
         log(`📋 Loading custom schema from file: ${schemaPath}`);
         const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+        try {
+          console.log(`📦 Loaded schema from file: ${schemaPath} (${schemaContent.length} bytes)`);
+        } catch {}
         return schemaContent.trim();
       } catch (error) {
         throw new Error(
@@ -1818,6 +1846,9 @@ ${'='.repeat(60)}
     for (const schemaPath of candidatePaths) {
       try {
         const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+        try {
+          console.log(`📦 Loaded schema from bundle: ${schemaPath} (${schemaContent.length} bytes)`);
+        } catch {}
         return schemaContent.trim();
       } catch {
         // try next
