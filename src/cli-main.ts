@@ -161,6 +161,34 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     const suite = runner.loadSuite(tpath);
     const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
     const failures = runRes.failures;
+    // Always print a concise end-of-run summary here as well, in case
+    // runner-level printing was suppressed by user flags or truncation
+    try {
+      const results: Array<{
+        name: string;
+        passed: boolean;
+        stages?: Array<{ name: string; errors?: string[] }>;
+        errors?: string[];
+      }> = (runRes as any).results || [];
+      const passed = results.filter(r => r.passed).map(r => r.name);
+      const failed = results.filter(r => !r.passed);
+      console.log('\n' + '── Summary '.padEnd(66, '─'));
+      console.log(`  Passed: ${passed.length}/${results.length}`);
+      if (passed.length) console.log(`   • ${passed.join(', ')}`);
+      console.log(`  Failed: ${failed.length}/${results.length}`);
+      if (failed.length) {
+        for (const f of failed) {
+          console.log(`   • ${f.name}`);
+          if (Array.isArray(f.stages) && f.stages.length > 0) {
+            const bad = f.stages.filter(s => s.errors && s.errors.length > 0).map(s => s.name);
+            if (bad.length) console.log(`     stages: ${bad.join(', ')}`);
+          }
+          if (Array.isArray(f.errors) && f.errors.length > 0) {
+            console.log(`     first error: ${f.errors[0]}`);
+          }
+        }
+      }
+    } catch {}
     // Basic reporters (Milestone 7): write minimal JSON/JUnit/Markdown summaries
     try {
       if (jsonOut) {
