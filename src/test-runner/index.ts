@@ -1280,6 +1280,22 @@ export class VisorTestRunner {
       }
     }
 
+    // Helper: parse /(?flags)pattern/ prefix
+    const parseRegex = (raw: string): RegExp => {
+      try {
+        let pattern = raw;
+        let flags = '';
+        const m = pattern.match(/^\(\?([gimsuy]+)\)/);
+        if (m) {
+          flags = m[1];
+          pattern = pattern.slice(m[0].length);
+        }
+        return new RegExp(pattern, flags);
+      } catch {
+        return new RegExp('(?!)');
+      }
+    };
+
     // Prompt assertions (with optional where-selector)
     for (const p of expect.prompts || []) {
       const arr = promptsByStep[p.step] || [];
@@ -1292,19 +1308,8 @@ export class VisorTestRunner {
           if (where.contains) ok = ok && where.contains.every(s => candidate.includes(s));
           if (where.not_contains) ok = ok && where.not_contains.every(s => !candidate.includes(s));
           if (where.matches) {
-            try {
-              let pattern = where.matches;
-              let flags = '';
-              const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-              if (m) {
-                flags = m[1];
-                pattern = pattern.slice(m[0].length);
-              }
-              const re = new RegExp(pattern, flags);
-              ok = ok && re.test(candidate);
-            } catch {
-              ok = false;
-            }
+            const re = parseRegex(where.matches);
+            ok = ok && re.test(candidate);
           }
           if (ok) {
             prompt = candidate;
@@ -1339,19 +1344,8 @@ export class VisorTestRunner {
         }
       }
       if (p.matches) {
-        try {
-          let pattern = p.matches;
-          let flags = '';
-          const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-          if (m) {
-            flags = m[1];
-            pattern = pattern.slice(m[0].length);
-          }
-          const re = new RegExp(pattern, flags);
-          if (!re.test(prompt)) errors.push(`Prompt for ${p.step} does not match: ${p.matches}`);
-        } catch {
-          errors.push(`Invalid regex in matches for ${p.step}`);
-        }
+        const re = parseRegex(p.matches);
+        if (!re.test(prompt)) errors.push(`Prompt for ${p.step} does not match: ${p.matches}`);
       }
     }
 
@@ -1381,13 +1375,11 @@ export class VisorTestRunner {
               break;
             }
           } else if (o.where.matches) {
-            try {
-              const re = new RegExp(o.where.matches);
-              if (re.test(String(probe))) {
-                chosen = item;
-                break;
-              }
-            } catch {}
+            const re = parseRegex(o.where.matches);
+            if (re.test(String(probe))) {
+              chosen = item;
+              break;
+            }
           }
         }
         if (chosen === undefined) {
@@ -1417,20 +1409,9 @@ export class VisorTestRunner {
         }
       }
       if (o.matches) {
-        try {
-          let pattern = o.matches;
-          let flags = '';
-          const m = pattern.match(/^\(\?([gimsuy]+)\)/);
-          if (m) {
-            flags = m[1];
-            pattern = pattern.slice(m[0].length);
-          }
-          const re = new RegExp(pattern, flags);
-          if (!re.test(String(val)))
-            errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
-        } catch {
-          errors.push(`Invalid regex for outputs.matches in ${o.step}`);
-        }
+        const re = parseRegex(o.matches);
+        if (!re.test(String(val)))
+          errors.push(`Output ${o.step}.${o.path} does not match ${o.matches}`);
       }
       if (o.contains_unordered) {
         if (!Array.isArray(val))
