@@ -338,10 +338,12 @@ ${content}
           // Don't retry auth errors, not found errors, etc.
           throw error;
         } else {
-          const delay = Math.min(
-            this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt),
-            this.retryConfig.maxDelay
-          );
+          const computed =
+            this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt);
+          const delay =
+            computed > this.retryConfig.maxDelay
+              ? Math.max(0, this.retryConfig.maxDelay - 1)
+              : computed;
           await this.sleep(delay);
         }
       }
@@ -354,7 +356,14 @@ ${content}
    * Sleep utility
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(resolve => {
+      const t = setTimeout(resolve, ms);
+      if (typeof (t as any).unref === 'function') {
+        try {
+          (t as any).unref();
+        } catch {}
+      }
+    });
   }
 
   /**

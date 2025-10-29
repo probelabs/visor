@@ -13,7 +13,7 @@ import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
 import { resolveHeadShaFromEvent } from './utils/head-sha';
-import { PRReviewer, GroupedCheckResults, ReviewIssue } from './reviewer';
+import { PRReviewer, GroupedCheckResults, ReviewIssue, CheckResult } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
@@ -762,8 +762,30 @@ async function handleIssueEvent(
     if (Object.keys(results).length > 0) {
       let commentBody = '';
 
+      // Collapse dynamic group: if multiple dynamic responses exist in a single run,
+      // take only the last non-empty one to avoid duplicated old+new answers.
+      const resultsToUse: GroupedCheckResults = { ...results };
+      try {
+        const dyn: CheckResult[] | undefined = resultsToUse['dynamic'];
+        if (Array.isArray(dyn) && dyn.length > 1) {
+          const nonEmpty = dyn.filter(d => d.content && d.content.trim().length > 0);
+          if (nonEmpty.length > 0) {
+            // Keep only the last non-empty dynamic item
+            resultsToUse['dynamic'] = [nonEmpty[nonEmpty.length - 1]];
+          } else {
+            // All empty: keep the last item (empty) to preserve intent
+            resultsToUse['dynamic'] = [dyn[dyn.length - 1]];
+          }
+        }
+      } catch (error) {
+        console.warn(
+          'Failed to collapse dynamic group:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+
       // Directly use check content without adding extra headers
-      for (const checks of Object.values(results)) {
+      for (const checks of Object.values(resultsToUse)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
             commentBody += `${check.content}\n\n`;
