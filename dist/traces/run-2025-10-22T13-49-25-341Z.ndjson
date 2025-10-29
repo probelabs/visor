@@ -1,0 +1,6 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: main (1 modified)\",\"author\":\"GitHub Action\",\"branch\":\"main\",\"base\":\"main\"},\"files\":[{\"filename\":\"README.md\",\"additions\":2,\"deletions\":2,\"changes\":4,\"patch\":\"diff --git a/README.md b/README.md\\nindex 49ef66bb..2f2b43cd 100644\\n--- a/README.md\\n+++ b/README.md\\n@@ -1,4 +1,4 @@\\n-<div align=\\\"center\\\">\\n+div align=\\\"center\\\">\\n   <img src=\\\"site/visor.png\\\" alt=\\\"Visor Logo\\\" width=\\\"500\\\" />\\n   \\n   # Visor — Open‑source SDLC automation & code review orchestration\\n\",\"status\":\"modified\"}],\"outputs\":{}}"},"events":[]}

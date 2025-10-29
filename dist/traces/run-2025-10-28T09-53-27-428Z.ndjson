@@ -1,0 +1,3 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"feat: add user search\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[{\"filename\":\"src/search.ts\",\"additions\":3,\"deletions\":0,\"changes\":3,\"status\":\"added\",\"patch\":\"@@\\n+export function search(q: string) {\\n  return []\\n}\\n\"}],\"outputs\":{}}"},"events":[]}

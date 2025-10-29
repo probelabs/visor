@@ -1,0 +1,2 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.check","attributes":{"visor.check.id":"unknown","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"feat: add user search\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}

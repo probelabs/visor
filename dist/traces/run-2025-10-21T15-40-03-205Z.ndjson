@@ -1,0 +1,6 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.check","attributes":{"visor.check.id":"simple-command","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: buger/debug-visualizer (No changes)\",\"author\":\"Leonid Bugaev\",\"branch\":\"buger/debug-visualizer\",\"base\":\"main\"},\"files\":[],\"fileCount\":0,\"outputs\":{},\"env\":{\"HOME\":\"/home/buger\",\"USER\":\"buger\",\"PATH\":\"/home/buger/.local/bin:./bin:/home/buger/.local/bin:/tmp/.tmp2wrbYl:/home/buger/.turso:/home/buger/.cargo/bin:/home/buger/.local/bin:./bin:/home/buger/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/lib/jvm/default/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl\",\"PWD\":\"/home/buger/projects/visor2\"}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"simple-command","visor.check.output":"{\"status\":\"ok\",\"count\":42}"},"events":[]}
