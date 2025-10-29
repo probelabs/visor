@@ -497,6 +497,12 @@ Progress Tracker
 - Milestone 9 — Coverage and perf — DONE (2025-10-27)
 - Milestone 10 — Docs, examples, migration — PENDING
 
+Progress Update — 2025-10-29
+- FlowStage refactor: each stage now recomputes prompts/output‑history deltas and execution statistics after any fallback run that executes “missing” expected steps. Coverage tables reflect the final state of the stage.
+- Test‑mode isolation: stages set `VISOR_TEST_MODE=true` to disable incidental tag filtering paths that are desirable for production runs but surprising in tests.
+- Recorder warnings: the runner warns when an AI/command step executes without a mock; tests remain stub‑free for GitHub ops via the Recording Octokit.
+- Engine polish: removed duplicate manual stats increments for `on_success` and added an early return in `handleOnFinishHooks` when no forEach parents produced results (removes a short pause without changing behavior).
+
 Progress Update — 2025-10-28
 - Runner: stage execution coverage now derives only from prompts/output-history deltas plus engine statistics (no selection heuristics). Single-check runs contribute to stats and history uniformly.
 - Engine: single-check path records iteration stats and appends outputs to history; on_finish children run via the unified scheduler so runs are counted.
