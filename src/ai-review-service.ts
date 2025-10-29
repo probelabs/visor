@@ -2085,6 +2085,16 @@ ${'='.repeat(60)}
             }
           } catch {}
 
+          // As a last structured attempt, search nested objects for a plausible text field
+          try {
+            if (!(out as any).text || String((out as any).text).trim().length === 0) {
+              const candidate = this.findTextInObject(out);
+              if (candidate && candidate.trim()) {
+                (out as any).text = candidate.trim();
+              }
+            }
+          } catch {}
+
           // If still no text, build a fallback string from the raw response
           // or issue messages if available
           let fallbackText = '';
@@ -2257,6 +2267,48 @@ ${'='.repeat(60)}
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Heuristically find a suitable text value inside a nested object for overview-like output.
+   * Prioritizes keys: result, text, message, content, summary.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private findTextInObject(obj: any): string | null {
+    if (!obj || typeof obj !== 'object') return null;
+    const preferredKeys = ['result', 'text', 'message', 'content', 'summary'];
+    const seen = new Set<any>();
+    const queue: any[] = [obj];
+    let best: string | null = null;
+    let bestScore = 0;
+    const score = (s: string) => {
+      let sc = s.length;
+      if (/^\s*#/.test(s)) sc += 100; // markdown header
+      if (/\n/.test(s)) sc += 50; // multi-line
+      return sc;
+    };
+    while (queue.length) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cur: any = queue.shift();
+      if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
+      seen.add(cur);
+      // First pass: check preferred keys
+      for (const k of preferredKeys) {
+        if (typeof cur[k] === 'string' && cur[k].trim()) {
+          const val = String(cur[k]);
+          const sc = score(val);
+          if (sc > bestScore) {
+            best = val;
+            bestScore = sc;
+          }
+        }
+      }
+      // Enqueue children
+      for (const v of Object.values(cur)) {
+        if (v && typeof v === 'object') queue.push(v);
+      }
+    }
+    return best;
   }
 
   /**
