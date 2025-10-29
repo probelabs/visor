@@ -2281,17 +2281,8 @@ ${'='.repeat(60)}
       const intent = name.includes('issue') ? 'issue_triage' : 'comment_reply';
       return JSON.stringify({ text, intent });
     }
-    // Overview (text-style) – align with output/overview/schema.json
-    if (name.includes('overview') || _schema === 'overview') {
-      return JSON.stringify({
-        text: '## PR Overview\n\nThis is a mock overview generated for testing. It summarizes the changes and impact.\n\n- Files changed: 0\n- Additions/Deletions: 0/0',
-        tags: { 'review-effort': 2, label: 'enhancement' },
-      });
-    }
-    // Code-review schema – return a minimal, valid structure
-    if (_schema === 'code-review' || /^(security|architecture|performance|quality)$/.test(name)) {
-      return JSON.stringify({ issues: [] });
-    }
+    // Note: no special-case for overview/code-review here; tests should mock ProbeAgent
+    // or use provider-specific fixtures instead of relying on built-in mock shapes.
     // Fallback
     const mockResponse = { content: JSON.stringify({ issues: [], summary: { totalIssues: 0 } }) };
     return JSON.stringify(mockResponse);
