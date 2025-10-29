@@ -883,6 +883,18 @@ export class CheckExecutionEngine {
       return; // No on_finish hooks to process
     }
 
+    // Fast path: if none of the forEach parents executed in this run, skip on_finish entirely.
+    // This avoids unnecessary work (and log noise) in cases where these parents belong to a different event.
+    try {
+      const anyParentRan = forEachChecksWithOnFinish.some(({ checkName }) =>
+        results.has(checkName)
+      );
+      if (!anyParentRan) {
+        if (debug) log('🧭 on_finish: no forEach parent executed in this run — skip');
+        return;
+      }
+    } catch {}
+
     if (debug) {
       log(`🎯 Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
     }
