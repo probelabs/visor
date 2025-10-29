@@ -1393,11 +1393,11 @@ ${'='.repeat(60)}
       const agent = new ProbeAgent(options);
 
       log('🚀 Calling ProbeAgent...');
-      // Load and pass the actual schema content (code-review only)
+      // Load and pass the actual schema content for all non-plain schemas (overview, code-review, custom)
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
 
-      if (typeof schema === 'string' && schema === 'code-review') {
+      if (schema && schema !== 'plain') {
         try {
           schemaString = await this.loadSchemaContent(schema);
           log(`📋 Loaded schema content for: ${schema}`);
@@ -2033,16 +2033,8 @@ ${'='.repeat(60)}
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
         if (!hasText) {
-          // Common provider shape: { content: string } – treat as text
-          try {
-            const contentField = (out as any).content;
-            if (typeof contentField === 'string' && contentField.trim()) {
-              (out as any).text = contentField.trim();
-            }
-          } catch {}
-
-          // If still no text, build a fallback
-          // Build a fallback string from the raw response or issue messages if available
+          // If still no text, build a fallback string from the raw response
+          // or issue messages if available
           let fallbackText = '';
           try {
             if (
@@ -2057,12 +2049,8 @@ ${'='.repeat(60)}
             }
           } catch {}
           if (!fallbackText && typeof response === 'string' && response.trim()) {
-            // Try to extract meaningful overview text from complex provider wrappers
-            fallbackText = this.extractOverviewText(response);
-            if (!fallbackText) {
-              // As last resort, use raw provider response (bounded)
-              fallbackText = response.trim().slice(0, 60000);
-            }
+            // As last resort, use raw provider response (bounded)
+            fallbackText = response.trim().slice(0, 60000);
           }
           // Avoid surfacing meaningless JSON placeholders like [] or {}
           const looksLikeEmptyJson =
@@ -2309,49 +2297,8 @@ ${'='.repeat(60)}
     return JSON.stringify(mockResponse);
   }
 
-  /**
-   * Extract meaningful overview text from a provider response that may contain
-   * tool-call wrappers or auxiliary tags (e.g., <attempt_completion>{"result": "..."}</attempt_completion>).
-   */
-  private extractOverviewText(response: string): string {
-    try {
-      const src = String(response || '');
-      if (!src.trim()) return '';
-
-      // 1) Extract JSON inside <attempt_completion>...</attempt_completion> and read result/content/message
-      const tagMatch = src.match(/<attempt_completion[^>]*>([\s\S]*?)<\/attempt_completion>/i);
-      if (tagMatch && tagMatch[1]) {
-        const jsonCandidate = this.extractJsonFromResponse(tagMatch[1]);
-        if (jsonCandidate) {
-          try {
-            const obj = JSON.parse(jsonCandidate);
-            const t = (obj && (obj.result || obj.text || obj.content || obj.message)) as unknown;
-            if (typeof t === 'string' && t.trim()) return t.trim();
-          } catch {
-            // ignore JSON parse errors here
-          }
-        }
-      }
-
-      // 2) Capture result: "..." from an inline object-ish dump
-      const resKey = src.match(/\bresult\s*:\s*(["'])([\s\S]*?)\1/);
-      if (resKey && resKey[2] && resKey[2].trim()) {
-        return resKey[2].trim();
-      }
-
-      // 3) As a generic fallback, if there is a markdown header, return from the first header onward
-      const headerIdx = src.search(/^\s*#{1,6}\s+/m);
-      if (headerIdx >= 0) {
-        const sliced = src.slice(headerIdx).trim();
-        if (sliced) return sliced;
-      }
-
-      // 4) Otherwise return a bounded slice of the raw response
-      return src.trim().slice(0, 60000);
-    } catch {
-      return '';
-    }
-  }
+  // Note: no special tool-call text extraction is needed when schemas are used;
+  // extractJsonFromResponse already finds JSON blocks inside wrappers if present.
 
   /**
    * Get the API key source for debugging (without revealing the key)

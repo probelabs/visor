@@ -44,7 +44,8 @@ describe('AI schema resolution (built-in and custom paths)', () => {
     const res = await svc.executeReview(makePR(), 'prompt', 'overview', 'check1');
     expect(res.debug).toBeDefined();
     expect(typeof (res.debug as any).schema).toBe('string');
-    const parsed = JSON.parse((res.debug as any).schema).schema;
+    const schemaOpt = JSON.parse((res.debug as any).schema);
+    const parsed = JSON.parse(schemaOpt.schema as string);
     // Basic shape check: should be a JSON schema object with type/object or properties
     expect(typeof parsed).toBe('object');
     expect(parsed.type || parsed.properties).toBeDefined();
