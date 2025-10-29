@@ -857,22 +857,7 @@ export class CheckExecutionEngine {
       if (debug) console.error('[on_finish] handler invoked');
     } catch {}
 
-    // Find all checks with forEach: true and on_finish configured
-    const forEachChecksWithOnFinish: Array<{
-      checkName: string;
-      checkConfig: CheckConfig;
-      onFinish: OnFinishConfig;
-    }> = [];
-
-    for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
-      if (checkConfig.forEach && checkConfig.on_finish) {
-        forEachChecksWithOnFinish.push({
-          checkName,
-          checkConfig,
-          onFinish: checkConfig.on_finish,
-        });
-      }
-    }
+    const forEachChecksWithOnFinish = this.collectForEachParentsWithOnFinish(config);
 
     try {
       logger.info(
@@ -941,22 +926,7 @@ export class CheckExecutionEngine {
         logger.info(`▶ on_finish: processing for "${checkName}"`);
 
         // Build context for on_finish evaluation
-        const outputsForContext: Record<string, unknown> = {};
-        for (const [name, result] of results.entries()) {
-          const r = result as import('./reviewer').ReviewSummary & { output?: unknown };
-          outputsForContext[name] = r.output !== undefined ? r.output : r;
-        }
-        // Also expose output history for each check (parity with docs/examples)
-        const outputsHistoryForContext: Record<string, unknown[]> = {};
-        try {
-          // this.outputHistory tracks all outputs per check across the run
-          // Convert to a plain object for sandbox consumption
-          for (const [check, history] of this.outputHistory.entries()) {
-            outputsHistoryForContext[check] = history as unknown[];
-          }
-          // Attach to outputs as a nested property for `outputs.history[...]`
-          /* outputs.history available via outputsMergedForContext */
-        } catch {}
+        const { outputsForContext, outputsHistoryForContext } = this.buildOnFinishContext(results);
 
         // Create forEach stats
         const forEachStats = {
@@ -1487,6 +1457,44 @@ export class CheckExecutionEngine {
         logger.error(`✗ on_finish: error for "${checkName}": ${error}`);
       }
     }
+  }
+
+  // Helper: find all forEach parents that define on_finish
+  private collectForEachParentsWithOnFinish(config: VisorConfig): Array<{
+    checkName: string;
+    checkConfig: CheckConfig;
+    onFinish: OnFinishConfig;
+  }> {
+    const out: Array<{
+      checkName: string;
+      checkConfig: CheckConfig;
+      onFinish: OnFinishConfig;
+    }> = [];
+    for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
+      if (checkConfig.forEach && checkConfig.on_finish) {
+        out.push({ checkName, checkConfig, onFinish: checkConfig.on_finish });
+      }
+    }
+    return out;
+  }
+
+  // Helper: project results + history into plain objects for sandbox
+  private buildOnFinishContext(results: Map<string, ReviewSummary>): {
+    outputsForContext: Record<string, unknown>;
+    outputsHistoryForContext: Record<string, unknown[]>;
+  } {
+    const outputsForContext: Record<string, unknown> = {};
+    for (const [name, result] of results.entries()) {
+      const r = result as import('./reviewer').ReviewSummary & { output?: unknown };
+      outputsForContext[name] = r.output !== undefined ? r.output : r;
+    }
+    const outputsHistoryForContext: Record<string, unknown[]> = {};
+    try {
+      for (const [check, history] of this.outputHistory.entries()) {
+        outputsHistoryForContext[check] = history as unknown[];
+      }
+    } catch {}
+    return { outputsForContext, outputsHistoryForContext };
   }
 
   /**
