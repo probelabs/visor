@@ -1336,7 +1336,12 @@ ${'='.repeat(60)}
       }
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
-        promptType: schema ? ('code-review-template' as 'code-review') : undefined,
+        // Only enable specialized prompt scaffolding for explicit code-review schema.
+        // Non code-review schemas (e.g., overview, assistants, custom) must not use code-review template.
+        promptType:
+          typeof schema === 'string' && schema === 'code-review'
+            ? ('code-review' as any)
+            : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
       };
