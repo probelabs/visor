@@ -452,8 +452,9 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # Always initialize fact validation attempt counter
-      run: [init-fact-validation]
+      # Initialize fact validation attempt counter only when validation is enabled
+      run_js: |
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['init-fact-validation'] : []
       # Preserve intent-based rerun: allow members to retrigger overview from a comment
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
@@ -507,6 +508,7 @@ steps:
   # Initialize fact validation attempt counter
   init-fact-validation:
     type: memory
+    tags: [one_shot]
     operation: set
     key: fact_validation_attempt
     value: 0
@@ -619,6 +621,12 @@ steps:
     # After all facts are validated, aggregate results and decide next action
     on_finish:
       run: [aggregate-validations]
+      # If aggregation stored validation issues in memory, schedule a correction reply
+      run_js: |
+        const issues = memory.list('fact-validation').includes('fact_validation_issues')
+          ? memory.get('fact_validation_issues', 'fact-validation')
+          : [];
+        return Array.isArray(issues) && issues.length > 0 ? ['comment-assistant'] : [];
       goto_js: |
         const allValid = memory.get('all_facts_valid', 'fact-validation');
         const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
@@ -702,21 +710,25 @@ steps:
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     on_success:
-      goto_js: |
-        // Route back to the appropriate assistant if there are issues
-        if (!output || output.all_valid) return null;
-        const hasComment = !!(outputs['comment-assistant']) || (outputs.history && (outputs.history['comment-assistant'] || []).length > 0);
-        return hasComment ? 'comment-assistant' : 'issue-assistant';
+      # Schedule the correction reply directly (target-only) when not all facts are valid
+      run_js: |
+        if (!output || output.all_valid) return [];
+        return ['comment-assistant'];
     memory_js: |
-      const validations = outputs.history['validate-fact'] || [];
+      const all = outputs.history['validate-fact'] || [];
+      // Use only the latest wave of validations for this run
+      const fxHist = outputs.history['extract-facts'] || [];
+      const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
+      const waveSize = Array.isArray(lastExtract) ? lastExtract.length : (lastExtract && typeof lastExtract.length === 'number' ? lastExtract.length : 0);
+      const validations = waveSize > 0 ? all.slice(-waveSize) : all;
 
       log('📊 Aggregating', validations.length, 'validation results');
 
       // Only HIGH confidence counts as valid. Everything else returns to loop.
-      const validHigh = validations.filter(v => v.is_valid && v.confidence === 'high');
-      const problems = validations.filter(v => !(v.is_valid && v.confidence === 'high'));
-      const lowConfidence = validations.filter(v => v.is_valid && v.confidence !== 'high');
-      const invalid = validations.filter(v => !v.is_valid);
+      const validHigh = validations.filter(v => v && v.is_valid && v.confidence === 'high');
+      const problems = validations.filter(v => v && !(v.is_valid && v.confidence === 'high'));
+      const lowConfidence = validations.filter(v => v && v.is_valid && v.confidence !== 'high');
+      const invalid = validations.filter(v => v && !v.is_valid);
       const allValid = problems.length === 0;
 
       log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),

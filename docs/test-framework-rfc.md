@@ -27,6 +27,23 @@ Developer Guides
 - CI integration: docs/testing/ci.md
 - Troubleshooting: docs/testing/troubleshooting.md
 
+## Progress Update (Oct 29, 2025)
+
+- Extracted focused helpers to simplify the runner:
+  - `EnvironmentManager` (per-case/stage env apply/restore)
+  - `MockManager` (step mocks and list-mocks cursors)
+  - `buildPrInfoFromFixture` moved to `src/test-runner/core/fixture.ts`
+  - Evaluators module scaffolded (`src/test-runner/evaluators.ts`) for assertion logic reuse
+- `setupTestCase` now delegates env and mock management to the helpers.
+- Flow stages: stage-local env now uses `EnvironmentManager`; stage mocks use `MockManager`.
+- Default suite runs green under strict mode; GitHub negative-mode case passes deterministically.
+
+Next steps (milestones excerpt)
+- Finish splitting `runFlowCase` into stage helpers (execute, state, assertions) or a `FlowStage` class.
+- Move the large `evaluateCase` body into the evaluators module with no behavior changes.
+- Enrich reporters with per-stage details (JSON/JUnit/Markdown) using structured results.
+- Keep all debug logs behind `VISOR_DEBUG` and remove ad-hoc prints.
+
 ## Motivation
 
 - Keep tests next to config and use the same mental model: events → checks → outputs → effects.

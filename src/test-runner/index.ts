@@ -7,8 +7,11 @@ import { CheckExecutionEngine } from '../check-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
 import { setGlobalRecorder } from './recorders/global-recorder';
-import { FixtureLoader } from './fixture-loader';
+// import { FixtureLoader } from './fixture-loader';
 import { validateCounts, type ExpectBlock } from './assertions';
+import { EnvironmentManager } from './core/environment';
+import { MockManager } from './core/mocks';
+import { buildPrInfoFromFixture } from './core/fixture';
 import { validateTestsDoc } from './validator';
 
 export type TestCase = {
@@ -74,22 +77,19 @@ export class VisorTestRunner {
       typeof (_case as any).fixture === 'object' && (_case as any).fixture
         ? (_case as any).fixture
         : { builtin: (_case as any).fixture };
-    const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
+    const prInfo = buildPrInfoFromFixture(
+      this.mapEventFromFixtureName.bind(this),
+      fixtureInput?.builtin,
+      fixtureInput?.overrides
+    );
 
-    // Inject recording Octokit and apply env overrides
-    const prevRepo = process.env.GITHUB_REPOSITORY;
-    process.env.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || 'owner/repo';
+    // Inject recording Octokit and apply env overrides via EnvironmentManager
+    const envMgr = new EnvironmentManager();
     const envOverrides =
       typeof (_case as any).env === 'object' && (_case as any).env
         ? ((_case as any).env as Record<string, string>)
         : undefined;
-    const prevEnv: Record<string, string | undefined> = {};
-    if (envOverrides) {
-      for (const [k, v] of Object.entries(envOverrides)) {
-        prevEnv[k] = process.env[k];
-        process.env[k] = String(v);
-      }
-    }
+    envMgr.apply(envOverrides);
 
     const ghRecCase =
       typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder
@@ -108,7 +108,7 @@ export class VisorTestRunner {
       typeof (_case as any).mocks === 'object' && (_case as any).mocks
         ? ((_case as any).mocks as Record<string, unknown>)
         : {};
-    const mockCursors: Record<string, number> = {};
+    const mockMgr = new MockManager(mocks);
     engine.setExecutionContext({
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
@@ -120,17 +120,7 @@ export class VisorTestRunner {
               : info.prompt;
           prompts[k].push(p);
         },
-        mockForStep: (step: string) => {
-          const listKey = `${step}[]`;
-          const list = (mocks as any)[listKey];
-          if (Array.isArray(list)) {
-            const i = mockCursors[listKey] || 0;
-            const idx = i < list.length ? i : list.length - 1;
-            mockCursors[listKey] = i + 1;
-            return list[idx];
-          }
-          return (mocks as any)[step];
-        },
+        mockForStep: (step: string) => mockMgr.get(step),
       },
     } as any);
 
@@ -147,16 +137,7 @@ export class VisorTestRunner {
     if (checksToRun.length === 0)
       checksToRun = this.computeChecksToRun(cfg, eventForCase, undefined);
 
-    const restoreEnv = () => {
-      if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
-      else process.env.GITHUB_REPOSITORY = prevRepo;
-      if (envOverrides) {
-        for (const [k, oldv] of Object.entries(prevEnv)) {
-          if (oldv === undefined) delete process.env[k];
-          else process.env[k] = oldv;
-        }
-      }
-    };
+    const restoreEnv = () => envMgr.restore();
 
     return {
       name,
@@ -177,7 +158,7 @@ export class VisorTestRunner {
     setup: ReturnType<VisorTestRunner['setupTestCase']>,
     cfg: any
   ): Promise<{ res: any; outHistory: Record<string, unknown[]> }> {
-    const { prInfo, engine, recorder, checksToRun } = setup;
+    const { prInfo, engine, /* recorder, */ checksToRun } = setup;
     const prevTestMode = process.env.VISOR_TEST_MODE;
     process.env.VISOR_TEST_MODE = 'true';
     let res = await engine.executeGroupedChecks(
@@ -604,7 +585,7 @@ export class VisorTestRunner {
       typeof flowCase.mocks === 'object' && flowCase.mocks
         ? (flowCase.mocks as Record<string, unknown>)
         : {};
-    let stageMockCursors: Record<string, number> = {};
+    const mockMgr = new MockManager(stageMocks);
     engine.setExecutionContext({
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
@@ -616,17 +597,7 @@ export class VisorTestRunner {
               : info.prompt;
           prompts[k].push(p);
         },
-        mockForStep: (step: string) => {
-          const listKey = `${step}[]`;
-          const list = (stageMocks as any)[listKey];
-          if (Array.isArray(list)) {
-            const i = stageMockCursors[listKey] || 0;
-            const idx = i < list.length ? i : list.length - 1;
-            stageMockCursors[listKey] = i + 1;
-            return list[idx];
-          }
-          return (stageMocks as any)[step];
-        },
+        mockForStep: (step: string) => mockMgr.get(step),
       },
     } as any);
 
@@ -655,20 +626,19 @@ export class VisorTestRunner {
         typeof stage.fixture === 'object' && stage.fixture
           ? stage.fixture
           : { builtin: stage.fixture };
-      const prInfo = this.buildPrInfoFromFixture(fixtureInput?.builtin, fixtureInput?.overrides);
+      const prInfo = buildPrInfoFromFixture(
+        this.mapEventFromFixtureName.bind(this),
+        fixtureInput?.builtin,
+        fixtureInput?.overrides
+      );
 
       // Stage env overrides
       const envOverrides =
         typeof stage.env === 'object' && stage.env
           ? (stage.env as Record<string, string>)
           : undefined;
-      const prevEnv: Record<string, string | undefined> = {};
-      if (envOverrides) {
-        for (const [k, v] of Object.entries(envOverrides)) {
-          prevEnv[k] = process.env[k];
-          process.env[k] = String(v);
-        }
-      }
+      const envMgr = new EnvironmentManager();
+      envMgr.apply(envOverrides);
 
       // Merge per-stage mocks over flow-level defaults (stage overrides flow)
       try {
@@ -677,7 +647,7 @@ export class VisorTestRunner {
             ? ((stage as any).mocks as Record<string, unknown>)
             : {};
         stageMocks = { ...(flowCase.mocks || {}), ...perStage } as Record<string, unknown>;
-        stageMockCursors = {};
+        mockMgr.reset(stageMocks);
       } catch {}
 
       // Baselines for deltas
@@ -1051,12 +1021,9 @@ export class VisorTestRunner {
         });
         if (bail) break;
       } finally {
-        if (envOverrides) {
-          for (const [k, oldv] of Object.entries(prevEnv)) {
-            if (oldv === undefined) delete process.env[k];
-            else process.env[k] = oldv;
-          }
-        }
+        try {
+          envMgr.restore();
+        } catch {}
       }
     }
 
@@ -1105,118 +1072,7 @@ export class VisorTestRunner {
     } catch {}
   }
 
-  private buildPrInfoFromFixture(
-    fixtureName?: string,
-    overrides?: Record<string, unknown>
-  ): PRInfo {
-    const eventType = this.mapEventFromFixtureName(fixtureName);
-    const isIssue = eventType === 'issue_opened' || eventType === 'issue_comment';
-    const number = 1;
-    const loader = new FixtureLoader();
-    const fx =
-      fixtureName && fixtureName.startsWith('gh.') ? loader.load(fixtureName as any) : undefined;
-    const title =
-      (fx?.webhook.payload as any)?.pull_request?.title ||
-      (fx?.webhook.payload as any)?.issue?.title ||
-      (isIssue ? 'Sample issue title' : 'feat: add user search');
-    const body = (fx?.webhook.payload as any)?.issue?.body || (isIssue ? 'Issue body' : 'PR body');
-    const commentBody = (fx?.webhook.payload as any)?.comment?.body;
-    const prInfo: PRInfo = {
-      number,
-      title,
-      body,
-      author: 'test-user',
-      authorAssociation: 'MEMBER',
-      base: 'main',
-      head: 'feature/test',
-      files: (fx?.files || []).map(f => ({
-        filename: f.path,
-        additions: f.additions || 0,
-        deletions: f.deletions || 0,
-        changes: (f.additions || 0) + (f.deletions || 0),
-        status: (f.status as any) || 'modified',
-        patch: f.content ? `@@\n+${f.content}` : undefined,
-      })),
-      totalAdditions: 0,
-      totalDeletions: 0,
-      eventType,
-      fullDiff: fx?.diff,
-      isIssue,
-      eventContext: {
-        event_name:
-          fx?.webhook?.name ||
-          (isIssue ? (eventType === 'issue_comment' ? 'issue_comment' : 'issues') : 'pull_request'),
-        action:
-          fx?.webhook?.action ||
-          (eventType === 'pr_opened'
-            ? 'opened'
-            : eventType === 'pr_updated'
-              ? 'synchronize'
-              : undefined),
-        issue: isIssue ? { number, title, body, user: { login: 'test-user' } } : undefined,
-        pull_request: !isIssue
-          ? { number, title, head: { ref: 'feature/test' }, base: { ref: 'main' } }
-          : undefined,
-        repository: { owner: { login: 'owner' }, name: 'repo' },
-        comment:
-          eventType === 'issue_comment'
-            ? { body: commentBody || 'dummy', user: { login: 'contributor' } }
-            : undefined,
-      },
-    };
-
-    // Apply overrides: pr.* to PRInfo; webhook.* to eventContext
-    if (overrides && typeof overrides === 'object') {
-      for (const [k, v] of Object.entries(overrides)) {
-        if (k.startsWith('pr.')) {
-          const key = k.slice(3);
-          (prInfo as any)[key] = v as any;
-        } else if (k.startsWith('webhook.')) {
-          const path = k.slice(8);
-          this.deepSet(
-            (prInfo as any).eventContext || ((prInfo as any).eventContext = {}),
-            path,
-            v
-          );
-        }
-      }
-    }
-    // Test mode: avoid heavy diff processing and file reads
-    try {
-      (prInfo as any).includeCodeContext = false;
-      (prInfo as any).isPRContext = false;
-    } catch {}
-    return prInfo;
-  }
-
-  private deepSet(target: any, path: string, value: unknown): void {
-    const parts: (string | number)[] = [];
-    const regex = /\[(\d+)\]|\['([^']+)'\]|\["([^"]+)"\]|\.([^\.\[\]]+)/g;
-    let m: RegExpExecArray | null;
-    let cursor = 0;
-    if (!path.startsWith('.') && !path.startsWith('[')) {
-      const first = path.split('.')[0];
-      parts.push(first);
-      cursor = first.length;
-    }
-    while ((m = regex.exec(path)) !== null) {
-      if (m.index !== cursor) continue;
-      cursor = regex.lastIndex;
-      if (m[1] !== undefined) parts.push(Number(m[1]));
-      else if (m[2] !== undefined) parts.push(m[2]);
-      else if (m[3] !== undefined) parts.push(m[3]);
-      else if (m[4] !== undefined) parts.push(m[4]);
-    }
-    let obj = target;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const key = parts[i] as any;
-      if (obj[key] == null || typeof obj[key] !== 'object') {
-        obj[key] = typeof parts[i + 1] === 'number' ? [] : {};
-      }
-      obj = obj[key];
-    }
-    obj[parts[parts.length - 1] as any] = value;
-  }
+  // buildPrInfoFromFixture and deepSet moved to src/test-runner/core/fixture.ts
 
   private evaluateCase(
     caseName: string,
