@@ -1335,11 +1335,10 @@ ${'='.repeat(60)}
       }
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
-        // Only enable specialized prompt scaffolding for explicit code-review schema.
-        // Non code-review schemas (e.g., overview, assistants, custom) must not use code-review template.
+        // Use ProbeAgent's original code-review-template for code-review schema for compatibility with tests
         promptType:
           typeof schema === 'string' && schema === 'code-review'
-            ? ('code-review' as any)
+            ? ('code-review-template' as any)
             : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
@@ -2033,6 +2032,18 @@ ${'='.repeat(60)}
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
         if (!hasText) {
+          // Normalize common fields some providers use instead of "text"
+          try {
+            const maybe =
+              (out as any).result ||
+              (out as any).response ||
+              (out as any).message ||
+              (out as any).content;
+            if (typeof maybe === 'string' && maybe.trim()) {
+              (out as any).text = maybe.trim();
+            }
+          } catch {}
+
           // If still no text, build a fallback string from the raw response
           // or issue messages if available
           let fallbackText = '';
