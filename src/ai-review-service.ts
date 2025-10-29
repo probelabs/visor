@@ -2065,6 +2065,14 @@ ${'='.repeat(60)}
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
         if (!hasText) {
+          // Attempt to extract tool-call style attempt_completion result blocks
+          try {
+            const ac = this.extractAttemptCompletionText(response);
+            if (ac && ac.trim()) {
+              (out as any).text = ac.trim();
+            }
+          } catch {}
+
           // Normalize common fields some providers use instead of "text"
           try {
             const maybe =
@@ -2224,6 +2232,31 @@ ${'='.repeat(60)}
     }
 
     return bestJson;
+  }
+
+  /**
+   * Extract plain text from tool-call wrappers like <attempt_completion>...</attempt_completion>.
+   * Supports either JSON payloads with a { result: string } shape or raw markdown between the tags.
+   */
+  private extractAttemptCompletionText(text: string): string | null {
+    try {
+      if (!text || typeof text !== 'string') return null;
+      const m = text.match(/<attempt_completion[^>]*>([\s\S]*?)<\/attempt_completion>/i);
+      if (!m || !m[1]) return null;
+      const inner = m[1].trim();
+      // Try to parse inner as JSON with a result field first
+      try {
+        const obj = JSON.parse(inner);
+        const r = (obj && (obj.result || obj.text || obj.message || obj.content)) as unknown;
+        if (typeof r === 'string' && r.trim()) return r.trim();
+      } catch {
+        // Not JSON; fall back to raw inner text
+        if (inner) return inner;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**
