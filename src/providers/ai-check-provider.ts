@@ -685,111 +685,185 @@ export class AICheckProvider extends CheckProvider {
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
-    // Fallback injection for correction context (keeps behavior simple and robust):
-    // If validation history shows problems but the prompt lacks correction markers, prepend a concise correction block.
+    // Generic, opt-in correction-context preface (no hard-coded step names)
+    // Configure in YAML under the step: ai.prepend_correction: { from_history_of: ["checkA"], size_hint_from?: "checkB", previous_from?: "checkX", claim_path?: "claim", correction_path?: "correction", previous_text_path?: "text", require_markers_absent?: true }
     try {
-      const stepName = String((config as any).checkName || '');
-      const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
-      const computeFactValidation = () => {
-        try {
-          const hist = outHist || new Map<string, unknown[]>();
-          const vf = (hist.get('validate-fact') as unknown[]) || [];
-          const fx = (hist.get('extract-facts') as unknown[]) || [];
-          let lastWaveSize = 0;
-          if (Array.isArray(fx) && fx.length > 0) {
-            const last = fx[fx.length - 1];
-            lastWaveSize = Array.isArray(last) ? last.length : 0;
-          }
-          let lastWave: any[] = [];
-          if (lastWaveSize > 0 && Array.isArray(vf) && vf.length >= lastWaveSize) {
-            lastWave = vf.slice(-lastWaveSize) as any[];
-            if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
-              lastWave = (lastWave as unknown as any[][]).flat();
-            }
-          } else if (Array.isArray(vf) && vf.length > 0) {
-            // Fallback: if we cannot infer wave size (missing extract-facts history),
-            // consider the entire validation history as the latest context.
-            lastWave = (vf as any[]).slice();
-            if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
-              lastWave = (lastWave as unknown as any[][]).flat();
-            }
-          }
-          const invalid = (lastWave as any[]).filter(
-            v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high'))
-          );
-          if (invalid.length > 0) return invalid as Array<{ claim?: string; correction?: string }>;
-          // Fallback 2: derive from dependencyResults map if history not available
+      const corrCfg = (config.ai as any)?.prepend_correction;
+      if (corrCfg && typeof corrCfg === 'object') {
+        const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+        const fromChecks: string[] = Array.isArray(corrCfg.from_history_of)
+          ? corrCfg.from_history_of.filter((s: unknown) => typeof s === 'string')
+          : [];
+        const sizeHintFrom: string | undefined =
+          typeof corrCfg.size_hint_from === 'string'
+            ? (corrCfg.size_hint_from as string)
+            : undefined;
+        const previousFrom: string | undefined =
+          typeof corrCfg.previous_from === 'string' ? (corrCfg.previous_from as string) : undefined;
+        const claimPath: string =
+          typeof corrCfg.claim_path === 'string' ? (corrCfg.claim_path as string) : 'claim';
+        const correctionPath: string =
+          typeof corrCfg.correction_path === 'string'
+            ? (corrCfg.correction_path as string)
+            : 'correction';
+        const prevTextPath: string =
+          typeof corrCfg.previous_text_path === 'string'
+            ? (corrCfg.previous_text_path as string)
+            : 'text';
+        const requireMarkersAbsent: boolean =
+          corrCfg.require_markers_absent === false ? false : true;
+
+        const deepGet = (obj: any, pathStr: string): any => {
           try {
-            const dr = _dependencyResults as Map<string, ReviewSummary> | undefined;
-            const acc: any[] = [];
-            if (dr) {
-              for (const [k, v] of dr.entries()) {
-                if (k !== 'validate-fact') continue;
-                const out = (v as any)?.output;
-                if (Array.isArray(out)) acc.push(...out);
-                else if (out && typeof out === 'object') acc.push(out);
-              }
+            const parts = pathStr.split('.');
+            let cur = obj;
+            for (const p of parts) {
+              if (cur == null) return undefined;
+              cur = cur[p];
             }
-            const inv2 = acc.filter(
-              v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high'))
-            );
-            return inv2 as Array<{ claim?: string; correction?: string }>;
+            return cur;
           } catch {
-            return [] as Array<{ claim?: string; correction?: string }>;
+            return undefined;
           }
-        } catch {
-          return [] as Array<{ claim?: string; correction?: string }>;
+        };
+
+        const collectHistory = (name: string): any[] => {
+          const hist = outHist || new Map<string, unknown[]>();
+          const arr = ((hist.get(name) as unknown[]) || []) as any[];
+          return arr.slice();
+        };
+
+        // Determine wave size if hint provided
+        let waveSize = 0;
+        if (sizeHintFrom) {
+          const h = collectHistory(sizeHintFrom);
+          if (h.length > 0) {
+            const last = h[h.length - 1];
+            waveSize = Array.isArray(last) ? last.length : 0;
+          }
         }
-      };
-      // Inspect memory for debugging
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          const ms = require('../memory-store').MemoryStore.getInstance();
-          const hasKey = (ms.list('fact-validation') || []).includes('fact_validation_issues');
-          const memIssues = hasKey ? ms.get('fact_validation_issues', 'fact-validation') || [] : [];
-          console.error(
-            `[ai-inject] memory fact_validation_issues len=${Array.isArray(memIssues) ? memIssues.length : 0}`
+
+        // Collect candidates from configured checks
+        const candidates: any[] = [];
+        for (const n of fromChecks) {
+          const h = collectHistory(n);
+          if (waveSize > 0 && h.length >= waveSize) {
+            const slice = h.slice(-waveSize);
+            if (Array.isArray(slice[0])) candidates.push(...(slice as any[]).flat());
+            else candidates.push(...slice);
+          } else {
+            candidates.push(...h);
+          }
+        }
+
+        const isInvalid = (v: any): boolean => {
+          const iv = deepGet(v, 'is_valid');
+          const conf = deepGet(v, 'confidence');
+          return iv === false || (typeof conf === 'string' && conf.toLowerCase() !== 'high');
+        };
+        const invalid = candidates.filter(isInvalid);
+
+        const hasMarkers = /\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
+        const shouldInject = invalid.length > 0 && (!requireMarkersAbsent || !hasMarkers);
+
+        if (shouldInject) {
+          let prevText = '';
+          if (previousFrom) {
+            try {
+              const arr = ((outHist?.get(previousFrom) as unknown[]) || []) as any[];
+              const last = arr[arr.length - 1] || {};
+              const maybe = deepGet(last, prevTextPath);
+              prevText = typeof maybe === 'string' ? maybe : '';
+            } catch {}
+          }
+          const lines: string[] = [];
+          lines.push(
+            '⚠️  IMPORTANT: Your previous response contained factual errors. Please correct them:'
           );
+          lines.push('');
+          lines.push('<previous_response>');
+          if (prevText) lines.push(prevText);
+          lines.push('</previous_response>');
+          lines.push('');
+          lines.push('**Validation Errors Found:**');
+          for (const it of invalid) {
+            const claim = deepGet(it, claimPath);
+            const corr = deepGet(it, correctionPath);
+            if (typeof claim === 'string' && claim) lines.push(`- **${claim}**`);
+            if (typeof corr === 'string' && corr) lines.push(`Correction: ${corr}`);
+          }
+          lines.push('');
+          processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
         }
-      } catch {}
-      const invalid = computeFactValidation();
-      const needsInjection =
-        (stepName === 'comment-assistant' || stepName === 'issue-assistant') &&
-        invalid.length > 0 &&
-        !/\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          console.error(
-            `[ai-inject] step=${stepName || 'unknown'} invalid.len=${invalid.length} willInject=${needsInjection}`
-          );
+      } else {
+        // Generic shape-based fallback: look for recent outputs that include is_valid/confidence
+        const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+        const deepGet = (obj: any, pathStr: string): any => {
+          try {
+            const parts = pathStr.split('.');
+            let cur = obj;
+            for (const p of parts) {
+              if (cur == null) return undefined;
+              cur = cur[p];
+            }
+            return cur;
+          } catch {
+            return undefined;
+          }
+        };
+        const isInvalid = (v: any): boolean => {
+          const iv = deepGet(v, 'is_valid');
+          const conf = deepGet(v, 'confidence');
+          if (iv === false) return true;
+          if (typeof conf === 'string' && conf.toLowerCase() !== 'high') return true;
+          return false;
+        };
+        const candidates: any[] = [];
+        if (outHist) {
+          for (const [, arr] of outHist.entries()) {
+            const hist = (arr as any[]) || [];
+            if (hist.length === 0) continue;
+            const last = hist[hist.length - 1];
+            if (Array.isArray(last)) candidates.push(...last);
+            else if (last && typeof last === 'object') candidates.push(last);
+          }
         }
-      } catch {}
-      if (needsInjection) {
-        // Pull last assistant text to embed inside <previous_response>
-        let prevText = '';
+        const invalid = candidates.filter(isInvalid);
         try {
-          const arr = (outHist?.get(stepName) as any[]) || [];
-          const last = arr[arr.length - 1] || {};
-          prevText = String((last && last.text) || '');
+          if (process.env.VISOR_DEBUG === 'true') {
+            console.error(`[ai-generic] candidates=${candidates.length} invalid=${invalid.length}`);
+          }
         } catch {}
-        const lines: string[] = [];
-        lines.push(
-          '⚠️  IMPORTANT: Your previous response contained factual errors. Please correct them:'
-        );
-        lines.push('');
-        lines.push('<previous_response>');
-        if (prevText) lines.push(prevText);
-        lines.push('</previous_response>');
-        lines.push('');
-        lines.push('**Validation Errors Found:**');
-        for (const it of invalid) {
-          const claim = it.claim ? String(it.claim) : '';
-          const corr = it.correction ? String(it.correction) : '';
-          if (claim) lines.push(`- **${claim}**`);
-          if (corr) lines.push(`Correction: ${corr}`);
+        const hasMarkers = /\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
+        if (invalid.length > 0 && !hasMarkers) {
+          // Previous text from same step by default
+          let prevText = '';
+          try {
+            const stepName = String((config as any).checkName || '');
+            const arr = ((outHist?.get(stepName) as unknown[]) || []) as any[];
+            const last = arr[arr.length - 1] || {};
+            const maybe = (last && (last.text ?? last.body ?? last.content)) as unknown;
+            prevText = typeof maybe === 'string' ? maybe : '';
+          } catch {}
+          const lines: string[] = [];
+          lines.push(
+            '⚠️  IMPORTANT: Your previous response may contain factual errors. Please correct them:'
+          );
+          lines.push('');
+          lines.push('<previous_response>');
+          if (prevText) lines.push(prevText);
+          lines.push('</previous_response>');
+          lines.push('');
+          lines.push('**Issues Detected:**');
+          for (const it of invalid) {
+            const claim = (it && (it.claim || it.message || it.reason)) as unknown;
+            const corr = (it && (it.correction || it.correct || it.fix)) as unknown;
+            if (typeof claim === 'string' && claim) lines.push(`- **${claim}**`);
+            if (typeof corr === 'string' && corr) lines.push(`Correction: ${corr}`);
+          }
+          lines.push('');
+          processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
         }
-        lines.push('');
-        processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
       }
     } catch {}
 

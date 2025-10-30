@@ -325,6 +325,15 @@ steps:
     type: ai
     group: dynamic  # New issue triage posts a standalone comment
     schema: issue-assistant
+    ai:
+      prepend_correction:
+        from_history_of: ['validate-fact']
+        size_hint_from: 'extract-facts'
+        previous_from: 'issue-assistant'
+        claim_path: 'claim'
+        correction_path: 'correction'
+        previous_text_path: 'text'
+        require_markers_absent: true
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
@@ -414,6 +423,15 @@ steps:
     group: dynamic
     schema: issue-assistant
     command: "visor"
+    ai:
+      prepend_correction:
+        from_history_of: ['validate-fact']
+        size_hint_from: 'extract-facts'
+        previous_from: 'comment-assistant'
+        claim_path: 'claim'
+        correction_path: 'correction'
+        previous_text_path: 'text'
+        require_markers_absent: true
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
