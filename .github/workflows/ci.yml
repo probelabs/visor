@@ -64,10 +64,8 @@ jobs:
           ls -la *.tgz
           echo "✅ Package can be created successfully"
 
-      - name: Run integration tests (defaults suite)
-        run: |
-          mkdir -p output
-          node ./dist/index.js test --config defaults/.visor.tests.yaml --json output/visor-tests.json --report junit:output/visor-tests.xml --summary md:output/visor-tests.md
+      # Visor YAML tests run as part of `npm test` via test:yaml.
+      # Artifacts are still uploaded below from ./output.
 
       - name: Upload integration test artifacts
         if: always()
