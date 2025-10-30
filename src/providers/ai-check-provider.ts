@@ -706,20 +706,64 @@ export class AICheckProvider extends CheckProvider {
             if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
               lastWave = (lastWave as unknown as any[][]).flat();
             }
+          } else if (Array.isArray(vf) && vf.length > 0) {
+            // Fallback: if we cannot infer wave size (missing extract-facts history),
+            // consider the entire validation history as the latest context.
+            lastWave = (vf as any[]).slice();
+            if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
+              lastWave = (lastWave as unknown as any[][]).flat();
+            }
           }
           const invalid = (lastWave as any[]).filter(
             v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high'))
           );
-          return invalid as Array<{ claim?: string; correction?: string }>;
+          if (invalid.length > 0) return invalid as Array<{ claim?: string; correction?: string }>;
+          // Fallback 2: derive from dependencyResults map if history not available
+          try {
+            const dr = _dependencyResults as Map<string, ReviewSummary> | undefined;
+            const acc: any[] = [];
+            if (dr) {
+              for (const [k, v] of dr.entries()) {
+                if (k !== 'validate-fact') continue;
+                const out = (v as any)?.output;
+                if (Array.isArray(out)) acc.push(...out);
+                else if (out && typeof out === 'object') acc.push(out);
+              }
+            }
+            const inv2 = acc.filter(
+              v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high'))
+            );
+            return inv2 as Array<{ claim?: string; correction?: string }>;
+          } catch {
+            return [] as Array<{ claim?: string; correction?: string }>;
+          }
         } catch {
           return [] as Array<{ claim?: string; correction?: string }>;
         }
       };
+      // Inspect memory for debugging
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const ms = require('../memory-store').MemoryStore.getInstance();
+          const hasKey = (ms.list('fact-validation') || []).includes('fact_validation_issues');
+          const memIssues = hasKey ? ms.get('fact_validation_issues', 'fact-validation') || [] : [];
+          console.error(
+            `[ai-inject] memory fact_validation_issues len=${Array.isArray(memIssues) ? memIssues.length : 0}`
+          );
+        }
+      } catch {}
       const invalid = computeFactValidation();
       const needsInjection =
         (stepName === 'comment-assistant' || stepName === 'issue-assistant') &&
         invalid.length > 0 &&
         !/\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.error(
+            `[ai-inject] step=${stepName || 'unknown'} invalid.len=${invalid.length} willInject=${needsInjection}`
+          );
+        }
+      } catch {}
       if (needsInjection) {
         // Pull last assistant text to embed inside <previous_response>
         let prevText = '';
