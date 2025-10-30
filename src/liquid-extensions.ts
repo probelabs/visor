@@ -185,7 +185,17 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     if (typeof key !== 'string') {
       return false;
     }
-    return memoryStore.has(key, namespace);
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === 'true' && key === 'fact_validation_issues') {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {}
+    return has;
   });
 
   liquid.registerFilter('memory_list', (namespace?: string) => {

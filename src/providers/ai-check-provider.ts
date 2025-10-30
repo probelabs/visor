@@ -624,13 +624,9 @@ export class AICheckProvider extends CheckProvider {
     if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
-      if (aiConfig.debug) {
-        console.error(
-          `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
-        );
-      }
-    } else if (config.ai?.disable_tools && aiConfig.debug) {
-      console.error(`🔧 Debug: AI check has tools disabled - MCP servers will not be passed`);
+      // no noisy diagnostics here
+    } else if (config.ai?.disable_tools) {
+      // silently skip MCP when tools disabled
     }
 
     // Build template context for state capture
@@ -677,7 +673,7 @@ export class AICheckProvider extends CheckProvider {
     // Process prompt with Liquid templates and file loading
     // Skip event context (PR diffs, files, etc.) if requested
     const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
-    let processedPrompt = await this.processPrompt(
+    const processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
       eventContext,
@@ -685,187 +681,7 @@ export class AICheckProvider extends CheckProvider {
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
-    // Generic, opt-in correction-context preface (no hard-coded step names)
-    // Configure in YAML under the step: ai.prepend_correction: { from_history_of: ["checkA"], size_hint_from?: "checkB", previous_from?: "checkX", claim_path?: "claim", correction_path?: "correction", previous_text_path?: "text", require_markers_absent?: true }
-    try {
-      const corrCfg = (config.ai as any)?.prepend_correction;
-      if (corrCfg && typeof corrCfg === 'object') {
-        const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
-        const fromChecks: string[] = Array.isArray(corrCfg.from_history_of)
-          ? corrCfg.from_history_of.filter((s: unknown) => typeof s === 'string')
-          : [];
-        const sizeHintFrom: string | undefined =
-          typeof corrCfg.size_hint_from === 'string'
-            ? (corrCfg.size_hint_from as string)
-            : undefined;
-        const previousFrom: string | undefined =
-          typeof corrCfg.previous_from === 'string' ? (corrCfg.previous_from as string) : undefined;
-        const claimPath: string =
-          typeof corrCfg.claim_path === 'string' ? (corrCfg.claim_path as string) : 'claim';
-        const correctionPath: string =
-          typeof corrCfg.correction_path === 'string'
-            ? (corrCfg.correction_path as string)
-            : 'correction';
-        const prevTextPath: string =
-          typeof corrCfg.previous_text_path === 'string'
-            ? (corrCfg.previous_text_path as string)
-            : 'text';
-        const requireMarkersAbsent: boolean =
-          corrCfg.require_markers_absent === false ? false : true;
-
-        const deepGet = (obj: any, pathStr: string): any => {
-          try {
-            const parts = pathStr.split('.');
-            let cur = obj;
-            for (const p of parts) {
-              if (cur == null) return undefined;
-              cur = cur[p];
-            }
-            return cur;
-          } catch {
-            return undefined;
-          }
-        };
-
-        const collectHistory = (name: string): any[] => {
-          const hist = outHist || new Map<string, unknown[]>();
-          const arr = ((hist.get(name) as unknown[]) || []) as any[];
-          return arr.slice();
-        };
-
-        // Determine wave size if hint provided
-        let waveSize = 0;
-        if (sizeHintFrom) {
-          const h = collectHistory(sizeHintFrom);
-          if (h.length > 0) {
-            const last = h[h.length - 1];
-            waveSize = Array.isArray(last) ? last.length : 0;
-          }
-        }
-
-        // Collect candidates from configured checks
-        const candidates: any[] = [];
-        for (const n of fromChecks) {
-          const h = collectHistory(n);
-          if (waveSize > 0 && h.length >= waveSize) {
-            const slice = h.slice(-waveSize);
-            if (Array.isArray(slice[0])) candidates.push(...(slice as any[]).flat());
-            else candidates.push(...slice);
-          } else {
-            candidates.push(...h);
-          }
-        }
-
-        const isInvalid = (v: any): boolean => {
-          const iv = deepGet(v, 'is_valid');
-          const conf = deepGet(v, 'confidence');
-          return iv === false || (typeof conf === 'string' && conf.toLowerCase() !== 'high');
-        };
-        const invalid = candidates.filter(isInvalid);
-
-        const hasMarkers = /\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
-        const shouldInject = invalid.length > 0 && (!requireMarkersAbsent || !hasMarkers);
-
-        if (shouldInject) {
-          let prevText = '';
-          if (previousFrom) {
-            try {
-              const arr = ((outHist?.get(previousFrom) as unknown[]) || []) as any[];
-              const last = arr[arr.length - 1] || {};
-              const maybe = deepGet(last, prevTextPath);
-              prevText = typeof maybe === 'string' ? maybe : '';
-            } catch {}
-          }
-          const lines: string[] = [];
-          lines.push(
-            '⚠️  IMPORTANT: Your previous response contained factual errors. Please correct them:'
-          );
-          lines.push('');
-          lines.push('<previous_response>');
-          if (prevText) lines.push(prevText);
-          lines.push('</previous_response>');
-          lines.push('');
-          lines.push('**Validation Errors Found:**');
-          for (const it of invalid) {
-            const claim = deepGet(it, claimPath);
-            const corr = deepGet(it, correctionPath);
-            if (typeof claim === 'string' && claim) lines.push(`- **${claim}**`);
-            if (typeof corr === 'string' && corr) lines.push(`Correction: ${corr}`);
-          }
-          lines.push('');
-          processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
-        }
-      } else {
-        // Generic shape-based fallback: look for recent outputs that include is_valid/confidence
-        const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
-        const deepGet = (obj: any, pathStr: string): any => {
-          try {
-            const parts = pathStr.split('.');
-            let cur = obj;
-            for (const p of parts) {
-              if (cur == null) return undefined;
-              cur = cur[p];
-            }
-            return cur;
-          } catch {
-            return undefined;
-          }
-        };
-        const isInvalid = (v: any): boolean => {
-          const iv = deepGet(v, 'is_valid');
-          const conf = deepGet(v, 'confidence');
-          if (iv === false) return true;
-          if (typeof conf === 'string' && conf.toLowerCase() !== 'high') return true;
-          return false;
-        };
-        const candidates: any[] = [];
-        if (outHist) {
-          for (const [, arr] of outHist.entries()) {
-            const hist = (arr as any[]) || [];
-            if (hist.length === 0) continue;
-            const last = hist[hist.length - 1];
-            if (Array.isArray(last)) candidates.push(...last);
-            else if (last && typeof last === 'object') candidates.push(last);
-          }
-        }
-        const invalid = candidates.filter(isInvalid);
-        try {
-          if (process.env.VISOR_DEBUG === 'true') {
-            console.error(`[ai-generic] candidates=${candidates.length} invalid=${invalid.length}`);
-          }
-        } catch {}
-        const hasMarkers = /\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
-        if (invalid.length > 0 && !hasMarkers) {
-          // Previous text from same step by default
-          let prevText = '';
-          try {
-            const stepName = String((config as any).checkName || '');
-            const arr = ((outHist?.get(stepName) as unknown[]) || []) as any[];
-            const last = arr[arr.length - 1] || {};
-            const maybe = (last && (last.text ?? last.body ?? last.content)) as unknown;
-            prevText = typeof maybe === 'string' ? maybe : '';
-          } catch {}
-          const lines: string[] = [];
-          lines.push(
-            '⚠️  IMPORTANT: Your previous response may contain factual errors. Please correct them:'
-          );
-          lines.push('');
-          lines.push('<previous_response>');
-          if (prevText) lines.push(prevText);
-          lines.push('</previous_response>');
-          lines.push('');
-          lines.push('**Issues Detected:**');
-          for (const it of invalid) {
-            const claim = (it && (it.claim || it.message || it.reason)) as unknown;
-            const corr = (it && (it.correction || it.correct || it.fix)) as unknown;
-            if (typeof claim === 'string' && claim) lines.push(`- **${claim}**`);
-            if (typeof corr === 'string' && corr) lines.push(`Correction: ${corr}`);
-          }
-          lines.push('');
-          processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
-        }
-      }
-    } catch {}
+    // No implicit prompt mutations here — prompts should come from YAML.
 
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
@@ -882,21 +698,7 @@ export class AICheckProvider extends CheckProvider {
         provider: 'ai',
         prompt: finalPrompt,
       });
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          console.error(
-            `[ai-capture] step=${String(stepName)} len=${finalPrompt.length} preview=${finalPrompt
-              .replace(/\s+/g, ' ')
-              .slice(0, 200)}`
-          );
-          const containsClaim = finalPrompt.includes('Claim:');
-          const containsCorrection = finalPrompt.includes('Correction:');
-
-          console.error(
-            `[ai-capture] markers step=${String(stepName)} Claim:${containsClaim} Correction:${containsCorrection}`
-          );
-        }
-      } catch {}
+      // capture hook retained; no extra console diagnostics
     } catch {}
 
     // Test hook: mock output for this step (short-circuit provider)
@@ -914,34 +716,15 @@ export class AICheckProvider extends CheckProvider {
     // Pass the custom prompt and schema - no fallbacks
     const schema = config.schema as string | Record<string, unknown> | undefined;
 
-    // Only output debug messages if debug mode is enabled
-    if (aiConfig.debug) {
-      console.error(
-        `🔧 Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
-      );
-      console.error(`🔧 Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-      console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
-    }
+    // Removed verbose AICheckProvider console diagnostics; rely on logger.debug when needed
 
     try {
-      if (aiConfig.debug) {
-        console.error(
-          `🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`
-        );
-      }
+      // No extra console diagnostics here
 
       let result: ReviewSummary;
 
       // Check if we should use session reuse (only if explicitly enabled on this check)
-      if (aiConfig.debug) {
-        try {
-          console.error(
-            `🔧 Debug: reuse_ai_session for ${config.checkName}: ${String(
-              (config as any).reuse_ai_session
-            )}`
-          );
-        } catch {}
-      }
+      // No extra reuse_ai_session console diagnostics
       const reuseEnabled =
         (config as any).reuse_ai_session === true ||
         typeof (config as any).reuse_ai_session === 'string';

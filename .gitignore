@@ -144,3 +144,7 @@ output/**/*.ndjson
 # NDJSON logs (global ignore)
 *.ndjson
 dist/output/**/*.ndjson
+
+# Local schema temp and scratch
+scripts/.schema-tmp/
+tmp/

@@ -81,10 +81,13 @@ export class FlowStage {
               ? info.prompt.slice(0, this.promptCap)
               : info.prompt;
           this.prompts[k].push(p);
+          // prompts are captured for assertions only — no ad-hoc console/file output
         },
         mockForStep: (step: string) => mockMgr.get(step),
       },
     } as any);
+
+    // (debug cleanup) removed stage-debug prints
 
     // Baselines for stage deltas
     const promptBase: Record<string, number> = {};
@@ -145,69 +148,8 @@ export class FlowStage {
         undefined
       );
 
-      // Fallback: if some explicitly expected steps did not run, execute them once
-      // and MERGE statistics so coverage reflects the extra execution(s).
-      let mergedStats: ExecutionStatistics | undefined = res.statistics as any;
-      try {
-        const expectedSteps = new Set<string>();
-        for (const c of (((stage as any).expect || {}).calls || []) as Array<{ step?: string }>) {
-          if (c && typeof c.step === 'string') expectedSteps.add(c.step);
-        }
-        if (expectedSteps.size > 0) {
-          const executed = new Set<string>();
-          for (const chk of res.statistics.checks || []) {
-            if ((chk.totalRuns || 0) > 0) executed.add(chk.checkName);
-          }
-          const missing = Array.from(expectedSteps).filter(s => !executed.has(s));
-          const toRun = missing.filter(s => (checksToRun.indexOf(s) === -1 ? true : true));
-          if (toRun.length > 0) {
-            const res2 = await this.engine.executeGroupedChecks(
-              prInfo,
-              toRun,
-              120000,
-              this.cfg,
-              'json',
-              process.env.VISOR_DEBUG === 'true',
-              undefined,
-              false,
-              undefined
-            );
-            // Merge statistics by checkName (sum runs/durations, keep simple fields best‑effort)
-            const byName = new Map<string, any>();
-            for (const c of (res.statistics.checks || []) as any[])
-              byName.set(c.checkName, { ...c });
-            for (const c of (res2.statistics.checks || []) as any[]) {
-              const prev = byName.get(c.checkName);
-              if (!prev) {
-                byName.set(c.checkName, { ...c });
-              } else {
-                byName.set(c.checkName, {
-                  ...prev,
-                  totalRuns: (prev.totalRuns || 0) + (c.totalRuns || 0),
-                  successfulRuns: (prev.successfulRuns || 0) + (c.successfulRuns || 0),
-                  failedRuns: (prev.failedRuns || 0) + (c.failedRuns || 0),
-                  totalDuration: (prev.totalDuration || 0) + (c.totalDuration || 0),
-                });
-              }
-            }
-            const checks = Array.from(byName.values());
-            mergedStats = {
-              ...(res.statistics as any),
-              totalChecksConfigured: Math.max(
-                res.statistics.totalChecksConfigured || checks.length,
-                checks.length
-              ),
-              totalExecutions: checks.reduce((a: number, c: any) => a + (c.totalRuns || 0), 0),
-              successfulExecutions: checks.reduce(
-                (a: number, c: any) => a + (c.successfulRuns || 0),
-                0
-              ),
-              failedExecutions: checks.reduce((a: number, c: any) => a + (c.failedRuns || 0), 0),
-              checks,
-            } as any;
-          }
-        }
-      } catch {}
+      // No second-pass fallback in flows to avoid duplicate runs; rely on single execution and deltas
+      const mergedStats: ExecutionStatistics | undefined = res.statistics as any;
 
       // Build stage deltas
       const stagePrompts: Record<string, string[]> = {};
@@ -314,6 +256,7 @@ export class FlowStage {
 
       // Evaluate stage
       const expect: ExpectBlock = stage.expect || {};
+      // evaluation proceeds without ad-hoc stage prompt previews
       const errors = evaluate(
         stageName,
         stageStats,

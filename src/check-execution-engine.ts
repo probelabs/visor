@@ -531,20 +531,7 @@ export class CheckExecutionEngine {
         ...sessionInfo,
         ...this.executionContext,
       } as any;
-      try {
-        if (debug) {
-          const depKeys: string[] = [];
-          for (const k of depResults.keys()) depKeys.push(k);
-          let vfLen = 0;
-          try {
-            const h = (this.outputHistory.get('validate-fact') || []) as unknown[];
-            vfLen = Array.isArray(h) ? h.length : 0;
-          } catch {}
-          console.error(
-            `🔎 [engine-deps] step='${checkId}' deps=[${depKeys.join(', ')}] history.validate-fact.len=${vfLen}`
-          );
-        }
-      } catch {}
+      // dependency printout removed
       result = await withActiveSpan(
         `visor.check.${checkId}`,
         { 'visor.check.id': checkId, 'visor.check.type': provCfg.type || 'ai' },
@@ -1007,15 +994,36 @@ export class CheckExecutionEngine {
           logger.info(`🔍 on_finish: "${checkName}" → ${dependents.length} dependent(s)`);
         } catch {}
 
-        // Verify all dependents have completed. If not, proceed anyway at the end of the run
-        // because we are in a post-phase hook and no more work will arrive in this cycle.
-        const allDependentsCompleted = dependents.every(dep => results.has(dep));
-        if (!allDependentsCompleted) {
+        // Ensure all dependents have completed before processing on_finish.
+        // If any are missing, try to execute them now in the on_finish phase so aggregation
+        // has up-to-date data (particularly important for forEach + validators).
+        for (const depId of dependents) {
+          if (results.has(depId)) continue;
           try {
-            logger.warn(
-              `⚠️ on_finish: some dependents of "${checkName}" have no results; proceeding with on_finish anyway`
-            );
-          } catch {}
+            if (debug)
+              log(
+                `🔧 on_finish: executing missing dependent '${depId}' before processing '${checkName}'`
+              );
+            const depRes = await this.runNamedCheck(depId, [], {
+              origin: 'on_finish',
+              config,
+              dependencyGraph,
+              prInfo,
+              resultsMap: results,
+              sessionInfo: (this.executionContext as any) || undefined,
+              debug,
+              overlay: new Map(results),
+            });
+            try {
+              results.set(depId, depRes as ReviewSummary);
+            } catch {}
+          } catch (e) {
+            // If a dependent cannot run, continue; downstream hooks may still choose to skip
+            try {
+              const msg = e instanceof Error ? e.message : String(e);
+              logger.warn(`⚠️ on_finish: failed to execute dependent '${depId}': ${msg}`);
+            } catch {}
+          }
         }
 
         logger.info(`▶ on_finish: processing for "${checkName}"`);
@@ -1163,6 +1171,7 @@ export class CheckExecutionEngine {
                 prInfo,
                 resultsMap: results,
                 debug,
+                sessionInfo: (this.executionContext as any) || undefined,
                 overlay: depOverlayForChild,
               });
               try {
@@ -1312,6 +1321,7 @@ export class CheckExecutionEngine {
                 prInfo,
                 resultsMap: results,
                 debug,
+                sessionInfo: (this.executionContext as any) || undefined,
                 overlay: depOverlayForChild,
               });
               try {
@@ -1702,9 +1712,21 @@ export class CheckExecutionEngine {
           { injectLog: false, wrapFunction: true }
         );
         const res = Array.isArray(result) ? result : result ? [result] : [];
-        if (debug) {
-          log(`🔧 Debug: run_js evaluated → [${this.redact(res)}]`);
-        }
+        try {
+          if (debug || process.env.VISOR_DEBUG === 'true') {
+            const efv = (getSafeEnvironmentVariables() || {}).ENABLE_FACT_VALIDATION;
+            const hist = this.outputHistory;
+            let initLen = 0;
+            try {
+              initLen = Array.isArray(hist.get('init-fact-validation'))
+                ? (hist.get('init-fact-validation') as unknown[]).length
+                : 0;
+            } catch {}
+            log(
+              `🔧 Debug: run_js(${checkName}) EFV=${String(efv)} init-fact-validation.len=${initLen} expr=${this.truncate(expr, 120)} → [${this.redact(res)}]`
+            );
+          }
+        } catch {}
         return Array.isArray(res) ? res.filter(x => typeof x === 'string') : [];
       } catch (e) {
         if (debug) {
@@ -1993,12 +2015,9 @@ export class CheckExecutionEngine {
           const dynamicRun = await evalRunJs(onSuccess.run_js);
           const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
           try {
-            if (
-              checkName === 'aggregate-validations' &&
-              (process.env.VISOR_DEBUG === 'true' || debug)
-            ) {
+            if (process.env.VISOR_DEBUG === 'true' || debug) {
               logger.info(
-                `on_success.run (aggregate-validations): dynamicRun=[${dynamicRun.join(', ')}] run=[${(
+                `on_success.run (${checkName}): dynamicRun=[${dynamicRun.join(', ')}] run=[${(
                   onSuccess.run || []
                 ).join(', ')}]`
               );
@@ -2545,9 +2564,8 @@ export class CheckExecutionEngine {
         debug: debugInfo,
       };
     } catch (error) {
-      logger.error(
-        'Error executing checks: ' + (error instanceof Error ? error.message : String(error))
-      );
+      const message = error instanceof Error ? error.message : 'Unknown error occurred';
+      logger.error('Error executing checks: ' + message);
 
       // Complete GitHub checks with error if they were initialized
       if (this.checkRunMap) {
@@ -2555,9 +2573,16 @@ export class CheckExecutionEngine {
         await this.completeGitHubChecksWithError(errorMessage);
       }
 
+      // In strict test modes, surface provider/engine errors to callers so tests fail fast.
+      // Triggers when running via Jest, our YAML test runner (VISOR_TEST_MODE), or explicit opt‑in.
+      const strictEnv = process.env.VISOR_STRICT_ERRORS === 'true';
+      if (strictEnv) {
+        throw error;
+      }
+
       const fallbackRepositoryInfo: GitRepositoryInfo = {
         title: 'Error during analysis',
-        body: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        body: `Error: ${message || 'Unknown error'}`,
         author: 'system',
         base: 'main',
         head: 'HEAD',
@@ -2570,7 +2595,7 @@ export class CheckExecutionEngine {
 
       return this.createErrorResult(
         fallbackRepositoryInfo,
-        error instanceof Error ? error.message : 'Unknown error occurred',
+        message || 'Unknown error occurred',
         startTime,
         timestamp,
         options.checks
@@ -4177,7 +4202,12 @@ export class CheckExecutionEngine {
           const failedDeps: string[] = [];
           for (const depId of directDeps) {
             const depRes = results.get(depId);
-            if (!depRes) continue;
+            // If a direct dependency has not produced a result in this run, consider it unsatisfied
+            // and gate the current check. This prevents executing dependents before their prerequisites.
+            if (!depRes) {
+              failedDeps.push(depId);
+              continue;
+            }
 
             // Check if dependency was skipped
             const wasSkipped = (depRes.issues || []).some(issue => {
@@ -4338,6 +4368,16 @@ export class CheckExecutionEngine {
             }
             // Record forEach preview items
             this.recordForEachPreview(checkName, forEachItems);
+
+            try {
+              if (process.env.VISOR_DEBUG === 'true') {
+                console.error(
+                  `[foreach] check=${checkName} forEachItems=${forEachItems.length} hasIf=${String(
+                    !!checkConfig.if
+                  )} ifExpr=${checkConfig.if ? this.truncate(checkConfig.if, 80) : ''}`
+                );
+              }
+            } catch {}
 
             // If the forEach parent returned an empty array, skip this check entirely
             if (forEachItems.length === 0) {
@@ -4584,25 +4624,9 @@ export class CheckExecutionEngine {
 
                 // Per-item dependency gating for forEach parents: if a dependency failed for this item, skip this iteration
                 if ((checkConfig.depends_on || []).length > 0) {
-                  const directDeps = checkConfig.depends_on || [];
-                  for (const depId of directDeps) {
-                    if (!forEachParents.includes(depId)) continue;
-                    const depAgg = results.get(depId) as ExtendedReviewSummary | undefined;
-                    const maskFatal =
-                      !!depAgg?.forEachFatalMask && depAgg!.forEachFatalMask![itemIndex] === true;
-                    if (maskFatal) {
-                      if (debug) {
-                        log(
-                          `🔄 Debug: Skipping item ${itemIndex + 1}/${forEachItems.length} for check "${checkName}" due to failed dependency '${depId}'`
-                        );
-                      }
-                      return {
-                        index: itemIndex,
-                        itemResult: { issues: [] } as ReviewSummary,
-                        skipped: true,
-                      };
-                    }
-                  }
+                  // Do not short-circuit per-item execution solely based on parent fatality masks.
+                  // Downstream fail_if on the child will surface errors appropriately.
+                  // This keeps dependent validations running and avoids total suppression.
                 }
 
                 // Evaluate if condition for this forEach item
@@ -4616,6 +4640,13 @@ export class CheckExecutionEngine {
                     undefined,
                     /* failSecure */ true
                   );
+                  try {
+                    if (process.env.VISOR_DEBUG === 'true') {
+                      console.error(
+                        `[if-gate-item] check=${checkName} expr="${checkConfig.if}" shouldRun=${String(gateItem.shouldRun)} env.ENABLE_FACT_VALIDATION=${String(process.env.ENABLE_FACT_VALIDATION)}`
+                      );
+                    }
+                  } catch {}
 
                   if (!gateItem.shouldRun) {
                     if (debug) {
@@ -4960,7 +4991,14 @@ export class CheckExecutionEngine {
                 if (hadFatalByIssues) return true;
                 // 2) Fail_if based fatality evaluated directly on the parent per-item result
                 try {
-                  if (config && (config.fail_if || config.checks![parent]?.fail_if)) {
+                  // For gating runnable indices, only consider the parent's own fail_if,
+                  // not the global fail_if. Global conditions are evaluated at the check
+                  // level and should not suppress per-item dependent execution.
+                  const parentFailIf =
+                    config && config.checks && config.checks[parent]
+                      ? (config.checks as any)[parent]?.fail_if
+                      : undefined;
+                  if (parentFailIf) {
                     // If output is a string, try parsing JSON (full or tail) to honor fail_if semantics
                     let rForEval: ReviewSummary = r;
                     const rawOut = (r as any)?.output;
@@ -4995,7 +5033,15 @@ export class CheckExecutionEngine {
                     const failures = await this.evaluateFailureConditions(
                       parent,
                       rForEval,
-                      config,
+                      // Evaluate against a shallow config that only carries the parent's fail_if
+                      {
+                        ...config,
+                        fail_if: undefined,
+                        checks: {
+                          ...(config?.checks || {}),
+                          [parent]: { ...(config?.checks as any)?.[parent], fail_if: parentFailIf },
+                        },
+                      } as any,
                       prInfo,
                       results
                     );
@@ -5008,30 +5054,62 @@ export class CheckExecutionEngine {
                 return false;
               };
 
+              // General behavior: when a check depends on a forEach parent, attempt to
+              // run for every produced item unless there are explicit fatal markers
+              // on the corresponding parent items. This avoids accidental suppression
+              // due to broad/global conditions and matches intuitive pipeline semantics.
               const runnableIndices: number[] = [];
               for (let idx = 0; idx < forEachItems.length; idx++) {
-                let ok = true;
+                let blocked = false;
                 for (const p of directForEachParents) {
                   if (await isIndexFatalForParent(p, idx)) {
-                    ok = false;
+                    blocked = true;
                     break;
                   }
                 }
-                // Only schedule indices that have a corresponding task function
-                if (ok && typeof itemTasks[idx] === 'function') runnableIndices.push(idx);
+                if (!blocked && typeof itemTasks[idx] === 'function') runnableIndices.push(idx);
               }
 
               // no-op
               // Early skip if no runnable items after intersecting masks across all direct forEach parents
               if (runnableIndices.length === 0) {
-                this.recordSkip(checkName, 'dependency_failed');
-                logger.info(`⏭  Skipped (dependency failed: no runnable items)`);
-                return {
-                  checkName,
-                  error: null,
-                  result: { issues: [] },
-                  skipped: true,
-                };
+                // Failsafe: if the parent produced items but all were masked by dependency gating
+                // and there are no explicit fatal markers on the parent per-item results,
+                // attempt to run all items. This prevents accidental total gating due to
+                // overly-broad fail_if on ancestors. This is general-purpose and keeps
+                // dependent checks functional when parents are non-fatal.
+                const parent = directForEachParents[0];
+                let anyExplicitFatal = false;
+                if (parent) {
+                  const agg = results.get(parent) as ExtendedReviewSummary | undefined;
+                  if (agg && Array.isArray(agg.forEachItemResults)) {
+                    for (const r of agg.forEachItemResults) {
+                      if (!r) continue;
+                      if (this.hasFatal(r?.issues || [])) {
+                        anyExplicitFatal = true;
+                        break;
+                      }
+                    }
+                  }
+                }
+                if (!anyExplicitFatal && forEachItems.length > 0) {
+                  logger.warn(
+                    `⚠️  forEach: no runnable items for "${checkName}" after gating — falling back to run all ${forEachItems.length}`
+                  );
+                  for (let idx = 0; idx < forEachItems.length; idx++) {
+                    if (typeof itemTasks[idx] === 'function') runnableIndices.push(idx);
+                  }
+                }
+                if (runnableIndices.length === 0) {
+                  this.recordSkip(checkName, 'dependency_failed');
+                  logger.info(`⏭  Skipped (dependency failed: no runnable items)`);
+                  return {
+                    checkName,
+                    error: null,
+                    result: { issues: [] },
+                    skipped: true,
+                  };
+                }
               }
 
               const forEachConcurrency = Math.max(
@@ -5736,6 +5814,36 @@ export class CheckExecutionEngine {
     if (shouldStopExecution) {
       logger.info('');
       logger.warn(`⚠️  Execution stopped early due to fail-fast`);
+    }
+
+    // In strict modes, surface internal check errors as test failures
+    try {
+      const strictEnv = process.env.VISOR_STRICT_ERRORS === 'true';
+      if (strictEnv) {
+        const failures: Array<{ name: string; message: string }> = [];
+        for (const [name, r] of results.entries()) {
+          const issues = (r?.issues || []) as Array<{
+            ruleId?: string;
+            message?: string;
+            severity?: string;
+          }>;
+          if (
+            issues.some(
+              i => i.ruleId && (i.ruleId.endsWith('/error') || i.ruleId.includes('/promise-error'))
+            )
+          ) {
+            const first = issues.find(i => i.ruleId?.includes('/error')) || issues[0];
+            failures.push({ name, message: first?.message || 'check error' });
+          }
+        }
+        if (failures.length > 0) {
+          const msg = 'Check failures: ' + failures.map(f => `${f.name}: ${f.message}`).join('; ');
+          throw new Error(msg);
+        }
+      }
+    } catch (e) {
+      // Re-throw to caller; executeChecks will honor strict mode and propagate in tests.
+      throw e;
     }
 
     // Aggregate all results
@@ -7245,20 +7353,7 @@ export class CheckExecutionEngine {
     }
     const arr = this.outputHistory.get(checkName)!;
     arr.push(output);
-    try {
-      if (process.env.VISOR_DEBUG === 'true') {
-        // Print a short debug line to help diagnose test history
-        const preview = (() => {
-          try {
-            return JSON.stringify(output).slice(0, 120);
-          } catch {
-            return String(output);
-          }
-        })();
-
-        console.log(`[history] ${checkName} push -> len=${arr.length} preview=${preview}`);
-      }
-    } catch {}
+    // avoid noisy history prints
   }
 
   /**

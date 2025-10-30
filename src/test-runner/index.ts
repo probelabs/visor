@@ -45,6 +45,28 @@ function isObject(v: unknown): v is Record<string, unknown> {
 export class VisorTestRunner {
   constructor(private readonly cwd: string = process.cwd()) {}
 
+  // Minimal TTY color helpers (no external deps)
+  private readonly isTTY = typeof process !== 'undefined' && !!process.stderr.isTTY;
+  private color(txt: string, code: string): string {
+    if (!this.isTTY || process.env.NO_COLOR) return txt;
+    return `\u001b[${code}m${txt}\u001b[0m`;
+  }
+  private bold(txt: string): string {
+    return this.color(txt, '1');
+  }
+  private gray(txt: string): string {
+    return this.color(txt, '90');
+  }
+  private tagPass(): string {
+    return this.color(this.color(' PASS ', '30'), '42'); // black on green
+  }
+  private tagFail(): string {
+    return this.color(this.color(' FAIL ', '97'), '41'); // white on red
+  }
+  private tagSkip(): string {
+    return this.color(this.color(' SKIP ', '30'), '43'); // black on yellow
+  }
+
   private line(title = '', char = '─', width = 60): string {
     if (!title) return char.repeat(width);
     const pad = Math.max(1, width - title.length - 2);
@@ -162,8 +184,10 @@ export class VisorTestRunner {
   ): Promise<{ res: any; outHistory: Record<string, unknown[]> }> {
     const { prInfo, engine, /* recorder, */ checksToRun } = setup;
     const prevTestMode = process.env.VISOR_TEST_MODE;
+    const prevStrict = process.env.VISOR_STRICT_ERRORS;
     process.env.VISOR_TEST_MODE = 'true';
-    let res = await engine.executeGroupedChecks(
+    process.env.VISOR_STRICT_ERRORS = 'true';
+    const res = await engine.executeGroupedChecks(
       prInfo,
       checksToRun,
       120000,
@@ -174,55 +198,19 @@ export class VisorTestRunner {
       false,
       undefined
     );
-    try {
-      const hist0 = engine.getOutputHistorySnapshot();
-      const parents = Object.entries(cfg.checks || {})
-        .filter(
-          ([name, c]: [string, any]) =>
-            checksToRun.includes(name) &&
-            c &&
-            c.forEach &&
-            c.on_finish &&
-            Array.isArray(c.on_finish.run) &&
-            c.on_finish.run.length > 0
-        )
-        .map(([name, c]: [string, any]) => ({ name, onFinish: c.on_finish }));
-      const missing: string[] = [];
-      for (const p of parents) {
-        for (const t of p.onFinish.run as string[]) {
-          if (!hist0[t] || (Array.isArray(hist0[t]) && hist0[t].length === 0)) missing.push(t);
-        }
-      }
-      const toRun = Array.from(new Set(missing.filter(n => !checksToRun.includes(n))));
-      if (toRun.length > 0) {
-        const fallbackRes = await engine.executeGroupedChecks(
-          prInfo,
-          toRun,
-          120000,
-          cfg,
-          'json',
-          process.env.VISOR_DEBUG === 'true',
-          undefined,
-          false,
-          undefined
-        );
-        res = {
-          results: fallbackRes.results || res.results,
-          statistics: fallbackRes.statistics || res.statistics,
-        } as any;
-      }
-    } catch {}
     if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
     else process.env.VISOR_TEST_MODE = prevTestMode;
+    if (prevStrict === undefined) delete process.env.VISOR_STRICT_ERRORS;
+    else process.env.VISOR_STRICT_ERRORS = prevStrict;
     const outHistory = engine.getOutputHistorySnapshot();
     return { res, outHistory };
   }
 
   private printCaseHeader(name: string, kind: 'flow' | 'single', event?: string): void {
-    console.log('\n' + this.line(`Case: ${name}`));
+    console.log('\n' + this.line(`${this.bold('Case')}: ${name}`));
     const meta: string[] = [`type=${kind}`];
     if (event) meta.push(`event=${event}`);
-    console.log(`  ${meta.join('  ·  ')}`);
+    console.log(`  ${this.gray(meta.join('  ·  '))}`);
   }
 
   private printStageHeader(
@@ -235,7 +223,7 @@ export class VisorTestRunner {
     const meta: string[] = [];
     if (event) meta.push(`event=${event}`);
     if (fixture) meta.push(`fixture=${fixture}`);
-    if (meta.length) console.log(`  ${meta.join('  ·  ')}`);
+    if (meta.length) console.log(`  ${this.gray(meta.join('  ·  '))}`);
   }
 
   private printSelectedChecks(checks: string[]): void {
@@ -342,6 +330,7 @@ export class VisorTestRunner {
     }>;
   }> {
     // Save defaults for flow runner access
+    const __suiteStart = Date.now();
     (this as any).suiteDefaults = suite.tests.defaults || {};
     // Support --only "case" and --only "case#stage"
     let onlyCase = options.only?.toLowerCase();
@@ -425,9 +414,10 @@ export class VisorTestRunner {
     // Keep-alive interval kept small to avoid noticeable pauses at end-of-run
     const __keepAlive = setInterval(() => {}, 1000);
     // Header: show suite path for clarity
+    let __suiteRel = testsPath;
     try {
-      const rel = path.relative(this.cwd, testsPath) || testsPath;
-      console.log(`Suite: ${rel}`);
+      __suiteRel = path.relative(this.cwd, testsPath) || testsPath;
+      console.log(`Suite: ${__suiteRel}`);
     } catch {}
 
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
@@ -479,12 +469,7 @@ export class VisorTestRunner {
             console.log(`  ⮕ main stats: [${names.join(', ')}]`);
           } catch {}
         }
-        try {
-          const dbgHist = exec.outHistory;
-          console.log(
-            `  ⮕ stage base history keys: ${Object.keys(dbgHist).join(', ') || '(none)'}`
-          );
-        } catch {}
+        // avoid printing raw history keys each case
         // (fallback for on_finish static targets handled inside executeTestCase)
 
         const caseFailures = require('./evaluators').evaluateCase(
@@ -507,10 +492,14 @@ export class VisorTestRunner {
         } catch {}
         this.printCoverage(_case.name, res.statistics, setup.expect);
         if (caseFailures.length === 0) {
-          console.log(`✅ PASS ${_case.name}`);
+          console.log(
+            `${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${__suiteRel} › ${_case.name}`
+          );
           caseResults.push({ name: _case.name, passed: true });
         } else {
-          console.log(`❌ FAIL ${_case.name}`);
+          console.log(
+            `${(this as any).tagFail ? (this as any).tagFail() : '❌ FAIL'} ${__suiteRel} › ${_case.name}`
+          );
           for (const f of caseFailures) console.log(`   - ${f}`);
           caseResults.push({ name: _case.name, passed: false, errors: caseFailures });
           return { name: _case.name, failed: 1 };
@@ -567,8 +556,11 @@ export class VisorTestRunner {
           } catch {}
         }
       };
+      const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
       write('\n' + this.line('Summary'));
-      write(`  Passed: ${passedCount}/${selected.length}`);
+      write(
+        `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
+      );
       if (passedCases.length > 0) {
         const names = passedCases.map(r => r.name).join(', ');
         write(`   • ${names}`);
@@ -688,11 +680,17 @@ export class VisorTestRunner {
         const expect = (stage as any).expect || {};
         if (outcome.stats) this.printCoverage(outcome.name, outcome.stats, expect);
         if (!outcome.errors) {
-          console.log(`✅ PASS ${outcome.name}`);
+          const __suiteRel = (this as any).__suiteRel || 'tests';
+          console.log(
+            `${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${__suiteRel} › ${outcome.name}`
+          );
           stagesSummary.push({ name: outcome.name });
         } else {
           failures += 1;
-          console.log(`❌ FAIL ${outcome.name}`);
+          const __suiteRel = (this as any).__suiteRel || 'tests';
+          console.log(
+            `${(this as any).tagFail ? (this as any).tagFail() : '❌ FAIL'} ${__suiteRel} › ${outcome.name}`
+          );
           for (const f of outcome.errors) console.log(`   - ${f}`);
           stagesSummary.push({ name: outcome.name, errors: outcome.errors });
           if (bail) break;
@@ -708,9 +706,12 @@ export class VisorTestRunner {
     if (!anyStageRan && stageFilter) {
       console.log(`⚠️  No stage matched filter '${stageFilter}' in flow '${flowName}'`);
     }
-    if (failures === 0) console.log(`✅ FLOW PASS ${flowName}`);
+    if (failures === 0)
+      console.log(`${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${flowName}`);
     else
-      console.log(`❌ FLOW FAIL ${flowName} (${failures} stage error${failures > 1 ? 's' : ''})`);
+      console.log(
+        `${(this as any).tagFail ? (this as any).tagFail() : '❌ FAIL'} ${flowName} (${failures} stage error${failures > 1 ? 's' : ''})`
+      );
     return { failures, stages: stagesSummary };
   }
 

@@ -138,7 +138,9 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     : undefined;
 
   // Configure logger for concise console output
-  configureLoggerFromCli({ output: 'table', debug: false, verbose: false, quiet: false });
+  // Respect --debug flag if present, or VISOR_DEBUG from environment
+  const debugFlag = hasFlag('--debug') || process.env.VISOR_DEBUG === 'true';
+  configureLoggerFromCli({ output: 'table', debug: debugFlag, verbose: false, quiet: false });
 
   console.log('🧪 Visor Test Runner');
   try {

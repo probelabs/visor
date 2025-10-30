@@ -15,10 +15,25 @@ async function generate() {
     return;
   }
 
+  // ts-json-schema-generator cannot represent function-typed fields in JSON Schema.
+  // Our VisorConfig includes hooks?: VisorHooks with function members.
+  // Generate a schema-friendly alias that omits 'hooks' (and replaces it with a generic object),
+  // and point the generator at a tiny temporary file that declares that alias.
+  const tmpDir = path.resolve(__dirname, '.schema-tmp');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmpFile = path.join(tmpDir, 'visor-config-alias.ts');
+  const relImport = path.relative(tmpDir, path.resolve(__dirname, '..', 'src', 'types', 'config'))
+    .replace(/\\/g, '/');
+  const aliasSource = `
+    import type { VisorConfig } from '${relImport}';
+    export type VisorConfigSchema = Omit<VisorConfig, 'hooks'> & { hooks?: Record<string, unknown> };
+  `;
+  fs.writeFileSync(tmpFile, aliasSource, 'utf8');
+
   const config = {
-    path: path.resolve(__dirname, '..', 'src', 'types', 'config.ts'),
+    path: tmpFile,
     tsconfig: path.resolve(__dirname, '..', 'tsconfig.json'),
-    type: 'VisorConfig',
+    type: 'VisorConfigSchema',
     expose: 'all',
     jsDoc: 'extended',
     skipTypeCheck: true,
@@ -26,7 +41,7 @@ async function generate() {
   };
 
   const generator = tjs.createGenerator(config);
-  const schema = generator.createSchema('VisorConfig');
+  const schema = generator.createSchema('VisorConfigSchema');
 
   // Post-process: lock objects and allow extension keys starting with x-
   function decorate(obj) {

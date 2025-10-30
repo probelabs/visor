@@ -197,7 +197,19 @@ export class FailureConditionEvaluator {
     };
 
     try {
-      return this.evaluateExpression(expression, context);
+      const res = this.evaluateExpression(expression, context);
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const envMap = context.env || {};
+
+          console.error(
+            `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
+              (envMap as any).ENABLE_FACT_VALIDATION
+            )} event=${context.event?.event_name} result=${String(res)}`
+          );
+        }
+      } catch {}
+      return res;
     } catch (error) {
       console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
       // Fail-secure: do not run the check on evaluation errors

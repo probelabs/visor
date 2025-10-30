@@ -41,6 +41,20 @@ function buildExecutedMap(stats: ExecStats): Record<string, number> {
   return executed;
 }
 
+// Middle‑truncate with explicit omitted-chars indicator and whitespace normalization
+function previewMiddle(raw: unknown, max = 240): string {
+  const s = String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const len = s.length;
+  if (len <= max) return s;
+  const placeholder = ` … [+${len - max} chars omitted] … `;
+  const budget = Math.max(16, max - placeholder.length);
+  const head = Math.max(8, Math.floor(budget / 2));
+  const tail = Math.max(8, budget - head);
+  return s.slice(0, head) + placeholder + s.slice(len - tail);
+}
+
 export function evaluateCalls(
   errors: string[],
   expect: ExpectBlock,
@@ -89,7 +103,15 @@ export function evaluateProviderCalls(
           const labels = (m.args as any)?.labels || [];
           return Array.isArray(labels) && want.every(w => labels.includes(w));
         });
-        if (!ok) errors.push(`Expected github ${call.op} args.contains not satisfied`);
+        if (!ok) {
+          const last = matched[matched.length - 1];
+          const actual = (last && (last.args as any)?.labels) || [];
+          errors.push(
+            `Expected github ${call.op} to include labels ${JSON.stringify(want)}; got ${JSON.stringify(
+              actual
+            )}`
+          );
+        }
       }
     }
   }
@@ -122,6 +144,7 @@ export function evaluatePrompts(
   for (const p of expect.prompts || []) {
     const arr = promptsByStep[p.step] || [];
     let prompt: string | undefined;
+    const idxLabel = String(p.index ?? 'last');
     if (p.where) {
       const where = p.where;
       for (const candidate of arr) {
@@ -147,17 +170,34 @@ export function evaluatePrompts(
       prompt = arr[idx];
     }
     if (!prompt) {
-      errors.push(`No captured prompt for step ${p.step} at index ${String(p.index ?? 'last')}`);
+      errors.push(`No captured prompt for step ${p.step} at index ${idxLabel}`);
       continue;
     }
     if (p.contains && !p.contains.every(s => prompt!.includes(s))) {
-      errors.push(`Prompt for ${p.step} missing contains assertion`);
+      const missing = (p.contains as string[]).filter(s => !prompt!.includes(s));
+      // (debug cleanup) avoid extra console noise on prompt assertion failures
+      errors.push(
+        `Prompt for ${p.step}@${idxLabel} expected to contain ${JSON.stringify(missing)}; got: ${previewMiddle(
+          prompt
+        )}`
+      );
     }
-    if (p.not_contains && !p.not_contains.every(s => !prompt!.includes(s))) {
-      errors.push(`Prompt for ${p.step} contains forbidden text`);
+    if (p.not_contains) {
+      const present = (p.not_contains as string[]).filter(s => prompt!.includes(s));
+      if (present.length > 0) {
+        errors.push(
+          `Prompt for ${p.step}@${idxLabel} contains forbidden ${JSON.stringify(
+            present
+          )}; got: ${previewMiddle(prompt)}`
+        );
+      }
     }
     if (p.matches && !parseRegex(p.matches).test(prompt)) {
-      errors.push(`Prompt for ${p.step} does not match pattern`);
+      errors.push(
+        `Prompt for ${p.step}@${idxLabel} expected to match ${p.matches}; got: ${previewMiddle(
+          prompt
+        )}`
+      );
     }
   }
 }
