@@ -419,6 +419,11 @@ export class VisorTestRunner {
       errors?: string[];
       stages?: Array<{ name: string; errors?: string[] }>;
     }> = [];
+    // Keep the event loop alive until we finish printing the summary.
+    // This prevents a natural early exit in environments where no handles remain
+    // right after engine cleanup logs.
+    // Keep-alive interval kept small to avoid noticeable pauses at end-of-run
+    const __keepAlive = setInterval(() => {}, 1000);
     // Header: show suite path for clarity
     try {
       const rel = path.relative(this.cwd, testsPath) || testsPath;
@@ -551,29 +556,60 @@ export class VisorTestRunner {
     const passedCount = caseResults.filter(r => r.passed).length;
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
-    console.log('\n' + this.line('Summary'));
-    console.log(`  Passed: ${passedCount}/${selected.length}`);
-    if (passedCases.length > 0) {
-      const names = passedCases.map(r => r.name).join(', ');
-      console.log(`   • ${names}`);
-    }
-    console.log(`  Failed: ${failedCases.length}/${selected.length}`);
-    if (failedCases.length > 0) {
-      for (const fc of failedCases) {
-        console.log(`   • ${fc.name}`);
-        // If flow case, show failing stages
-        if (Array.isArray(fc.stages) && fc.stages.length > 0) {
-          const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
-          if (bad.length > 0) {
-            console.log(`     stages: ${bad.map(s => s.name).join(', ')}`);
+    {
+      const fsSync = require('fs');
+      const write = (s: string) => {
+        try { fsSync.writeSync(2, s + '\n'); } catch { try { console.log(s); } catch {} }
+      };
+      write('\n' + this.line('Summary'));
+      write(`  Passed: ${passedCount}/${selected.length}`);
+      if (passedCases.length > 0) {
+        const names = passedCases.map(r => r.name).join(', ');
+        write(`   • ${names}`);
+      }
+      write(`  Failed: ${failedCases.length}/${selected.length}`);
+      if (failedCases.length > 0) {
+        const maxErrs = Math.max(
+          1,
+          parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+        );
+        for (const fc of failedCases) {
+          write(`   • ${fc.name}`);
+          // If flow case, print failing stages with their first errors
+          if (Array.isArray(fc.stages) && fc.stages.length > 0) {
+            const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
+            for (const st of bad) {
+              write(`     - ${st.name}`);
+              const errs = (st.errors || []).slice(0, maxErrs);
+              for (const e of errs) write(`       • ${e}`);
+              const more = (st.errors?.length || 0) - errs.length;
+              if (more > 0) write(`       • … and ${more} more`);
+            }
+            if (bad.length === 0) {
+              // No per-stage errors captured; print names for context
+              const names = fc.stages.map(s => s.name).join(', ');
+              write(`     stages: ${names}`);
+            }
           }
-        }
-        if (Array.isArray(fc.errors) && fc.errors.length > 0) {
-          const first = fc.errors[0];
-          console.log(`     first error: ${first}`);
+          // Non-flow case errors
+          if ((!fc.stages || fc.stages.length === 0) && Array.isArray(fc.errors) && fc.errors.length > 0) {
+            const errs = fc.errors.slice(0, maxErrs);
+            for (const e of errs) write(`     • ${e}`);
+            const more = fc.errors.length - errs.length;
+            if (more > 0) write(`     • … and ${more} more`);
+          }
         }
       }
     }
+    try {
+      // Expose results and a summary-printed guard for the CLI to detect
+      // when runner-level summary was emitted.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (globalThis as any).__VISOR_TEST_RESULTS__ = { failures, results: caseResults };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (globalThis as any).__VISOR_SUMMARY_PRINTED__ = true;
+    } catch {}
+    clearInterval(__keepAlive);
     return { failures, results: caseResults };
   }
 

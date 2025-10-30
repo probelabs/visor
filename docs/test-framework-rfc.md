@@ -502,6 +502,7 @@ Progress Update — 2025-10-29
 - Test‑mode isolation: stages set `VISOR_TEST_MODE=true` to disable incidental tag filtering paths that are desirable for production runs but surprising in tests.
 - Recorder warnings: the runner warns when an AI/command step executes without a mock; tests remain stub‑free for GitHub ops via the Recording Octokit.
 - Engine polish: removed duplicate manual stats increments for `on_success` and added an early return in `handleOnFinishHooks` when no forEach parents produced results (removes a short pause without changing behavior).
+- Runner/CLI UX: single, clean end‑of‑run Summary; removed default artifact writes; exit‑tracer instrumentation removed; CLI warns on unknown flags; JSON/JUnit/Markdown only when flags passed.
 
 Progress Update — 2025-10-28
 - Runner: stage execution coverage now derives only from prompts/output-history deltas plus engine statistics (no selection heuristics). Single-check runs contribute to stats and history uniformly.

@@ -5784,7 +5784,7 @@ export class CheckExecutionEngine {
 
         // Create provider config for this specific check
         const providerConfig: CheckProviderConfig = {
-          type: 'ai',
+          type: (checkConfig.type as any) || 'ai',
           prompt: checkConfig.prompt,
           focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
           schema: checkConfig.schema,
@@ -5795,7 +5795,9 @@ export class CheckExecutionEngine {
             debug: debug, // Pass debug flag to AI provider
             ...(checkConfig.ai || {}),
           },
-        };
+          // Preserve all other provider-specific fields (e.g., memory.operation, github.op)
+          ...checkConfig,
+        } as any;
 
         const result = await provider.execute(prInfo, providerConfig);
         console.error(

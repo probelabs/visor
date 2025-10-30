@@ -161,30 +161,56 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     const suite = runner.loadSuite(tpath);
     const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
     const failures = runRes.failures;
-    // Always print a concise end-of-run summary here as well, in case
-    // runner-level printing was suppressed by user flags or truncation
+    // Fallback: If for any reason the runner didn't print its own summary
+    // (e.g., natural early exit in some environments), print a concise one here.
     try {
-      const results: Array<{
-        name: string;
-        passed: boolean;
-        stages?: Array<{ name: string; errors?: string[] }>;
-        errors?: string[];
-      }> = (runRes as any).results || [];
-      const passed = results.filter(r => r.passed).map(r => r.name);
-      const failed = results.filter(r => !r.passed);
-      console.log('\n' + '── Summary '.padEnd(66, '─'));
-      console.log(`  Passed: ${passed.length}/${results.length}`);
-      if (passed.length) console.log(`   • ${passed.join(', ')}`);
-      console.log(`  Failed: ${failed.length}/${results.length}`);
-      if (failed.length) {
-        for (const f of failed) {
-          console.log(`   • ${f.name}`);
-          if (Array.isArray(f.stages) && f.stages.length > 0) {
-            const bad = f.stages.filter(s => s.errors && s.errors.length > 0).map(s => s.name);
-            if (bad.length) console.log(`     stages: ${bad.join(', ')}`);
-          }
-          if (Array.isArray(f.errors) && f.errors.length > 0) {
-            console.log(`     first error: ${f.errors[0]}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const g: any = globalThis as any;
+      const already = g && g.__VISOR_SUMMARY_PRINTED__ === true;
+      if (!already) {
+        const fsSync = require('fs');
+        const write = (s: string) => {
+          try { fsSync.writeSync(2, s + '\n'); } catch { try { console.log(s); } catch {} }
+        };
+        const results: Array<{
+          name: string;
+          passed: boolean;
+          stages?: Array<{ name: string; errors?: string[] }>;
+          errors?: string[];
+        }> = (runRes as any).results || [];
+        const passed = results.filter(r => r.passed).map(r => r.name);
+        const failed = results.filter(r => !r.passed);
+        write('\n' + '── Summary '.padEnd(66, '─'));
+        write(`  Passed: ${passed.length}/${results.length}`);
+        if (passed.length) write(`   • ${passed.join(', ')}`);
+        write(`  Failed: ${failed.length}/${results.length}`);
+        if (failed.length) {
+          const maxErrs = Math.max(
+            1,
+            parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+          );
+          for (const f of failed) {
+            write(`   • ${f.name}`);
+            if (Array.isArray(f.stages) && f.stages.length > 0) {
+              const bad = f.stages.filter((s: any) => s.errors && s.errors.length > 0);
+              for (const st of bad) {
+                write(`     - ${st.name}`);
+                const errs = (st.errors || []).slice(0, maxErrs);
+                for (const e of errs) write(`       • ${e}`);
+                const more = (st.errors?.length || 0) - errs.length;
+                if (more > 0) write(`       • … and ${more} more`);
+              }
+              if (bad.length === 0) {
+                const names = f.stages.map((s: any) => s.name).join(', ');
+                write(`     stages: ${names}`);
+              }
+            }
+            if ((!f.stages || f.stages.length === 0) && Array.isArray(f.errors) && f.errors.length > 0) {
+              const errs = f.errors.slice(0, maxErrs);
+              for (const e of errs) write(`     • ${e}`);
+              const more = f.errors.length - errs.length;
+              if (more > 0) write(`     • … and ${more} more`);
+            }
           }
         }
       }
@@ -251,8 +277,10 @@ export async function main(): Promise<void> {
   let debugServer: DebugVisualizerServer | null = null;
 
   try {
-    const cli = new CLI();
-    const configManager = new ConfigManager();
+    // IMPORTANT: detect subcommands before constructing CLI/commander to avoid
+    // any argument parsing side-effects (e.g., extra positional args like 'test').
+    // Also filter out the --cli flag if it exists (used to force CLI mode in GH Actions)
+    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
 
     // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
     try {
@@ -277,11 +305,9 @@ export async function main(): Promise<void> {
       } catch {}
     } catch {}
 
-    // Filter out the --cli flag if it exists (used to force CLI mode in GitHub Actions)
-    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
-
     // Check for validate subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'validate') {
+      const configManager = new ConfigManager();
       await handleValidateCommand(filteredArgv, configManager);
       return;
     }
@@ -290,6 +316,9 @@ export async function main(): Promise<void> {
       await handleTestCommand(filteredArgv);
       return;
     }
+    // Construct CLI and ConfigManager only after subcommand handling
+    const cli = new CLI();
+    const configManager = new ConfigManager();
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);

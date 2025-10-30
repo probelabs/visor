@@ -341,7 +341,7 @@ steps:
         {% for issue in issues %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
           {% if issue.correction %}
-          ✏️  Correction: {{ issue.correction }}
+          Correction: {{ issue.correction }}
           {% endif %}
         {% endfor %}
 
@@ -618,15 +618,11 @@ steps:
 
     forEach: true
 
-    # After all facts are validated, aggregate results and decide next action
+    # After facts are validated, run the aggregator explicitly for this stage
     on_finish:
       run: [aggregate-validations]
-      # If aggregation stored validation issues in memory, schedule a correction reply
       run_js: |
-        const issues = memory.list('fact-validation').includes('fact_validation_issues')
-          ? memory.get('fact_validation_issues', 'fact-validation')
-          : [];
-        return Array.isArray(issues) && issues.length > 0 ? ['comment-assistant'] : [];
+        return [];
       goto_js: |
         const allValid = memory.get('all_valid', 'fact-validation');
         const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
@@ -707,7 +703,8 @@ steps:
     type: memory
     operation: exec_js
     namespace: fact-validation
-    on: [issue_opened, issue_comment]
+    # Run only when scheduled from extract-facts.on_finish (stage-local)
+    on: [manual]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     on_success:
       # Schedule the correction reply directly (target-only) when not all facts are valid
@@ -715,23 +712,31 @@ steps:
         if (!output || output.all_valid) return [];
         return ['comment-assistant'];
     memory_js: |
+      // Start by clearing any stale issues from prior stages
+      if (memory.list('fact-validation').includes('fact_validation_issues')) {
+        memory.delete('fact_validation_issues', 'fact-validation');
+      }
+
       const all = outputs.history['validate-fact'] || [];
-      // Use only the latest wave of validations for this run
       const fxHist = outputs.history['extract-facts'] || [];
       const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
-      const waveSize = Array.isArray(lastExtract) ? lastExtract.length : (lastExtract && typeof lastExtract.length === 'number' ? lastExtract.length : 0);
-      const validations = waveSize > 0 ? all.slice(-waveSize) : all;
+      const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && x.id).filter(Boolean) : [];
 
-      log('📊 Aggregating', validations.length, 'validation results');
+      // Use only validations that correspond to the last extract wave, by fact_id
+      const validations = ids.length > 0
+        ? all.filter(v => v && ids.includes(v.fact_id))
+        : [];
 
-      // Only HIGH confidence counts as valid. Everything else returns to loop.
+      log('📊 Aggregating', validations.length, 'validation results for ids', JSON.stringify(ids));
+
+      // Only HIGH confidence counts as valid. Everything else returns to loop/correction.
       const validHigh = validations.filter(v => v && v.is_valid && v.confidence === 'high');
       const problems = validations.filter(v => v && !(v.is_valid && v.confidence === 'high'));
       const lowConfidence = validations.filter(v => v && v.is_valid && v.confidence !== 'high');
       const invalid = validations.filter(v => v && !v.is_valid);
       const allValid = problems.length === 0;
 
-      log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),
+      log('Results: valid=' + validHigh.length,
           'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
 
       memory.set('all_valid', allValid, 'fact-validation');
