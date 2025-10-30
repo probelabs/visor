@@ -235,7 +235,7 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
       if (typeof v === 'string' && v.length > 0) return v;
       if (v && typeof v === 'object' && Object.keys(v as object).length > 0) return v;
     }
-    return Array.isArray(first) ? [] : first ?? undefined;
+    return Array.isArray(first) ? [] : (first ?? undefined);
   });
 
   // where_exp: generic expression-based filter (Shopify-style)
@@ -246,13 +246,22 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     const body = String(expr || '');
     try {
       // Build a tiny predicate; expose only item, idx, arr
-      // eslint-disable-next-line no-new-func
-      const fn = new Function(name, 'idx', 'arr', `try { return (${body}); } catch { return false; }`);
+
+      const fn = new Function(
+        name,
+        'idx',
+        'arr',
+        `try { return (${body}); } catch { return false; }`
+      );
       const out: any[] = [];
       for (let idx = 0; idx < arr.length; idx++) {
         const i = arr[idx];
         let ok = false;
-        try { ok = !!(fn as any)(i, idx, arr); } catch { ok = false; }
+        try {
+          ok = !!(fn as any)(i, idx, arr);
+        } catch {
+          ok = false;
+        }
         if (ok) out.push(i);
       }
       return out;
