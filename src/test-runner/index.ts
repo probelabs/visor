@@ -559,7 +559,13 @@ export class VisorTestRunner {
     {
       const fsSync = require('fs');
       const write = (s: string) => {
-        try { fsSync.writeSync(2, s + '\n'); } catch { try { console.log(s); } catch {} }
+        try {
+          fsSync.writeSync(2, s + '\n');
+        } catch {
+          try {
+            console.log(s);
+          } catch {}
+        }
       };
       write('\n' + this.line('Summary'));
       write(`  Passed: ${passedCount}/${selected.length}`);
@@ -592,7 +598,11 @@ export class VisorTestRunner {
             }
           }
           // Non-flow case errors
-          if ((!fc.stages || fc.stages.length === 0) && Array.isArray(fc.errors) && fc.errors.length > 0) {
+          if (
+            (!fc.stages || fc.stages.length === 0) &&
+            Array.isArray(fc.errors) &&
+            fc.errors.length > 0
+          ) {
             const errs = fc.errors.slice(0, maxErrs);
             for (const e of errs) write(`     • ${e}`);
             const more = fc.errors.length - errs.length;

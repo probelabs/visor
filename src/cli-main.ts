@@ -170,7 +170,13 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (!already) {
         const fsSync = require('fs');
         const write = (s: string) => {
-          try { fsSync.writeSync(2, s + '\n'); } catch { try { console.log(s); } catch {} }
+          try {
+            fsSync.writeSync(2, s + '\n');
+          } catch {
+            try {
+              console.log(s);
+            } catch {}
+          }
         };
         const results: Array<{
           name: string;
@@ -205,7 +211,11 @@ async function handleTestCommand(argv: string[]): Promise<void> {
                 write(`     stages: ${names}`);
               }
             }
-            if ((!f.stages || f.stages.length === 0) && Array.isArray(f.errors) && f.errors.length > 0) {
+            if (
+              (!f.stages || f.stages.length === 0) &&
+              Array.isArray(f.errors) &&
+              f.errors.length > 0
+            ) {
               const errs = f.errors.slice(0, maxErrs);
               for (const e of errs) write(`     • ${e}`);
               const more = f.errors.length - errs.length;

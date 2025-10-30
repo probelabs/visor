@@ -125,7 +125,9 @@ export class MemoryCheckProvider extends CheckProvider {
     // Backward/forgiving fallback: if operation is missing but a JS body exists,
     // treat it as exec_js to avoid brittle config coupling.
     if (!operation) {
-      const hasJs = typeof (config as any)?.memory_js === 'string' || typeof (config as any)?.operation_js === 'string';
+      const hasJs =
+        typeof (config as any)?.memory_js === 'string' ||
+        typeof (config as any)?.operation_js === 'string';
       if (hasJs) {
         operation = 'exec_js';
       }
