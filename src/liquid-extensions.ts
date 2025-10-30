@@ -201,6 +201,55 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
   liquid.registerFilter('memory_list', (namespace?: string) => {
     return memoryStore.list(namespace);
   });
+
+  // Generic helpers to radically simplify templates
+
+  // get: safe nested access using dot-path (e.g., obj | get: 'a.b.c')
+  liquid.registerFilter('get', (obj: any, pathExpr: unknown) => {
+    if (obj == null) return undefined;
+    const path = typeof pathExpr === 'string' ? pathExpr : String(pathExpr || '');
+    if (!path) return obj;
+    const parts = path.split('.');
+    let cur: any = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p as keyof typeof cur];
+    }
+    return cur;
+  });
+
+  // not_empty: true when value is a non-empty array/string/object with keys
+  liquid.registerFilter('not_empty', (v: unknown) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === 'string') return v.length > 0;
+    if (v && typeof v === 'object') return Object.keys(v as object).length > 0;
+    return false;
+  });
+
+  // coalesce: pick first argument (value or candidates) that is a non-empty array/object/string
+  // Usage: a | coalesce: b, c, d
+  liquid.registerFilter('coalesce', (first: unknown, ...rest: unknown[]) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === 'string' && v.length > 0) return v;
+      if (v && typeof v === 'object' && Object.keys(v as object).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : first ?? undefined;
+  });
+
+  // issues_filter: convenience to keep only invalid or low-confidence validations
+  // issues | issues_filter: 'invalid_or_low'
+  liquid.registerFilter('issues_filter', (items: unknown, mode: string) => {
+    const arr = Array.isArray(items) ? (items as any[]) : [];
+    if (mode === 'invalid_or_low') {
+      return arr.filter(
+        i => !(i?.is_valid === true && (i?.confidence === 'high' || i?.confidence === 'HIGH'))
+      );
+    }
+    if (mode === 'invalid') return arr.filter(i => i?.is_valid === false);
+    return arr;
+  });
 }
 
 /**
