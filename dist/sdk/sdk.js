@@ -807,28 +807,25 @@ var init_ai_review_service = __esm({
           ...config
         };
         this.sessionRegistry = SessionRegistry.getInstance();
-        const providerExplicit = typeof this.config.provider === "string" && this.config.provider.length > 0;
-        if (!providerExplicit) {
-          if (!this.config.apiKey) {
-            if (process.env.CLAUDE_CODE_API_KEY) {
-              this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
-              this.config.provider = "claude-code";
-            } else if (process.env.GOOGLE_API_KEY) {
-              this.config.apiKey = process.env.GOOGLE_API_KEY;
-              this.config.provider = "google";
-            } else if (process.env.ANTHROPIC_API_KEY) {
-              this.config.apiKey = process.env.ANTHROPIC_API_KEY;
-              this.config.provider = "anthropic";
-            } else if (process.env.OPENAI_API_KEY) {
-              this.config.apiKey = process.env.OPENAI_API_KEY;
-              this.config.provider = "openai";
-            } else if (
-              // Check for AWS Bedrock credentials
-              process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_BEDROCK_API_KEY
-            ) {
-              this.config.provider = "bedrock";
-              this.config.apiKey = "AWS_CREDENTIALS";
-            }
+        if (!this.config.apiKey) {
+          if (process.env.CLAUDE_CODE_API_KEY) {
+            this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+            this.config.provider = "claude-code";
+          } else if (process.env.GOOGLE_API_KEY) {
+            this.config.apiKey = process.env.GOOGLE_API_KEY;
+            this.config.provider = "google";
+          } else if (process.env.ANTHROPIC_API_KEY) {
+            this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+            this.config.provider = "anthropic";
+          } else if (process.env.OPENAI_API_KEY) {
+            this.config.apiKey = process.env.OPENAI_API_KEY;
+            this.config.provider = "openai";
+          } else if (
+            // Check for AWS Bedrock credentials
+            process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_BEDROCK_API_KEY
+          ) {
+            this.config.provider = "bedrock";
+            this.config.apiKey = "AWS_CREDENTIALS";
           }
         }
         if (!this.config.model && process.env.MODEL_NAME) {
@@ -869,27 +866,39 @@ var init_ai_review_service = __esm({
           log("\u{1F3AD} Using mock AI model/provider for testing - skipping API key validation");
         } else {
           if (!this.config.apiKey) {
-            try {
-              if (this.config.provider === "google" && process.env.GOOGLE_API_KEY) {
-                this.config.apiKey = process.env.GOOGLE_API_KEY;
-              } else if (this.config.provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
-                this.config.apiKey = process.env.ANTHROPIC_API_KEY;
-              } else if (this.config.provider === "openai" && process.env.OPENAI_API_KEY) {
-                this.config.apiKey = process.env.OPENAI_API_KEY;
-              } else if (this.config.provider === "claude-code" && process.env.CLAUDE_CODE_API_KEY) {
-                this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
-              }
-            } catch {
-            }
-          }
-          if (!this.config.apiKey) {
             const errorMessage = "No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).";
             if (debugInfo) {
               debugInfo.errors = [errorMessage];
-              debugInfo.rawResponse = "API call attempted in debug without API key (test mode)";
-            } else {
-              throw new Error(errorMessage);
+              debugInfo.processingTime = Date.now() - startTime;
+              debugInfo.rawResponse = "API call not attempted - no API key configured";
+              const isCustomSchema = typeof schema === "string" && schema !== "code-review" || typeof schema === "object";
+              if (isCustomSchema) {
+                const out = {
+                  // Provide a friendly, bounded fallback so built-in templates render
+                  text: "\u26A0\uFE0F AI provider is not configured for this run. Set GOOGLE_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY or AWS credentials to enable real responses.\n\nThis is a placeholder response so your workflow still posts a comment."
+                };
+                const res = {
+                  issues: [],
+                  output: out,
+                  debug: debugInfo
+                };
+                return res;
+              }
+              return {
+                issues: [
+                  {
+                    file: "system",
+                    line: 0,
+                    ruleId: "system/api-key-missing",
+                    message: errorMessage,
+                    severity: "error",
+                    category: "logic"
+                  }
+                ],
+                debug: debugInfo
+              };
             }
+            throw new Error(errorMessage);
           }
         }
         try {
@@ -935,20 +944,6 @@ var init_ai_review_service = __esm({
       async executeReviewWithSessionReuse(prInfo, customPrompt, parentSessionId, schema, checkName, sessionMode = "clone") {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-        if (!this.config.apiKey) {
-          try {
-            if (this.config.provider === "google" && process.env.GOOGLE_API_KEY) {
-              this.config.apiKey = process.env.GOOGLE_API_KEY;
-            } else if (this.config.provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
-              this.config.apiKey = process.env.ANTHROPIC_API_KEY;
-            } else if (this.config.provider === "openai" && process.env.OPENAI_API_KEY) {
-              this.config.apiKey = process.env.OPENAI_API_KEY;
-            } else if (this.config.provider === "claude-code" && process.env.CLAUDE_CODE_API_KEY) {
-              this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
-            }
-          } catch {
-          }
-        }
         const existingAgent = this.sessionRegistry.getSession(parentSessionId);
         if (!existingAgent) {
           throw new Error(
@@ -1024,10 +1019,6 @@ var init_ai_review_service = __esm({
             debugInfo.processingTime = processingTime;
           }
           const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
-          try {
-            result.sessionId = currentSessionId;
-          } catch {
-          }
           if (debugInfo) {
             result.debug = debugInfo;
           }
@@ -1296,16 +1287,6 @@ ${this.escapeXml(prInfo.body)}
     <total_deletions>${prInfo.totalDeletions}</total_deletions>
     <files_changed_count>${prInfo.files.length}</files_changed_count>
   </metadata>`;
-        try {
-          const firstFile = (prInfo.files || [])[0];
-          if (firstFile && firstFile.filename) {
-            context2 += `
-  <raw_diff_header>
-${this.escapeXml(`diff --git a/${firstFile.filename} b/${firstFile.filename}`)}
-  </raw_diff_header>`;
-          }
-        } catch {
-        }
         if (prInfo.body) {
           context2 += `
   <!-- Full pull request description provided by the author -->
@@ -1751,12 +1732,9 @@ ${"=".repeat(60)}
        */
       async callProbeAgent(prompt, schema, debugInfo, _checkName, providedSessionId) {
         if (this.config.model === "mock" || this.config.provider === "mock") {
-          const inJest = !!process.env.JEST_WORKER_ID;
-          log("\u{1F3AD} Using mock AI model/provider");
-          if (!inJest) {
-            const response = await this.generateMockResponse(prompt, _checkName, schema);
-            return { response, effectiveSchema: typeof schema === "object" ? "custom" : schema };
-          }
+          log("\u{1F3AD} Using mock AI model/provider for testing");
+          const response = await this.generateMockResponse(prompt, _checkName, schema);
+          return { response, effectiveSchema: typeof schema === "object" ? "custom" : schema };
         }
         const sessionId = providedSessionId || (() => {
           const timestamp = (/* @__PURE__ */ new Date()).toISOString();
@@ -2884,15 +2862,12 @@ var init_file_exclusion = __esm({
             const rawContent = fs2.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
-            if (process.env.VISOR_DEBUG === "true") {
-              console.error("\u2705 Loaded .gitignore patterns for file filtering");
-            }
+            console.error("\u2705 Loaded .gitignore patterns for file filtering");
           } else if (additionalPatterns && additionalPatterns.length > 0) {
-            console.error("No .gitignore found, using default exclusion patterns");
-            console.warn("No .gitignore found, using default exclusion patterns");
+            console.error("\u26A0\uFE0F  No .gitignore found, using default exclusion patterns");
           }
         } catch (error) {
-          console.warn("Failed to load .gitignore:", error instanceof Error ? error.message : error);
+          console.warn("\u26A0\uFE0F Failed to load .gitignore:", error instanceof Error ? error.message : error);
         }
       }
       /**
@@ -4338,18 +4313,7 @@ function configureLiquidWithExtensions(liquid) {
     if (typeof key !== "string") {
       return false;
     }
-    const has = memoryStore.has(key, namespace);
-    try {
-      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
-        console.error(
-          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
-            has
-          )}`
-        );
-      }
-    } catch {
-    }
-    return has;
+    return memoryStore.has(key, namespace);
   });
   liquid.registerFilter("memory_list", (namespace) => {
     return memoryStore.list(namespace);
@@ -4915,29 +4879,6 @@ var init_ai_check_provider = __esm({
             }
           }
         }
-        const factValidation = (() => {
-          try {
-            const hist = outputHistory || /* @__PURE__ */ new Map();
-            const vf = hist.get("validate-fact") || [];
-            const fx = hist.get("extract-facts") || [];
-            let lastWaveSize = 0;
-            if (Array.isArray(fx) && fx.length > 0) {
-              const last = fx[fx.length - 1];
-              lastWaveSize = Array.isArray(last) ? last.length : 0;
-            }
-            let lastWave = [];
-            if (lastWaveSize > 0 && Array.isArray(vf) && vf.length >= lastWaveSize) {
-              lastWave = vf.slice(-lastWaveSize);
-              if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
-                lastWave = lastWave.flat();
-              }
-            }
-            const invalid = lastWave.filter((v) => v && (v.is_valid === false || v.confidence && v.confidence !== "high")).map((v) => ({ claim: v.claim, correction: v.correction }));
-            return { has_issues: invalid.length > 0, invalid };
-          } catch {
-            return { has_issues: false, invalid: [] };
-          }
-        })();
         const templateContext = {
           // PR Information
           pr: {
@@ -5037,43 +4978,11 @@ var init_ai_check_provider = __esm({
             return hist;
           })(),
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
-          outputs_raw: outputsRaw,
-          // Convenience: fact validation summary from history for robust gating in templates
-          fact_validation: factValidation,
-          has_issues: !!factValidation.has_issues
+          outputs_raw: outputsRaw
         };
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            console.error(
-              `[prompt-ctx] outputs.keys=${Object.keys(templateContext.outputs || {}).join(", ")} hist.validate-fact.len=${(() => {
-                try {
-                  const h = templateContext.outputs_history || {};
-                  const v = h["validate-fact"];
-                  return Array.isArray(v) ? v.length : 0;
-                } catch {
-                  return 0;
-                }
-              })()}`
-            );
-          }
-        } catch {
-        }
         try {
           return await this.liquidEngine.parseAndRender(promptContent, templateContext);
         } catch (error) {
-          try {
-            if (process.env.VISOR_DEBUG === "true") {
-              const lines = promptContent.split(/\r?\n/);
-              const preview = lines.slice(0, 20).map((l, i) => `${(i + 1).toString().padStart(3, " ")}| ${l}`).join("\n");
-              try {
-                process.stderr.write(
-                  "[prompt-error] First 20 lines of prompt before Liquid render:\n" + preview + "\n"
-                );
-              } catch {
-              }
-            }
-          } catch {
-          }
           throw new Error(
             `Failed to render prompt template: ${error instanceof Error ? error.message : "Unknown error"}`
           );
@@ -5092,12 +5001,6 @@ var init_ai_check_provider = __esm({
         return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
       }
       async executeWithConfig(prInfo, config, _dependencyResults, sessionInfo) {
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            console.error(`[ai-exec] step=${String(config.checkName || "unknown")}`);
-          }
-        } catch {
-        }
         const aiConfig = {};
         if (config.ai) {
           if (config.ai.apiKey !== void 0) {
@@ -5197,43 +5100,6 @@ var init_ai_check_provider = __esm({
           _dependencyResults,
           config.__outputHistory
         );
-        try {
-          const stepName = config.checkName || "unknown";
-          const serviceForCapture = new AIReviewService(aiConfig);
-          const finalPrompt = await serviceForCapture.buildCustomPrompt(
-            prInfo,
-            processedPrompt,
-            config.schema,
-            { checkName: config.checkName }
-          );
-          sessionInfo?.hooks?.onPromptCaptured?.({
-            step: String(stepName),
-            provider: "ai",
-            prompt: finalPrompt
-          });
-          try {
-            if (process.env.VISOR_DEBUG === "true") {
-              console.error(
-                `[ai-capture] step=${String(stepName)} len=${finalPrompt.length} preview=${finalPrompt.replace(/\s+/g, " ").slice(0, 200)}`
-              );
-              const containsClaim = finalPrompt.includes("Claim:");
-              const containsCorrection = finalPrompt.includes("Correction:");
-              console.error(
-                `[ai-capture] markers step=${String(stepName)} Claim:${containsClaim} Correction:${containsCorrection}`
-              );
-            }
-          } catch {
-          }
-        } catch {
-        }
-        try {
-          const stepName = config.checkName || "unknown";
-          const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
-          if (mock !== void 0) {
-            return { issues: [], output: mock };
-          }
-        } catch {
-        }
         const service = new AIReviewService(aiConfig);
         const schema = config.schema;
         if (aiConfig.debug) {
@@ -5250,44 +5116,7 @@ var init_ai_check_provider = __esm({
             );
           }
           let result;
-          if (aiConfig.debug) {
-            try {
-              console.error(
-                `\u{1F527} Debug: reuse_ai_session for ${config.checkName}: ${String(
-                  config.reuse_ai_session
-                )}`
-              );
-            } catch {
-            }
-          }
-          const reuseEnabled = config.reuse_ai_session === true || typeof config.reuse_ai_session === "string";
-          if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
-            try {
-              const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
-              const reg = SessionRegistry2.getInstance();
-              if (!reg.hasSession(sessionInfo.parentSessionId)) {
-                if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
-                  console.warn(
-                    `\u26A0\uFE0F  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
-                  );
-                }
-                const fresh = await service.executeReview(
-                  prInfo,
-                  processedPrompt,
-                  schema,
-                  config.checkName,
-                  config.sessionId
-                );
-                return {
-                  ...fresh,
-                  issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
-                    fresh.issues || [],
-                    process.cwd()
-                  )
-                };
-              }
-            } catch {
-            }
+          if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
             const sessionMode = config.session_mode || "clone";
             if (aiConfig.debug) {
               console.error(
@@ -5804,7 +5633,7 @@ var init_http_client_provider = __esm({
           return false;
         }
       }
-      async execute(prInfo, config, dependencyResults, context2) {
+      async execute(prInfo, config, dependencyResults, _sessionInfo) {
         const url = config.url;
         const method = config.method || "GET";
         const headers = config.headers || {};
@@ -5836,9 +5665,7 @@ var init_http_client_provider = __esm({
             requestBody = renderedBody;
           }
           const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
-          const stepName = config.checkName || "unknown";
-          const mock = context2?.hooks?.mockForStep?.(String(stepName));
-          const data = mock !== void 0 ? mock : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+          const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
           let processedData = data;
           if (transform) {
             try {
@@ -6339,26 +6166,6 @@ var init_sandbox = __esm({
   }
 });
 
-// src/test-runner/recorders/global-recorder.ts
-var global_recorder_exports = {};
-__export(global_recorder_exports, {
-  getGlobalRecorder: () => getGlobalRecorder,
-  setGlobalRecorder: () => setGlobalRecorder
-});
-function setGlobalRecorder(r) {
-  __rec = r;
-}
-function getGlobalRecorder() {
-  return __rec;
-}
-var __rec;
-var init_global_recorder = __esm({
-  "src/test-runner/recorders/global-recorder.ts"() {
-    "use strict";
-    __rec = null;
-  }
-});
-
 // src/providers/github-ops-provider.ts
 var GitHubOpsProvider;
 var init_github_ops_provider = __esm({
@@ -6367,7 +6174,6 @@ var init_github_ops_provider = __esm({
     init_check_provider_interface();
     init_sandbox();
     init_liquid_extensions();
-    init_logger();
     GitHubOpsProvider = class extends CheckProvider {
       sandbox;
       getName() {
@@ -6394,28 +6200,8 @@ var init_github_ops_provider = __esm({
       }
       async execute(prInfo, config, dependencyResults) {
         const cfg = config;
-        let octokit = config.eventContext?.octokit;
-        if (process.env.VISOR_DEBUG === "true") {
-          try {
-            logger.debug(`[github-ops] pre-fallback octokit? ${!!octokit}`);
-          } catch {
-          }
-        }
+        const octokit = config.eventContext?.octokit;
         if (!octokit) {
-          try {
-            const { getGlobalRecorder: getGlobalRecorder2 } = (init_global_recorder(), __toCommonJS(global_recorder_exports));
-            const rec = getGlobalRecorder2 && getGlobalRecorder2();
-            if (rec) octokit = rec;
-          } catch {
-          }
-        }
-        if (!octokit) {
-          if (process.env.VISOR_DEBUG === "true") {
-            try {
-              console.error("[github-ops] missing octokit after fallback \u2014 returning issue");
-            } catch {
-            }
-          }
           return {
             issues: [
               {
@@ -6430,26 +6216,7 @@ var init_github_ops_provider = __esm({
           };
         }
         const repoEnv = process.env.GITHUB_REPOSITORY || "";
-        let owner = "";
-        let repo = "";
-        if (repoEnv.includes("/")) {
-          [owner, repo] = repoEnv.split("/");
-        } else {
-          try {
-            const ec = config.eventContext || {};
-            owner = ec?.repository?.owner?.login || owner;
-            repo = ec?.repository?.name || repo;
-          } catch {
-          }
-        }
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            logger.info(
-              `[github-ops] context octokit? ${!!octokit} repo=${owner}/${repo} pr#=${prInfo?.number}`
-            );
-          }
-        } catch {
-        }
+        const [owner, repo] = repoEnv.split("/");
         if (!owner || !repo || !prInfo?.number) {
           return {
             issues: [
@@ -6468,12 +6235,6 @@ var init_github_ops_provider = __esm({
         if (Array.isArray(cfg.values)) valuesRaw = cfg.values.map((v) => String(v));
         else if (typeof cfg.values === "string") valuesRaw = [cfg.values];
         else if (typeof cfg.value === "string") valuesRaw = [cfg.value];
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            logger.info(`[github-ops] op=${cfg.op} valuesRaw(before)=${JSON.stringify(valuesRaw)}`);
-          }
-        } catch {
-        }
         const renderValues = async (arr) => {
           if (!arr || arr.length === 0) return [];
           const liq = createExtendedLiquid({
@@ -6488,17 +6249,6 @@ var init_github_ops_provider = __esm({
               outputs[name] = summary.output !== void 0 ? summary.output : summary;
             }
           }
-          try {
-            const hist = config.__outputHistory;
-            if (hist) {
-              for (const [name, arr2] of hist.entries()) {
-                if (!outputs[name] && Array.isArray(arr2) && arr2.length > 0) {
-                  outputs[name] = arr2[arr2.length - 1];
-                }
-              }
-            }
-          } catch {
-          }
           const ctx = {
             pr: {
               number: prInfo.number,
@@ -6510,27 +6260,6 @@ var init_github_ops_provider = __esm({
             },
             outputs
           };
-          try {
-            if (process.env.VISOR_DEBUG === "true") {
-              logger.info(`[github-ops] deps keys=${Object.keys(outputs).join(", ")}`);
-              const ov = outputs["overview"];
-              if (ov) {
-                logger.info(`[github-ops] outputs.overview.keys=${Object.keys(ov).join(",")}`);
-                if (ov.tags) {
-                  logger.info(
-                    `[github-ops] outputs.overview.tags keys=${Object.keys(ov.tags).join(",")}`
-                  );
-                  try {
-                    logger.info(
-                      `[github-ops] outputs.overview.tags['review-effort']=${String(ov.tags["review-effort"])}`
-                    );
-                  } catch {
-                  }
-                }
-              }
-            }
-          } catch {
-          }
           const out = [];
           for (const item of arr) {
             if (typeof item === "string" && (item.includes("{{") || item.includes("{%"))) {
@@ -6539,9 +6268,6 @@ var init_github_ops_provider = __esm({
                 out.push(rendered);
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
-                if (process.env.VISOR_DEBUG === "true") {
-                  logger.warn(`[github-ops] liquid_render_error: ${msg}`);
-                }
                 return Promise.reject({
                   issues: [
                     {
@@ -6582,9 +6308,6 @@ var init_github_ops_provider = __esm({
             else if (Array.isArray(res)) values = res.map((v) => String(v));
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            if (process.env.VISOR_DEBUG === "true") {
-              logger.warn(`[github-ops] value_js_error: ${msg}`);
-            }
             return {
               issues: [
                 {
@@ -6599,44 +6322,12 @@ var init_github_ops_provider = __esm({
             };
           }
         }
-        if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
-          try {
-            const derived = [];
-            for (const result of dependencyResults.values()) {
-              const out = result?.output ?? result;
-              const tags = out?.["tags"];
-              if (tags && typeof tags === "object") {
-                const label = tags["label"];
-                const effort = tags["review-effort"];
-                if (label != null) derived.push(String(label));
-                if (effort !== void 0 && effort !== null)
-                  derived.push(`review/effort:${String(effort)}`);
-              }
-            }
-            values = derived;
-            if (process.env.VISOR_DEBUG === "true") {
-              logger.info(`[github-ops] derived values from deps: ${JSON.stringify(values)}`);
-            }
-          } catch {
-          }
-        }
         values = values.map((v) => v.trim()).filter((v) => v.length > 0);
         values = Array.from(new Set(values));
-        try {
-          if (process.env.NODE_ENV === "test" || process.env.VISOR_DEBUG === "true") {
-            logger.info(`[github-ops] ${cfg.op} resolved values: ${JSON.stringify(values)}`);
-          }
-        } catch {
-        }
         try {
           switch (cfg.op) {
             case "labels.add": {
               if (values.length === 0) break;
-              try {
-                if (process.env.VISOR_OUTPUT_FORMAT !== "json")
-                  logger.step(`[github-ops] labels.add -> ${JSON.stringify(values)}`);
-              } catch {
-              }
               await octokit.rest.issues.addLabels({
                 owner,
                 repo,
@@ -6684,10 +6375,6 @@ var init_github_ops_provider = __esm({
           return { issues: [] };
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          try {
-            logger.error(`[github-ops] op_failed ${cfg.op}: ${msg}`);
-          } catch {
-          }
           return {
             issues: [
               {
@@ -7283,7 +6970,7 @@ var init_command_check_provider = __esm({
         }
         return true;
       }
-      async execute(prInfo, config, dependencyResults, context2) {
+      async execute(prInfo, config, dependencyResults) {
         try {
           logger.info(
             `  command provider: executing check=${String(config.checkName || config.type)} hasTransformJs=${Boolean(
@@ -7346,38 +7033,6 @@ var init_command_check_provider = __esm({
             { "visor.check.id": checkId, "visor.check.input.context": ctxJson },
             [{ name: "check.started" }, { name: "check.completed" }]
           );
-        } catch {
-        }
-        try {
-          const stepName = config.checkName || "unknown";
-          const mock = context2?.hooks?.mockForStep?.(String(stepName));
-          if (mock && typeof mock === "object") {
-            const m = mock;
-            let out = m.stdout ?? "";
-            try {
-              if (typeof out === "string" && (out.trim().startsWith("{") || out.trim().startsWith("["))) {
-                out = JSON.parse(out);
-              }
-            } catch {
-            }
-            if (m.exit_code && m.exit_code !== 0) {
-              return {
-                issues: [
-                  {
-                    file: "command",
-                    line: 0,
-                    ruleId: "command/execution_error",
-                    message: `Mocked command exited with code ${m.exit_code}`,
-                    severity: "error",
-                    category: "logic"
-                  }
-                ],
-                // Also expose output for assertions
-                output: out
-              };
-            }
-            return { issues: [], output: out };
-          }
         } catch {
         }
         try {
@@ -8641,7 +8296,7 @@ var init_memory_check_provider = __esm({
         return true;
       }
       async execute(prInfo, config, dependencyResults, _sessionInfo) {
-        let operation = config.operation;
+        const operation = config.operation;
         const key = config.key;
         const namespace = config.namespace;
         const memoryStore = MemoryStore.getInstance();
@@ -8652,12 +8307,6 @@ var init_memory_check_provider = __esm({
           config.__outputHistory
         );
         let result;
-        if (!operation) {
-          const hasJs = typeof config?.memory_js === "string" || typeof config?.operation_js === "string";
-          if (hasJs) {
-            operation = "exec_js";
-          }
-        }
         try {
           switch (operation) {
             case "get":
@@ -8861,30 +8510,32 @@ var init_memory_check_provider = __esm({
           }
         };
         try {
-          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate") {
-            if (process.env.VISOR_DEBUG === "true") {
-              const hist = enhancedContext?.outputs?.history || {};
-              const keys = Object.keys(hist);
-              logger.debug(
-                `[MemoryProvider] ${config.checkName}: history keys = [${keys.join(", ")}]`
-              );
-              const vf = hist["validate-fact"];
-              logger.debug(
-                `[MemoryProvider] ${config.checkName}: validate-fact history length = ${Array.isArray(vf) ? vf.length : "n/a"}`
-              );
-            }
+          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate" || config.checkName === "aggregate") {
+            const hist = enhancedContext?.outputs?.history || {};
+            const keys = Object.keys(hist);
+            console.log("[MemoryProvider]", config.checkName, ": history keys =", keys);
+            const vf = hist["validate-fact"];
+            console.log(
+              "[MemoryProvider]",
+              config.checkName,
+              ": validate-fact history length =",
+              Array.isArray(vf) ? vf.length : "n/a"
+            );
           }
         } catch {
         }
         const result = this.evaluateJavaScriptBlock(script, enhancedContext);
         try {
-          if (config.checkName === "aggregate-validations" && process.env.VISOR_DEBUG === "true") {
+          if (config.checkName === "aggregate-validations") {
             const tv = store.get("total_validations", "fact-validation");
             const av = store.get("all_valid", "fact-validation");
-            logger.debug(
-              `[MemoryProvider] post-exec ${config.checkName} total_validations=${String(
-                tv
-              )} all_valid=${String(av)}`
+            console.error(
+              "[MemoryProvider] post-exec",
+              config.checkName,
+              "total_validations=",
+              tv,
+              "all_valid=",
+              av
             );
           }
         } catch {
@@ -11905,9 +11556,6 @@ var init_check_execution_engine = __esm({
       onFinishLoopCounts = /* @__PURE__ */ new Map();
       // Track how many times a forEach parent check has produced an array during this run ("waves")
       forEachWaveCounts = /* @__PURE__ */ new Map();
-      // One-shot guards for post on_finish scheduling to avoid duplicate replies when
-      // multiple signals (aggregator, memory, history) agree. Keyed by session + parent check.
-      postOnFinishGuards = /* @__PURE__ */ new Set();
       // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
       journal = new ExecutionJournal();
       sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -11930,8 +11578,7 @@ var init_check_execution_engine = __esm({
           }
         }
         this.mockOctokit = this.createMockOctokit();
-        const reviewerOctokit = octokit || this.mockOctokit;
-        this.reviewer = new PRReviewer(reviewerOctokit);
+        this.reviewer = new PRReviewer(this.mockOctokit);
       }
       sessionUUID() {
         return this.sessionId;
@@ -12005,9 +11652,8 @@ var init_check_execution_engine = __esm({
        */
       enrichEventContext(eventContext) {
         const baseContext = eventContext || {};
-        const injected = this.actionContext?.octokit || baseContext.octokit;
-        if (injected) {
-          return { ...baseContext, octokit: injected };
+        if (this.actionContext?.octokit) {
+          return { ...baseContext, octokit: this.actionContext.octokit };
         }
         return baseContext;
       }
@@ -12178,22 +11824,6 @@ var init_check_execution_engine = __esm({
             ...sessionInfo,
             ...this.executionContext
           };
-          try {
-            if (debug) {
-              const depKeys = [];
-              for (const k of depResults.keys()) depKeys.push(k);
-              let vfLen = 0;
-              try {
-                const h = this.outputHistory.get("validate-fact") || [];
-                vfLen = Array.isArray(h) ? h.length : 0;
-              } catch {
-              }
-              console.error(
-                `\u{1F50E} [engine-deps] step='${checkId}' deps=[${depKeys.join(", ")}] history.validate-fact.len=${vfLen}`
-              );
-            }
-          } catch {
-          }
           result = await withActiveSpan(
             `visor.check.${checkId}`,
             { "visor.check.id": checkId, "visor.check.type": provCfg.type || "ai" },
@@ -12388,12 +12018,6 @@ var init_check_execution_engine = __esm({
           overlay
         } = opts;
         try {
-          if (debug && opts.origin === "on_finish") {
-            console.error(`[runNamedCheck] origin=on_finish step=${target}`);
-          }
-        } catch {
-        }
-        try {
           const tcfg = opts.config.checks?.[target];
           if (tcfg && tcfg.if) {
             const gate = await this.shouldRunCheck(
@@ -12510,29 +12134,18 @@ var init_check_execution_engine = __esm({
        */
       async handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug) {
         const log2 = (msg) => (config?.output?.pr_comment ? console.error : console.log)(msg);
-        try {
-          if (debug) console.error("[on_finish] handler invoked");
-        } catch {
-        }
-        const forEachChecksWithOnFinish = this.collectForEachParentsWithOnFinish(config);
-        try {
-          logger.info(
-            `\u{1F9ED} on_finish: discovered ${forEachChecksWithOnFinish.length} forEach parent(s) with hooks`
-          );
-        } catch {
+        const forEachChecksWithOnFinish = [];
+        for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
+          if (checkConfig.forEach && checkConfig.on_finish) {
+            forEachChecksWithOnFinish.push({
+              checkName,
+              checkConfig,
+              onFinish: checkConfig.on_finish
+            });
+          }
         }
         if (forEachChecksWithOnFinish.length === 0) {
           return;
-        }
-        try {
-          const anyParentRan = forEachChecksWithOnFinish.some(
-            ({ checkName }) => results.has(checkName)
-          );
-          if (!anyParentRan) {
-            if (debug) log2("\u{1F9ED} on_finish: no forEach parent executed in this run \u2014 skip");
-            return;
-          }
-        } catch {
         }
         if (debug) {
           log2(`\u{1F3AF} Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
@@ -12541,54 +12154,37 @@ var init_check_execution_engine = __esm({
           try {
             const forEachResult = results.get(checkName);
             if (!forEachResult) {
-              try {
-                logger.info(`\u23ED on_finish: no result found for "${checkName}" \u2014 skip`);
-              } catch {
-              }
+              if (debug) log2(`\u26A0\uFE0F No result found for forEach check "${checkName}", skipping on_finish`);
               continue;
             }
             const forEachItems = forEachResult.forEachItems || [];
             if (forEachItems.length === 0) {
-              try {
-                logger.info(`\u23ED on_finish: "${checkName}" produced 0 items \u2014 skip`);
-              } catch {
-              }
+              if (debug) log2(`\u23ED  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
               continue;
             }
             const node = dependencyGraph.nodes.get(checkName);
             const dependents = node?.dependents || [];
-            try {
-              logger.info(`\u{1F50D} on_finish: "${checkName}" \u2192 ${dependents.length} dependent(s)`);
-            } catch {
+            if (debug) {
+              log2(`\u{1F50D} on_finish for "${checkName}": ${dependents.length} dependent(s)`);
             }
-            for (const depId of dependents) {
-              if (results.has(depId)) continue;
-              try {
-                if (debug) log2(`\u{1F527} on_finish: executing missing dependent '${depId}' before processing '${checkName}'`);
-                const depRes = await this.runNamedCheck(depId, [], {
-                  origin: "on_finish",
-                  config,
-                  dependencyGraph,
-                  prInfo,
-                  resultsMap: results,
-                  sessionInfo: this.executionContext || void 0,
-                  debug,
-                  overlay: new Map(results)
-                });
-                try {
-                  results.set(depId, depRes);
-                } catch {
-                }
-              } catch (e) {
-                try {
-                  const msg = e instanceof Error ? e.message : String(e);
-                  logger.warn(`\u26A0\uFE0F on_finish: failed to execute dependent '${depId}': ${msg}`);
-                } catch {
-                }
-              }
+            const allDependentsCompleted = dependents.every((dep) => results.has(dep));
+            if (!allDependentsCompleted) {
+              if (debug) log2(`\u26A0\uFE0F Not all dependents of "${checkName}" completed, skipping on_finish`);
+              continue;
             }
             logger.info(`\u25B6 on_finish: processing for "${checkName}"`);
-            const { outputsForContext, outputsHistoryForContext } = this.buildOnFinishContext(results);
+            const outputsForContext = {};
+            for (const [name, result] of results.entries()) {
+              const r = result;
+              outputsForContext[name] = r.output !== void 0 ? r.output : r;
+            }
+            const outputsHistoryForContext = {};
+            try {
+              for (const [check, history] of this.outputHistory.entries()) {
+                outputsHistoryForContext[check] = history;
+              }
+            } catch {
+            }
             const forEachStats = {
               total: forEachItems.length,
               successful: forEachResult.forEachItemResults ? forEachResult.forEachItemResults.filter(
@@ -12680,119 +12276,6 @@ var init_check_execution_engine = __esm({
             {
               const maxLoops = config?.routing?.max_loops ?? 10;
               let loopCount = 0;
-              const runList = Array.from(new Set([...onFinish.run || []].filter(Boolean)));
-              if (runList.length > 0) {
-                logger.info(`\u25B6 on_finish.run: executing [${runList.join(", ")}] for "${checkName}"`);
-              }
-              try {
-                for (const runCheckId of runList) {
-                  if (++loopCount > maxLoops) {
-                    throw new Error(
-                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
-                    );
-                  }
-                  if (debug) log2(`\u{1F527} Debug: on_finish.run executing check '${runCheckId}'`);
-                  logger.info(`  \u25B6 Executing on_finish check: ${runCheckId}`);
-                  const childCfgFull = (config?.checks || {})[runCheckId];
-                  if (!childCfgFull) throw new Error(`Unknown check in on_finish.run: ${runCheckId}`);
-                  const childProvType = childCfgFull.type || "ai";
-                  const childProvider = this.providerRegistry.getProviderOrThrow(childProvType);
-                  this.setProviderWebhookContext(childProvider);
-                  const depOverlayForChild = new Map(results);
-                  const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
-                    origin: "on_finish",
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: results,
-                    debug,
-                    sessionInfo: this.executionContext || void 0,
-                    overlay: depOverlayForChild
-                  });
-                  try {
-                    lastRunOutput = __onFinishRes?.output;
-                  } catch {
-                  }
-                  try {
-                    results.set(runCheckId, __onFinishRes);
-                  } catch {
-                  }
-                  logger.info(`  \u2713 Completed on_finish check: ${runCheckId}`);
-                  try {
-                    const childCfg = (config?.checks || {})[runCheckId];
-                    const childOnSuccess = childCfg?.on_success;
-                    if (childOnSuccess) {
-                      try {
-                        logger.info(
-                          `  \u21AA on_finish.run: '${runCheckId}' defines on_success; evaluating run_js`
-                        );
-                      } catch {
-                      }
-                      const evalChildRunJs = async (js) => {
-                        if (!js) return [];
-                        try {
-                          const sandbox = this.getRoutingSandbox();
-                          const scope = { ...onFinishContext, output: lastRunOutput };
-                          const code = `
-                        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const output = scope.output; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
-                        const __fn = () => {
-${js}
-};
-                        const __res = __fn();
-                        return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
-                      `;
-                          const exec = sandbox.compile(code);
-                          const res = exec({ scope }).run();
-                          return Array.isArray(res) ? res : [];
-                        } catch (e) {
-                          const msg = e instanceof Error ? e.message : String(e);
-                          logger.error(
-                            `\u2717 on_finish.run \u2192 child on_success.run_js failed for "${runCheckId}": ${msg}`
-                          );
-                          return [];
-                        }
-                      };
-                      const childDynamicRun = await evalChildRunJs(childOnSuccess.run_js);
-                      const childRunList = Array.from(
-                        new Set([...childOnSuccess.run || [], ...childDynamicRun].filter(Boolean))
-                      );
-                      if (childRunList.length > 0) {
-                        logger.info(
-                          `  \u25B6 on_finish.run \u2192 scheduling child on_success [${childRunList.join(", ")}] after '${runCheckId}'`
-                        );
-                      } else {
-                        try {
-                          logger.info(
-                            `  \u21AA on_finish.run: child on_success produced empty run list for '${runCheckId}'`
-                          );
-                        } catch {
-                        }
-                      }
-                      for (const stepId of childRunList) {
-                        await this.runNamedCheck(stepId, [], {
-                          origin: "on_finish",
-                          config,
-                          dependencyGraph,
-                          prInfo,
-                          resultsMap: results,
-                          sessionInfo: void 0,
-                          debug,
-                          overlay: new Map(results)
-                        });
-                      }
-                    }
-                  } catch {
-                  }
-                }
-                if (runList.length > 0) logger.info(`\u2713 on_finish.run: completed for "${checkName}"`);
-              } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                logger.error(`\u2717 on_finish.run: failed for "${checkName}": ${errorMsg}`);
-                if (error instanceof Error && error.stack) {
-                  logger.debug(`Stack trace: ${error.stack}`);
-                }
-                throw error;
-              }
               const evalRunJs = async (js) => {
                 if (!js) return [];
                 try {
@@ -12806,6 +12289,14 @@ ${js}
                 const __res = __fn();
                 return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
               `;
+                  try {
+                    if (code.includes("process")) {
+                      logger.warn('\u26A0\uFE0F on_finish.goto_js prelude contains "process" token');
+                    } else {
+                      logger.info("\u{1F527} on_finish.goto_js prelude is clean (no process token)");
+                    }
+                  } catch {
+                  }
                   const exec = sandbox.compile(code);
                   const res = exec({ scope }).run();
                   return Array.isArray(res) ? res : [];
@@ -12816,91 +12307,71 @@ ${js}
                   return [];
                 }
               };
-              try {
-                if (process.env.VISOR_DEBUG === "true" || debug) {
-                  const memDbg = MemoryStore.getInstance(this.config?.memory);
-                  const keys = memDbg.list("fact-validation");
-                  logger.info(
-                    `on_finish.run_js context (keys in fact-validation) = [${keys.join(", ")}]`
-                  );
-                }
-              } catch {
-              }
               const dynamicRun = await evalRunJs(onFinish.run_js);
-              const dynList = Array.from(new Set(dynamicRun.filter(Boolean)));
-              if (dynList.length > 0) {
-                logger.info(
-                  `\u25B6 on_finish.run_js: executing [${dynList.join(", ")}] for "${checkName}"`
-                );
-                for (const runCheckId of dynList) {
+              const runList = Array.from(
+                new Set([...onFinish.run || [], ...dynamicRun].filter(Boolean))
+              );
+              if (runList.length > 0) {
+                logger.info(`\u25B6 on_finish.run: executing [${runList.join(", ")}] for "${checkName}"`);
+              }
+              try {
+                for (const runCheckId of runList) {
                   if (++loopCount > maxLoops) {
                     throw new Error(
-                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`
+                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
                     );
                   }
-                  logger.info(`  \u25B6 Executing on_finish(run_js) check: ${runCheckId}`);
-                  const childCfgFull = (config?.checks || {})[runCheckId];
-                  if (!childCfgFull)
-                    throw new Error(`Unknown check in on_finish.run_js: ${runCheckId}`);
-                  const childProvType = childCfgFull.type || "ai";
-                  const childProvider = this.providerRegistry.getProviderOrThrow(childProvType);
-                  this.setProviderWebhookContext(childProvider);
-                  const depOverlayForChild = new Map(results);
-                  const childRes = await this.runNamedCheck(runCheckId, [], {
+                  if (debug) log2(`\u{1F527} Debug: on_finish.run executing check '${runCheckId}'`);
+                  logger.info(`  \u25B6 Executing on_finish check: ${runCheckId}`);
+                  const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
                     origin: "on_finish",
                     config,
                     dependencyGraph,
                     prInfo,
                     resultsMap: results,
+                    sessionInfo: void 0,
                     debug,
-                    sessionInfo: this.executionContext || void 0,
-                    overlay: depOverlayForChild
+                    eventOverride: onFinish.goto_event,
+                    overlay: new Map(results)
                   });
                   try {
-                    results.set(runCheckId, childRes);
+                    lastRunOutput = __onFinishRes?.output;
                   } catch {
                   }
-                  try {
-                    lastRunOutput = childRes?.output;
-                  } catch {
-                  }
-                  logger.info(`  \u2713 Completed on_finish(run_js) check: ${runCheckId}`);
+                  logger.info(`  \u2713 Completed on_finish check: ${runCheckId}`);
                 }
+                if (runList.length > 0) {
+                  logger.info(`\u2713 on_finish.run: completed for "${checkName}"`);
+                }
+              } catch (error) {
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                logger.error(`\u2717 on_finish.run: failed for "${checkName}": ${errorMsg}`);
+                if (error instanceof Error && error.stack) {
+                  logger.debug(`Stack trace: ${error.stack}`);
+                }
+                throw error;
               }
             }
-            if (process.env.VISOR_TEST_MODE !== "true") {
-              try {
-                const vfNow = this.outputHistory.get("validate-fact") || [];
-                if (Array.isArray(vfNow) && forEachItems.length > 0 && vfNow.length >= forEachItems.length) {
-                  const lastWave = vfNow.slice(-forEachItems.length);
-                  try {
-                    if (process.env.VISOR_DEBUG === "true") {
-                      logger.info(`[on_finish.recompute] lastWave=${JSON.stringify(lastWave)}`);
-                    }
-                  } catch {
-                  }
-                  const ok = lastWave.every(
-                    (v) => v && (v.is_valid === true || v.valid === true)
+            try {
+              const vfNow = this.outputHistory.get("validate-fact") || [];
+              if (Array.isArray(vfNow) && forEachItems.length > 0 && vfNow.length >= forEachItems.length) {
+                const lastWave = vfNow.slice(-forEachItems.length);
+                const ok = lastWave.every(
+                  (v) => v && (v.is_valid === true || v.valid === true)
+                );
+                await MemoryStore.getInstance(this.config?.memory).set(
+                  "all_valid",
+                  ok,
+                  "fact-validation"
+                );
+                try {
+                  logger.info(
+                    `\u{1F9EE} on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
                   );
-                  await MemoryStore.getInstance(this.config?.memory).set(
-                    "all_valid",
-                    ok,
-                    "fact-validation"
-                  );
-                  try {
-                    logger.info(
-                      `\u{1F9EE} on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
-                    );
-                  } catch {
-                  }
+                } catch {
                 }
-              } catch {
               }
-            } else {
-              try {
-                logger.info("\u{1F9EE} on_finish: skipping recompute of all_valid in test mode");
-              } catch {
-              }
+            } catch {
             }
             let gotoTarget = null;
             if (onFinish.goto_js) {
@@ -13071,32 +12542,6 @@ ${onFinish.goto_js}
             logger.error(`\u2717 on_finish: error for "${checkName}": ${error}`);
           }
         }
-      }
-      // Helper: find all forEach parents that define on_finish
-      collectForEachParentsWithOnFinish(config) {
-        const out = [];
-        for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
-          if (checkConfig.forEach && checkConfig.on_finish) {
-            out.push({ checkName, checkConfig, onFinish: checkConfig.on_finish });
-          }
-        }
-        return out;
-      }
-      // Helper: project results + history into plain objects for sandbox
-      buildOnFinishContext(results) {
-        const outputsForContext = {};
-        for (const [name, result] of results.entries()) {
-          const r = result;
-          outputsForContext[name] = r.output !== void 0 ? r.output : r;
-        }
-        const outputsHistoryForContext = {};
-        try {
-          for (const [check, history] of this.outputHistory.entries()) {
-            outputsHistoryForContext[check] = history;
-          }
-        } catch {
-        }
-        return { outputsForContext, outputsHistoryForContext };
       }
       /**
        * Execute a check with retry/backoff and routing semantics (on_fail/on_success)
@@ -13280,16 +12725,7 @@ ${expr}`;
             );
             this.recordProviderDuration(checkName, Date.now() - __provStart);
             try {
-              const anyRes = res;
-              currentRouteOutput = anyRes && typeof anyRes === "object" && "output" in anyRes ? anyRes.output : anyRes;
-              if (checkName === "aggregate-validations" && (process.env.VISOR_DEBUG === "true" || debug)) {
-                try {
-                  logger.info(
-                    "[aggregate-validations] route-output = " + JSON.stringify(currentRouteOutput)
-                  );
-                } catch {
-                }
-              }
+              currentRouteOutput = res?.output;
             } catch {
             }
             const hasSoftFailure = (res.issues || []).some(
@@ -13422,14 +12858,6 @@ ${expr}`;
             if (onSuccess) {
               const dynamicRun = await evalRunJs(onSuccess.run_js);
               const runList = [...onSuccess.run || [], ...dynamicRun].filter(Boolean);
-              try {
-                if (checkName === "aggregate-validations" && (process.env.VISOR_DEBUG === "true" || debug)) {
-                  logger.info(
-                    `on_success.run (aggregate-validations): dynamicRun=[${dynamicRun.join(", ")}] run=[${(onSuccess.run || []).join(", ")}]`
-                  );
-                }
-              } catch {
-              }
               if (runList.length > 0) {
                 try {
                   (init_logger(), __toCommonJS(logger_exports)).logger.info(
@@ -13444,18 +12872,6 @@ ${expr}`;
                   );
                 }
                 for (const stepId of Array.from(new Set(runList))) {
-                  try {
-                    const tcfg2 = (config.checks || {})[stepId];
-                    const tags = tcfg2?.tags || [];
-                    const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
-                    if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
-                      (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                        `\u23ED on_success.run: skipping one_shot '${stepId}' (already executed)`
-                      );
-                      continue;
-                    }
-                  } catch {
-                  }
                   const tcfg = config.checks?.[stepId];
                   const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                   const inItem = !!foreachContext;
@@ -13540,16 +12956,6 @@ ${expr}`;
                       if (!eventMatches) continue;
                       if (dependsOn(name, target)) forwardSet.add(name);
                     }
-                    const runTargetOnce = async (scopeForRun) => {
-                      await this.runNamedCheck(target, scopeForRun, {
-                        config,
-                        dependencyGraph,
-                        prInfo,
-                        resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                        debug: !!debug,
-                        eventOverride: onSuccess.goto_event
-                      });
-                    };
                     const order = [];
                     const inSet = (n) => forwardSet.has(n);
                     const tempMarks = /* @__PURE__ */ new Set();
@@ -13578,10 +12984,10 @@ ${expr}`;
                     const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                     const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
                     const runChainOnce = async (scopeForRun) => {
-                      await runTargetOnce(scopeForRun);
-                      const dependentsOnly = order.filter((n) => n !== target);
-                      for (const stepId of dependentsOnly) {
-                        await this.runNamedCheck(stepId, scopeForRun, {
+                      for (const stepId of order) {
+                        if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
+                        const childStart = this.recordIterationStart(stepId);
+                        const childRes = await this.runNamedCheck(stepId, scopeForRun, {
                           config,
                           dependencyGraph,
                           prInfo,
@@ -13589,6 +12995,16 @@ ${expr}`;
                           debug: !!debug,
                           eventOverride: onSuccess.goto_event
                         });
+                        const childIssues = (childRes.issues || []).map((i) => ({ ...i }));
+                        const childSuccess = !this.hasFatal(childIssues);
+                        const childOutput = childRes?.output;
+                        this.recordIterationComplete(
+                          stepId,
+                          childStart,
+                          childSuccess,
+                          childIssues,
+                          childOutput
+                        );
                       }
                     };
                     if (!foreachContext && mode === "map" && items.length > 0) {
@@ -13734,26 +13150,36 @@ ${expr}`;
        * Filter checks based on tag filter configuration
        */
       filterChecksByTags(checks, config, tagFilter) {
+        const logFn = this.config?.output?.pr_comment ? console.error : console.log;
         return checks.filter((checkName) => {
           const checkConfig = config?.checks?.[checkName];
           if (!checkConfig) {
             return true;
           }
           const checkTags = checkConfig.tags || [];
+          if (checkTags.length > 0 && (!tagFilter || !tagFilter.include && !tagFilter.exclude)) {
+            logFn(`\u23ED\uFE0F Skipping check '${checkName}' - check has tags but no tag filter specified`);
+            return false;
+          }
           if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
-            if (process.env.VISOR_TEST_MODE === "true") return true;
-            return checkTags.length === 0;
+            return true;
           }
           if (checkTags.length === 0) {
             return true;
           }
           if (tagFilter.exclude && tagFilter.exclude.length > 0) {
             const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
-            if (hasExcludedTag) return false;
+            if (hasExcludedTag) {
+              logFn(`\u23ED\uFE0F Skipping check '${checkName}' - has excluded tag`);
+              return false;
+            }
           }
           if (tagFilter.include && tagFilter.include.length > 0) {
             const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
-            if (!hasIncludedTag) return false;
+            if (!hasIncludedTag) {
+              logFn(`\u23ED\uFE0F Skipping check '${checkName}' - does not have required tags`);
+              return false;
+            }
           }
           return true;
         });
@@ -13973,12 +13399,7 @@ ${expr}`;
               ai: timeout ? { timeout } : void 0
             };
             const __provStart = Date.now();
-            const result = await provider.execute(
-              prInfo,
-              providerConfig,
-              void 0,
-              this.executionContext
-            );
+            const result = await provider.execute(prInfo, providerConfig);
             this.recordProviderDuration(checks[0], Date.now() - __provStart);
             const prefixedIssues = (result.issues || []).map((issue) => ({
               ...issue,
@@ -14010,7 +13431,6 @@ ${expr}`;
             type: "ai",
             prompt: focus2,
             focus: focus2,
-            checkName,
             eventContext: this.enrichEventContext(prInfo.eventContext),
             ai: timeout ? { timeout } : void 0,
             // Inherit global AI provider and model settings if config is available
@@ -14018,12 +13438,7 @@ ${expr}`;
             ai_model: config?.ai_model
           };
           const __provStart2 = Date.now();
-          const result = await provider.execute(
-            prInfo,
-            providerConfig,
-            void 0,
-            this.executionContext
-          );
+          const result = await provider.execute(prInfo, providerConfig);
           this.recordProviderDuration(checkName, Date.now() - __provStart2);
           const prefixedIssues = (result.issues || []).map((issue) => ({
             ...issue,
@@ -14057,10 +13472,6 @@ ${expr}`;
        * Execute review checks and return grouped results with statistics for new architecture
        */
       async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
-        try {
-          this["executionStats"].clear();
-        } catch {
-        }
         const logFn = outputFormat === "json" || outputFormat === "sarif" ? debug ? console.error : () => {
         } : console.log;
         if (debug) {
@@ -14086,13 +13497,6 @@ ${expr}`;
           );
         }
         checks = tagFilteredChecks;
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            const ev = prInfo?.eventType || "(unknown)";
-            console.error(`[engine] final checks after filters (event=${ev}): [${checks.join(", ")}]`);
-          }
-        } catch {
-        }
         if (!this.actionContext) {
           try {
             const repoEnv = process.env.GITHUB_REPOSITORY || "";
@@ -14127,25 +13531,12 @@ ${expr}`;
           return Boolean(c?.on_success || c?.on_fail);
         });
         if (checks.length > 1 || hasDependencies || hasRouting) {
-          try {
-            if (process.env.VISOR_DEBUG === "true") {
-              console.error(
-                "[engine] grouped-dep path: checks=",
-                checks.join(","),
-                " hasDeps=",
-                hasDependencies,
-                " hasRouting=",
-                hasRouting
-              );
-            }
-          } catch {
-          }
           if (debug) {
             logger.debug(
               `\u{1F527} Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies}, has routing: ${hasRouting})`
             );
           }
-          const execRes = await this.executeGroupedDependencyAwareChecks(
+          return await this.executeGroupedDependencyAwareChecks(
             prInfo,
             checks,
             timeout,
@@ -14156,38 +13547,8 @@ ${expr}`;
             failFast,
             tagFilter
           );
-          try {
-            if (process.env.VISOR_TEST_MODE === "true" && config?.output?.pr_comment) {
-              let owner = this.actionContext?.owner;
-              let repo = this.actionContext?.repo;
-              if (!owner || !repo) {
-                try {
-                  const anyInfo = prInfo;
-                  owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
-                  repo = anyInfo?.eventContext?.repository?.name || repo;
-                } catch {
-                }
-              }
-              owner = owner || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[0];
-              repo = repo || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[1];
-              if (owner && repo && prInfo.number) {
-                await this.reviewer.postReviewComment(owner, repo, prInfo.number, execRes.results, {
-                  config,
-                  triggeredBy: prInfo.eventType || "manual",
-                  commentId: "visor-review"
-                });
-              }
-            }
-          } catch {
-          }
-          return execRes;
         }
         if (checks.length === 1) {
-          try {
-            if (process.env.VISOR_DEBUG === "true")
-              console.error("[engine] grouped-single path: check=", checks[0]);
-          } catch {
-          }
           if (debug) {
             logger.debug(`\u{1F527} Debug: Using grouped single check execution for: ${checks[0]}`);
           }
@@ -14201,30 +13562,6 @@ ${expr}`;
           );
           const groupedResults = {};
           groupedResults[checkResult.group] = [checkResult];
-          try {
-            if (process.env.VISOR_TEST_MODE === "true" && config?.output?.pr_comment) {
-              let owner = this.actionContext?.owner;
-              let repo = this.actionContext?.repo;
-              if (!owner || !repo) {
-                try {
-                  const anyInfo = prInfo;
-                  owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
-                  repo = anyInfo?.eventContext?.repository?.name || repo;
-                } catch {
-                }
-              }
-              owner = owner || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[0];
-              repo = repo || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[1];
-              if (owner && repo && prInfo.number) {
-                await this.reviewer.postReviewComment(owner, repo, prInfo.number, groupedResults, {
-                  config,
-                  triggeredBy: prInfo.eventType || "manual",
-                  commentId: "visor-review"
-                });
-              }
-            }
-          } catch {
-          }
           return {
             results: groupedResults,
             statistics: this.buildExecutionStatistics()
@@ -14268,10 +13605,8 @@ ${expr}`;
           ...checkConfig
         };
         providerConfig.forEach = checkConfig.forEach;
-        if (!this.executionStats.has(checkName)) this.initializeCheckStats(checkName);
-        const __iterStart = this.recordIterationStart(checkName);
         const __provStart = Date.now();
-        const result = await provider.execute(prInfo, providerConfig, void 0, this.executionContext);
+        const result = await provider.execute(prInfo, providerConfig);
         this.recordProviderDuration(checkName, Date.now() - __provStart);
         if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
           const reviewSummaryWithOutput = result;
@@ -14308,12 +13643,7 @@ ${expr}`;
         if (config?.output?.pr_comment?.group_by === "check" && !checkConfig.group) {
           group = checkName;
         }
-        try {
-          const out = result?.output;
-          if (out !== void 0) this.trackOutputHistory(checkName, out);
-        } catch {
-        }
-        const checkResult = {
+        return {
           checkName,
           content,
           group,
@@ -14322,14 +13652,6 @@ ${expr}`;
           issues: result.issues
           // Include structured issues
         };
-        try {
-          const issuesArr = (result.issues || []).map((i) => ({ ...i }));
-          const success = !this.hasFatal(issuesArr);
-          const outputVal = result?.output;
-          this.recordIterationComplete(checkName, __iterStart, success, issuesArr, outputVal);
-        } catch {
-        }
-        return checkResult;
       }
       /**
        * Validate and normalize forEach output
@@ -14744,13 +14066,6 @@ ${expr}`;
        */
       async executeDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug, maxParallelism, failFast, tagFilter) {
         const log2 = logFn || console.error;
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            console.error("[engine] enter executeDependencyAwareChecks (dbg=", debug, ")");
-            console.error("  [engine] root checks in (pre-expand): [", checks.join(", "), "]");
-          }
-        } catch {
-        }
         if (debug) {
           log2(`\u{1F527} Debug: Starting dependency-aware execution of ${checks.length} checks`);
         }
@@ -14770,17 +14085,7 @@ ${expr}`;
           const checkConfig = config.checks[checkName];
           if (checkConfig) {
             dependencies[checkName] = checkConfig.depends_on || [];
-            if (debug) {
-              try {
-                log2(
-                  `\u{1F527} Debug: reuse_ai_session for '${checkName}' \u2192 ${String(
-                    checkConfig.reuse_ai_session
-                  )}`
-                );
-              } catch {
-              }
-            }
-            if (checkConfig.reuse_ai_session === true || typeof checkConfig.reuse_ai_session === "string") {
+            if (checkConfig.reuse_ai_session) {
               sessionReuseChecks.add(checkName);
               if (typeof checkConfig.reuse_ai_session === "string") {
                 sessionProviders.set(checkName, checkConfig.reuse_ai_session);
@@ -14812,24 +14117,12 @@ ${expr}`;
             }
             return true;
           };
-          const allowByEvent = (name) => {
-            try {
-              const cfg = config.checks?.[name];
-              const triggers = cfg?.on || [];
-              if (!triggers || triggers.length === 0) return true;
-              const current = prInfo?.eventType || "manual";
-              return triggers.includes(current);
-            } catch {
-              return true;
-            }
-          };
           const visit = (name) => {
             const cfg = config.checks[name];
             if (!cfg || !cfg.depends_on) return;
             for (const dep of cfg.depends_on) {
               if (!config.checks[dep]) continue;
               if (!allowByTags(dep)) continue;
-              if (!allowByEvent(dep)) continue;
               if (!set.has(dep)) {
                 set.add(dep);
                 visit(dep);
@@ -14840,31 +14133,9 @@ ${expr}`;
           return Array.from(set);
         };
         checks = expandWithTransitives(checks);
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            console.error("  [engine] checks after expandWithTransitives: [", checks.join(", "), "]");
-          }
-        } catch {
-        }
         for (const checkName of checks) {
           const checkConfig = config.checks[checkName];
           dependencies[checkName] = checkConfig?.depends_on || [];
-        }
-        try {
-          if (prInfo && prInfo.eventType) {
-            const currentEv = prInfo.eventType || "manual";
-            for (const [name, deps] of Object.entries(dependencies)) {
-              const filtered = (deps || []).filter((dep) => {
-                const cfg = config.checks?.[dep];
-                if (!cfg) return false;
-                const trig = cfg.on || [];
-                if (!trig || Array.isArray(trig) && trig.length === 0) return true;
-                return Array.isArray(trig) ? trig.includes(currentEv) : trig === currentEv;
-              });
-              dependencies[name] = filtered;
-            }
-          }
-        } catch {
         }
         {
           const validation2 = DependencyResolver.validateDependencies(checks, dependencies);
@@ -14922,12 +14193,6 @@ ${expr}`;
         }
         for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length && !shouldStopExecution; levelIndex++) {
           const executionGroup = dependencyGraph.executionOrder[levelIndex];
-          try {
-            console.error(
-              `  [engine] level ${executionGroup.level} parallel=[${executionGroup.parallel.join(", ")}]`
-            );
-          } catch {
-          }
           const checksInLevel = executionGroup.parallel;
           const sessionReuseGroups = /* @__PURE__ */ new Map();
           checksInLevel.forEach((checkName) => {
@@ -14964,12 +14229,6 @@ ${expr}`;
             );
           }
           const levelChecks = executionGroup.parallel.filter((name) => !results.has(name));
-          try {
-            if (process.env.VISOR_DEBUG === "true") {
-              console.error("  [engine] levelChecks = [", levelChecks.join(", "), "]");
-            }
-          } catch {
-          }
           const levelTaskFunctions = levelChecks.map((checkName) => async () => {
             if (results.has(checkName)) {
               if (debug) log2(`\u{1F527} Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -14993,12 +14252,7 @@ ${expr}`;
               const providerType = checkConfig.type || "ai";
               const provider = this.providerRegistry.getProviderOrThrow(providerType);
               if (debug) {
-                log2(`\u{1F527} Debug: Provider for '${checkName}' is '${providerType}'`);
-              } else if (process.env.VISOR_DEBUG === "true") {
-                try {
-                  console.log(`[engine] provider for ${checkName} -> ${providerType}`);
-                } catch {
-                }
+                log2(`\u{1F527} Debug: Provider f|| '${checkName}' is '${providerType}'`);
               }
               this.setProviderWebhookContext(provider);
               const extendedCheckConfig = checkConfig;
@@ -15021,8 +14275,6 @@ ${expr}`;
                 message: extendedCheckConfig.message,
                 env: checkConfig.env,
                 forEach: checkConfig.forEach,
-                // Provide output history so providers can access latest outputs for Liquid rendering
-                __outputHistory: this.outputHistory,
                 // Pass through any provider-specific keys (e.g., op/values for github provider)
                 ...checkConfig,
                 ai: {
@@ -16163,70 +15415,7 @@ ${error.stack || ""}` : String(error);
           }
         }
         if (!shouldStopExecution) {
-          try {
-            logger.info("\u{1F9ED} on_finish: invoking handleOnFinishHooks");
-          } catch {
-          }
-          try {
-            if (debug) console.error("[engine] calling handleOnFinishHooks");
-          } catch {
-          }
           await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
-          try {
-            for (const [parentName, cfg] of Object.entries(config.checks || {})) {
-              const onf = cfg?.on_finish;
-              if (!cfg?.forEach || !onf || !Array.isArray(onf.run) || onf.run.length === 0)
-                continue;
-              const parentRes = results.get(parentName);
-              const count = (() => {
-                try {
-                  if (!parentRes) return 0;
-                  if (Array.isArray(parentRes.forEachItems)) return parentRes.forEachItems.length;
-                  const out = parentRes?.output;
-                  return Array.isArray(out) ? out.length : 0;
-                } catch {
-                  return 0;
-                }
-              })();
-              if (count > 0) {
-                for (const stepId of onf.run) {
-                  if (typeof stepId !== "string" || !stepId) continue;
-                  if (results.has(stepId)) continue;
-                  try {
-                    const h = this.outputHistory.get(stepId);
-                    if (Array.isArray(h) && h.length > 0) continue;
-                  } catch {
-                  }
-                  try {
-                    logger.info(
-                      `\u25B6 on_finish.fallback: executing static run step '${stepId}' for parent '${parentName}'`
-                    );
-                  } catch {
-                  }
-                  try {
-                    if (debug)
-                      console.error(`[on_finish.fallback] run '${stepId}' for '${parentName}'`);
-                  } catch {
-                  }
-                  await this.runNamedCheck(stepId, [], {
-                    origin: "on_finish",
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: results,
-                    debug: !!debug,
-                    overlay: new Map(results)
-                  });
-                }
-              }
-            }
-          } catch {
-          }
-        } else {
-          try {
-            logger.info("\u{1F9ED} on_finish: skipped due to shouldStopExecution");
-          } catch {
-          }
         }
         if (sessionIds.size > 0 && debug) {
           log2(`\u{1F9F9} Cleaning up ${sessionIds.size} AI sessions...`);
@@ -16238,13 +15427,6 @@ ${error.stack || ""}` : String(error);
               log2(`\u26A0\uFE0F Failed to cleanup session for check ${checkName}: ${error}`);
             }
           }
-        }
-        try {
-          if (sessionIds.size > 0) {
-            const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
-            SessionRegistry2.getInstance().clearAllSessions();
-          }
-        } catch {
         }
         const executionStatistics = this.buildExecutionStatistics();
         if (logFn === console.log) {
@@ -16315,28 +15497,20 @@ ${error.stack || ""}` : String(error);
               }
             }
             const providerConfig = {
-              type: checkConfig.type || "ai",
+              type: "ai",
               prompt: checkConfig.prompt,
               focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
               schema: checkConfig.schema,
               group: checkConfig.group,
-              checkName,
               eventContext: this.enrichEventContext(prInfo.eventContext),
               ai: {
                 timeout: timeout || 6e5,
                 debug,
                 // Pass debug flag to AI provider
                 ...checkConfig.ai || {}
-              },
-              // Preserve all other provider-specific fields (e.g., memory.operation, github.op)
-              ...checkConfig
+              }
             };
-            const result = await provider.execute(
-              prInfo,
-              providerConfig,
-              void 0,
-              this.executionContext
-            );
+            const result = await provider.execute(prInfo, providerConfig);
             console.error(
               `\u{1F527} Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
             );
@@ -16413,7 +15587,7 @@ ${error.stack || ""}` : String(error);
           ai_provider: checkConfig.ai_provider || config.ai_provider,
           ai_model: checkConfig.ai_model || config.ai_model
         };
-        const result = await provider.execute(prInfo, providerConfig, void 0, this.executionContext);
+        const result = await provider.execute(prInfo, providerConfig);
         const prefixedIssues = (result.issues || []).map((issue) => ({
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
@@ -17437,31 +16611,7 @@ ${result.value.result.debug.rawResponse}`;
         if (!this.outputHistory.has(checkName)) {
           this.outputHistory.set(checkName, []);
         }
-        const arr = this.outputHistory.get(checkName);
-        arr.push(output);
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            const preview = (() => {
-              try {
-                return JSON.stringify(output).slice(0, 120);
-              } catch {
-                return String(output);
-              }
-            })();
-            console.log(`[history] ${checkName} push -> len=${arr.length} preview=${preview}`);
-          }
-        } catch {
-        }
-      }
-      /**
-       * Snapshot of output history per step for test assertions
-       */
-      getOutputHistorySnapshot() {
-        const out = {};
-        for (const [k, v] of this.outputHistory.entries()) {
-          out[k] = Array.isArray(v) ? [...v] : [];
-        }
-        return out;
+        this.outputHistory.get(checkName).push(output);
       }
       /**
        * Record that a check was skipped

@@ -668,12 +668,6 @@ interface ExecutionContext {
     /** SDK hooks for human input */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
-        onPromptCaptured?: (info: {
-            step: string;
-            provider: string;
-            prompt: string;
-        }) => void;
-        mockForStep?: (step: string) => unknown | undefined;
     };
 }
 
