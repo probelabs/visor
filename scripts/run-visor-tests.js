@@ -19,18 +19,36 @@ function main() {
 
   let nodeArgs = [];
   let argv = [];
-  if (fs.existsSync(distCli)) {
-    argv = [distCli, 'test', '--config', testsPath, '--progress', 'compact'];
-  } else {
-    // Fall back to ts-node
+  if (!isCI) {
+    // Prefer TypeScript source in local/dev for correctness
     try {
       require.resolve('ts-node/register');
-    } catch (e) {
-      console.error('ts-node not found. Please build (npm run build:cli) or install ts-node.');
-      process.exit(2);
+      nodeArgs = ['-r', 'ts-node/register'];
+      argv = [srcCli, 'test', '--config', testsPath, '--progress', 'compact'];
+    } catch (_) {
+      // Fallback to dist if ts-node is not installed
+      if (fs.existsSync(distCli)) {
+        argv = [distCli, 'test', '--config', testsPath, '--progress', 'compact'];
+      } else {
+        console.error('Neither ts-node nor dist/index.js found. Run `npm run build:cli` first.');
+        process.exit(2);
+      }
     }
-    nodeArgs = ['-r', 'ts-node/register'];
-    argv = [srcCli, 'test', '--config', testsPath, '--progress', 'compact'];
+  } else {
+    // In CI we always use the freshly built dist
+    // Fall back to ts-node
+    if (fs.existsSync(distCli)) {
+      argv = [distCli, 'test', '--config', testsPath, '--progress', 'compact'];
+    } else {
+      try {
+        require.resolve('ts-node/register');
+        nodeArgs = ['-r', 'ts-node/register'];
+        argv = [srcCli, 'test', '--config', testsPath, '--progress', 'compact'];
+      } catch (e) {
+        console.error('Build artifacts missing and ts-node not available.');
+        process.exit(2);
+      }
+    }
   }
 
   if (isCI) {
@@ -59,4 +77,3 @@ function main() {
 }
 
 main();
-
