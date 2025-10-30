@@ -328,45 +328,14 @@ steps:
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
-        {% assign has_issues = has_issues | default: false %}
-        {% if "fact_validation_issues" | memory_has: "fact-validation" %}
-        {% assign has_issues = true %}
-        {% endif %}
-        {% if has_issues != true and outputs['aggregate-validations'] %}
-        {% assign _agg = outputs['aggregate-validations'] %}
-        {% assign _agg_issues = _agg.issues %}
-        {% assign _agg_issues_len = _agg_issues | size %}
-        {% if _agg.has_problems %}
-        {% assign has_issues = true %}
-        {% elsif _agg_issues and _agg_issues_len > 0 %}
-        {% assign has_issues = true %}
-        {% endif %}
-        {% endif %}
-        {% if has_issues != true and fact_validation and fact_validation.has_issues == true %}
-        {% assign has_issues = true %}
-        {% endif %}
-        {# do not infer has_issues from prior assistant history alone #}
-        {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
-        {% assign __issues_len = issues | size %}
-        {% if __issues_len == 0 and outputs['aggregate-validations'] %}
-        {% assign issues = outputs['aggregate-validations'].issues %}
-        {% assign __issues_len = issues | size %}
-        {% endif %}
-        {% assign __issues_len = issues | size %}
-        {% if __issues_len == 0 %}
-        {% if fact_validation and fact_validation.has_issues %}
-        {% assign issues = fact_validation.invalid %}
-        {% endif %}
-        {% endif %}
-
-        {% assign __issues_len_check = issues | size %}
-        {% assign __do_correction = false %}
-        {% if has_issues %}
-        {% assign __do_correction = true %}
-        {% elsif issues and __issues_len_check > 0 %}
-        {% assign __do_correction = true %}
-        {% endif %}
-        {% if __do_correction %}
+        {%- liquid
+          assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
+          assign _from_agg  = outputs | get: "aggregate-validations.issues"
+          assign _from_fact = fact_validation | get: "invalid"
+          assign _from_last = outputs_history | get: "validate-fact" | last
+          assign issues = _from_mem | coalesce: _from_agg, _from_fact, _from_last
+        -%}
+        {% if issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
@@ -449,31 +418,15 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          # Normalize issues from most trustworthy source available
-          assign issues = "fact_validation_issues" | memory_get: "fact-validation"
-          if issues == nil or issues == empty
-            if outputs['aggregate-validations'] and outputs['aggregate-validations'].has_problems
-              assign issues = outputs['aggregate-validations'].issues
-            elsif fact_validation and fact_validation.has_issues
-              assign issues = fact_validation.invalid
-            elsif outputs_history['validate-fact'] and outputs_history['validate-fact'] != empty
-              assign vf_last = outputs_history['validate-fact'] | last
-              assign issues = vf_last
-            else
-              assign issues = empty
-            endif
-          endif
-
-          # Determine if we have issues to correct
-          assign has_issues = issues != empty
-
-          # Safely fetch previous assistant reply
-          if outputs_history['comment-assistant'] and outputs_history['comment-assistant'] != empty
-            assign prev_comment = outputs_history['comment-assistant'] | last
-          endif
+          assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
+          assign _from_agg  = outputs | get: "aggregate-validations.issues"
+          assign _from_fact = fact_validation | get: "invalid"
+          assign _from_last = outputs_history | get: "validate-fact" | last
+          assign issues = _from_mem | coalesce: _from_agg, _from_fact, _from_last
+          assign prev_comment = outputs_history | get: "comment-assistant" | last
         -%}
 
-        {% if has_issues %}
+        {% if issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>

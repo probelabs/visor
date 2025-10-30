@@ -238,17 +238,27 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     return Array.isArray(first) ? [] : first ?? undefined;
   });
 
-  // issues_filter: convenience to keep only invalid or low-confidence validations
-  // issues | issues_filter: 'invalid_or_low'
-  liquid.registerFilter('issues_filter', (items: unknown, mode: string) => {
+  // where_exp: generic expression-based filter (Shopify-style)
+  // Usage: array | where_exp: 'i', 'i.is_valid != true and i.confidence != "high"'
+  liquid.registerFilter('where_exp', (items: unknown, varName: string, expr: string) => {
     const arr = Array.isArray(items) ? (items as any[]) : [];
-    if (mode === 'invalid_or_low') {
-      return arr.filter(
-        i => !(i?.is_valid === true && (i?.confidence === 'high' || i?.confidence === 'HIGH'))
-      );
+    const name = typeof varName === 'string' && varName.trim() ? varName.trim() : 'i';
+    const body = String(expr || '');
+    try {
+      // Build a tiny predicate; expose only item, idx, arr
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(name, 'idx', 'arr', `try { return (${body}); } catch { return false; }`);
+      const out: any[] = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const i = arr[idx];
+        let ok = false;
+        try { ok = !!(fn as any)(i, idx, arr); } catch { ok = false; }
+        if (ok) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
     }
-    if (mode === 'invalid') return arr.filter(i => i?.is_valid === false);
-    return arr;
   });
 }
 
