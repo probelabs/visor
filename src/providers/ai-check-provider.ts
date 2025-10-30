@@ -300,36 +300,9 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Derive fact-validation convenience flags from output history (robust gating for correction prompts)
-    const factValidation: {
-      has_issues: boolean;
-      invalid: Array<{ claim?: string; correction?: string }>;
-    } = (() => {
-      try {
-        const hist = outputHistory || new Map<string, unknown[]>();
-        const vf = (hist.get('validate-fact') as unknown[]) || [];
-        const fx = (hist.get('extract-facts') as unknown[]) || [];
-        let lastWaveSize = 0;
-        if (Array.isArray(fx) && fx.length > 0) {
-          const last = fx[fx.length - 1];
-          lastWaveSize = Array.isArray(last) ? last.length : 0;
-        }
-        let lastWave: unknown[] = [];
-        if (lastWaveSize > 0 && Array.isArray(vf) && vf.length >= lastWaveSize) {
-          lastWave = vf.slice(-lastWaveSize);
-          if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
-            // Flatten nested waves if present
-            lastWave = (lastWave as unknown[][]).flat();
-          }
-        }
-        const invalid = (lastWave as any[])
-          .filter(v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high')))
-          .map(v => ({ claim: v.claim, correction: v.correction }));
-        return { has_issues: invalid.length > 0, invalid };
-      } catch {
-        return { has_issues: false, invalid: [] };
-      }
-    })();
+    // Note: We intentionally do NOT expose any special `fact_validation` object
+    // in the template context. Templates should derive everything from
+    // outputs / outputs_history / memory helpers to avoid hidden magic.
 
     // Create comprehensive template context with PR and event information
     const templateContext = {
@@ -460,9 +433,6 @@ export class AICheckProvider extends CheckProvider {
       })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
-      // Convenience: fact validation summary from history for robust gating in templates
-      fact_validation: factValidation,
-      has_issues: !!factValidation.has_issues,
     };
 
     try {

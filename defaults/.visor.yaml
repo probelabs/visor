@@ -331,9 +331,8 @@ steps:
         {%- liquid
           assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
           assign _from_agg  = outputs | get: "aggregate-validations.issues"
-          assign _from_fact = fact_validation | get: "invalid"
           assign _from_last = outputs_history | get: "validate-fact" | last
-          assign issues = _from_mem | coalesce: _from_agg, _from_fact, _from_last
+          assign issues = _from_mem | coalesce: _from_agg, _from_last
         -%}
         {% if issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
@@ -420,9 +419,8 @@ steps:
         {%- liquid
           assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
           assign _from_agg  = outputs | get: "aggregate-validations.issues"
-          assign _from_fact = fact_validation | get: "invalid"
           assign _from_last = outputs_history | get: "validate-fact" | last
-          assign issues = _from_mem | coalesce: _from_agg, _from_fact, _from_last
+          assign issues = _from_mem | coalesce: _from_agg, _from_last
           assign prev_comment = outputs_history | get: "comment-assistant" | last
         -%}
 
