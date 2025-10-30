@@ -300,6 +300,37 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
+    // Derive fact-validation convenience flags from output history (robust gating for correction prompts)
+    const factValidation: {
+      has_issues: boolean;
+      invalid: Array<{ claim?: string; correction?: string }>;
+    } = (() => {
+      try {
+        const hist = outputHistory || new Map<string, unknown[]>();
+        const vf = (hist.get('validate-fact') as unknown[]) || [];
+        const fx = (hist.get('extract-facts') as unknown[]) || [];
+        let lastWaveSize = 0;
+        if (Array.isArray(fx) && fx.length > 0) {
+          const last = fx[fx.length - 1];
+          lastWaveSize = Array.isArray(last) ? last.length : 0;
+        }
+        let lastWave: unknown[] = [];
+        if (lastWaveSize > 0 && Array.isArray(vf) && vf.length >= lastWaveSize) {
+          lastWave = vf.slice(-lastWaveSize);
+          if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
+            // Flatten nested waves if present
+            lastWave = (lastWave as unknown[][]).flat();
+          }
+        }
+        const invalid = (lastWave as any[])
+          .filter(v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high')))
+          .map(v => ({ claim: v.claim, correction: v.correction }));
+        return { has_issues: invalid.length > 0, invalid };
+      } catch {
+        return { has_issues: false, invalid: [] };
+      }
+    })();
+
     // Create comprehensive template context with PR and event information
     const templateContext = {
       // PR Information
@@ -429,11 +460,44 @@ export class AICheckProvider extends CheckProvider {
       })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
+      // Convenience: fact validation summary from history for robust gating in templates
+      fact_validation: factValidation,
+      has_issues: !!factValidation.has_issues,
     };
+
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error(
+          `[prompt-ctx] outputs.keys=${Object.keys((templateContext as any).outputs || {}).join(', ')} hist.validate-fact.len=${(() => {
+            try {
+              const h = (templateContext as any).outputs_history || {};
+              const v = h['validate-fact'];
+              return Array.isArray(v) ? v.length : 0;
+            } catch {
+              return 0;
+            }
+          })()}`
+        );
+      }
+    } catch {}
 
     try {
       return await this.liquidEngine.parseAndRender(promptContent, templateContext);
     } catch (error) {
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const lines = promptContent.split(/\r?\n/);
+          const preview = lines
+            .slice(0, 20)
+            .map((l, i) => `${(i + 1).toString().padStart(3, ' ')}| ${l}`)
+            .join('\n');
+          try {
+            process.stderr.write(
+              '[prompt-error] First 20 lines of prompt before Liquid render:\n' + preview + '\n'
+            );
+          } catch {}
+        }
+      } catch {}
       throw new Error(
         `Failed to render prompt template: ${
           error instanceof Error ? error.message : 'Unknown error'
@@ -473,6 +537,11 @@ export class AICheckProvider extends CheckProvider {
       reuseSession?: boolean;
     } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error(`[ai-exec] step=${String((config as any).checkName || 'unknown')}`);
+      }
+    } catch {}
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
@@ -608,13 +677,77 @@ export class AICheckProvider extends CheckProvider {
     // Process prompt with Liquid templates and file loading
     // Skip event context (PR diffs, files, etc.) if requested
     const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
-    const processedPrompt = await this.processPrompt(
+    let processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
       eventContext,
       _dependencyResults,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
+
+    // Fallback injection for correction context (keeps behavior simple and robust):
+    // If validation history shows problems but the prompt lacks correction markers, prepend a concise correction block.
+    try {
+      const stepName = String((config as any).checkName || '');
+      const outHist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+      const computeFactValidation = () => {
+        try {
+          const hist = outHist || new Map<string, unknown[]>();
+          const vf = (hist.get('validate-fact') as unknown[]) || [];
+          const fx = (hist.get('extract-facts') as unknown[]) || [];
+          let lastWaveSize = 0;
+          if (Array.isArray(fx) && fx.length > 0) {
+            const last = fx[fx.length - 1];
+            lastWaveSize = Array.isArray(last) ? last.length : 0;
+          }
+          let lastWave: any[] = [];
+          if (lastWaveSize > 0 && Array.isArray(vf) && vf.length >= lastWaveSize) {
+            lastWave = vf.slice(-lastWaveSize) as any[];
+            if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
+              lastWave = (lastWave as unknown as any[][]).flat();
+            }
+          }
+          const invalid = (lastWave as any[]).filter(
+            v => v && (v.is_valid === false || (v.confidence && v.confidence !== 'high'))
+          );
+          return invalid as Array<{ claim?: string; correction?: string }>;
+        } catch {
+          return [] as Array<{ claim?: string; correction?: string }>;
+        }
+      };
+      const invalid = computeFactValidation();
+      const needsInjection =
+        (stepName === 'comment-assistant' || stepName === 'issue-assistant') &&
+        invalid.length > 0 &&
+        !/\b<previous_response>\b|\bCorrection:\b/.test(processedPrompt);
+      if (needsInjection) {
+        // Pull last assistant text to embed inside <previous_response>
+        let prevText = '';
+        try {
+          const arr = (outHist?.get(stepName) as any[]) || [];
+          const last = arr[arr.length - 1] || {};
+          prevText = String((last && last.text) || '');
+        } catch {}
+        const lines: string[] = [];
+        lines.push(
+          '⚠️  IMPORTANT: Your previous response contained factual errors. Please correct them:'
+        );
+        lines.push('');
+        lines.push('<previous_response>');
+        if (prevText) lines.push(prevText);
+        lines.push('</previous_response>');
+        lines.push('');
+        lines.push('**Validation Errors Found:**');
+        for (const it of invalid) {
+          const claim = it.claim ? String(it.claim) : '';
+          const corr = it.correction ? String(it.correction) : '';
+          if (claim) lines.push(`- **${claim}**`);
+          if (corr) lines.push(`Correction: ${corr}`);
+        }
+        lines.push('');
+        processedPrompt = lines.join('\n') + '\n\n' + processedPrompt;
+      }
+    } catch {}
 
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
@@ -631,6 +764,21 @@ export class AICheckProvider extends CheckProvider {
         provider: 'ai',
         prompt: finalPrompt,
       });
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.error(
+            `[ai-capture] step=${String(stepName)} len=${finalPrompt.length} preview=${finalPrompt
+              .replace(/\s+/g, ' ')
+              .slice(0, 200)}`
+          );
+          const containsClaim = finalPrompt.includes('Claim:');
+          const containsCorrection = finalPrompt.includes('Correction:');
+
+          console.error(
+            `[ai-capture] markers step=${String(stepName)} Claim:${containsClaim} Correction:${containsCorrection}`
+          );
+        }
+      } catch {}
     } catch {}
 
     // Test hook: mock output for this step (short-circuit provider)
