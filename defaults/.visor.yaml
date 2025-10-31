@@ -399,9 +399,8 @@ steps:
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
     on_success:
-      # When fact validation is enabled, schedule extraction (engine runs validate-fact per item and dedupes per stage)
-      run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
+      # Always schedule extraction here; the step itself is gated by its own `if:`.
+      run: [extract-facts]
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -473,9 +472,8 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # When fact validation is enabled, schedule extraction (engine runs validate-fact per item and dedupes per stage)
-      run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
+      # Always schedule extraction here; the step itself is gated by its own `if:`.
+      run: [extract-facts]
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
