@@ -34,10 +34,9 @@ checks:
     forEach: true
 
   decide:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: 'return { n: (outputs_raw["list"] || []).length }'
+    content: 'return { n: (outputs_raw["list"] || []).length }'
     on_success:
       goto_js: |
         // Branch by aggregate size, not per-item value
@@ -168,10 +167,9 @@ checks:
       run: [summarize]
 
   summarize:
-    type: memory
+    type: script
     fanout: reduce  # ← single run
-    operation: exec_js
-    memory_js: |
+    content: |
       const arr = outputs_raw['extract'] || [];
       return { total: arr.length };
 ```
@@ -390,9 +388,8 @@ checks:
     # Validates each claim individually
 
   aggregate-results:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       const results = outputs.history['validate-claim'];
       const allValid = results.every(r => r.is_valid);
       memory.set('all_valid', allValid, 'validation');
@@ -457,9 +454,8 @@ checks:
     # Runs N times, validates format/style
 
   aggregate-all-validations:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Access ALL results from ALL dependent checks
       const securityResults = outputs.history['validate-security'];
       const technicalResults = outputs.history['validate-technical'];

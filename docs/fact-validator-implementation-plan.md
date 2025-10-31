@@ -397,10 +397,9 @@ checks:
 
 ```yaml
   aggregate-validations:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       // Get ALL validation results from forEach iterations
       const validations = outputs.history['validate-fact'];
 

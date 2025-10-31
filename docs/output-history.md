@@ -42,18 +42,16 @@ Track a counter through multiple goto iterations:
 ```yaml
 steps:
   counter:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       const count = (memory.get('count') || 0) + 1;
       memory.set('count', count);
       return { iteration: count, timestamp: Date.now() };
 
   process:
-    type: memory
+    type: script
     depends_on: [counter]
-    operation: exec_js
-    memory_js: |
+    content: |
       // Current iteration
       log('Current iteration:', outputs.counter.iteration);
 
@@ -78,9 +76,8 @@ Track all retry attempts:
 ```yaml
 steps:
   attempt-counter:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       const attempt = (memory.get('attempt') || 0) + 1;
       memory.set('attempt', attempt);
       return { attempt, timestamp: Date.now() };
@@ -117,9 +114,8 @@ Track all forEach iterations:
 ```yaml
 steps:
   generate-items:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       return [
         { id: 1, name: 'alpha', value: 10 },
         { id: 2, name: 'beta', value: 20 },
@@ -127,17 +123,13 @@ steps:
       ];
 
   process-item:
-    type: memory
+    type: script
     depends_on: [generate-items]
     forEach: true
-    operation: exec_js
-    memory_js: |
-      // Process current item
-      const processed = {
-        ...item,
-        doubled: item.value * 2,
-        processedAt: Date.now()
-      };
+    content: |
+      // Process current item (use current dependency value)
+      const curr = outputs['generate-items'];
+      const processed = { ...curr, doubled: curr.value * 2, processedAt: Date.now() };
 
       log('Processing item:', item.id);
       log('Items processed so far:', outputs.history['process-item'].length);
@@ -145,10 +137,9 @@ steps:
       return processed;
 
   summarize:
-    type: memory
+    type: script
     depends_on: [process-item]
-    operation: exec_js
-    memory_js: |
+    content: |
       // Access all forEach results
       const allProcessed = outputs.history['process-item'];
 
@@ -174,10 +165,9 @@ steps:
       return { value: current, timestamp: Date.now() };
 
   check-trend:
-    type: memory
+    type: script
     depends_on: [monitor-metric]
-    operation: exec_js
-    memory_js: |
+    content: |
       const current = outputs['monitor-metric'].value;
       const history = outputs.history['monitor-metric'];
 
@@ -210,9 +200,8 @@ Build up results over iterations:
 ```yaml
 steps:
   fetch-page:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       const page = (memory.get('page') || 0) + 1;
       memory.set('page', page);
 
@@ -223,10 +212,9 @@ steps:
       };
 
   aggregate-results:
-    type: memory
+    type: script
     depends_on: [fetch-page]
-    operation: exec_js
-    memory_js: |
+    content: |
       // Collect all items from all pages
       const allPages = outputs.history['fetch-page'];
       const allItems = allPages.flatMap(page => page.items);
@@ -333,9 +321,10 @@ Each forEach iteration is tracked separately:
 steps:
   process-items:
     forEach: true
-    operation: exec_js
-    memory_js: |
-      return { itemId: item.id, processed: true };
+    type: script
+    content: |
+      const curr = outputs['process-items'];
+      return { itemId: (curr && curr.id) || null, processed: true };
 ```
 
 After processing 3 items, `outputs.history['process-items']` will have 3 entries (one per item).

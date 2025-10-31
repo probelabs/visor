@@ -50,18 +50,17 @@ When a check has `forEach: true`, three accessors are available:
 ```yaml
 steps:
   process-items:
-    type: memory
+    type: script
     depends_on: [fetch-tickets]
     forEach: true
-    operation: exec_js
-    memory_js: |
-      return { itemId: item.key, processed: true };
+    content: |
+      const curr = outputs['fetch-tickets'];
+      return { itemId: curr.key, processed: true };
 
   summarize:
-    type: memory
+    type: script
     depends_on: [process-items]
-    operation: exec_js
-    memory_js: |
+    content: |
       // Access all forEach iteration results
       const allProcessed = outputs.history['process-items'];  # or outputs_history['process-items']
       return { totalProcessed: allProcessed.length };
@@ -149,10 +148,9 @@ checks:
     # Runs N times (once per fact)
 
   aggregate-validations:
-    type: memory
+    type: script
     fanout: reduce  # ensure single aggregation run after forEach
-    operation: exec_js
-    memory_js: |
+    content: |
       // Access all validation results
       const validations = outputs.history['validate-fact'];
       const allValid = validations.every(v => v.is_valid);
@@ -289,9 +287,8 @@ checks:
 
   # Step 4: Aggregate all validation results
   aggregate-validations:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Get ALL validation results from forEach iterations
       const validations = outputs.history['validate-fact'];
 
@@ -365,10 +362,9 @@ checks:
     depends_on: [extract-claims]
 
   aggregate-all:
-    type: memory
+    type: script
     fanout: reduce
-    operation: exec_js
-    memory_js: |
+    content: |
       // Access ALL results from ALL dependent checks
       const security = outputs.history['validate-security'];
       const technical = outputs.history['validate-technical'];

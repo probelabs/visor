@@ -140,18 +140,16 @@ checks:
     forEach: true
 
   use-raw-memory:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: |
+    content: |
       const arr = outputs_raw["list"]; // → ["a","b","c"]
       return { count: arr.length };
 
   route-by-raw:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: |
+    content: |
       return 'ok';
     on_success:
       goto_js: |

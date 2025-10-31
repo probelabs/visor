@@ -77,8 +77,10 @@ steps:
     # OR compute value dynamically
     value_js: "javascript_expression"
 
-    # OR execute custom JavaScript with full memory access (for exec_js operation)
-    memory_js: |
+    # Or run custom JavaScript as a separate step
+  my-script-step:
+    type: script
+    content: |
       // Full JavaScript with statements, loops, conditionals
       memory.set('key', 'value');
       return result;
@@ -211,16 +213,15 @@ steps:
 
 Returns an array of key names.
 
-### exec_js
+### Script
 
-Execute custom JavaScript with full memory access. This operation allows complex logic, loops, conditionals, and direct manipulation of memory state.
+Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper.
 
 ```yaml
 steps:
   complex-logic:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Access existing values
       const errors = memory.get('errors') || [];
       const warnings = memory.get('warnings') || [];
@@ -607,7 +608,7 @@ steps:
     depends_on: [calculate-score]
 ```
 
-### Complex Logic with exec_js
+### Complex Logic with script
 
 ```yaml
 memory:
@@ -622,10 +623,9 @@ steps:
 
   # Analyze results with complex logic
   analyze-results:
-    type: memory
-    operation: exec_js
+    type: script
     depends_on: [run-tests]
-    memory_js: |
+    content: |
       // Get test results
       const results = outputs['run-tests'];
 
