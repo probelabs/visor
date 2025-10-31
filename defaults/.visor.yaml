@@ -471,11 +471,9 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # Schedule init-fact-validation once (when enabled); otherwise allow retrigger to overview
+      # No explicit scheduling; extract-facts is event-gated and depends on this step
       run_js: |
-        // If fact validation is enabled, schedule initialization.
-        // The init step itself is idempotent; scheduling it multiple times is harmless.
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['init-fact-validation'] : [];
+        return [];
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
@@ -525,22 +523,6 @@ steps:
   # To enable: Set ENABLE_FACT_VALIDATION=true environment variable
   # ============================================================================
 
-  # Initialize fact validation attempt counter
-  init-fact-validation:
-    type: memory
-    # Make initialization idempotent and driven only by explicit scheduling.
-    # We no longer rely on env tags for one-shot behavior.
-    operation: exec_js
-    namespace: fact-validation
-    on: [manual]
-    memory_js: |
-      // Initialize attempt counter only if it doesn't exist yet
-      if (!memory.has('fact_validation_attempt', 'fact-validation')) {
-        memory.set('fact_validation_attempt', 0, 'fact-validation');
-      }
-      return memory.get('fact_validation_attempt', 'fact-validation');
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
-
   # Extract verifiable facts from assistant responses
   # This is a forEach check that triggers validation for each fact
   extract-facts:
@@ -576,7 +558,7 @@ steps:
                   description: Line or range, e.g., "120-145" or "88"
               required: [path]
         required: [id, category, claim, verifiable]
-    depends_on: [init-fact-validation, comment-assistant]
+    depends_on: [comment-assistant]
     on: [issue_opened, issue_comment]
     # Only when validation is enabled and assistants produced text
     if: "env.ENABLE_FACT_VALIDATION === 'true' && (outputs['issue-assistant'] || outputs['comment-assistant'])"

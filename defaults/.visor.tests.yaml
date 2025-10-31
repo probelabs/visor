@@ -166,7 +166,6 @@ tests:
             no_calls:
               - provider: github
                 op: issues.createComment
-              - step: init-fact-validation
             calls:
               - step: comment-assistant
                 exactly: 1
@@ -263,8 +262,6 @@ tests:
                 at_least: 1
               - step: aggregate-validations
                 exactly: 1
-              - step: init-fact-validation
-                exactly: 1
           # Prompt assertions are validated separately in stage-level prompt tests
 
         - name: facts-invalid
@@ -299,8 +296,6 @@ tests:
                 at_least: 1
               - step: aggregate-validations
                 exactly: 1
-              - step: init-fact-validation
-                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -334,8 +329,6 @@ tests:
                 exactly: 2
               - step: aggregate-validations
                 exactly: 1
-              - step: init-fact-validation
-                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -362,7 +355,6 @@ tests:
               - step: comment-assistant
                 exactly: 1
             no_calls:
-              - step: init-fact-validation
               - step: extract-facts
               - step: validate-fact
               - step: aggregate-validations
