@@ -329,12 +329,18 @@ steps:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         {%- liquid
-          assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
-          assign _from_agg  = outputs | get: "aggregate-validations.issues"
-          assign _from_last = outputs_history | get: "validate-fact" | last
-          assign issues = _from_mem | coalesce: _from_agg, _from_last
+          # Use only the aggregator output from history as the source of truth
+          assign _agg      = outputs_history | get: "aggregate-validations" | last
+          assign _agg_issues     = _agg | get: "issues"
+          assign _agg_issues_out = _agg | get: "output.issues"
+          assign issues          = _agg_issues | coalesce: _agg_issues_out
+          assign _issues_mem     = "fact_validation_issues" | memory_get: "fact-validation"
+          assign issues          = issues | coalesce: _issues_mem
+          assign _agg_hasp       = _agg | get: "has_problems"
+          assign _agg_hasp_out   = _agg | get: "output.has_problems"
+          assign has_problems    = _agg_hasp | default: _agg_hasp_out
         -%}
-        {% if issues | not_empty %}
+        {% if has_problems or issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
@@ -344,17 +350,12 @@ steps:
 
         **Validation Errors Found:**
         {% for issue in issues %}
-        {% if issue.is_valid != true or issue.confidence != 'high' %}
+        {% if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' %}
         - **{{ issue.claim }}**: {{ issue.evidence }}
           {% if issue.correction %}
           Correction: {{ issue.correction }}
           {% endif %}
-        {% endif %}
-        {% endfor %}
-
-        <!-- Plain echo to make assertions robust and unambiguous -->
-        {% for issue in issues %}
-        {% if issue.is_valid != true or issue.confidence != 'high' %}
+        {# Plain echo for stable assertions #}
         Claim: {{ issue.claim }}
         {% if issue.correction %}Correction: {{ issue.correction }}{% endif %}
         {% endif %}
@@ -417,14 +418,19 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          assign _from_mem  = "fact_validation_issues" | memory_get: "fact-validation"
-          assign _from_agg  = outputs | get: "aggregate-validations.issues"
-          assign _from_last = outputs_history | get: "validate-fact" | last
-          assign issues = _from_mem | coalesce: _from_agg, _from_last
+          # Use only the aggregator output from history as the source of truth
+          assign _agg      = outputs_history | get: "aggregate-validations" | last
+          assign _agg_issues     = _agg | get: "issues"
+          assign _agg_issues_out = _agg | get: "output.issues"
+          assign issues          = _agg_issues | coalesce: _agg_issues_out
+          assign _issues_mem     = "fact_validation_issues" | memory_get: "fact-validation"
+          assign issues          = issues | coalesce: _issues_mem
+          assign _agg_hasp       = _agg | get: "has_problems"
+          assign _agg_hasp_out   = _agg | get: "output.has_problems"
+          assign has_problems    = _agg_hasp | default: _agg_hasp_out
           assign prev_comment = outputs_history | get: "comment-assistant" | last
         -%}
-
-        {% if issues | not_empty %}
+        {% if has_problems or issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
@@ -433,17 +439,11 @@ steps:
 
         **Validation Errors Found:**
         {%- for issue in issues -%}
-        {%- if issue.is_valid != true or issue.confidence != 'high' -%}
+        {%- if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' -%}
         - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
           {%- if issue.correction %}
           Correction: {{ issue.correction }}
           {%- endif %}
-        {%- endif -%}
-        {%- endfor -%}
-
-        <!-- Plain echo to make assertions robust and unambiguous -->
-        {%- for issue in issues -%}
-        {%- if issue.is_valid != true or issue.confidence != 'high' -%}
         Claim: {{ issue.claim }}
         {%- if issue.correction %}Correction: {{ issue.correction }}{% endif -%}
         {%- endif -%}
@@ -661,11 +661,13 @@ steps:
     on_finish:
       run: [aggregate-validations]
       run_js: |
+        // Decide correction pass by inspecting the last validation wave (history)
         const vf = (outputs_history && outputs_history['validate-fact']) ? outputs_history['validate-fact'] : [];
         const fxHist = (outputs_history && outputs_history['extract-facts']) ? outputs_history['extract-facts'] : [];
         const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
         const n = Array.isArray(lastExtract) ? lastExtract.length : 0;
         const lastWave = (n > 0 && Array.isArray(vf) && vf.length >= n) ? vf.slice(-n) : [];
+        // Flatten nested waves if present
         let waveFlat = lastWave;
         if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
           const tmp = [];
@@ -678,13 +680,7 @@ steps:
         }
         const hasProblems = waveFlat.some(v => !v || v.is_valid !== true || v.confidence !== 'high');
         return hasProblems ? ['comment-assistant'] : [];
-      goto_js: |
-        const allValid = memory.get('all_valid', 'fact-validation');
-        const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
-
-        // 0 retries policy: never schedule another extract-facts pass
-        // If not allValid, we simply stop here and surface issues via aggregate-validations
-        return null;
+      # keep event context as-is to avoid cross-event leakage
       # keep event context as-is to avoid cross-event leakage
 
   # Validate each extracted fact
@@ -761,7 +757,7 @@ steps:
     on: [manual]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     on_success:
-      # Aggregator does not schedule corrections directly; extract-facts.on_finish handles it
+      # Aggregator stores issues in memory and exposes output for templates; no routing here
       run_js: |
         return [];
     memory_js: |

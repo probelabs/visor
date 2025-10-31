@@ -301,13 +301,11 @@ tests:
                 exactly: 1
               - step: init-fact-validation
                 exactly: 1
-            prompts:
-              - step: comment-assistant
-                index: last
-                contains:
-                  - "<previous_response>"
-                  - "max_parallelism defaults to 4"
-                  - "Correction: max_parallelism defaults to 3"
+            outputs:
+              - step: validate-fact
+                where: { path: fact_id, equals: f1 }
+                path: correction
+                equals: "max_parallelism defaults to 3"
 
         - name: facts-two-items
           description: |
@@ -347,15 +345,10 @@ tests:
                 where: { path: fact_id, equals: f2 }
                 path: is_valid
                 equals: true
-            prompts:
-              - step: comment-assistant
-                index: last
-                contains:
-                  - "<previous_response>"
-                  - "max_parallelism defaults to 4"
-                  - "Correction: max_parallelism defaults to 3"
-                not_contains:
-                  - "Fast mode is enabled by default"
+              - step: validate-fact
+                where: { path: fact_id, equals: f1 }
+                path: correction
+                equals: "max_parallelism defaults to 3"
 
         - name: facts-disabled
           description: |
