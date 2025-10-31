@@ -676,7 +676,7 @@ Learn more: [docs/http.md](docs/http.md)
 Mix providers (`ai`, `mcp`, `http`, `http_client`, `log`, `command`, `script`, `github`, `claude-code`) or add your own.
 
 - **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
-- **Script Provider**: Run JavaScript in a secure sandbox (preferred over `memory.exec_js`) - [docs/script.md](docs/script.md)
+- **Script Provider**: Run JavaScript in a secure sandbox - [docs/script.md](docs/script.md)
 - **MCP Provider**: Call MCP tools directly via stdio, SSE, or HTTP transports - [docs/mcp-provider.md](docs/mcp-provider.md)
 - **MCP Tools for AI**: Enhance AI providers with MCP context - [docs/mcp.md](docs/mcp.md)
 - **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)

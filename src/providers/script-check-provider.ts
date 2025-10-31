@@ -39,22 +39,20 @@ export class ScriptCheckProvider extends CheckProvider {
 
   async validateConfig(config: unknown): Promise<boolean> {
     if (!config || typeof config !== 'object') return false;
-    const cfg = config as CheckProviderConfig & { script_js?: string };
-    // Must provide script_js as a string
-    if (!cfg.script_js || typeof cfg.script_js !== 'string') return false;
-    return true;
+    const cfg = config as CheckProviderConfig & { content?: string };
+    return typeof cfg.content === 'string' && cfg.content.length > 0;
   }
 
   async execute(
     prInfo: PRInfo,
-    config: CheckProviderConfig & { script_js?: string },
+    config: CheckProviderConfig & { content?: string },
     dependencyResults?: Map<string, ReviewSummary>,
     _sessionInfo?: {
       parentSessionId?: string;
       reuseSession?: boolean;
     } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
-    const script = String(config.script_js || '');
+    const script = String(config.content || '');
     const memoryStore = MemoryStore.getInstance();
 
     // Build execution context (aligns with memory exec_js and command provider)
@@ -165,7 +163,7 @@ export class ScriptCheckProvider extends CheckProvider {
   getSupportedConfigKeys(): string[] {
     return [
       'type',
-      'script_js',
+      'content',
       'depends_on',
       'group',
       'on',

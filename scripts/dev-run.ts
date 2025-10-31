@@ -34,7 +34,7 @@ import { MemoryStore } from '../src/memory-store';
       },
       'validate-fact': {
         type: 'script', depends_on: ['extract-facts'],
-        script_js: `
+        content: `
           const attempt = memory.get('attempt', 'fact-validation') || 0;
           const f = outputs['extract-facts'];
           const n = Number((f.id||'').split('-')[1]||'0');
@@ -45,7 +45,7 @@ import { MemoryStore } from '../src/memory-store';
       },
       'aggregate-validations': {
         type: 'script',
-        script_js: `
+        content: `
           const nested = outputs.history['validate-fact'] || [];
           const vals = (Array.isArray(nested) && nested.length>0 && Array.isArray(nested[0])) ? nested.flat() : nested;
           const invalid = vals.filter(v => v && v.is_valid === false);

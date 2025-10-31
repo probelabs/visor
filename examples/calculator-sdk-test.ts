@@ -65,11 +65,9 @@ const calculatorConfig: VisorConfig = {
     },
 
     'calculate': {
-      type: 'memory',
+      type: 'script',
       depends_on: ['store-operation'],
-      operation: 'exec_js',
-      namespace: 'calculator',
-      memory_js: `
+      content: `
         const num1 = memory.get('number1', 'calculator');
         const num2 = memory.get('number2', 'calculator');
         const op = memory.get('operation', 'calculator');
@@ -86,7 +84,6 @@ const calculatorConfig: VisorConfig = {
         }
 
         log('✅ Result:', result);
-        memory.set('result', result, 'calculator');
         return result;
       `,
     },

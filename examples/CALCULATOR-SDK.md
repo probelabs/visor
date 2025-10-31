@@ -60,7 +60,7 @@ const calculatorConfig: VisorConfig = {
     "store-number2": { type: "memory", operation: "set", key: "number2", ... },
     "get-operation": { type: "human-input", prompt: "Select operation:" },
     "store-operation": { type: "memory", operation: "set", key: "operation", ... },
-    "calculate": { type: "memory", operation: "exec_js", memory_js: "..." },
+    "calculate": { type: "script", content: "..." },
     "show-result": { type: "log", message: "..." }
   },
   output: { pr_comment: { format: "markdown", group_by: "check", collapse: false } }
@@ -241,7 +241,7 @@ async function guiInputHandler(request: HumanInputRequest): Promise<string> {
 Extend the calculator in the `calculate` step:
 
 ```typescript
-memory_js: `
+content: `
   const num1 = memory.get('number1', 'calculator');
   const num2 = memory.get('number2', 'calculator');
   const op = memory.get('operation', 'calculator');

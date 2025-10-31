@@ -10,9 +10,8 @@ memory:
 steps:
   # Initialize counters
   init-counters:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Initialize multiple counters
       memory.set('processed', 0);
       memory.set('errors', 0);
@@ -45,12 +44,11 @@ steps:
     key: warnings
     value: 3  # Increment by 3
 
-  # Generate report using exec_js
+  # Generate report using script
   generate-report:
-    type: memory
-    operation: exec_js
+    type: script
     depends_on: [process-file-2, track-error, track-warnings]
-    memory_js: |
+    content: |
       const processed = memory.get('processed');
       const errors = memory.get('errors');
       const warnings = memory.get('warnings');
@@ -81,9 +79,8 @@ steps:
 
   # Example: View counter with decrement
   decrement-example:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Initialize views and clicks
       memory.set('views', 100);
       memory.set('clicks', 25);

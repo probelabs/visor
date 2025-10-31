@@ -327,8 +327,8 @@ export interface CheckConfig {
   transform?: string;
   /** Transform using JavaScript expressions (evaluated in secure sandbox) - optional */
   transform_js?: string;
-  /** JavaScript code to execute for script checks */
-  script_js?: string;
+  /** Script content to execute for script checks */
+  content?: string;
   /** Cron schedule expression (e.g., "0 2 * * *") - optional for any check type */
   schedule?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */

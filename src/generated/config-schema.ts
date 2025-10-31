@@ -163,9 +163,9 @@ export const configSchema = {
           description:
             'Transform using JavaScript expressions (evaluated in secure sandbox) - optional',
         },
-        script_js: {
+        content: {
           type: 'string',
-          description: 'JavaScript code to execute for script checks',
+          description: 'Script content to execute for script checks',
         },
         schedule: {
           type: 'string',

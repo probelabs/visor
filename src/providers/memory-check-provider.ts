@@ -108,7 +108,7 @@ export class MemoryCheckProvider extends CheckProvider {
       reuseSession?: boolean;
     } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
-    let operation = config.operation as MemoryOperation | undefined;
+    const operation = config.operation as MemoryOperation | undefined;
     const key = config.key as string | undefined;
     const namespace = config.namespace as string | undefined;
 
@@ -126,16 +126,7 @@ export class MemoryCheckProvider extends CheckProvider {
 
     let result: unknown;
 
-    // Backward/forgiving fallback: if operation is missing but a JS body exists,
-    // treat it as exec_js to avoid brittle config coupling.
-    if (!operation) {
-      const hasJs =
-        typeof (config as any)?.memory_js === 'string' ||
-        typeof (config as any)?.operation_js === 'string';
-      if (hasJs) {
-        operation = 'exec_js';
-      }
-    }
+    // No implicit fallbacks; operation must be explicitly provided.
 
     try {
       switch (operation) {

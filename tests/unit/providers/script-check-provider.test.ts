@@ -29,14 +29,14 @@ describe('ScriptCheckProvider', () => {
   });
 
   it('validates configuration', async () => {
-    expect(await provider.validateConfig({ type: 'script', script_js: 'return 1;' })).toBe(true);
+    expect(await provider.validateConfig({ type: 'script', content: 'return 1;' })).toBe(true);
     expect(await provider.validateConfig({ type: 'script' })).toBe(false);
   });
 
   it('executes simple script and returns result', async () => {
     const res = (await provider.execute(pr, {
       type: 'script',
-      script_js: 'return 42;',
+      content: 'return 42;',
     })) as ReviewSummary & {
       output?: unknown;
     };
@@ -51,7 +51,7 @@ describe('ScriptCheckProvider', () => {
       pr,
       {
         type: 'script',
-        script_js: `
+        content: `
           memory.set('count', 10);
           return { v: outputs.dep.num, n: memory.increment('count', outputs.dep.num), stored: memory.get('count') };
         `,
@@ -71,7 +71,7 @@ describe('ScriptCheckProvider', () => {
     deps.set('alpha', { issues: [], output: { hello: 'world' } } as any);
     const res = (await provider.execute(
       pr,
-      { type: 'script', script_js: 'return { ok: !!outputs, keys: Object.keys(outputs) };' },
+      { type: 'script', content: 'return { ok: !!outputs, keys: Object.keys(outputs) };' },
       deps
     )) as ReviewSummary & { output?: any };
     expect(res.output?.ok).toBe(true);
@@ -84,7 +84,7 @@ describe('ScriptCheckProvider', () => {
     deps.set('dep', { issues: [], output: { num: 7 } } as any);
     const res = (await provider.execute(
       pr,
-      { type: 'script', script_js: 'return { dep: outputs.dep, type: typeof outputs.dep };' },
+      { type: 'script', content: 'return { dep: outputs.dep, type: typeof outputs.dep };' },
       deps
     )) as ReviewSummary & { output?: any };
     expect(res.output?.type).toBe('object');

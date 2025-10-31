@@ -2,8 +2,6 @@
 
 The Memory provider enables persistent key-value storage across checks, allowing you to implement stateful workflows, retry logic with counters, error aggregation, and complex orchestration patterns.
 
-> Note: For running general JavaScript, prefer the dedicated `script` step (`type: script` + `script_js`). It replaces `operation: exec_js` with a first-class provider while keeping identical context and memory helpers. See docs/script.md.
-
 ## Table of Contents
 
 - [Overview](#overview)
@@ -19,7 +17,7 @@ The Memory provider enables persistent key-value storage across checks, allowing
 
 The Memory provider acts as a shared data store that persists across check executions. It supports:
 
-- **Multiple operations**: get, set, append, increment, delete, clear, list, exec_js (deprecated)
+- **Multiple operations**: get, set, append, increment, delete, clear, list, exec_js
 - **Namespace isolation**: Separate data contexts for different workflows
 - **In-memory or file-based storage**: Choose between speed or persistence
 - **Multiple formats**: JSON or CSV for file storage
@@ -68,7 +66,7 @@ steps:
     type: memory
 
     # Operation (required)
-    operation: get | set | append | increment | delete | clear | list | exec_js  # exec_js is deprecated; prefer type: script
+    operation: get | set | append | increment | delete | clear | list | exec_js
 
     # Key (required for get/set/append/increment/delete)
     key: string
@@ -80,7 +78,6 @@ steps:
     value_js: "javascript_expression"
 
     # OR execute custom JavaScript with full memory access (for exec_js operation)
-    # DEPRECATED: prefer using `type: script` + `script_js` (see docs/script.md)
     memory_js: |
       // Full JavaScript with statements, loops, conditionals
       memory.set('key', 'value');
@@ -214,7 +211,7 @@ steps:
 
 Returns an array of key names.
 
-### exec_js (deprecated — use `type: script`)
+### exec_js
 
 Execute custom JavaScript with full memory access. This operation allows complex logic, loops, conditionals, and direct manipulation of memory state.
 
@@ -244,32 +241,7 @@ steps:
       };
 ```
 
-Equivalent using the script step (preferred):
-
-```yaml
-steps:
-  complex-logic:
-    type: script
-    script_js: |
-      // Access existing values
-      const errors = memory.get('errors') || [];
-      const warnings = memory.get('warnings') || [];
-
-      // Complex calculations
-      const total = errors.length + warnings.length;
-      const severity = total > 10 ? 'critical' : total > 5 ? 'warning' : 'ok';
-
-      // Store results
-      memory.set('total_issues', total);
-      memory.set('severity', severity);
-
-      // Return custom object
-      return {
-        total,
-        severity,
-        hasErrors: errors.length > 0
-      };
-```
+ 
 
 **Available memory operations in exec_js:**
 - `memory.get(key, namespace?)` - Get value
@@ -635,7 +607,7 @@ steps:
     depends_on: [calculate-score]
 ```
 
-### Complex Logic with exec_js (deprecated — use `type: script`)
+### Complex Logic with exec_js
 
 ```yaml
 memory:
@@ -650,7 +622,7 @@ steps:
 
   # Analyze results with complex logic
   analyze-results:
-    type: memory  # deprecated variant
+    type: memory
     operation: exec_js
     depends_on: [run-tests]
     memory_js: |
@@ -742,111 +714,7 @@ steps:
     fail_if: "memory.get('test_status') === 'poor'"
 ```
 
-Equivalent using the script step (preferred):
-
-```yaml
-memory:
-  storage: memory
-
-steps:
-  # Collect test results
-  run-tests:
-    type: command
-    exec: npm test -- --json
-    transform_js: "JSON.parse(output)"
-
-  # Analyze results with complex logic
-  analyze-results:
-    type: script
-    depends_on: [run-tests]
-    script_js: |
-      // Get test results
-      const results = outputs['run-tests'];
-
-      // Calculate statistics
-      const stats = {
-        total: results.numTotalTests || 0,
-        passed: results.numPassedTests || 0,
-        failed: results.numFailedTests || 0,
-        skipped: results.numPendingTests || 0
-      };
-
-      // Calculate pass rate
-      stats.passRate = stats.total > 0
-        ? (stats.passed / stats.total * 100).toFixed(2)
-        : 0;
-
-      // Determine status
-      let status;
-      if (stats.failed === 0 && stats.total > 0) {
-        status = 'excellent';
-      } else if (stats.passRate >= 90) {
-        status = 'good';
-      } else if (stats.passRate >= 70) {
-        status = 'acceptable';
-      } else {
-        status = 'poor';
-      }
-
-      // Store analysis
-      memory.set('test_stats', stats);
-      memory.set('test_status', status);
-
-      // Collect failed test names
-      if (results.testResults) {
-        const failures = [];
-        for (const suite of results.testResults) {
-          for (const test of suite.assertionResults || []) {
-            if (test.status === 'failed') {
-              failures.push({
-                suite: suite.name,
-                test: test.fullName,
-                message: test.failureMessages?.[0]
-              });
-            }
-          }
-        }
-        memory.set('test_failures', failures);
-      }
-
-      // Return summary
-      return {
-        stats,
-        status,
-        failureCount: stats.failed
-      };
-
-  # Report results
-  report:
-    type: log
-    depends_on: [analyze-results]
-    message: |
-      ## Test Results
-
-      Status: **{{ "test_status" | memory_get | upcase }}**
-
-      {% assign stats = "test_stats" | memory_get %}
-      - Total: {{ stats.total }}
-      - Passed: {{ stats.passed }}
-      - Failed: {{ stats.failed }}
-      - Pass Rate: {{ stats.passRate }}%
-
-      {% assign failures = "test_failures" | memory_get %}
-      {% if failures.size > 0 %}
-      ### Failed Tests
-      {% for failure in failures %}
-      - **{{ failure.test }}**
-        - Suite: {{ failure.suite }}
-        - Error: {{ failure.message | truncate: 100 }}
-      {% endfor %}
-      {% endif %}
-
-  # Fail if status is poor
-  check-quality:
-    type: noop
-    depends_on: [report]
-    fail_if: "memory.get('test_status') === 'poor'"
-```
+ 
 
 ## Best Practices
 

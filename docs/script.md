@@ -1,10 +1,9 @@
 ## Script step (type: `script`)
 
 The `script` provider executes JavaScript in a secure sandbox with access to
-PR context, dependency outputs, and the Visor memory store. It is a direct,
-first-class replacement for `type: memory` + `operation: exec_js`.
+PR context, dependency outputs, and the Visor memory store.
 
-- Use `type: script` with a `script_js` block containing your code.
+- Use `type: script` with a `content` block containing your code.
 - The sandbox exposes these objects:
   - `pr`: basic PR metadata and file list.
   - `outputs`: map of dependency outputs (plus `outputs.history`).
@@ -24,7 +23,7 @@ steps:
   aggregate:
     type: script
     depends_on: [extract-facts]
-    script_js: |
+    content: |
       const facts = outputs['extract-facts'] || [];
       memory.set('total_facts', Array.isArray(facts) ? facts.length : 0, 'fact-validation');
       const allValid = Array.isArray(facts) && facts.every(f => f.valid === true);
@@ -32,24 +31,4 @@ steps:
       return { total: memory.get('total_facts', 'fact-validation'), allValid };
 ```
 
-Migration tip:
-
-- Wherever you used:
-
-```yaml
-type: memory
-operation: exec_js
-memory_js: |
-  // ...
-```
-
-replace with:
-
-```yaml
-type: script
-script_js: |
-  // ...
-```
-
-The script context and memory helpers are equivalent. The `script` step is preferred going forward; `memory.exec_js` remains for backward compatibility.
-
+The script context and memory helpers mirror other providers’ contexts.

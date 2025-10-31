@@ -26,12 +26,11 @@ steps:
     exec: 'echo ''{"issues": 15, "severity": "low"}'''
     transform_js: "JSON.parse(output.trim())"
 
-  # Use exec_js to aggregate and analyze results
+  # Use script to aggregate and analyze results
   analyze-all-checks:
-    type: memory
-    operation: exec_js
+    type: script
     depends_on: [check-security, check-performance, check-style]
-    memory_js: |
+    content: |
       // Collect all check results
       const checks = {
         security: outputs['check-security'],
@@ -171,10 +170,9 @@ steps:
 
   # Calculate trends if previous data exists
   calculate-trend:
-    type: memory
-    operation: exec_js
+    type: script
     depends_on: [analyze-all-checks]
-    memory_js: |
+    content: |
       const currentScore = memory.get('risk_score');
 
       // Get previous score (would be from persistent storage in real use)
