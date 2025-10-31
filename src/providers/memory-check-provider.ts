@@ -7,6 +7,8 @@ import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import { buildProviderTemplateContext } from '../utils/template-context';
+import { createSyncMemoryOps } from '../utils/script-memory-ops';
 
 /**
  * Memory operation types
@@ -66,6 +68,14 @@ export class MemoryCheckProvider extends CheckProvider {
 
     // Operation is required
     if (!cfg.operation || typeof cfg.operation !== 'string') {
+      // Offer a helpful migration hint if user provided exec body without operation
+      if (typeof (cfg as any).memory_js === 'string') {
+        try {
+          require('../logger').logger.warn(
+            "Memory provider: 'operation' is required. To execute JavaScript, either set operation: 'exec_js' explicitly or switch to type: 'script' with a 'content' block."
+          );
+        } catch {}
+      }
       return false;
     }
 
@@ -522,110 +532,18 @@ export class MemoryCheckProvider extends CheckProvider {
     outputHistory?: Map<string, unknown[]>,
     stageHistoryBase?: Record<string, number>
   ): Record<string, unknown> {
-    const context: Record<string, unknown> = {};
-
-    // Add PR context
-    context.pr = {
-      number: prInfo.number,
-      title: prInfo.title,
-      body: prInfo.body,
-      author: prInfo.author,
-      base: prInfo.base,
-      head: prInfo.head,
-      totalAdditions: prInfo.totalAdditions,
-      totalDeletions: prInfo.totalDeletions,
-      files: prInfo.files.map(f => ({
-        filename: f.filename,
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        changes: f.changes,
-      })),
-    };
-
-    // Add dependency outputs - always create outputs object even if no dependencies
-    const outputs: Record<string, unknown> = {};
-    const outputsRaw: Record<string, unknown> = {};
-    const history: Record<string, unknown[]> = {};
-
-    if (dependencyResults) {
-      for (const [checkName, result] of dependencyResults.entries()) {
-        // Defensive: some callers may accidentally provide non-string keys
-        if (typeof checkName !== 'string') continue;
-        const summary = result as ReviewSummary & { output?: unknown };
-        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
-          const name = checkName.slice(0, -4);
-          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
-        } else {
-          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
-        }
-      }
-    }
-
-    // Add history for each check if available
-    if (outputHistory) {
-      for (const [checkName, historyArray] of outputHistory) {
-        history[checkName] = historyArray;
-      }
-    }
-
-    // Build stage-scoped history using the provided baseline
-    const historyStage: Record<string, unknown[]> = {};
-    try {
-      if (outputHistory && stageHistoryBase) {
-        for (const [checkName, historyArray] of outputHistory) {
-          const start = stageHistoryBase[checkName] || 0;
-          const arr = Array.isArray(historyArray) ? (historyArray as unknown[]) : [];
-          historyStage[checkName] = arr.slice(start);
-        }
-      }
-    } catch {}
-
-    // Attach history to the outputs object
-    (outputs as any).history = history;
-
-    context.outputs = outputs;
-    // Alias for consistency: outputs_history mirrors outputs.history
-    (context as any).outputs_history = history;
-    (context as any).outputs_history_stage = historyStage;
-    // New: outputs_raw exposes aggregate values for forEach parents
-    (context as any).outputs_raw = outputsRaw;
-
-    // Add memory accessor
+    const base = buildProviderTemplateContext(
+      prInfo,
+      dependencyResults,
+      memoryStore,
+      outputHistory as Map<string, unknown[]> | undefined,
+      stageHistoryBase
+    );
     if (memoryStore) {
-      context.memory = {
-        get: (key: string, ns?: string) => memoryStore.get(key, ns),
-        has: (key: string, ns?: string) => memoryStore.has(key, ns),
-        list: (ns?: string) => memoryStore.list(ns),
-        getAll: (ns?: string) => memoryStore.getAll(ns),
-        set: (key: string, value: unknown, ns?: string) => {
-          const nsName = ns || memoryStore.getDefaultNamespace();
-          if (!(memoryStore as any)['data'].has(nsName)) {
-            (memoryStore as any)['data'].set(nsName, new Map());
-          }
-          (memoryStore as any)['data'].get(nsName)!.set(key, value);
-          return true;
-        },
-        increment: (key: string, amount: number = 1, ns?: string) => {
-          const nsName = ns || memoryStore.getDefaultNamespace();
-          const current = memoryStore.get(key, nsName);
-          const numCurrent = typeof current === 'number' ? (current as number) : 0;
-          const newValue = numCurrent + amount;
-          if (!(memoryStore as any)['data'].has(nsName)) {
-            (memoryStore as any)['data'].set(nsName, new Map());
-          }
-          (memoryStore as any)['data'].get(nsName)!.set(key, newValue);
-          return newValue;
-        },
-      } as Record<string, unknown>;
+      const { ops } = createSyncMemoryOps(memoryStore);
+      (base as any).memory = ops;
     }
-
-    // SECURITY: Do NOT expose process.env to user-controlled scripts
-    // Removed: context.env = process.env;
-    // Environment variables, especially secrets like GITHUB_TOKEN, must not be
-    // accessible to scripts defined in .visor.yaml as this would allow credential theft
-
-    return context;
+    return base;
   }
 
   getSupportedConfigKeys(): string[] {

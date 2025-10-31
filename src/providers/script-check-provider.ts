@@ -17,7 +17,6 @@ import { createSyncMemoryOps } from '../utils/script-memory-ops';
  */
 export class ScriptCheckProvider extends CheckProvider {
   private liquid: Liquid;
-  private sandbox?: Sandbox;
 
   constructor() {
     super();
@@ -42,7 +41,15 @@ export class ScriptCheckProvider extends CheckProvider {
   async validateConfig(config: unknown): Promise<boolean> {
     if (!config || typeof config !== 'object') return false;
     const cfg = config as CheckProviderConfig & { content?: string };
-    return typeof cfg.content === 'string' && cfg.content.length > 0;
+    if (typeof cfg.content !== 'string') return false;
+    const trimmed = cfg.content.trim();
+    if (trimmed.length === 0) return false;
+    try {
+      const bytes = Buffer.byteLength(cfg.content, 'utf8');
+      if (bytes > 1024 * 1024) return false; // 1MB cap
+    } catch {}
+    if (cfg.content.indexOf('\u0000') >= 0) return false;
+    return true;
   }
 
   async execute(
@@ -69,12 +76,12 @@ export class ScriptCheckProvider extends CheckProvider {
     const { ops, needsSave } = createSyncMemoryOps(memoryStore);
     (ctx as any).memory = ops as unknown as Record<string, unknown>;
 
-    // Evaluate the script in a secure sandbox
-    if (!this.sandbox) this.sandbox = this.createSecureSandbox();
+    // Evaluate the script in a secure sandbox (per-execution instance)
+    const sandbox = this.createSecureSandbox();
     let result: unknown;
     try {
       result = compileAndRun<unknown>(
-        this.sandbox,
+        sandbox,
         script,
         { ...ctx },
         {
@@ -86,10 +93,19 @@ export class ScriptCheckProvider extends CheckProvider {
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[script] execution error: ${msg}`);
-      return { issues: [], output: null, error: msg } as ReviewSummary & {
-        output: null;
-        error: string;
-      };
+      return {
+        issues: [
+          {
+            file: 'script',
+            line: 0,
+            ruleId: 'script/execution_error',
+            message: msg,
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
+        output: null,
+      } as ReviewSummary;
     }
 
     // Persist file-backed memory once if needed

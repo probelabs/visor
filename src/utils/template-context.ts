@@ -8,6 +8,16 @@ import { MemoryStore } from '../memory-store';
  * outputs_history / outputs_history_stage. Optionally attaches read-only
  * memory helpers (get/has/list/getAll).
  */
+const PR_CACHE_LIMIT = 16;
+const prCache = new Map<string, any>();
+
+function prCacheKey(pr: PRInfo): string {
+  // Hash on stable fields + file list summary to avoid rebuilding the same structure repeatedly
+  let sum = 0;
+  for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
+  return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join('|');
+}
+
 export function buildProviderTemplateContext(
   prInfo: PRInfo,
   dependencyResults?: Map<string, ReviewSummary>,
@@ -18,24 +28,34 @@ export function buildProviderTemplateContext(
 ): Record<string, unknown> {
   const context: Record<string, unknown> = {};
 
-  // PR context
-  context.pr = {
-    number: prInfo.number,
-    title: prInfo.title,
-    body: prInfo.body,
-    author: prInfo.author,
-    base: prInfo.base,
-    head: prInfo.head,
-    totalAdditions: prInfo.totalAdditions,
-    totalDeletions: prInfo.totalDeletions,
-    files: prInfo.files.map(f => ({
-      filename: f.filename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      changes: f.changes,
-    })),
-  };
+  // PR context with tiny cache
+  const key = prCacheKey(prInfo);
+  let prObj = prCache.get(key);
+  if (!prObj) {
+    prObj = {
+      number: prInfo.number,
+      title: prInfo.title,
+      body: prInfo.body,
+      author: prInfo.author,
+      base: prInfo.base,
+      head: prInfo.head,
+      totalAdditions: prInfo.totalAdditions,
+      totalDeletions: prInfo.totalDeletions,
+      files: prInfo.files.map(f => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+      })),
+    };
+    prCache.set(key, prObj);
+    if (prCache.size > PR_CACHE_LIMIT) {
+      const first = prCache.keys().next();
+      if (!first.done) prCache.delete(first.value);
+    }
+  }
+  context.pr = prObj;
 
   // outputs and history
   const outputs: Record<string, unknown> = {};

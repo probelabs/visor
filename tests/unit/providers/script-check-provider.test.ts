@@ -90,4 +90,18 @@ describe('ScriptCheckProvider', () => {
     expect(res.output?.type).toBe('object');
     expect(res.output?.dep && res.output.dep.num).toBe(7);
   });
+
+  it('returns an issue when script throws', async () => {
+    const res = (await provider.execute(pr, {
+      type: 'script',
+      content: 'throw new Error("boom")',
+    })) as ReviewSummary;
+    expect(Array.isArray(res.issues)).toBe(true);
+    expect((res.issues || [])[0]?.ruleId).toBe('script/execution_error');
+  });
+
+  it('rejects oversize content in validateConfig', async () => {
+    const big = 'x'.repeat(1024 * 1024 + 10);
+    expect(await provider.validateConfig({ type: 'script', content: big } as any)).toBe(false);
+  });
 });
