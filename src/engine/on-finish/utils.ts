@@ -109,7 +109,7 @@ export function evaluateOnFinishGoto(
       const result = exec({ scope }).run();
       gotoTarget = typeof result === 'string' && result ? result : null;
       if (debug) log(`🔧 Debug: on_finish.goto_js evaluated → ${String(gotoTarget)}`);
-    } catch (e) {
+    } catch {
       // Fall back to static goto
       if (onFinish.goto) gotoTarget = onFinish.goto;
     }

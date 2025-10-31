@@ -1,6 +1,5 @@
 import type { PRInfo } from '../../pr-analyzer';
 import type { ReviewSummary } from '../../reviewer';
-import type { DependencyGraph } from '../../dependency-resolver';
 import type { VisorConfig, CheckConfig } from '../../types/config';
 import {
   buildProjectionFrom,

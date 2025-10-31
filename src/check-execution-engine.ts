@@ -1215,39 +1215,8 @@ export class CheckExecutionEngine {
           items: forEachItems,
         };
 
-        // Get memory store for context
+        // Get memory store for context (used for diagnostics below)
         const memoryStore = MemoryStore.getInstance(this.config?.memory);
-        const memoryHelpers = {
-          get: (key: string, ns?: string) => memoryStore.get(key, ns),
-          has: (key: string, ns?: string) => memoryStore.has(key, ns),
-          list: (ns?: string) => memoryStore.list(ns),
-          getAll: (ns?: string) => {
-            const keys = memoryStore.list(ns);
-            const result: Record<string, unknown> = {};
-            for (const key of keys) {
-              result[key] = memoryStore.get(key, ns);
-            }
-            return result;
-          },
-          set: (key: string, value: unknown, ns?: string) => {
-            const nsName = ns || memoryStore.getDefaultNamespace();
-            if (!memoryStore['data'].has(nsName)) {
-              memoryStore['data'].set(nsName, new Map());
-            }
-            memoryStore['data'].get(nsName)!.set(key, value);
-          },
-          increment: (key: string, amount: number, ns?: string) => {
-            const current = memoryStore.get(key, ns);
-            const numCurrent = typeof current === 'number' ? current : 0;
-            const newValue = numCurrent + amount;
-            const nsName = ns || memoryStore.getDefaultNamespace();
-            if (!memoryStore['data'].has(nsName)) {
-              memoryStore['data'].set(nsName, new Map());
-            }
-            memoryStore['data'].get(nsName)!.set(key, newValue);
-            return newValue;
-          },
-        };
 
         // Build context for on_finish evaluation (extracted helper)
         const onFinishContext = ofComposeCtx(
