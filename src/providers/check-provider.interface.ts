@@ -57,6 +57,20 @@ export interface ExecutionContext {
     onPromptCaptured?: (info: { step: string; provider: string; prompt: string }) => void;
     mockForStep?: (step: string) => unknown | undefined;
   };
+  /**
+   * Optional execution mode hints. The core engine does not read environment
+   * variables directly; callers (CLI, test runner) can set these flags to
+   * request certain behaviors without polluting core logic with test-specific
+   * branches.
+   */
+  mode?: {
+    /** true when running under the YAML test runner */
+    test?: boolean;
+    /** post review comments from grouped execution paths (used by tests) */
+    postGroupedComments?: boolean;
+    /** reset per-run guard state before grouped execution */
+    resetPerRunState?: boolean;
+  };
 }
 
 /**

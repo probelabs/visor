@@ -14,6 +14,9 @@ tests:
     github_recorder:            # optional negative modes
       error_code: 0             # e.g., 429
       timeout_ms: 0             # e.g., 1000
+    # Optional: include/exclude checks by tags (same semantics as main CLI)
+    tags: "local,fast"         # or [local, fast]
+    exclude_tags: "experimental,slow"  # or [experimental, slow]
 
   fixtures: []                  # (optional) suite-level custom fixtures
 
@@ -29,6 +32,8 @@ tests:
       mocks: { <step>: <value>, <step>[]: [<value>...] }
       expect: <expect-block>
       strict: true|false         # overrides defaults.strict
+      tags: "security,fast"     # optional per-case include filter
+      exclude_tags: "slow"      # optional per-case exclude filter
 
       # OR flow case
       flow:
@@ -39,6 +44,8 @@ tests:
           mocks: ...             # merged with flow-level mocks
           expect: <expect-block>
           strict: true|false     # per-stage fallback to case/defaults
+          tags: "security"       # optional per-stage include filter
+          exclude_tags: "slow"   # optional per-stage exclude filter
 ```
 
 ## Fixtures
@@ -146,6 +153,18 @@ Note on dependencies: test execution honors your base config routing, including 
 - Run one stage: `visor test --only pr-review-e2e-flow#facts-invalid`
 - JSON/JUnit/Markdown reporters: `--json`, `--report junit:<path>`, `--summary md:<path>`
 ## JavaScript in Tests and Routing (run_js, goto_js, value_js, transform_js)
+
+### Tags default semantics in tests
+
+- The test runner passes tags to the engine using the same rules as the main CLI.
+- If no tags/exclude_tags are specified anywhere (suite defaults, case, or stage), only untagged checks run by default; tagged checks are skipped. This keeps tests deterministic and fast unless you explicitly opt into groups (for example, `github`).
+- To run GitHub‑tagged checks in tests, add:
+
+```yaml
+tests:
+  defaults:
+    tags: "github"
+```
 
 Visor evaluates your `run_js`, `goto_js`, `value_js` and `transform_js` snippets inside a hardened JavaScript sandbox. The goal is to provide a great developer experience with modern JS, while keeping the engine safe and deterministic.
 

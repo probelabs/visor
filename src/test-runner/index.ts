@@ -10,6 +10,7 @@ import { setGlobalRecorder } from './recorders/global-recorder';
 // import { FixtureLoader } from './fixture-loader';
 import { type ExpectBlock } from './assertions';
 import { FlowStage } from './core/flow-stage';
+import { TestExecutionWrapper } from './core/test-execution-wrapper';
 // evaluators are required at call sites to avoid circular import during build
 import { EnvironmentManager } from './core/environment';
 import { MockManager } from './core/mocks';
@@ -79,7 +80,9 @@ export class VisorTestRunner {
     cfg: any,
     defaultStrict: boolean,
     defaultPromptCap?: number,
-    ghRec?: { error_code?: number; timeout_ms?: number }
+    ghRec?: { error_code?: number; timeout_ms?: number },
+    defaultIncludeTags?: string[] | undefined,
+    defaultExcludeTags?: string[] | undefined
   ): {
     name: string;
     strict: boolean;
@@ -91,6 +94,7 @@ export class VisorTestRunner {
     mocks: Record<string, unknown>;
     restoreEnv: () => void;
     checksToRun: string[];
+    tagFilter?: { include?: string[]; exclude?: string[] };
   } {
     const name = (_case as any).name || '(unnamed)';
     const strict = (
@@ -133,6 +137,28 @@ export class VisorTestRunner {
         ? ((_case as any).mocks as Record<string, unknown>)
         : {};
     const mockMgr = new MockManager(mocks);
+    const parseTags = (v: unknown): string[] | undefined => {
+      if (!v) return undefined;
+      if (Array.isArray(v))
+        return (v as unknown[])
+          .map(String)
+          .map(s => s.trim())
+          .filter(Boolean);
+      if (typeof v === 'string')
+        return v
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+      return undefined;
+    };
+    const caseInclude = parseTags((_case as any).tags);
+    const caseExclude = parseTags((_case as any).exclude_tags);
+    const include = Array.from(new Set([...(defaultIncludeTags || []), ...(caseInclude || [])]));
+    const exclude = Array.from(new Set([...(defaultExcludeTags || []), ...(caseExclude || [])]));
+    const tagFilter = {
+      include: include.length ? include : undefined,
+      exclude: exclude.length ? exclude : undefined,
+    };
     engine.setExecutionContext({
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
@@ -174,6 +200,7 @@ export class VisorTestRunner {
       mocks,
       restoreEnv,
       checksToRun,
+      tagFilter,
     };
   }
 
@@ -182,27 +209,19 @@ export class VisorTestRunner {
     setup: ReturnType<VisorTestRunner['setupTestCase']>,
     cfg: any
   ): Promise<{ res: any; outHistory: Record<string, unknown[]> }> {
-    const { prInfo, engine, /* recorder, */ checksToRun } = setup;
-    const prevTestMode = process.env.VISOR_TEST_MODE;
+    const { prInfo, engine, /* recorder, */ checksToRun, tagFilter } = setup;
     const prevStrict = process.env.VISOR_STRICT_ERRORS;
-    process.env.VISOR_TEST_MODE = 'true';
     process.env.VISOR_STRICT_ERRORS = 'true';
-    const res = await engine.executeGroupedChecks(
+    const wrapper = new TestExecutionWrapper(engine);
+    const { res, outHistory } = await wrapper.execute(
       prInfo,
       checksToRun,
-      120000,
       cfg,
-      'json',
       process.env.VISOR_DEBUG === 'true',
-      undefined,
-      false,
-      undefined
+      tagFilter
     );
-    if (prevTestMode === undefined) delete process.env.VISOR_TEST_MODE;
-    else process.env.VISOR_TEST_MODE = prevTestMode;
     if (prevStrict === undefined) delete process.env.VISOR_STRICT_ERRORS;
     else process.env.VISOR_STRICT_ERRORS = prevStrict;
-    const outHistory = engine.getOutputHistorySnapshot();
     return { res, outHistory };
   }
 
@@ -384,6 +403,24 @@ export class VisorTestRunner {
       (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) ||
       1;
 
+    // Parse default tags/include and exclude from suite defaults (string or array)
+    const parseTags = (v: unknown): string[] | undefined => {
+      if (!v) return undefined;
+      if (Array.isArray(v))
+        return (v as unknown[])
+          .map(String)
+          .map(s => s.trim())
+          .filter(Boolean);
+      if (typeof v === 'string')
+        return v
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+      return undefined;
+    };
+    const defaultIncludeTags = parseTags(defaultsAny?.tags);
+    const defaultExcludeTags = parseTags(defaultsAny?.exclude_tags);
+
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
     const cfg = JSON.parse(JSON.stringify(config));
     for (const name of Object.keys(cfg.checks || {})) {
@@ -447,7 +484,15 @@ export class VisorTestRunner {
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
         return { name: _case.name, failed };
       }
-      const setup = this.setupTestCase(_case, cfg, defaultStrict, defaultPromptCap, ghRec);
+      const setup = this.setupTestCase(
+        _case,
+        cfg,
+        defaultStrict,
+        defaultPromptCap,
+        ghRec,
+        defaultIncludeTags,
+        defaultExcludeTags
+      );
 
       try {
         this.printSelectedChecks(setup.checksToRun);
@@ -663,6 +708,25 @@ export class VisorTestRunner {
       ) as boolean;
 
       try {
+        // Prepare default tag filters for this flow (inherit suite defaults)
+        const parseTags = (v: unknown): string[] | undefined => {
+          if (!v) return undefined;
+          if (Array.isArray(v))
+            return (v as unknown[])
+              .map(String)
+              .map(s => s.trim())
+              .filter(Boolean);
+          if (typeof v === 'string')
+            return v
+              .split(',')
+              .map(s => s.trim())
+              .filter(Boolean);
+          return undefined;
+        };
+        const suiteDefaults: any = (this as any).suiteDefaults || {};
+        const defaultIncludeTags = parseTags(suiteDefaults?.tags);
+        const defaultExcludeTags = parseTags(suiteDefaults?.exclude_tags);
+
         const stageRunner = new FlowStage(
           flowName,
           engine,
@@ -674,7 +738,9 @@ export class VisorTestRunner {
           this.computeChecksToRun.bind(this),
           this.printStageHeader.bind(this),
           this.printSelectedChecks.bind(this),
-          this.warnUnmockedProviders.bind(this)
+          this.warnUnmockedProviders.bind(this),
+          defaultIncludeTags,
+          defaultExcludeTags
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

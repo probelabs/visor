@@ -7,6 +7,7 @@ import { EnvironmentManager } from './environment';
 import { MockManager } from './mocks';
 import { buildPrInfoFromFixture } from './fixture';
 import { evaluateCase as evaluate } from '../evaluators';
+import { TestExecutionWrapper } from './test-execution-wrapper';
 
 type PrintHeaderFn = (
   flowName: string,
@@ -35,7 +36,9 @@ export class FlowStage {
     private readonly computeChecksToRun: ComputeChecksFn,
     private readonly printStageHeader: PrintHeaderFn,
     private readonly printSelectedChecks: PrintChecksFn,
-    private readonly warnUnmockedProviders: WarnUnmockedFn
+    private readonly warnUnmockedProviders: WarnUnmockedFn,
+    private readonly defaultIncludeTags?: string[],
+    private readonly defaultExcludeTags?: string[]
   ) {}
 
   async run(
@@ -155,16 +158,51 @@ export class FlowStage {
         } as any);
       } catch {}
 
-      const res = await this.engine.executeGroupedChecks(
+      // Build tag filter from defaults + flow-level + stage-level overrides
+      const parseTags = (v: unknown): string[] | undefined => {
+        if (!v) return undefined;
+        if (Array.isArray(v))
+          return (v as unknown[])
+            .map(String)
+            .map(s => s.trim())
+            .filter(Boolean);
+        if (typeof v === 'string')
+          return v
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+        return undefined;
+      };
+      const flowInclude = parseTags((flowCase as any).tags);
+      const flowExclude = parseTags((flowCase as any).exclude_tags);
+      const stageInclude = parseTags((stage as any).tags);
+      const stageExclude = parseTags((stage as any).exclude_tags);
+      const include = Array.from(
+        new Set([
+          ...(this.defaultIncludeTags || []),
+          ...(flowInclude || []),
+          ...(stageInclude || []),
+        ])
+      );
+      const exclude = Array.from(
+        new Set([
+          ...(this.defaultExcludeTags || []),
+          ...(flowExclude || []),
+          ...(stageExclude || []),
+        ])
+      );
+      const tagFilter = {
+        include: include.length ? include : undefined,
+        exclude: exclude.length ? exclude : undefined,
+      };
+
+      const wrapper = new TestExecutionWrapper(this.engine);
+      const { res } = await wrapper.execute(
         prInfo,
         checksToRun,
-        120000,
         this.cfg,
-        'json',
         process.env.VISOR_DEBUG === 'true',
-        undefined,
-        false,
-        undefined
+        tagFilter
       );
 
       // No second-pass fallback in flows to avoid duplicate runs; rely on single execution and deltas

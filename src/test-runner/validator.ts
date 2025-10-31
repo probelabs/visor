@@ -24,6 +24,12 @@ const schema: any = {
             strict: { type: 'boolean' },
             ai_provider: { type: 'string' },
             fail_on_unexpected_calls: { type: 'boolean' },
+            tags: {
+              oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+            },
+            exclude_tags: {
+              oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+            },
             github_recorder: {
               type: 'object',
               additionalProperties: false,
@@ -71,6 +77,12 @@ const schema: any = {
         description: { type: 'string' },
         skip: { type: 'boolean' },
         strict: { type: 'boolean' },
+        tags: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
+        exclude_tags: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
         github_recorder: {
           type: 'object',
           additionalProperties: false,
@@ -110,6 +122,12 @@ const schema: any = {
       properties: {
         name: { type: 'string' },
         description: { type: 'string' },
+        tags: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
+        exclude_tags: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
         github_recorder: {
           type: 'object',
           additionalProperties: false,

@@ -12,6 +12,8 @@ tests:
     strict: true
     ai_provider: mock
     fail_on_unexpected_calls: true
+    # Run GitHub-tagged checks in tests (e.g., label application)
+    tags: "github"
     # Example: enable negative GitHub recorder for all tests
     # github_recorder: { error_code: 429 }
   # Built-in fixtures are provided by the test runner (gh.* namespace).
