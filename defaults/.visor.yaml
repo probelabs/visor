@@ -334,7 +334,7 @@ steps:
           assign issues       = agg | get: "issues"
           assign has_problems = agg | get: "has_problems"
         -%}
-        {% if has_problems or issues | not_empty %}
+        {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
@@ -418,7 +418,7 @@ steps:
           assign has_problems = agg | get: "has_problems"
           assign prev_comment = outputs_history | get: "comment-assistant" | last
         -%}
-        {% if has_problems or issues | not_empty %}
+        {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
@@ -744,10 +744,6 @@ steps:
     # Run only when scheduled from extract-facts.on_finish (stage-local)
     on: [manual]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    on_success:
-      # Aggregator stores issues in memory and exposes output for templates; no routing here
-      run_js: |
-        return [];
     memory_js: |
 
       const all = outputs.history['validate-fact'] || [];
