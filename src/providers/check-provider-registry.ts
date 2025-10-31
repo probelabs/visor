@@ -11,6 +11,7 @@ import { CommandCheckProvider } from './command-check-provider';
 import { MemoryCheckProvider } from './memory-check-provider';
 import { McpCheckProvider } from './mcp-check-provider';
 import { HumanInputCheckProvider } from './human-input-check-provider';
+import { ScriptCheckProvider } from './script-check-provider';
 
 /**
  * Registry for managing check providers
@@ -41,6 +42,7 @@ export class CheckProviderRegistry {
     // Register all built-in providers
     this.register(new AICheckProvider());
     this.register(new CommandCheckProvider());
+    this.register(new ScriptCheckProvider());
     this.register(new HttpCheckProvider());
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());

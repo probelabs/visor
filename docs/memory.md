@@ -2,6 +2,8 @@
 
 The Memory provider enables persistent key-value storage across checks, allowing you to implement stateful workflows, retry logic with counters, error aggregation, and complex orchestration patterns.
 
+> Note: For running general JavaScript, prefer the dedicated `script` step (`type: script` + `script_js`). It replaces `operation: exec_js` with a first-class provider while keeping identical context and memory helpers. See docs/script.md.
+
 ## Table of Contents
 
 - [Overview](#overview)

@@ -163,6 +163,10 @@ export const configSchema = {
           description:
             'Transform using JavaScript expressions (evaluated in secure sandbox) - optional',
         },
+        script_js: {
+          type: 'string',
+          description: 'JavaScript code to execute for script checks',
+        },
         schedule: {
           type: 'string',
           description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type',
@@ -434,6 +438,7 @@ export const configSchema = {
       enum: [
         'ai',
         'command',
+        'script',
         'http',
         'http_input',
         'http_client',
