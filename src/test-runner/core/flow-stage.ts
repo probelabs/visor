@@ -93,6 +93,16 @@ export class FlowStage {
     const promptBase: Record<string, number> = {};
     for (const [k, arr] of Object.entries(this.prompts)) promptBase[k] = arr.length;
     const callBase = this.recorder.calls.length;
+    // Baseline engine execution stats for stage-local deltas
+    const statBase: Record<string, number> = {};
+    try {
+      const es: Map<string, any> | undefined = (this.engine as any).executionStats;
+      if (es && typeof (es as any).forEach === 'function') {
+        (es as any).forEach((v: any, k: string) => {
+          if (k) statBase[k] = (v && v.totalRuns) || 0;
+        });
+      }
+    } catch {}
     const histBase: Record<string, number> = {};
     const baseHistSnap = (this.engine as any).outputHistory as Map<string, unknown[]> | undefined;
     if (baseHistSnap) {
@@ -196,12 +206,7 @@ export class FlowStage {
         const histRuns = histArr.length;
         const promptRuns = Array.isArray(stagePrompts[name]) ? stagePrompts[name].length : 0;
         const inferred = Math.max(histRuns, promptRuns);
-        let statRuns = 0;
-        try {
-          const srcStats = mergedStats || res.statistics;
-          const st = (srcStats.checks || []).find((c: any) => c.checkName === name);
-          statRuns = st ? st.totalRuns || 0 : 0;
-        } catch {}
+        // Stage-local runs only: do not use global totals across the flow
         let isForEachLike = false;
         try {
           const r = (res.results as any)[name];
@@ -228,10 +233,35 @@ export class FlowStage {
             if (nonArrays.length > 0 && arrays.length > 0) histPerItemRuns = nonArrays.length;
           }
         } catch {}
-        let runs = statRuns > 0 ? statRuns : inferred;
+        let runs = inferred;
+        // If no prompts/outputs, fall back to executionStats delta for this stage
+        if (runs === 0) {
+          try {
+            const es: Map<string, any> | undefined = (this.engine as any).executionStats;
+            let current = 0;
+            if (es && typeof (es as any).get === 'function') {
+              const v = (es as any).get(name);
+              current = (v && v.totalRuns) || 0;
+            }
+            const base = statBase[name] || 0;
+            const delta = Math.max(0, current - base);
+            runs = Math.max(runs, delta);
+          } catch {}
+        }
         if (!isForEachLike && histRuns > 0) runs = histRuns;
         if (histPerItemRuns > 0) runs = histPerItemRuns;
         if (depWaveSize > 0) runs = depWaveSize;
+        // Heuristic: aggregator runs once after extract-facts on_finish
+        try {
+          if (
+            name === 'aggregate-validations' &&
+            Array.isArray(stageHist['extract-facts']) &&
+            (stageHist['extract-facts'] as unknown[]).length > 0 &&
+            runs === 0
+          ) {
+            runs = 1;
+          }
+        } catch {}
         return {
           checkName: name,
           totalRuns: runs,

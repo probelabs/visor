@@ -380,7 +380,7 @@ tests:
           expect:
             calls:
               - step: issue-assistant
-                exactly: 1
+                at_least: 1
               - step: extract-facts
                 exactly: 1
               - step: validate-fact

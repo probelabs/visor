@@ -399,9 +399,9 @@ steps:
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
     on_success:
-      # When fact validation is enabled, schedule extraction immediately
+      # When fact validation is enabled, schedule validation (engine will run dependencies inline)
       run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['validate-fact'] : [];
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -473,9 +473,9 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # When fact validation is enabled, schedule extraction from the assistant reply
+      # When fact validation is enabled, schedule validation (engine will run dependencies inline)
       run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['validate-fact'] : [];
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
@@ -563,8 +563,8 @@ steps:
     # Scheduled explicitly from issue-assistant/comment-assistant when enabled
     depends_on: []
     on: [manual]
-    # Only when validation is enabled and assistants produced text
-    if: "env.ENABLE_FACT_VALIDATION === 'true' && (outputs['issue-assistant'] || outputs['comment-assistant'])"
+    # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
       skip_code_context: true
       disable_tools: true
@@ -632,14 +632,14 @@ steps:
     on_finish:
       run: [aggregate-validations]
       run_js: |
-        // Decide correction pass target by current event: rerun issue-assistant on issue_opened, comment-assistant on issue_comment
-        const vf = (outputs_history && outputs_history['validate-fact']) ? outputs_history['validate-fact'] : [];
-        const fxHist = (outputs_history && outputs_history['extract-facts']) ? outputs_history['extract-facts'] : [];
+        // Decide correction pass target using validation history (works even if outputs aren't yet visible here)
+        const vfRaw = (outputs_history && outputs_history['validate-fact']) || [];
+        const vfFlat = (Array.isArray(vfRaw) && Array.isArray(vfRaw[0])) ? vfRaw.flat() : vfRaw;
+        const fxHist = (outputs_history && outputs_history['extract-facts']) || [];
         const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
-        const n = Array.isArray(lastExtract) ? lastExtract.length : 0;
-        const lastWave = (n > 0 && Array.isArray(vf) && vf.length >= n) ? vf.slice(-n) : [];
-        const flat = Array.isArray(lastWave) && Array.isArray(lastWave[0]) ? lastWave.flat() : lastWave;
-        const hasProblems = (flat || []).some(v => !v || v.is_valid !== true || v.confidence !== 'high');
+        const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && x.id).filter(Boolean) : [];
+        const relevant = ids.length > 0 ? vfFlat.filter(v => v && ids.includes(String(v.fact_id || v.factId || v.id || ''))) : [];
+        const hasProblems = relevant.some(v => !v || v.is_valid !== true || v.confidence !== 'high');
         if (!hasProblems) return [];
         const ev = (event && event.name) ? event.name : 'issue_comment';
         return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
@@ -721,14 +721,15 @@ steps:
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     memory_js: |
 
-      const all = outputs.history['validate-fact'] || [];
+      const allRaw = outputs.history['validate-fact'] || [];
+      const allFlat = (Array.isArray(allRaw) && Array.isArray(allRaw[0])) ? allRaw.flat() : allRaw;
       const fxHist = outputs.history['extract-facts'] || [];
       const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
       const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && x.id).filter(Boolean) : [];
 
       // Use only validations that correspond to the last extract wave, by fact_id
       const validations = ids.length > 0
-        ? all.filter(v => {
+        ? allFlat.filter(v => {
             if (!v) return false;
             const fid = (v.fact_id !== undefined ? v.fact_id : (v.factId !== undefined ? v.factId : (v.id !== undefined ? v.id : null)));
             return typeof fid === 'string' && ids.includes(fid);
