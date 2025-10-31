@@ -182,6 +182,9 @@ export class CheckExecutionEngine {
   private sessionId: string = `sess-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+  // Dedup forward-run targets within a single grouped run (stage/event).
+  // Keyed by `${event}:${target}`.
+  private forwardRunGuards: Set<string> = new Set();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Execution context for providers (CLI message, hooks, etc.)
@@ -917,6 +920,9 @@ export class CheckExecutionEngine {
         issues,
         isForEachParent ? undefined : out
       );
+      // Output history is already tracked inside executeCheckInline when a check
+      // produces an output. Avoid tracking again here to prevent double-counting
+      // (particularly for forward-run goto chains within a single stage).
       return res;
     } catch (e) {
       this.recordIterationComplete(target, startTs, false, [], undefined);
@@ -2154,6 +2160,10 @@ export class CheckExecutionEngine {
                 // Always execute the target itself first (goto target), regardless of event filtering
                 // Then, optionally execute its dependents that match the goto_event
                 const runTargetOnce = async (scopeForRun: ScopePath) => {
+                  const evKey = onSuccess.goto_event || prInfo.eventType || 'manual';
+                  const guardKey = `${String(evKey)}:${String(target)}`;
+                  if (this.forwardRunGuards.has(guardKey)) return;
+                  this.forwardRunGuards.add(guardKey);
                   await this.runNamedCheck(target, scopeForRun, {
                     config: config!,
                     dependencyGraph,
@@ -2256,8 +2266,12 @@ export class CheckExecutionEngine {
                   checkConfig.forEach && Array.isArray(currentRouteOutput)
                     ? (currentRouteOutput as unknown[])
                     : [];
-                const scheduleOnce = async (scopeForRun: ScopePath) =>
-                  this.runNamedCheck(target, scopeForRun, {
+                const scheduleOnce = async (scopeForRun: ScopePath) => {
+                  const evKey = onSuccess.goto_event || prInfo.eventType || 'manual';
+                  const guardKey = `${String(evKey)}:${String(target)}`;
+                  if (this.forwardRunGuards.has(guardKey)) return;
+                  this.forwardRunGuards.add(guardKey);
+                  return this.runNamedCheck(target, scopeForRun, {
                     config: config!,
                     dependencyGraph,
                     prInfo,
@@ -2266,6 +2280,7 @@ export class CheckExecutionEngine {
                     eventOverride: onSuccess.goto_event,
                     overlay: dependencyResults,
                   });
+                };
                 if (!foreachContext && mode === 'map' && items.length > 0) {
                   for (let i = 0; i < items.length; i++) {
                     const itemScope: ScopePath = [{ check: checkName, index: i }];
@@ -2857,6 +2872,10 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter,
     _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
+    // Reset forward-run guards for this grouped execution (stage)
+    try {
+      this.forwardRunGuards.clear();
+    } catch {}
     // Reset per-run execution stats to avoid cross-run bleed between stages
     try {
       this['executionStats'].clear();
@@ -5803,58 +5822,9 @@ export class CheckExecutionEngine {
         if (debug) console.error('[engine] calling handleOnFinishHooks');
       } catch {}
       await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
-      // Fallback: if some on_finish static run targets did not execute (e.g., due to graph selection peculiarities),
-      // run them once now for each forEach parent that produced items in this run. This preserves general semantics
-      // without hardcoding step names.
-      try {
-        for (const [parentName, cfg] of Object.entries(config.checks || {})) {
-          const onf = (cfg as any)?.on_finish as OnFinishConfig | undefined;
-          if (!(cfg as any)?.forEach || !onf || !Array.isArray(onf.run) || onf.run.length === 0)
-            continue;
-          const parentRes = results.get(parentName) as ExtendedReviewSummary | undefined;
-          const count = (() => {
-            try {
-              if (!parentRes) return 0;
-              if (Array.isArray(parentRes.forEachItems)) return parentRes.forEachItems.length;
-              const out = (parentRes as any)?.output;
-              return Array.isArray(out) ? out.length : 0;
-            } catch {
-              return 0;
-            }
-          })();
-          // Only consider fallback for parents that produced items in THIS run.
-          if (count > 0) {
-            for (const stepId of onf.run!) {
-              if (typeof stepId !== 'string' || !stepId) continue;
-              // already executed in this run
-              if (results.has(stepId)) continue;
-              // or output was produced (history snapshot)
-              try {
-                const h = this.outputHistory.get(stepId) as unknown[] | undefined;
-                if (Array.isArray(h) && h.length > 0) continue;
-              } catch {}
-              try {
-                logger.info(
-                  `▶ on_finish.fallback: executing static run step '${stepId}' for parent '${parentName}'`
-                );
-              } catch {}
-              try {
-                if (debug)
-                  console.error(`[on_finish.fallback] run '${stepId}' for '${parentName}'`);
-              } catch {}
-              await this.runNamedCheck(stepId, [], {
-                origin: 'on_finish',
-                config: config!,
-                dependencyGraph,
-                prInfo,
-                resultsMap: results,
-                debug: !!debug,
-                overlay: new Map(results),
-              });
-            }
-          }
-        }
-      } catch {}
+      // Removed fallback re-execution of on_finish.run static steps to avoid double-counting and
+      // unintended duplicate runs within a single stage. The primary on_finish handler above is
+      // authoritative and records history/stats for reporters.
     } else {
       try {
         logger.info('🧭 on_finish: skipped due to shouldStopExecution');
