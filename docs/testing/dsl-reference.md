@@ -145,3 +145,36 @@ Note on dependencies: test execution honors your base config routing, including 
 - Run one case: `visor test --only label-flow`
 - Run one stage: `visor test --only pr-review-e2e-flow#facts-invalid`
 - JSON/JUnit/Markdown reporters: `--json`, `--report junit:<path>`, `--summary md:<path>`
+## JavaScript in Tests and Routing (run_js, goto_js, value_js, transform_js)
+
+Visor evaluates your `run_js`, `goto_js`, `value_js` and `transform_js` snippets inside a hardened JavaScript sandbox. The goal is to provide a great developer experience with modern JS, while keeping the engine safe and deterministic.
+
+What you can use by default (Node 24, ES2023)
+- Language features: `const/let`, arrow functions, template strings, destructuring, spread, async/await, `Array.prototype.at`, `findLast`/`findLastIndex`.
+- Arrays: iteration helpers (`map`, `filter`, `some`, `every`, `reduce`, `keys/values/entries`, `forEach`), non‑mutating helpers (`toReversed`, `toSorted`, `toSpliced`, `with`), and `flat/flatMap`.
+- Strings: `replaceAll`, `matchAll`, `trimStart/End`, `at`, `repeat`, `normalize`.
+- Maps/Sets: `get/set/has/delete/keys/values/entries/forEach`.
+- Date/RegExp: `toISOString`, `getTime`, `test`, `exec`.
+
+What remains intentionally restricted
+- Prototype mutation and reflective escape hatches (e.g., `Object.defineProperty`, `__proto__`, `setPrototypeOf`) are not exposed to sandboxed code.
+- `if:` and `fail_if:` conditions are parsed by a small expression DSL (not full JS). Keep them simple (no optional chaining or nullish coalescing in those), or move complex logic to `run_js`/`goto_js`.
+
+Tips
+- Prefer non‑mutating array helpers (`toReversed`, `toSorted`, `with`) when deriving new arrays for clarity and correctness.
+- Use `Array.prototype.at(-1)` to read the last item. Example: `const last = (outputs_history['validate-fact'] || []).at(-1) || [];`.
+- For reshaping small maps, `Object.entries` + `Object.fromEntries` is concise and readable.
+
+Example: wave‑scoped correction gate
+```
+run_js: |
+  const facts = (outputs_history['extract-facts'] || []).at(-1) || [];
+  const ids = facts.map(f => String(f.id || '')).filter(Boolean);
+  const vf = outputs_history['validate-fact'] || [];
+  const lastItems = vf.filter(v => ids.includes(String((v && v.fact_id) || '')));
+  const hasProblems = lastItems.some(v => v.is_valid !== true || v.confidence !== 'high');
+  if (!hasProblems) return [];
+  return (event && event.name) === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
+```
+
+This evaluates the last `extract-facts` wave, finds the corresponding `validate-fact` results, and schedules a single correction pass when any item is invalid or low‑confidence.
