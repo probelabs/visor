@@ -318,7 +318,11 @@ steps:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
     value_js: |
-      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
+      // Normalize, trim, and drop empties (ES5-safe)
+      return values
+        .map(v => (v == null ? '' : String(v)))
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -470,10 +474,10 @@ steps:
     on: [issue_comment]
     on_success:
       goto_js: |
-        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
-        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        const intent = output?.intent;
+        const isComment = event?.name === 'issue_comment';
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+        return isComment && allowed && intent === 'comment_retrigger' ? 'overview' : null;
       goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
@@ -485,13 +489,14 @@ steps:
     op: labels.add
     value_js: |
       try {
-        const issueAssistant = outputs['issue-assistant'];
-        const labels = Array.isArray(issueAssistant?.labels) ? issueAssistant.labels : [];
+        const labels = Array.isArray(outputs['issue-assistant']?.labels)
+          ? outputs['issue-assistant'].labels
+          : [];
         // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
         return labels
-          .map(v => (v == null ? '' : String(v)))
+          .map(v => String(v ?? ''))
           .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
-          .filter(s => s.length > 0);
+          .filter(Boolean);
       } catch (error) {
         log('Error processing issue labels:', error);
         return [];
@@ -624,17 +629,14 @@ steps:
     # After facts are validated, run the aggregator; it decides about corrections in its on_success
     on_finish:
       run_js: |
-        // Consider only the last wave of extract-facts in this stage when deciding correction
-        const vfHist = outputs_history && outputs_history['validate-fact'];
-        const flat = Array.isArray(vfHist) && Array.isArray(vfHist[0]) ? vfHist.flat() : (Array.isArray(vfHist) ? vfHist : (vfHist ? [vfHist] : []));
-        const fxHist = (outputs_history && outputs_history['extract-facts']) || [];
-        const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
-        const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && (x.id || x.fact_id || x.factId)).filter(Boolean).map(String) : [];
-        const relevant = ids.length > 0 ? flat.filter(v => v && ids.includes(String(v.fact_id || v.factId || v.id || ''))) : flat;
-        const hasProblems = relevant.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
+        // ES2023 style: use at() and concise arrows; inspect only the last wave
+        const facts = (outputs_history['extract-facts'] || []).at(-1) || [];
+        const ids = facts.map(f => String(f.id || '')).filter(Boolean);
+        const vf = outputs_history['validate-fact'] || [];
+        const lastItems = vf.filter(v => ids.includes(String((v && v.fact_id) || '')));
+        const hasProblems = lastItems.some(v => v.is_valid !== true || v.confidence !== 'high');
         if (!hasProblems) return [];
-        const ev = (event && event.name) ? event.name : 'issue_comment';
-        return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
+        return (event && event.name) === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
 
   # Validate each extracted fact
   validate-fact:
