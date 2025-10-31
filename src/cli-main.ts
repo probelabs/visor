@@ -110,6 +110,178 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
 }
 
 /**
+ * Handle the test subcommand (Milestone 0: discovery only)
+ */
+async function handleTestCommand(argv: string[]): Promise<void> {
+  // Minimal flag parsing: --config <path>, --only <name>, --bail
+  const getArg = (name: string): string | undefined => {
+    const i = argv.indexOf(name);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  const hasFlag = (name: string): boolean => argv.includes(name);
+
+  const testsPath = getArg('--config');
+  const only = getArg('--only');
+  const bail = hasFlag('--bail');
+  const listOnly = hasFlag('--list');
+  const validateOnly = hasFlag('--validate');
+  const progress = (getArg('--progress') as 'compact' | 'detailed' | undefined) || 'compact';
+  void progress; // currently parsed but not changing output detail yet
+  const jsonOut = getArg('--json'); // path or '-' for stdout
+  const reportArg = getArg('--report'); // e.g. junit:path.xml
+  const summaryArg = getArg('--summary'); // e.g. md:path.md
+  const maxParallelRaw = getArg('--max-parallel');
+  const promptMaxCharsRaw = getArg('--prompt-max-chars');
+  const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
+  const promptMaxChars = promptMaxCharsRaw
+    ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1)
+    : undefined;
+
+  // Configure logger for concise console output
+  // Respect --debug flag if present, or VISOR_DEBUG from environment
+  const debugFlag = hasFlag('--debug') || process.env.VISOR_DEBUG === 'true';
+  configureLoggerFromCli({ output: 'table', debug: debugFlag, verbose: false, quiet: false });
+
+  console.log('🧪 Visor Test Runner');
+  try {
+    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import(
+      './test-runner/index'
+    );
+    if (validateOnly) {
+      const errors = await validateTestsOnly({ testsPath });
+      process.exit(errors > 0 ? 1 : 0);
+    }
+    if (listOnly) {
+      await discoverAndPrint({ testsPath });
+      if (only) console.log(`\nFilter: --only ${only}`);
+      if (bail) console.log('Mode: --bail (stop on first failure)');
+      process.exit(0);
+    }
+    // Run and capture structured results
+    const runner = new (VisorTestRunner as any)();
+    const tpath = runner.resolveTestsPath(testsPath);
+    const suite = runner.loadSuite(tpath);
+    const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
+    const failures = runRes.failures;
+    // Fallback: If for any reason the runner didn't print its own summary
+    // (e.g., natural early exit in some environments), print a concise one here.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const g: any = globalThis as any;
+      const already = g && g.__VISOR_SUMMARY_PRINTED__ === true;
+      if (!already) {
+        const fsSync = require('fs');
+        const write = (s: string) => {
+          try {
+            fsSync.writeSync(2, s + '\n');
+          } catch {
+            try {
+              console.log(s);
+            } catch {}
+          }
+        };
+        const results: Array<{
+          name: string;
+          passed: boolean;
+          stages?: Array<{ name: string; errors?: string[] }>;
+          errors?: string[];
+        }> = (runRes as any).results || [];
+        const passed = results.filter(r => r.passed).map(r => r.name);
+        const failed = results.filter(r => !r.passed);
+        write('\n' + '── Summary '.padEnd(66, '─'));
+        write(`  Passed: ${passed.length}/${results.length}`);
+        if (passed.length) write(`   • ${passed.join(', ')}`);
+        write(`  Failed: ${failed.length}/${results.length}`);
+        if (failed.length) {
+          const maxErrs = Math.max(
+            1,
+            parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+          );
+          for (const f of failed) {
+            write(`   • ${f.name}`);
+            if (Array.isArray(f.stages) && f.stages.length > 0) {
+              const bad = f.stages.filter((s: any) => s.errors && s.errors.length > 0);
+              for (const st of bad) {
+                write(`     - ${st.name}`);
+                const errs = (st.errors || []).slice(0, maxErrs);
+                for (const e of errs) write(`       • ${e}`);
+                const more = (st.errors?.length || 0) - errs.length;
+                if (more > 0) write(`       • … and ${more} more`);
+              }
+              if (bad.length === 0) {
+                const names = f.stages.map((s: any) => s.name).join(', ');
+                write(`     stages: ${names}`);
+              }
+            }
+            if (
+              (!f.stages || f.stages.length === 0) &&
+              Array.isArray(f.errors) &&
+              f.errors.length > 0
+            ) {
+              const errs = f.errors.slice(0, maxErrs);
+              for (const e of errs) write(`     • ${e}`);
+              const more = f.errors.length - errs.length;
+              if (more > 0) write(`     • … and ${more} more`);
+            }
+          }
+        }
+      }
+    } catch {}
+    // Basic reporters (Milestone 7): write minimal JSON/JUnit/Markdown summaries
+    try {
+      if (jsonOut) {
+        const fs = require('fs');
+        const payload = { failures, results: runRes.results };
+        const data = JSON.stringify(payload, null, 2);
+        if (jsonOut === '-' || jsonOut === 'stdout') console.log(data);
+        else {
+          fs.writeFileSync(jsonOut, data, 'utf8');
+          console.error(`📝 JSON report written to ${jsonOut}`);
+        }
+      }
+    } catch {}
+    try {
+      if (reportArg && reportArg.startsWith('junit:')) {
+        const fs = require('fs');
+        const dest = reportArg.slice('junit:'.length);
+        const tests = (runRes.results || []).length;
+        const failed = (runRes.results || []).filter((r: any) => !r.passed).length;
+        const detail = (runRes.results || [])
+          .map((r: any) => {
+            const errs = (r.errors || []).concat(
+              ...(r.stages || []).map((s: any) => s.errors || [])
+            );
+            return `<testcase classname=\"visor\" name=\"${r.name}\"${errs.length > 0 ? '' : ''}>${errs
+              .map((e: string) => `<failure message=\"${e.replace(/\"/g, '&quot;')}\"></failure>`)
+              .join('')}</testcase>`;
+          })
+          .join('\n  ');
+        const xml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"visor\" tests=\"${tests}\" failures=\"${failed}\">\n  ${detail}\n</testsuite>`;
+        fs.writeFileSync(dest, xml, 'utf8');
+        console.error(`📝 JUnit report written to ${dest}`);
+      }
+    } catch {}
+    try {
+      if (summaryArg && summaryArg.startsWith('md:')) {
+        const fs = require('fs');
+        const dest = summaryArg.slice('md:'.length);
+        const lines = (runRes.results || []).map(
+          (r: any) =>
+            `- ${r.passed ? '✅' : '❌'} ${r.name}${r.stages ? ' (' + r.stages.length + ' stage' + (r.stages.length !== 1 ? 's' : '') + ')' : ''}`
+        );
+        const content = `# Visor Test Summary\n\n- Failures: ${failures}\n\n${lines.join('\n')}`;
+        fs.writeFileSync(dest, content, 'utf8');
+        console.error(`📝 Markdown summary written to ${dest}`);
+      }
+    } catch {}
+    process.exit(failures > 0 ? 1 : 0);
+  } catch (err) {
+    console.error('❌ test: ' + (err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+}
+
+/**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
@@ -117,8 +289,10 @@ export async function main(): Promise<void> {
   let debugServer: DebugVisualizerServer | null = null;
 
   try {
-    const cli = new CLI();
-    const configManager = new ConfigManager();
+    // IMPORTANT: detect subcommands before constructing CLI/commander to avoid
+    // any argument parsing side-effects (e.g., extra positional args like 'test').
+    // Also filter out the --cli flag if it exists (used to force CLI mode in GH Actions)
+    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
 
     // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
     try {
@@ -143,14 +317,20 @@ export async function main(): Promise<void> {
       } catch {}
     } catch {}
 
-    // Filter out the --cli flag if it exists (used to force CLI mode in GitHub Actions)
-    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
-
     // Check for validate subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'validate') {
+      const configManager = new ConfigManager();
       await handleValidateCommand(filteredArgv, configManager);
       return;
     }
+    // Check for test subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
+      await handleTestCommand(filteredArgv);
+      return;
+    }
+    // Construct CLI and ConfigManager only after subcommand handling
+    const cli = new CLI();
+    const configManager = new ConfigManager();
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);

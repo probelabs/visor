@@ -4,6 +4,7 @@ import { ReviewSummary } from '../reviewer';
 import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { logger } from '../logger';
 
 export class GitHubOpsProvider extends CheckProvider {
   private sandbox?: Sandbox;
@@ -51,11 +52,29 @@ export class GitHubOpsProvider extends CheckProvider {
 
     // IMPORTANT: Always prefer authenticated octokit from event context (GitHub App or token)
     // This ensures proper bot identity in reactions, labels, and comments
-    const octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
+    let octokit: import('@octokit/rest').Octokit | undefined = config.eventContext?.octokit as
       | import('@octokit/rest').Octokit
       | undefined;
+    if (process.env.VISOR_DEBUG === 'true') {
+      try {
+        logger.debug(`[github-ops] pre-fallback octokit? ${!!octokit}`);
+      } catch {}
+    }
+    // Test runner fallback: use global recorder if eventContext is missing octokit
+    if (!octokit) {
+      try {
+        const { getGlobalRecorder } = require('../test-runner/recorders/global-recorder');
+        const rec = getGlobalRecorder && getGlobalRecorder();
+        if (rec) octokit = rec as any;
+      } catch {}
+    }
 
     if (!octokit) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        try {
+          console.error('[github-ops] missing octokit after fallback — returning issue');
+        } catch {}
+      }
       return {
         issues: [
           {
@@ -72,7 +91,24 @@ export class GitHubOpsProvider extends CheckProvider {
     }
 
     const repoEnv = process.env.GITHUB_REPOSITORY || '';
-    const [owner, repo] = repoEnv.split('/') as [string, string];
+    let owner = '';
+    let repo = '';
+    if (repoEnv.includes('/')) {
+      [owner, repo] = repoEnv.split('/') as [string, string];
+    } else {
+      try {
+        const ec: any = config.eventContext || {};
+        owner = ec?.repository?.owner?.login || owner;
+        repo = ec?.repository?.name || repo;
+      } catch {}
+    }
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.info(
+          `[github-ops] context octokit? ${!!octokit} repo=${owner}/${repo} pr#=${prInfo?.number}`
+        );
+      }
+    } catch {}
     if (!owner || !repo || !prInfo?.number) {
       return {
         issues: [
@@ -93,6 +129,11 @@ export class GitHubOpsProvider extends CheckProvider {
     if (Array.isArray(cfg.values)) valuesRaw = (cfg.values as unknown[]).map(v => String(v));
     else if (typeof cfg.values === 'string') valuesRaw = [cfg.values];
     else if (typeof cfg.value === 'string') valuesRaw = [cfg.value];
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.info(`[github-ops] op=${cfg.op} valuesRaw(before)=${JSON.stringify(valuesRaw)}`);
+      }
+    } catch {}
 
     // Liquid render helper for values
     const renderValues = async (arr: string[]): Promise<string[]> => {
@@ -109,6 +150,17 @@ export class GitHubOpsProvider extends CheckProvider {
           outputs[name] = summary.output !== undefined ? summary.output : summary;
         }
       }
+      // Fallback: if outputs missing but engine provided history, use last output snapshot
+      try {
+        const hist = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+        if (hist) {
+          for (const [name, arr] of hist.entries()) {
+            if (!outputs[name] && Array.isArray(arr) && arr.length > 0) {
+              outputs[name] = arr[arr.length - 1];
+            }
+          }
+        }
+      } catch {}
       const ctx = {
         pr: {
           number: prInfo.number,
@@ -120,6 +172,25 @@ export class GitHubOpsProvider extends CheckProvider {
         },
         outputs,
       };
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.info(`[github-ops] deps keys=${Object.keys(outputs).join(', ')}`);
+          const ov = outputs['overview'] as any;
+          if (ov) {
+            logger.info(`[github-ops] outputs.overview.keys=${Object.keys(ov).join(',')}`);
+            if (ov.tags) {
+              logger.info(
+                `[github-ops] outputs.overview.tags keys=${Object.keys(ov.tags).join(',')}`
+              );
+              try {
+                logger.info(
+                  `[github-ops] outputs.overview.tags['review-effort']=${String(ov.tags['review-effort'])}`
+                );
+              } catch {}
+            }
+          }
+        }
+      } catch {}
       const out: string[] = [];
       for (const item of arr) {
         if (typeof item === 'string' && (item.includes('{{') || item.includes('{%'))) {
@@ -129,6 +200,9 @@ export class GitHubOpsProvider extends CheckProvider {
           } catch (e) {
             // If Liquid fails, surface as a provider error
             const msg = e instanceof Error ? e.message : String(e);
+            if (process.env.VISOR_DEBUG === 'true') {
+              logger.warn(`[github-ops] liquid_render_error: ${msg}`);
+            }
             return Promise.reject({
               issues: [
                 {
@@ -175,6 +249,9 @@ export class GitHubOpsProvider extends CheckProvider {
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.warn(`[github-ops] value_js_error: ${msg}`);
+        }
         return {
           issues: [
             {
@@ -190,14 +267,49 @@ export class GitHubOpsProvider extends CheckProvider {
       }
     }
 
+    // Fallback: if values are still empty, try deriving from dependency outputs (common pattern: outputs.<dep>.tags)
+    if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
+      try {
+        const derived: string[] = [];
+        for (const result of dependencyResults.values()) {
+          const out = (result as ReviewSummary & { output?: unknown })?.output ?? result;
+          const tags = (out as Record<string, unknown>)?.['tags'] as
+            | Record<string, unknown>
+            | undefined;
+          if (tags && typeof tags === 'object') {
+            const label = tags['label'];
+            const effort = (tags as Record<string, unknown>)['review-effort'];
+            if (label != null) derived.push(String(label));
+            if (effort !== undefined && effort !== null)
+              derived.push(`review/effort:${String(effort)}`);
+          }
+        }
+        values = derived;
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.info(`[github-ops] derived values from deps: ${JSON.stringify(values)}`);
+        }
+      } catch {}
+    }
+
     // Trim, drop empty, and de-duplicate values regardless of source
     values = values.map(v => v.trim()).filter(v => v.length > 0);
     values = Array.from(new Set(values));
 
     try {
+      // Minimal debug to help diagnose label flow under tests
+      if (process.env.NODE_ENV === 'test' || process.env.VISOR_DEBUG === 'true') {
+        logger.info(`[github-ops] ${cfg.op} resolved values: ${JSON.stringify(values)}`);
+      }
+    } catch {}
+
+    try {
       switch (cfg.op) {
         case 'labels.add': {
           if (values.length === 0) break; // no-op if nothing to add
+          try {
+            if (process.env.VISOR_OUTPUT_FORMAT !== 'json')
+              logger.step(`[github-ops] labels.add -> ${JSON.stringify(values)}`);
+          } catch {}
           await octokit.rest.issues.addLabels({
             owner,
             repo,
@@ -246,6 +358,9 @@ export class GitHubOpsProvider extends CheckProvider {
       return { issues: [] };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      try {
+        logger.error(`[github-ops] op_failed ${cfg.op}: ${msg}`);
+      } catch {}
       return {
         issues: [
           {

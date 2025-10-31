@@ -103,9 +103,12 @@ export class MemoryCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    _sessionInfo?: {
+      parentSessionId?: string;
+      reuseSession?: boolean;
+    } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
-    const operation = config.operation as MemoryOperation;
+    let operation = config.operation as MemoryOperation | undefined;
     const key = config.key as string | undefined;
     const namespace = config.namespace as string | undefined;
 
@@ -117,10 +120,22 @@ export class MemoryCheckProvider extends CheckProvider {
       prInfo,
       dependencyResults,
       memoryStore,
-      config.__outputHistory as Map<string, unknown[]> | undefined
+      config.__outputHistory as Map<string, unknown[]> | undefined,
+      (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined
     );
 
     let result: unknown;
+
+    // Backward/forgiving fallback: if operation is missing but a JS body exists,
+    // treat it as exec_js to avoid brittle config coupling.
+    if (!operation) {
+      const hasJs =
+        typeof (config as any)?.memory_js === 'string' ||
+        typeof (config as any)?.operation_js === 'string';
+      if (hasJs) {
+        operation = 'exec_js';
+      }
+    }
 
     try {
       switch (operation) {
@@ -381,34 +396,36 @@ export class MemoryCheckProvider extends CheckProvider {
     try {
       if (
         (config as any).checkName === 'aggregate-validations' ||
-        (config as any).checkName === 'aggregate' ||
         (config as any).checkName === 'aggregate'
       ) {
-        const hist = (enhancedContext as any)?.outputs?.history || {};
-        const keys = Object.keys(hist);
-        console.log('[MemoryProvider]', (config as any).checkName, ': history keys =', keys);
-        const vf = (hist as any)['validate-fact'];
-        console.log(
-          '[MemoryProvider]',
-          (config as any).checkName,
-          ': validate-fact history length =',
-          Array.isArray(vf) ? vf.length : 'n/a'
-        );
+        if (process.env.VISOR_DEBUG === 'true') {
+          const hist = (enhancedContext as any)?.outputs?.history || {};
+          const keys = Object.keys(hist);
+          logger.debug(
+            `[MemoryProvider] ${(config as any).checkName}: history keys = [${keys.join(', ')}]`
+          );
+          const vf = (hist as any)['validate-fact'];
+          logger.debug(
+            `[MemoryProvider] ${(config as any).checkName}: validate-fact history length = ${
+              Array.isArray(vf) ? vf.length : 'n/a'
+            }`
+          );
+        }
       }
     } catch {}
 
     const result = this.evaluateJavaScriptBlock(script, enhancedContext);
     try {
-      if ((config as any).checkName === 'aggregate-validations') {
+      if (
+        (config as any).checkName === 'aggregate-validations' &&
+        process.env.VISOR_DEBUG === 'true'
+      ) {
         const tv = store.get('total_validations', 'fact-validation');
         const av = store.get('all_valid', 'fact-validation');
-        console.error(
-          '[MemoryProvider] post-exec',
-          (config as any).checkName,
-          'total_validations=',
-          tv,
-          'all_valid=',
-          av
+        logger.debug(
+          `[MemoryProvider] post-exec ${(config as any).checkName} total_validations=${String(
+            tv
+          )} all_valid=${String(av)}`
         );
       }
     } catch {}
@@ -511,7 +528,8 @@ export class MemoryCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
     memoryStore?: MemoryStore,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    stageHistoryBase?: Record<string, number>
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -560,12 +578,25 @@ export class MemoryCheckProvider extends CheckProvider {
       }
     }
 
+    // Build stage-scoped history using the provided baseline
+    const historyStage: Record<string, unknown[]> = {};
+    try {
+      if (outputHistory && stageHistoryBase) {
+        for (const [checkName, historyArray] of outputHistory) {
+          const start = stageHistoryBase[checkName] || 0;
+          const arr = Array.isArray(historyArray) ? (historyArray as unknown[]) : [];
+          historyStage[checkName] = arr.slice(start);
+        }
+      }
+    } catch {}
+
     // Attach history to the outputs object
     (outputs as any).history = history;
 
     context.outputs = outputs;
     // Alias for consistency: outputs_history mirrors outputs.history
     (context as any).outputs_history = history;
+    (context as any).outputs_history_stage = historyStage;
     // New: outputs_raw exposes aggregate values for forEach parents
     (context as any).outputs_raw = outputsRaw;
 

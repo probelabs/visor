@@ -64,6 +64,19 @@ jobs:
           ls -la *.tgz
           echo "✅ Package can be created successfully"
 
+      # Visor YAML tests run as part of `npm test` via test:yaml.
+      # Artifacts are still uploaded below from ./output.
+
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visor-test-results
+          path: |
+            output/visor-tests.json
+            output/visor-tests.xml
+            output/visor-tests.md
+
       - name: Test basic action functionality
         uses: ./
         with:

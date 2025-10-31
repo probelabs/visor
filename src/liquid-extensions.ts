@@ -185,11 +185,89 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     if (typeof key !== 'string') {
       return false;
     }
-    return memoryStore.has(key, namespace);
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === 'true' && key === 'fact_validation_issues') {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {}
+    return has;
   });
 
   liquid.registerFilter('memory_list', (namespace?: string) => {
     return memoryStore.list(namespace);
+  });
+
+  // Generic helpers to radically simplify templates
+
+  // get: safe nested access using dot-path (e.g., obj | get: 'a.b.c')
+  liquid.registerFilter('get', (obj: any, pathExpr: unknown) => {
+    if (obj == null) return undefined;
+    const path = typeof pathExpr === 'string' ? pathExpr : String(pathExpr || '');
+    if (!path) return obj;
+    const parts = path.split('.');
+    let cur: any = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p as keyof typeof cur];
+    }
+    return cur;
+  });
+
+  // not_empty: true when value is a non-empty array/string/object with keys
+  liquid.registerFilter('not_empty', (v: unknown) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === 'string') return v.length > 0;
+    if (v && typeof v === 'object') return Object.keys(v as object).length > 0;
+    return false;
+  });
+
+  // coalesce: pick first argument (value or candidates) that is a non-empty array/object/string
+  // Usage: a | coalesce: b, c, d
+  liquid.registerFilter('coalesce', (first: unknown, ...rest: unknown[]) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === 'string' && v.length > 0) return v;
+      if (v && typeof v === 'object' && Object.keys(v as object).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : (first ?? undefined);
+  });
+
+  // where_exp: generic expression-based filter (Shopify-style)
+  // Usage: array | where_exp: 'i', 'i.is_valid != true and i.confidence != "high"'
+  liquid.registerFilter('where_exp', (items: unknown, varName: string, expr: string) => {
+    const arr = Array.isArray(items) ? (items as any[]) : [];
+    const name = typeof varName === 'string' && varName.trim() ? varName.trim() : 'i';
+    const body = String(expr || '');
+    try {
+      // Build a tiny predicate; expose only item, idx, arr
+
+      const fn = new Function(
+        name,
+        'idx',
+        'arr',
+        `try { return (${body}); } catch { return false; }`
+      );
+      const out: any[] = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const i = arr[idx];
+        let ok = false;
+        try {
+          ok = !!(fn as any)(i, idx, arr);
+        } catch {
+          ok = false;
+        }
+        if (ok) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
+    }
   });
 }
 

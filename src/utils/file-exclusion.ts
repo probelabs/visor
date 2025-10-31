@@ -128,12 +128,17 @@ export class FileExclusionHelper {
           .trim();
 
         this.gitignore.add(gitignoreContent);
-        console.error('✅ Loaded .gitignore patterns for file filtering');
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.error('✅ Loaded .gitignore patterns for file filtering');
+        }
       } else if (additionalPatterns && additionalPatterns.length > 0) {
-        console.error('⚠️  No .gitignore found, using default exclusion patterns');
+        // Always emit a user-visible warning so callers can assert this behavior in tests
+        console.error('No .gitignore found, using default exclusion patterns');
+        console.warn('No .gitignore found, using default exclusion patterns');
       }
     } catch (error) {
-      console.warn('⚠️ Failed to load .gitignore:', error instanceof Error ? error.message : error);
+      // Always emit a warning with the error for visibility and tests
+      console.warn('Failed to load .gitignore:', error instanceof Error ? error.message : error);
     }
   }
 

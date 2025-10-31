@@ -8,6 +8,10 @@ Visor supports tagging checks to create flexible execution profiles. This lets y
 2. Filter execution using `--tags` and `--exclude-tags`
 3. Dependencies adapt intelligently based on what’s included
 
+Note on defaults
+- If you do NOT provide any tag filter (no `--tags`/`--exclude-tags` and no `tag_filter` in config), Visor only runs untagged checks. Any check that has `tags: [...]` is skipped by default. This keeps day‑to‑day runs lightweight and makes tagged groups opt‑in.
+- To run tagged checks, explicitly include their tags (for example, `--tags github,security`).
+
 ### Basic Configuration
 
 ```yaml
@@ -125,6 +129,31 @@ jobs:
 
 ### Advanced Examples
 
+#### Default behavior vs. explicit tags
+
+By default (no tag filter provided), only untagged checks execute. To include tagged checks, specify them explicitly:
+
+```bash
+# Default (no flags): only untagged checks
+visor
+
+# Include github-tagged checks (e.g., GitHub operations)
+visor --tags github
+
+# Include multiple tag groups
+visor --tags github,security
+```
+
+In the test runner, you can mirror this behavior with the tests DSL:
+
+```yaml
+# defaults/.visor.tests.yaml
+tests:
+  defaults:
+    # Run GitHub-tagged checks during tests
+    tags: "github"
+```
+
 #### Environment-Specific Execution
 
 ```yaml
@@ -227,4 +256,3 @@ steps:
 4. Avoid over-tagging to reduce confusion
 5. Use tag combinations for fine-grained control
 6. Test tag filters before deploying broadly
-

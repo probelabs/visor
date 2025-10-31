@@ -66,7 +66,8 @@ export class CommandCheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    context?: import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
     try {
       logger.info(
@@ -111,6 +112,21 @@ export class CommandCheckProvider extends CheckProvider {
       outputs: outputsObj,
       // Alias: outputs_history mirrors outputs.history for consistency
       outputs_history: (outputsObj as any).history || {},
+      // Stage-scoped history slice based on baseline provided by runner
+      outputs_history_stage: (() => {
+        const stage: Record<string, unknown[]> = {};
+        try {
+          const base = (context as any)?.stageHistoryBase as Record<string, number> | undefined;
+          const histMap = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+          if (!base || !histMap) return stage;
+          for (const [k, v] of histMap.entries()) {
+            const start = base[k] || 0;
+            const arr = Array.isArray(v) ? (v as unknown[]) : [];
+            stage[k] = arr.slice(start);
+          }
+        } catch {}
+        return stage;
+      })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
       env: this.getSafeEnvironmentVariables(),
@@ -140,6 +156,41 @@ export class CommandCheckProvider extends CheckProvider {
         { 'visor.check.id': checkId, 'visor.check.input.context': ctxJson },
         [{ name: 'check.started' }, { name: 'check.completed' }]
       );
+    } catch {}
+
+    // Test hook: mock output for this step (short-circuit execution)
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = context?.hooks?.mockForStep?.(String(stepName));
+      if (mock && typeof mock === 'object') {
+        const m = mock as { stdout?: string; stderr?: string; exit_code?: number };
+        let out: unknown = m.stdout ?? '';
+        try {
+          if (
+            typeof out === 'string' &&
+            (out.trim().startsWith('{') || out.trim().startsWith('['))
+          ) {
+            out = JSON.parse(out);
+          }
+        } catch {}
+        if (m.exit_code && m.exit_code !== 0) {
+          return {
+            issues: [
+              {
+                file: 'command',
+                line: 0,
+                ruleId: 'command/execution_error',
+                message: `Mocked command exited with code ${m.exit_code}`,
+                severity: 'error',
+                category: 'logic',
+              },
+            ],
+            // Also expose output for assertions
+            output: out,
+          } as any;
+        }
+        return { issues: [], output: out } as any;
+      }
     } catch {}
 
     try {

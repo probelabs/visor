@@ -127,6 +127,22 @@ Additional guides:
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 - live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
 
+## 🧪 Integration Tests
+
+Write and run integration tests for your Visor config in YAML. No network, built‑in GitHub fixtures, strict by default, and great CLI output.
+
+- Getting started: [docs/testing/getting-started.md](docs/testing/getting-started.md)
+- DSL reference: [docs/testing/dsl-reference.md](docs/testing/dsl-reference.md)
+- Flows: [docs/testing/flows.md](docs/testing/flows.md)
+- Fixtures & mocks: [docs/testing/fixtures-and-mocks.md](docs/testing/fixtures-and-mocks.md)
+- Assertions: [docs/testing/assertions.md](docs/testing/assertions.md)
+- Cookbook: [docs/testing/cookbook.md](docs/testing/cookbook.md)
+- CLI & reporters: [docs/testing/cli.md](docs/testing/cli.md)
+- CI integration: [docs/testing/ci.md](docs/testing/ci.md)
+- Troubleshooting: [docs/testing/troubleshooting.md](docs/testing/troubleshooting.md)
+
+Note: examples use descriptive step names (e.g., `extract-facts`, `validate-fact`) to illustrate patterns. These are not built‑ins; the test runner works with whatever steps you define in `.visor.yaml`.
+
 ## 🧩 Core Concepts (1 minute)
 
 - Check – unit of work (`security`, `performance`).
@@ -729,3 +745,13 @@ steps:
 ```
 
 See docs: docs/github-ops.md
+## Integration Tests
+
+Visor ships a YAML‑native integration test runner so you can describe user flows, mocks, and assertions alongside your config.
+
+- Start here: docs/testing/getting-started.md
+- CLI details: docs/testing/cli.md
+- Fixtures and mocks: docs/testing/fixtures-and-mocks.md
+- Assertions reference: docs/testing/assertions.md
+
+Example suite: defaults/.visor.tests.yaml

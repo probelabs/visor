@@ -300,6 +300,10 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
+    // Note: We intentionally do NOT expose any special `fact_validation` object
+    // in the template context. Templates should derive everything from
+    // outputs / outputs_history / memory helpers to avoid hidden magic.
+
     // Create comprehensive template context with PR and event information
     const templateContext = {
       // PR Information
@@ -427,13 +431,59 @@ export class AICheckProvider extends CheckProvider {
         }
         return hist;
       })(),
+      // Stage-scoped history slice calculated from baseline captured by the flow runner.
+      outputs_history_stage: (() => {
+        const stage: Record<string, unknown[]> = {};
+        try {
+          const base = (eventContext as any)?.__stageHistoryBase as
+            | Record<string, number>
+            | undefined;
+          if (!outputHistory || !base) return stage;
+          for (const [k, v] of outputHistory.entries()) {
+            const start = base[k] || 0;
+            const arr = Array.isArray(v) ? (v as unknown[]) : [];
+            stage[k] = arr.slice(start);
+          }
+        } catch {}
+        return stage;
+      })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
     };
 
     try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error(
+          `[prompt-ctx] outputs.keys=${Object.keys((templateContext as any).outputs || {}).join(', ')} hist.validate-fact.len=${(() => {
+            try {
+              const h = (templateContext as any).outputs_history || {};
+              const v = h['validate-fact'];
+              return Array.isArray(v) ? v.length : 0;
+            } catch {
+              return 0;
+            }
+          })()}`
+        );
+      }
+    } catch {}
+
+    try {
       return await this.liquidEngine.parseAndRender(promptContent, templateContext);
     } catch (error) {
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const lines = promptContent.split(/\r?\n/);
+          const preview = lines
+            .slice(0, 20)
+            .map((l, i) => `${(i + 1).toString().padStart(3, ' ')}| ${l}`)
+            .join('\n');
+          try {
+            process.stderr.write(
+              '[prompt-error] First 20 lines of prompt before Liquid render:\n' + preview + '\n'
+            );
+          } catch {}
+        }
+      } catch {}
       throw new Error(
         `Failed to render prompt template: ${
           error instanceof Error ? error.message : 'Unknown error'
@@ -468,8 +518,16 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    sessionInfo?: {
+      parentSessionId?: string;
+      reuseSession?: boolean;
+    } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error(`[ai-exec] step=${String((config as any).checkName || 'unknown')}`);
+      }
+    } catch {}
     // Extract AI configuration - only set properties that are explicitly provided
     const aiConfig: AIReviewConfig = {};
 
@@ -552,13 +610,9 @@ export class AICheckProvider extends CheckProvider {
     if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
-      if (aiConfig.debug) {
-        console.error(
-          `🔧 Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
-        );
-      }
-    } else if (config.ai?.disable_tools && aiConfig.debug) {
-      console.error(`🔧 Debug: AI check has tools disabled - MCP servers will not be passed`);
+      // no noisy diagnostics here
+    } else if (config.ai?.disable_tools) {
+      // silently skip MCP when tools disabled
     }
 
     // Build template context for state capture
@@ -605,13 +659,51 @@ export class AICheckProvider extends CheckProvider {
     // Process prompt with Liquid templates and file loading
     // Skip event context (PR diffs, files, etc.) if requested
     const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
+    // Thread stageHistoryBase via eventContext for prompt rendering so
+    // Liquid templates can get outputs_history_stage (computed from baseline).
+    const ctxWithStage = {
+      ...(eventContext || {}),
+      __stageHistoryBase: (sessionInfo as any)?.stageHistoryBase as
+        | Record<string, number>
+        | undefined,
+    } as Record<string, unknown>;
+
     const processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
-      eventContext,
+      ctxWithStage,
       _dependencyResults,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
+
+    // No implicit prompt mutations here — prompts should come from YAML.
+
+    // Test hook: capture the FINAL prompt (with PR context) before provider invocation
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const serviceForCapture = new AIReviewService(aiConfig);
+      const finalPrompt = await (serviceForCapture as any).buildCustomPrompt(
+        prInfo,
+        processedPrompt,
+        config.schema,
+        { checkName: (config as any).checkName }
+      );
+      sessionInfo?.hooks?.onPromptCaptured?.({
+        step: String(stepName),
+        provider: 'ai',
+        prompt: finalPrompt,
+      });
+      // capture hook retained; no extra console diagnostics
+    } catch {}
+
+    // Test hook: mock output for this step (short-circuit provider)
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        return { issues: [], output: mock } as ReviewSummary & { output: unknown };
+      }
+    } catch {}
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     const service = new AIReviewService(aiConfig);
@@ -619,26 +711,46 @@ export class AICheckProvider extends CheckProvider {
     // Pass the custom prompt and schema - no fallbacks
     const schema = config.schema as string | Record<string, unknown> | undefined;
 
-    // Only output debug messages if debug mode is enabled
-    if (aiConfig.debug) {
-      console.error(
-        `🔧 Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
-      );
-      console.error(`🔧 Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-      console.error(`🔧 Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
-    }
+    // Removed verbose AICheckProvider console diagnostics; rely on logger.debug when needed
 
     try {
-      if (aiConfig.debug) {
-        console.error(
-          `🔧 Debug: AICheckProvider passing checkName: ${config.checkName} to service`
-        );
-      }
+      // No extra console diagnostics here
 
       let result: ReviewSummary;
 
-      // Check if we should use session reuse
-      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+      // Check if we should use session reuse (only if explicitly enabled on this check)
+      // No extra reuse_ai_session console diagnostics
+      const reuseEnabled =
+        (config as any).reuse_ai_session === true ||
+        typeof (config as any).reuse_ai_session === 'string';
+      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
+        // Safety: only reuse if the parent session actually exists
+        try {
+          const { SessionRegistry } = require('../session-registry');
+          const reg = SessionRegistry.getInstance();
+          if (!reg.hasSession(sessionInfo.parentSessionId)) {
+            if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
+              console.warn(
+                `⚠️  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+              );
+            }
+            // Fall back to new session
+            const fresh = await service.executeReview(
+              prInfo,
+              processedPrompt,
+              schema,
+              config.checkName,
+              config.sessionId
+            );
+            return {
+              ...fresh,
+              issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
+                fresh.issues || [],
+                process.cwd()
+              ),
+            };
+          }
+        } catch {}
         // Get session_mode from config, default to 'clone'
         const sessionMode = (config.session_mode as 'clone' | 'append') || 'clone';
 

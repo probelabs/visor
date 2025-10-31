@@ -74,6 +74,26 @@ steps:
   integration:        { type: ai, group: summary,     schema: markdown, depends_on: [security_advanced, performance_advanced] }
 ```
 
+#### Any‑of (OR) Dependency Groups
+
+Sometimes a check can proceed when any one of several upstream steps has completed successfully. Visor supports this with pipe‑separated tokens inside `depends_on`.
+
+```yaml
+checks:
+  parse-issue:   { type: noop }
+  parse-comment: { type: noop }
+  triage:        { type: noop, depends_on: ["parse-issue|parse-comment"] }
+```
+
+Rules:
+- Each string containing `|` denotes an ANY‑OF group. In the example above, either `parse-issue` or `parse-comment` satisfies the dependency for `triage`.
+- You may combine ALL‑OF and ANY‑OF: `depends_on: ["a|b", "c"]` means “(a or b) and c”.
+- Event gating still applies: a dependency only counts if it is applicable to the current event (has compatible `on` or no `on`).
+- Failure/skip semantics: a member that is skipped or fails fatally does not satisfy the group; at least one member must complete without a fatal error for the group to be satisfied.
+- Session reuse: if `reuse_ai_session: true` and `depends_on` contains a pipe group, the session parent is selected from the first satisfied member at runtime.
+
+Tip: When targeting a leaf in ad‑hoc runs (e.g., `visor --check final`), include one member of each pipe group explicitly (e.g., `--check a --check final`) to make intent unambiguous. In normal runs Visor computes the plan automatically from your config.
+
 ### Error Handling
 
 - Cycle detection and missing dependency validation
@@ -312,4 +332,3 @@ checks:
 - [Failure Routing](./failure-routing.md) - Complete `on_finish` reference
 - [forEach Dependency Propagation](./foreach-dependency-propagation.md) - Detailed forEach mechanics
 - [Output History](./output-history.md) - Accessing historical outputs
-

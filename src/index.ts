@@ -614,7 +614,15 @@ function resolveDependencies(
 
     // Get dependencies for this check
     const checkConfig = config?.checks?.[checkId];
-    const dependencies = checkConfig?.depends_on || [];
+    // Expand OR groups (pipe syntax) for dependency closure discovery
+    const dependencies = (checkConfig?.depends_on || []).flatMap(d =>
+      typeof d === 'string' && d.includes('|')
+        ? d
+            .split('|')
+            .map(s => s.trim())
+            .filter(Boolean)
+        : [d]
+    );
 
     // Recursively resolve dependencies first
     if (dependencies.length > 0) {

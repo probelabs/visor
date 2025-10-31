@@ -37,15 +37,31 @@ export function createSecureSandbox(): Sandbox {
 
   // Arrays — union of methods used around the codebase
   const arrayMethods = new Set<string>([
+    // Query/iteration
     'some',
     'every',
     'filter',
     'map',
     'reduce',
+    'reduceRight',
     'find',
+    'findIndex',
+    'findLast',
+    'findLastIndex',
     'includes',
     'indexOf',
-    'length',
+    'lastIndexOf',
+    'keys',
+    'values',
+    'entries',
+    'forEach',
+    // Non‑mutating ES2023 additions
+    'toReversed',
+    'toSorted',
+    'toSpliced',
+    'with',
+    'at',
+    // Mutators and common ops
     'slice',
     'concat',
     'join',
@@ -55,8 +71,13 @@ export function createSecureSandbox(): Sandbox {
     'unshift',
     'sort',
     'reverse',
+    'copyWithin',
+    'fill',
+    // Flattening
     'flat',
     'flatMap',
+    // Meta
+    'length',
   ]);
   prototypeWhitelist.set(Array.prototype, arrayMethods);
 
@@ -66,29 +87,77 @@ export function createSecureSandbox(): Sandbox {
     'toUpperCase',
     'includes',
     'indexOf',
+    'lastIndexOf',
     'startsWith',
     'endsWith',
     'slice',
     'substring',
-    'length',
+    'substr',
     'trim',
+    'trimStart',
+    'trimEnd',
     'split',
     'replace',
+    'replaceAll',
     'match',
+    'matchAll',
+    'charAt',
+    'charCodeAt',
+    'codePointAt',
+    'normalize',
+    'repeat',
     'padStart',
     'padEnd',
+    'at',
+    'length',
   ]);
   prototypeWhitelist.set(String.prototype, stringMethods);
 
   // Objects — keep to basic safe operations
   const objectMethods = new Set<string>([
     'hasOwnProperty',
+    'propertyIsEnumerable',
     'toString',
     'valueOf',
-    'keys',
-    'values',
   ]);
   prototypeWhitelist.set(Object.prototype, objectMethods);
+
+  // Keep native constructors from SAFE_GLOBALS; rely on prototype whitelists above.
+
+  // Maps and Sets — allow common, safe operations
+  const mapMethods = new Set<string>([
+    'get',
+    'set',
+    'has',
+    'delete',
+    'entries',
+    'keys',
+    'values',
+    'forEach',
+  ]);
+  // @ts-ignore - sandbox typings accept Map.prototype as a key
+  prototypeWhitelist.set((Map as any).prototype, mapMethods);
+
+  const setMethods = new Set<string>([
+    'add',
+    'has',
+    'delete',
+    'entries',
+    'keys',
+    'values',
+    'forEach',
+  ]);
+  // @ts-ignore
+  prototypeWhitelist.set((Set as any).prototype, setMethods);
+
+  // Date and RegExp — read‑only helpers
+  const dateMethods = new Set<string>(['toISOString', 'toJSON', 'getTime']);
+  // @ts-ignore
+  prototypeWhitelist.set((Date as any).prototype, dateMethods);
+
+  const regexpMethods = new Set<string>(['test', 'exec']);
+  // @ts-ignore
+  prototypeWhitelist.set((RegExp as any).prototype, regexpMethods);
 
   return new Sandbox({ globals, prototypeWhitelist });
 }

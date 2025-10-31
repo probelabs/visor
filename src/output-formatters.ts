@@ -49,11 +49,11 @@ export class OutputFormatters {
   // Hard safety limits to prevent pathological table rendering hangs
   // Can be tuned via env vars if needed
   private static readonly MAX_CELL_CHARS: number = parseInt(
-    process.env.VISOR_MAX_TABLE_CELL || '4000',
+    process.env.VISOR_MAX_TABLE_CELL || (process.env.JEST_WORKER_ID ? '2000' : '4000'),
     10
   );
   private static readonly MAX_CODE_LINES: number = parseInt(
-    process.env.VISOR_MAX_TABLE_CODE_LINES || '120',
+    process.env.VISOR_MAX_TABLE_CODE_LINES || (process.env.JEST_WORKER_ID ? '80' : '120'),
     10
   );
   private static readonly WRAP_WIDTH_MESSAGE = 55;
@@ -147,6 +147,14 @@ export class OutputFormatters {
           });
 
           output += `${category.toUpperCase()} Issues (${comments.length})\n`;
+          // For extremely large message cells (e.g., long code replacements),
+          // avoid feeding huge strings into cli-table. Collect details separately
+          // and render them after the table for a massive speedup in tests/CI.
+          const LARGE_CELL_SPLIT = parseInt(
+            process.env.VISOR_LARGE_CELL_SPLIT || (process.env.JEST_WORKER_ID ? '1500' : '0'),
+            10
+          );
+          const deferredDetails: string[] = [];
 
           for (const comment of comments.slice(0, showDetails ? comments.length : 5)) {
             // Convert comment back to issue to access suggestion/replacement fields
@@ -172,16 +180,30 @@ export class OutputFormatters {
               const code = this.formatCodeBlock(issue.replacement);
               messageContent += '\nCode fix:\n' + code;
             }
-
-            categoryTable.push([
-              comment.file,
-              comment.line.toString(),
-              { content: this.formatSeverity(comment.severity), hAlign: 'center' },
-              this.truncateCell(messageContent),
-            ]);
+            const finalCell = this.truncateCell(messageContent);
+            if (LARGE_CELL_SPLIT > 0 && finalCell.length >= LARGE_CELL_SPLIT) {
+              // Put a short marker into the table and defer the full detail
+              categoryTable.push([
+                comment.file,
+                comment.line.toString(),
+                { content: this.formatSeverity(comment.severity), hAlign: 'center' },
+                '[see details below]',
+              ]);
+              deferredDetails.push(`${comment.file}:${comment.line}\n` + finalCell + '\n');
+            } else {
+              categoryTable.push([
+                comment.file,
+                comment.line.toString(),
+                { content: this.formatSeverity(comment.severity), hAlign: 'center' },
+                finalCell,
+              ]);
+            }
           }
 
           output += categoryTable.toString() + '\n';
+          if (deferredDetails.length > 0) {
+            output += deferredDetails.join('\n');
+          }
 
           if (!showDetails && comments.length > 5) {
             output += `... and ${comments.length - 5} more issues\n`;

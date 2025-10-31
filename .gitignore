@@ -9,9 +9,6 @@ yarn-error.log*
 dist/
 # Do not keep legacy ncc bundle
 bundled/
-# Allow committing the pre-generated JSON schema for runtime validation
-!dist/generated/
-!dist/generated/config-schema.json
 *.tsbuildinfo
 
 # Environment variables
@@ -80,9 +77,6 @@ yarn-error.log*
 dist/
 # Do not keep legacy ncc bundle
 bundled/
-# Allow committing the pre-generated JSON schema for runtime validation
-!dist/generated/
-!dist/generated/config-schema.json
 *.tsbuildinfo
 
 # Environment variables
@@ -140,3 +134,11 @@ workshop/build/
 
 # Local NDJSON traces written by CLI tests or manual runs
 output/**/*.ndjson
+
+# NDJSON logs (global ignore)
+*.ndjson
+dist/output/**/*.ndjson
+
+# Local schema temp and scratch
+scripts/.schema-tmp/
+tmp/
