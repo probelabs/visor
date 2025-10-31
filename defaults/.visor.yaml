@@ -329,18 +329,10 @@ steps:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         {%- liquid
-          # Correction context based on the last validation wave
-          assign issues = outputs_history["validate-fact"].last
-          assign has_problems = false
-          if issues
-            for it in issues
-              if it
-                if it.is_valid != true or it.confidence != 'high'
-                  assign has_problems = true
-                endif
-              endif
-            endfor
-          endif
+          # Correction context from the last validation wave (filtered)
+          # Keep only invalid or non-high confidence items using where_exp
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
         -%}
         {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
@@ -420,18 +412,9 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          # Correction context based on the last validation wave
-          assign issues = outputs_history["validate-fact"].last
-          assign has_problems = false
-          if issues
-            for it in issues
-              if it
-                if it.is_valid != true or it.confidence != 'high'
-                  assign has_problems = true
-                endif
-              endif
-            endfor
-          endif
+          # Correction context from the last validation wave (filtered)
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
           assign prev_comment = outputs_history["comment-assistant"].last
         -%}
         {% if has_problems %}
