@@ -185,6 +185,9 @@ export class CheckExecutionEngine {
   // Dedup forward-run targets within a single grouped run (stage/event).
   // Keyed by `${event}:${target}`.
   private forwardRunGuards: Set<string> = new Set();
+  // Track per-grouped-run scheduling of specific steps we want to allow only once.
+  // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
+  private oncePerRunScheduleGuards: Set<string> = new Set();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Execution context for providers (CLI message, hooks, etc.)
@@ -2019,7 +2022,7 @@ export class CheckExecutionEngine {
         if (onSuccess) {
           // Compute run list
           const dynamicRun = await evalRunJs(onSuccess.run_js);
-          const runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
+          let runList = [...(onSuccess.run || []), ...dynamicRun].filter(Boolean);
           try {
             if (process.env.VISOR_DEBUG === 'true' || debug) {
               logger.info(
@@ -2029,6 +2032,15 @@ export class CheckExecutionEngine {
               );
             }
           } catch {}
+          // Dedup within this call and apply once-per-run guards
+          runList = Array.from(new Set(runList)).filter(step => {
+            if (step === 'validate-fact') {
+              if (this.oncePerRunScheduleGuards.has(step)) return false;
+              this.oncePerRunScheduleGuards.add(step);
+              return true;
+            }
+            return true;
+          });
           if (runList.length > 0) {
             try {
               require('./logger').logger.info(
@@ -2041,7 +2053,7 @@ export class CheckExecutionEngine {
                 `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`
               );
             }
-            for (const stepId of Array.from(new Set(runList))) {
+            for (const stepId of runList) {
               // One-shot guard (generalized): if the target step has a 'one_shot' tag
               // and it already executed in this run, skip rescheduling it.
               try {
@@ -2875,6 +2887,10 @@ export class CheckExecutionEngine {
     // Reset forward-run guards for this grouped execution (stage)
     try {
       this.forwardRunGuards.clear();
+    } catch {}
+    // Reset per-run schedule guards (e.g., validate-fact once per stage)
+    try {
+      this.oncePerRunScheduleGuards.clear();
     } catch {}
     // Reset per-run execution stats to avoid cross-run bleed between stages
     try {
