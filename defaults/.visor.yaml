@@ -399,7 +399,9 @@ steps:
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
     on_success:
-      goto: init-fact-validation
+      # When fact validation is enabled, schedule extraction immediately
+      run_js: |
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -471,9 +473,9 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # No explicit scheduling; extract-facts is event-gated and depends on this step
+      # When fact validation is enabled, schedule extraction from the assistant reply
       run_js: |
-        return [];
+        return env.ENABLE_FACT_VALIDATION === 'true' ? ['extract-facts'] : [];
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
@@ -558,8 +560,9 @@ steps:
                   description: Line or range, e.g., "120-145" or "88"
               required: [path]
         required: [id, category, claim, verifiable]
-    depends_on: [comment-assistant]
-    on: [issue_opened, issue_comment]
+    # Scheduled explicitly from issue-assistant/comment-assistant when enabled
+    depends_on: []
+    on: [manual]
     # Only when validation is enabled and assistants produced text
     if: "env.ENABLE_FACT_VALIDATION === 'true' && (outputs['issue-assistant'] || outputs['comment-assistant'])"
     ai:
@@ -629,25 +632,17 @@ steps:
     on_finish:
       run: [aggregate-validations]
       run_js: |
-        // Decide correction pass by inspecting the last validation wave (history)
+        // Decide correction pass target by current event: rerun issue-assistant on issue_opened, comment-assistant on issue_comment
         const vf = (outputs_history && outputs_history['validate-fact']) ? outputs_history['validate-fact'] : [];
         const fxHist = (outputs_history && outputs_history['extract-facts']) ? outputs_history['extract-facts'] : [];
         const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
         const n = Array.isArray(lastExtract) ? lastExtract.length : 0;
         const lastWave = (n > 0 && Array.isArray(vf) && vf.length >= n) ? vf.slice(-n) : [];
-        // Flatten nested waves if present
-        let waveFlat = lastWave;
-        if (Array.isArray(lastWave) && lastWave.length > 0 && Array.isArray(lastWave[0])) {
-          const tmp = [];
-          for (let i = 0; i < lastWave.length; i++) {
-            const e = lastWave[i];
-            if (Array.isArray(e)) { for (let j = 0; j < e.length; j++) tmp.push(e[j]); }
-            else tmp.push(e);
-          }
-          waveFlat = tmp;
-        }
-        const hasProblems = waveFlat.some(v => !v || v.is_valid !== true || v.confidence !== 'high');
-        return hasProblems ? ['comment-assistant'] : [];
+        const flat = Array.isArray(lastWave) && Array.isArray(lastWave[0]) ? lastWave.flat() : lastWave;
+        const hasProblems = (flat || []).some(v => !v || v.is_valid !== true || v.confidence !== 'high');
+        if (!hasProblems) return [];
+        const ev = (event && event.name) ? event.name : 'issue_comment';
+        return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
       # keep event context as-is to avoid cross-event leakage
       # keep event context as-is to avoid cross-event leakage
 

@@ -232,7 +232,7 @@ tests:
               - step: comment-assistant
                 contains: ["Regenerate reviews"]
 
-        - name: facts-enabled
+        - name: facts-enabled (comment)
           description: |
             With fact validation enabled, the assistant reply is followed by
             extract-facts, validate-fact (per fact), and aggregate-validations.
@@ -264,7 +264,7 @@ tests:
                 exactly: 1
           # Prompt assertions are validated separately in stage-level prompt tests
 
-        - name: facts-invalid
+        - name: facts-invalid (comment)
           description: |
             Invalid fact path: after assistant reply, extract-facts finds one claim and
             validate-fact returns is_valid=false; aggregate-validations detects not-all-valid
@@ -302,7 +302,7 @@ tests:
                 path: correction
                 equals: "max_parallelism defaults to 3"
 
-        - name: facts-two-items
+        - name: facts-two-items (comment)
           description: |
             Two facts extracted; only the invalid fact should appear in the correction pass.
           event: issue_comment
@@ -350,14 +350,78 @@ tests:
           fixture: gh.issue_comment.standard
           env:
             ENABLE_FACT_VALIDATION: "false"
+      expect:
+        calls:
+          - step: comment-assistant
+            exactly: 1
+        no_calls:
+          - step: extract-facts
+          - step: validate-fact
+          - step: aggregate-validations
+
+        - name: facts-enabled (issue)
+          description: Fact validation runs from an issue creation path.
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          env:
+            ENABLE_FACT_VALIDATION: "true"
+          mocks:
+            issue-assistant:
+              text: "Opening issue with claim about defaults/.visor.yaml"
+              intent: issue_triage
+            extract-facts:
+              - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
+            validate-fact[]:
+              - fact_id: f1
+                claim: "max_parallelism defaults to 4"
+                is_valid: true
+                confidence: high
+                evidence: "defaults/.visor.yaml:11"
           expect:
             calls:
-              - step: comment-assistant
+              - step: issue-assistant
                 exactly: 1
-            no_calls:
               - step: extract-facts
+                exactly: 1
               - step: validate-fact
+                at_least: 1
               - step: aggregate-validations
+                exactly: 1
+
+        - name: facts-invalid (issue)
+          description: Invalid claim triggers correction by rerunning issue-assistant.
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          env:
+            ENABLE_FACT_VALIDATION: "true"
+          mocks:
+            issue-assistant:
+              text: "Claim: max_parallelism defaults to 4"
+              intent: issue_triage
+            extract-facts:
+              - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
+            validate-fact[]:
+              - fact_id: f1
+                claim: "max_parallelism defaults to 4"
+                is_valid: false
+                confidence: high
+                evidence: "defaults/.visor.yaml:11 does not set 4"
+                correction: "max_parallelism defaults to 3"
+          expect:
+            calls:
+              - step: issue-assistant
+                exactly: 2
+              - step: extract-facts
+                exactly: 1
+              - step: validate-fact
+                at_least: 1
+              - step: aggregate-validations
+                exactly: 1
+            outputs:
+              - step: validate-fact
+                where: { path: fact_id, equals: f1 }
+                path: correction
+                equals: "max_parallelism defaults to 3"
 
         - name: pr-updated
           description: |
