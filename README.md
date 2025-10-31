@@ -428,18 +428,16 @@ checks:
     forEach: true
 
   summarize:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: |
+    content: |
       const arr = outputs_raw['list'] || [];
       return { total: arr.length };
 
   branch-by-size:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: 'return true'
+    content: 'return true'
     on_success:
       goto_js: |
         return (outputs_raw['list'] || []).length >= 3 ? 'after' : null;

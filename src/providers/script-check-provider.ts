@@ -10,8 +10,8 @@ import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * Provider that executes JavaScript in a secure sandbox.
- * Intended to replace the memory provider's exec_js operation with a
- * first-class step: `type: 'script'` + `script_js: | ...`.
+ * Intended to replace most uses of the memory provider's exec_js operation with a
+ * first-class step: `type: 'script'` + `content: | ...`.
  */
 export class ScriptCheckProvider extends CheckProvider {
   private liquid: Liquid;
