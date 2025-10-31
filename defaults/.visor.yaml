@@ -749,10 +749,6 @@ steps:
       run_js: |
         return [];
     memory_js: |
-      // Start by clearing any stale issues from prior stages
-      if (memory.list('fact-validation').includes('fact_validation_issues')) {
-        memory.delete('fact_validation_issues', 'fact-validation');
-      }
 
       const all = outputs.history['validate-fact'] || [];
       const fxHist = outputs.history['extract-facts'] || [];
@@ -782,23 +778,6 @@ steps:
 
       log('Results: valid=' + validHigh.length,
           'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
-
-      memory.set('all_valid', allValid, 'fact-validation');
-      memory.set('total_validations', validations.length, 'fact-validation');
-      memory.set('validation_results', validations, 'fact-validation');
-      memory.set('invalid_facts', invalid, 'fact-validation');
-      memory.set('low_confidence_facts', lowConfidence, 'fact-validation');
-
-      if (!allValid) {
-        const issues = [...invalid, ...lowConfidence].map(v => ({
-          claim: v.claim,
-          issue: v.is_valid ? 'low confidence' : 'incorrect',
-          evidence: v.evidence,
-          correction: v.correction
-        }));
-        memory.set('fact_validation_issues', issues, 'fact-validation');
-        log('⚠️  Stored', issues.length, 'validation issues for retry');
-      }
 
       return {
         total: validations.length,
