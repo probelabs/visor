@@ -217,8 +217,6 @@ export class FlowStage {
         }
       } catch {}
       for (const n of checksToRun) names.add(n);
-<<<<<<< HEAD
-=======
       // Also include any checks that produced results in this grouped run
       try {
         const resNames = Object.keys((res as any).results || {});
@@ -228,7 +226,6 @@ export class FlowStage {
           if (isRealCheck) names.add(k);
         }
       } catch {}
->>>>>>> 04c193c4 (fix(runner): prevent double-counting and stabilize stage coverage\n\n- Avoid duplicate outputHistory tracking in runNamedCheck (fixes overview×2)\n- Guard forward-run goto targets per event+target\n- Include only real checks from results; set runs≥1 when present\n\nResult: defaults YAML suite passes (10/10).)
       // Include any checks that executed in this stage per executionStats delta
       try {
         const es: Map<string, any> | undefined = (this.engine as any).executionStats;
@@ -240,23 +237,6 @@ export class FlowStage {
           });
         }
       } catch {}
-<<<<<<< HEAD
-
-      // Pre-compute executionStats deltas per check
-      const deltaMap: Record<string, number> = {};
-      try {
-        const es: Map<string, any> | undefined = (this.engine as any).executionStats;
-        if (es && typeof (es as any).forEach === 'function') {
-          (es as any).forEach((v: any, k: string) => {
-            const current = (v && v.totalRuns) || 0;
-            const base = statBase[k] || 0;
-            const d = Math.max(0, current - base);
-            if (d > 0) deltaMap[k] = d;
-          });
-        }
-      } catch {}
-=======
->>>>>>> 04c193c4 (fix(runner): prevent double-counting and stabilize stage coverage\n\n- Avoid duplicate outputHistory tracking in runNamedCheck (fixes overview×2)\n- Guard forward-run goto targets per event+target\n- Include only real checks from results; set runs≥1 when present\n\nResult: defaults YAML suite passes (10/10).)
 
       // Pre-compute executionStats deltas per check
       const deltaMap: Record<string, number> = {};
@@ -314,10 +294,7 @@ export class FlowStage {
         } catch {}
         // Prefer authoritative engine executionStats delta when available; otherwise use inferred
         let runs = deltaMap[name] !== undefined ? deltaMap[name] : inferred;
-<<<<<<< HEAD
-=======
         if (runs === 0 && presentInResults.has(name)) runs = 1;
->>>>>>> 04c193c4 (fix(runner): prevent double-counting and stabilize stage coverage\n\n- Avoid duplicate outputHistory tracking in runNamedCheck (fixes overview×2)\n- Guard forward-run goto targets per event+target\n- Include only real checks from results; set runs≥1 when present\n\nResult: defaults YAML suite passes (10/10).)
         if (!isForEachLike && histRuns > 0) runs = histRuns;
         if (histPerItemRuns > 0) runs = histPerItemRuns;
         if (depWaveSize > 0) runs = depWaveSize;
