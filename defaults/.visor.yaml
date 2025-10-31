@@ -630,19 +630,13 @@ steps:
     on_finish:
       run: [aggregate-validations]
       run_js: |
-        // Decide correction pass target using validation history (works even if outputs aren't yet visible here)
-        const vfRaw = (outputs_history && outputs_history['validate-fact']) || [];
-        const vfFlat = (Array.isArray(vfRaw) && Array.isArray(vfRaw[0])) ? vfRaw.flat() : vfRaw;
-        const fxHist = (outputs_history && outputs_history['extract-facts']) || [];
-        const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
-        const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && x.id).filter(Boolean) : [];
-        const relevant = ids.length > 0 ? vfFlat.filter(v => v && ids.includes(String(v.fact_id || v.factId || v.id || ''))) : [];
-        const hasProblems = relevant.some(v => !v || v.is_valid !== true || v.confidence !== 'high');
+        // Simple rule: if any validate-fact in history is not strictly valid/high, run one correction pass
+        const vfHist = outputs_history && outputs_history['validate-fact'];
+        const arr = Array.isArray(vfHist) ? vfHist : (vfHist ? [vfHist] : []);
+        const hasProblems = arr.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
         if (!hasProblems) return [];
         const ev = (event && event.name) ? event.name : 'issue_comment';
         return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
-      # keep event context as-is to avoid cross-event leakage
-      # keep event context as-is to avoid cross-event leakage
 
   # Validate each extracted fact
   validate-fact:
