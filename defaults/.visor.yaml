@@ -329,16 +329,10 @@ steps:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         {%- liquid
-          # Use only the aggregator output from history as the source of truth
-          assign _agg      = outputs_history | get: "aggregate-validations" | last
-          assign _agg_issues     = _agg | get: "issues"
-          assign _agg_issues_out = _agg | get: "output.issues"
-          assign issues          = _agg_issues | coalesce: _agg_issues_out
-          assign _issues_mem     = "fact_validation_issues" | memory_get: "fact-validation"
-          assign issues          = issues | coalesce: _issues_mem
-          assign _agg_hasp       = _agg | get: "has_problems"
-          assign _agg_hasp_out   = _agg | get: "output.has_problems"
-          assign has_problems    = _agg_hasp | default: _agg_hasp_out
+          # Single source of truth: last aggregate-validations result
+          assign agg          = outputs_history | get: "aggregate-validations" | last
+          assign issues       = agg | get: "issues"
+          assign has_problems = agg | get: "has_problems"
         -%}
         {% if has_problems or issues | not_empty %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
@@ -418,16 +412,10 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          # Use only the aggregator output from history as the source of truth
-          assign _agg      = outputs_history | get: "aggregate-validations" | last
-          assign _agg_issues     = _agg | get: "issues"
-          assign _agg_issues_out = _agg | get: "output.issues"
-          assign issues          = _agg_issues | coalesce: _agg_issues_out
-          assign _issues_mem     = "fact_validation_issues" | memory_get: "fact-validation"
-          assign issues          = issues | coalesce: _issues_mem
-          assign _agg_hasp       = _agg | get: "has_problems"
-          assign _agg_hasp_out   = _agg | get: "output.has_problems"
-          assign has_problems    = _agg_hasp | default: _agg_hasp_out
+          # Single source of truth: last aggregate-validations result
+          assign agg          = outputs_history | get: "aggregate-validations" | last
+          assign issues       = agg | get: "issues"
+          assign has_problems = agg | get: "has_problems"
           assign prev_comment = outputs_history | get: "comment-assistant" | last
         -%}
         {% if has_problems or issues | not_empty %}
