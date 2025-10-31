@@ -398,9 +398,6 @@ steps:
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
-    on_success:
-      # Always schedule extraction here; the step itself is gated by its own `if:`.
-      run: [extract-facts]
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -472,8 +469,6 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # Always schedule extraction here; the step itself is gated by its own `if:`.
-      run: [extract-facts]
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
@@ -558,9 +553,9 @@ steps:
                   description: Line or range, e.g., "120-145" or "88"
               required: [path]
         required: [id, category, claim, verifiable]
-    # Scheduled explicitly from issue-assistant/comment-assistant when enabled
-    depends_on: []
-    on: [manual]
+    # Declarative OR dependency: run after either assistant in the same stage
+    depends_on: ["issue-assistant|comment-assistant"]
+    on: [issue_opened, issue_comment]
     # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
@@ -629,10 +624,14 @@ steps:
     # After facts are validated, run the aggregator; it decides about corrections in its on_success
     on_finish:
       run_js: |
-        // If any validate-fact in this run is not strictly valid/high, run one correction pass
+        // Consider only the last wave of extract-facts in this stage when deciding correction
         const vfHist = outputs_history && outputs_history['validate-fact'];
         const flat = Array.isArray(vfHist) && Array.isArray(vfHist[0]) ? vfHist.flat() : (Array.isArray(vfHist) ? vfHist : (vfHist ? [vfHist] : []));
-        const hasProblems = flat.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
+        const fxHist = (outputs_history && outputs_history['extract-facts']) || [];
+        const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
+        const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && (x.id || x.fact_id || x.factId)).filter(Boolean).map(String) : [];
+        const relevant = ids.length > 0 ? flat.filter(v => v && ids.includes(String(v.fact_id || v.factId || v.id || ''))) : flat;
+        const hasProblems = relevant.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
         if (!hasProblems) return [];
         const ev = (event && event.name) ? event.name : 'issue_comment';
         return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];

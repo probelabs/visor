@@ -3956,13 +3956,24 @@ export class CheckExecutionEngine {
       const visit = (name: string) => {
         const cfg = config.checks![name];
         if (!cfg || !cfg.depends_on) return;
-        for (const dep of cfg.depends_on) {
-          if (!config.checks![dep]) continue;
-          if (!allowByTags(dep)) continue;
-          if (!allowByEvent(dep)) continue;
-          if (!set.has(dep)) {
-            set.add(dep);
-            visit(dep);
+        const depTokens = Array.isArray(cfg.depends_on) ? cfg.depends_on : [cfg.depends_on];
+        const expand = (tok: any): string[] => {
+          if (typeof tok === 'string' && tok.includes('|')) {
+            return tok
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean);
+          }
+          return tok ? [String(tok)] : [];
+        };
+        const deps = depTokens.flatMap(expand);
+        for (const depName of deps) {
+          if (!config.checks![depName]) continue;
+          if (!allowByTags(depName)) continue;
+          if (!allowByEvent(depName)) continue;
+          if (!set.has(depName)) {
+            set.add(depName);
+            visit(depName);
           }
         }
       };
@@ -3977,10 +3988,25 @@ export class CheckExecutionEngine {
       }
     } catch {}
 
-    // Rebuild dependencies map for the expanded set
+    // Rebuild dependencies map for the expanded set (expand OR groups and prune by event)
     for (const checkName of checks) {
       const checkConfig = config.checks![checkName];
-      dependencies[checkName] = checkConfig?.depends_on || [];
+      const depTokens: any[] = Array.isArray(checkConfig?.depends_on)
+        ? (checkConfig!.depends_on as any[])
+        : checkConfig?.depends_on
+          ? [checkConfig.depends_on]
+          : [];
+      const expandedDeps = depTokens.flatMap(tok =>
+        typeof tok === 'string' && tok.includes('|')
+          ? tok
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean)
+          : tok
+            ? [String(tok)]
+            : []
+      );
+      dependencies[checkName] = expandedDeps;
     }
     // Prune dependencies that are not applicable for the current event.
     // This avoids false validation failures for dual-source deps like
