@@ -2032,9 +2032,10 @@ export class CheckExecutionEngine {
               );
             }
           } catch {}
-          // Dedup within this call and apply once-per-run guards
+          // Dedup within this call and apply once-per-run guards for certain steps
+          const oncePerRun = new Set<string>(['validate-fact', 'extract-facts']);
           runList = Array.from(new Set(runList)).filter(step => {
-            if (step === 'validate-fact') {
+            if (oncePerRun.has(step)) {
               if (this.oncePerRunScheduleGuards.has(step)) return false;
               this.oncePerRunScheduleGuards.add(step);
               return true;
