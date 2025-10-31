@@ -43,6 +43,14 @@ export interface ExecutionContext {
   reuseSession?: boolean;
   /** CLI message value (from --message argument) */
   cliMessage?: string;
+  /**
+   * Stage-local baseline of output history lengths per check name.
+   * When present, providers should expose an `outputs_history_stage` object in
+   * Liquid/JS contexts that slices the global history from this baseline.
+   * This enables stage-scoped assertions in the YAML test runner without
+   * relying on global execution history.
+   */
+  stageHistoryBase?: Record<string, number>;
   /** SDK hooks for human input */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

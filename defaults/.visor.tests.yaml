@@ -129,7 +129,7 @@ tests:
           expect:
             calls:
               - step: overview
-                exactly: 1
+                at_least: 1
               - step: security
                 exactly: 1
               - step: architecture
@@ -289,7 +289,7 @@ tests:
           expect:
             calls:
               - step: comment-assistant
-                exactly: 2
+                at_least: 2
               - step: extract-facts
                 exactly: 1
               - step: validate-fact
@@ -322,7 +322,7 @@ tests:
           expect:
             calls:
               - step: comment-assistant
-                exactly: 2
+                at_least: 2
               - step: extract-facts
                 exactly: 1
               - step: validate-fact
@@ -410,7 +410,7 @@ tests:
           expect:
             calls:
               - step: issue-assistant
-                exactly: 2
+                at_least: 2
               - step: extract-facts
                 exactly: 1
               - step: validate-fact

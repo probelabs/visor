@@ -431,6 +431,22 @@ export class AICheckProvider extends CheckProvider {
         }
         return hist;
       })(),
+      // Stage-scoped history slice calculated from baseline captured by the flow runner.
+      outputs_history_stage: (() => {
+        const stage: Record<string, unknown[]> = {};
+        try {
+          const base = (eventContext as any)?.__stageHistoryBase as
+            | Record<string, number>
+            | undefined;
+          if (!outputHistory || !base) return stage;
+          for (const [k, v] of outputHistory.entries()) {
+            const start = base[k] || 0;
+            const arr = Array.isArray(v) ? (v as unknown[]) : [];
+            stage[k] = arr.slice(start);
+          }
+        } catch {}
+        return stage;
+      })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
     };
@@ -643,10 +659,19 @@ export class AICheckProvider extends CheckProvider {
     // Process prompt with Liquid templates and file loading
     // Skip event context (PR diffs, files, etc.) if requested
     const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
+    // Thread stageHistoryBase via eventContext for prompt rendering so
+    // Liquid templates can get outputs_history_stage (computed from baseline).
+    const ctxWithStage = {
+      ...(eventContext || {}),
+      __stageHistoryBase: (sessionInfo as any)?.stageHistoryBase as
+        | Record<string, number>
+        | undefined,
+    } as Record<string, unknown>;
+
     const processedPrompt = await this.processPrompt(
       customPrompt,
       prInfo,
-      eventContext,
+      ctxWithStage,
       _dependencyResults,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );

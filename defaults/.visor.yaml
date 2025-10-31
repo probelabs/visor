@@ -399,9 +399,13 @@ steps:
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
     on_success:
-      # When fact validation is enabled, schedule validation (engine will run dependencies inline)
+      # When fact validation is enabled, schedule validation (engine runs dependencies inline)
+      # Guard: do not start a second validation wave within the same stage (after aggregator)
       run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['validate-fact'] : [];
+        // Stage-scoped guard: only schedule once per stage
+        const hist = typeof outputs_history_stage === 'object' ? outputs_history_stage : {};
+        const wave = Array.isArray(hist['aggregate-validations']) ? hist['aggregate-validations'].length : 0;
+        return (env.ENABLE_FACT_VALIDATION === 'true' && wave === 0) ? ['validate-fact'] : [];
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -473,9 +477,12 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # When fact validation is enabled, schedule validation (engine will run dependencies inline)
+      # When fact validation is enabled, schedule validation once (avoid a second wave within stage)
       run_js: |
-        return env.ENABLE_FACT_VALIDATION === 'true' ? ['validate-fact'] : [];
+        // Stage-scoped guard: only schedule once per stage
+        const hist = typeof outputs_history_stage === 'object' ? outputs_history_stage : {};
+        const wave = Array.isArray(hist['aggregate-validations']) ? hist['aggregate-validations'].length : 0;
+        return (env.ENABLE_FACT_VALIDATION === 'true' && wave === 0) ? ['validate-fact'] : [];
       goto_js: |
         const intent = (typeof output === 'object' && output) ? output.intent : undefined;
         const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;

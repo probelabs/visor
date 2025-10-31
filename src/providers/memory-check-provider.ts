@@ -103,7 +103,10 @@ export class MemoryCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    _sessionInfo?: {
+      parentSessionId?: string;
+      reuseSession?: boolean;
+    } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
     let operation = config.operation as MemoryOperation | undefined;
     const key = config.key as string | undefined;
@@ -117,7 +120,8 @@ export class MemoryCheckProvider extends CheckProvider {
       prInfo,
       dependencyResults,
       memoryStore,
-      config.__outputHistory as Map<string, unknown[]> | undefined
+      config.__outputHistory as Map<string, unknown[]> | undefined,
+      (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined
     );
 
     let result: unknown;
@@ -524,7 +528,8 @@ export class MemoryCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
     memoryStore?: MemoryStore,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    stageHistoryBase?: Record<string, number>
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -573,12 +578,25 @@ export class MemoryCheckProvider extends CheckProvider {
       }
     }
 
+    // Build stage-scoped history using the provided baseline
+    const historyStage: Record<string, unknown[]> = {};
+    try {
+      if (outputHistory && stageHistoryBase) {
+        for (const [checkName, historyArray] of outputHistory) {
+          const start = stageHistoryBase[checkName] || 0;
+          const arr = Array.isArray(historyArray) ? (historyArray as unknown[]) : [];
+          historyStage[checkName] = arr.slice(start);
+        }
+      }
+    } catch {}
+
     // Attach history to the outputs object
     (outputs as any).history = history;
 
     context.outputs = outputs;
     // Alias for consistency: outputs_history mirrors outputs.history
     (context as any).outputs_history = history;
+    (context as any).outputs_history_stage = historyStage;
     // New: outputs_raw exposes aggregate values for forEach parents
     (context as any).outputs_raw = outputsRaw;
 

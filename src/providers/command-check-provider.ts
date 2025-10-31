@@ -112,6 +112,21 @@ export class CommandCheckProvider extends CheckProvider {
       outputs: outputsObj,
       // Alias: outputs_history mirrors outputs.history for consistency
       outputs_history: (outputsObj as any).history || {},
+      // Stage-scoped history slice based on baseline provided by runner
+      outputs_history_stage: (() => {
+        const stage: Record<string, unknown[]> = {};
+        try {
+          const base = (context as any)?.stageHistoryBase as Record<string, number> | undefined;
+          const histMap = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+          if (!base || !histMap) return stage;
+          for (const [k, v] of histMap.entries()) {
+            const start = base[k] || 0;
+            const arr = Array.isArray(v) ? (v as unknown[]) : [];
+            stage[k] = arr.slice(start);
+          }
+        } catch {}
+        return stage;
+      })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
       env: this.getSafeEnvironmentVariables(),

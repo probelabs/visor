@@ -146,6 +146,15 @@ export class FlowStage {
       } catch {}
 
       // First pass
+      // Pass stage baseline to providers through execution context so they can
+      // compute outputs_history_stage for template guards and assertions.
+      try {
+        this.engine.setExecutionContext({
+          ...(this.engine as any).executionContext,
+          stageHistoryBase: histBase,
+        } as any);
+      } catch {}
+
       const res = await this.engine.executeGroupedChecks(
         prInfo,
         checksToRun,
@@ -173,6 +182,14 @@ export class FlowStage {
         const start = histBase[k] || 0;
         stageHist[k] = (arr as unknown[]).slice(start);
       }
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const parts = Object.entries(stageHist)
+            .map(([k, a]) => `${k}:${Array.isArray(a) ? (a as any[]).length : 0}`)
+            .join(', ');
+          console.error(`[stage-hist] ${stageName} keys=${parts}`);
+        }
+      } catch {}
 
       // Compute stage execution statistics
       const names = new Set<string>();
@@ -200,6 +217,31 @@ export class FlowStage {
         }
       } catch {}
       for (const n of checksToRun) names.add(n);
+      // Include any checks that executed in this stage per executionStats delta
+      try {
+        const es: Map<string, any> | undefined = (this.engine as any).executionStats;
+        if (es && typeof (es as any).forEach === 'function') {
+          (es as any).forEach((v: any, k: string) => {
+            const current = (v && v.totalRuns) || 0;
+            const base = statBase[k] || 0;
+            if (current > base) names.add(k);
+          });
+        }
+      } catch {}
+
+      // Pre-compute executionStats deltas per check
+      const deltaMap: Record<string, number> = {};
+      try {
+        const es: Map<string, any> | undefined = (this.engine as any).executionStats;
+        if (es && typeof (es as any).forEach === 'function') {
+          (es as any).forEach((v: any, k: string) => {
+            const current = (v && v.totalRuns) || 0;
+            const base = statBase[k] || 0;
+            const d = Math.max(0, current - base);
+            if (d > 0) deltaMap[k] = d;
+          });
+        }
+      } catch {}
 
       const checks = Array.from(names).map(name => {
         const histArr = Array.isArray(stageHist[name]) ? (stageHist[name] as unknown[]) : [];
@@ -233,35 +275,11 @@ export class FlowStage {
             if (nonArrays.length > 0 && arrays.length > 0) histPerItemRuns = nonArrays.length;
           }
         } catch {}
-        let runs = inferred;
-        // If no prompts/outputs, fall back to executionStats delta for this stage
-        if (runs === 0) {
-          try {
-            const es: Map<string, any> | undefined = (this.engine as any).executionStats;
-            let current = 0;
-            if (es && typeof (es as any).get === 'function') {
-              const v = (es as any).get(name);
-              current = (v && v.totalRuns) || 0;
-            }
-            const base = statBase[name] || 0;
-            const delta = Math.max(0, current - base);
-            runs = Math.max(runs, delta);
-          } catch {}
-        }
+        // Prefer authoritative engine executionStats delta when available; otherwise use inferred
+        let runs = deltaMap[name] !== undefined ? deltaMap[name] : inferred;
         if (!isForEachLike && histRuns > 0) runs = histRuns;
         if (histPerItemRuns > 0) runs = histPerItemRuns;
         if (depWaveSize > 0) runs = depWaveSize;
-        // Heuristic: aggregator runs once after extract-facts on_finish
-        try {
-          if (
-            name === 'aggregate-validations' &&
-            Array.isArray(stageHist['extract-facts']) &&
-            (stageHist['extract-facts'] as unknown[]).length > 0 &&
-            runs === 0
-          ) {
-            runs = 1;
-          }
-        } catch {}
         return {
           checkName: name,
           totalRuns: runs,
