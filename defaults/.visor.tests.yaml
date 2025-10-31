@@ -235,7 +235,7 @@ tests:
         - name: facts-enabled (comment)
           description: |
             With fact validation enabled, the assistant reply is followed by
-            extract-facts, validate-fact (per fact), and aggregate-validations.
+            extract-facts and validate-fact (per fact). No aggregator is required for routing.
           event: issue_comment
           fixture: gh.issue_comment.visor_help
           env:
@@ -260,15 +260,13 @@ tests:
                 exactly: 1
               - step: validate-fact
                 at_least: 1
-              - step: aggregate-validations
-                exactly: 1
           # Prompt assertions are validated separately in stage-level prompt tests
 
         - name: facts-invalid (comment)
           description: |
             Invalid fact path: after assistant reply, extract-facts finds one claim and
-            validate-fact returns is_valid=false; aggregate-validations detects not-all-valid
-            and reruns the assistant once with correction context.
+            validate-fact returns is_valid=false; the runner detects problems from
+            validate-fact history and reruns the assistant once with correction context.
           event: issue_comment
           fixture: gh.issue_comment.visor_help
           env:
@@ -294,8 +292,6 @@ tests:
                 exactly: 1
               - step: validate-fact
                 at_least: 1
-              - step: aggregate-validations
-                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -327,8 +323,6 @@ tests:
                 exactly: 1
               - step: validate-fact
                 exactly: 2
-              - step: aggregate-validations
-                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -357,7 +351,6 @@ tests:
             no_calls:
               - step: extract-facts
               - step: validate-fact
-              - step: aggregate-validations
 
         - name: facts-enabled (issue)
           description: Fact validation runs from an issue creation path.
@@ -385,8 +378,6 @@ tests:
                 exactly: 1
               - step: validate-fact
                 at_least: 1
-              - step: aggregate-validations
-                exactly: 1
 
         - name: facts-invalid (issue)
           description: Invalid claim triggers correction by rerunning issue-assistant.
@@ -415,8 +406,6 @@ tests:
                 exactly: 1
               - step: validate-fact
                 at_least: 1
-              - step: aggregate-validations
-                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }

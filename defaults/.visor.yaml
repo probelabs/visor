@@ -329,9 +329,18 @@ steps:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         {%- liquid
-          # Single source of truth: last aggregate-validations result (dot syntax)
-          assign has_problems = outputs_history["aggregate-validations"].last.has_problems | default: false
-          assign issues       = outputs_history["aggregate-validations"].last.issues       | default: empty
+          # Correction context based on the last validation wave
+          assign issues = outputs_history["validate-fact"].last
+          assign has_problems = false
+          if issues
+            for it in issues
+              if it
+                if it.is_valid != true or it.confidence != 'high'
+                  assign has_problems = true
+                endif
+              endif
+            endfor
+          endif
         -%}
         {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
@@ -344,11 +353,10 @@ steps:
         **Validation Errors Found:**
         {% for issue in issues %}
         {% if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' %}
-        - **{{ issue.claim }}**: {{ issue.evidence }}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
           {% if issue.correction %}
           Correction: {{ issue.correction }}
           {% endif %}
-        {# Plain echo for stable assertions #}
         Claim: {{ issue.claim }}
         {% if issue.correction %}Correction: {{ issue.correction }}{% endif %}
         {% endif %}
@@ -412,9 +420,18 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          # Single source of truth: last aggregate-validations result (dot syntax)
-          assign has_problems = outputs_history["aggregate-validations"].last.has_problems | default: false
-          assign issues       = outputs_history["aggregate-validations"].last.issues       | default: empty
+          # Correction context based on the last validation wave
+          assign issues = outputs_history["validate-fact"].last
+          assign has_problems = false
+          if issues
+            for it in issues
+              if it
+                if it.is_valid != true or it.confidence != 'high'
+                  assign has_problems = true
+                endif
+              endif
+            endfor
+          endif
           assign prev_comment = outputs_history["comment-assistant"].last
         -%}
         {% if has_problems %}
@@ -628,12 +645,11 @@ steps:
 
     # After facts are validated, run the aggregator; it decides about corrections in its on_success
     on_finish:
-      run: [aggregate-validations]
       run_js: |
-        // Simple rule: if any validate-fact in history is not strictly valid/high, run one correction pass
+        // If any validate-fact in this run is not strictly valid/high, run one correction pass
         const vfHist = outputs_history && outputs_history['validate-fact'];
-        const arr = Array.isArray(vfHist) ? vfHist : (vfHist ? [vfHist] : []);
-        const hasProblems = arr.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
+        const flat = Array.isArray(vfHist) && Array.isArray(vfHist[0]) ? vfHist.flat() : (Array.isArray(vfHist) ? vfHist : (vfHist ? [vfHist] : []));
+        const hasProblems = flat.some(v => v && (v.is_valid !== true || v.confidence !== 'high'));
         if (!hasProblems) return [];
         const ev = (event && event.name) ? event.name : 'issue_comment';
         return ev === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
@@ -702,59 +718,6 @@ steps:
       - Evidence of what you found in the codebase
       - Confidence level (high/medium/low) in your validation
       - If the claim is incorrect, provide the accurate information as a correction
-
-  # Aggregate all validation results
-  aggregate-validations:
-    type: memory
-    operation: exec_js
-    namespace: fact-validation
-    # Run only when scheduled from extract-facts.on_finish (stage-local)
-    on: [manual]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    memory_js: |
-
-      const allRaw = outputs.history['validate-fact'] || [];
-      const allFlat = (Array.isArray(allRaw) && Array.isArray(allRaw[0])) ? allRaw.flat() : allRaw;
-      const fxHist = outputs.history['extract-facts'] || [];
-      const lastExtract = Array.isArray(fxHist) && fxHist.length > 0 ? fxHist[fxHist.length - 1] : [];
-      const ids = Array.isArray(lastExtract) ? lastExtract.map(x => x && x.id).filter(Boolean) : [];
-
-      // Use only validations that correspond to the last extract wave, by fact_id
-      const validations = ids.length > 0
-        ? allFlat.filter(v => {
-            if (!v) return false;
-            const fid = (v.fact_id !== undefined ? v.fact_id : (v.factId !== undefined ? v.factId : (v.id !== undefined ? v.id : null)));
-            return typeof fid === 'string' && ids.includes(fid);
-          })
-        : [];
-
-      try { if (env.VISOR_DEBUG === 'true') log('🧪 DEBUG: validate-fact history = ' + JSON.stringify(all)); } catch {}
-      try { if (env.VISOR_DEBUG === 'true') log('🧪 DEBUG: selected validations = ' + JSON.stringify(validations)); } catch {}
-
-      log('📊 Aggregating', validations.length, 'validation results for ids', JSON.stringify(ids));
-
-      // Only HIGH confidence counts as valid. Everything else returns to loop/correction.
-      const validHigh = validations.filter(v => v && v.is_valid && v.confidence === 'high');
-      const problems = validations.filter(v => v && !(v.is_valid && v.confidence === 'high'));
-      const lowConfidence = validations.filter(v => v && v.is_valid && v.confidence !== 'high');
-      const invalid = validations.filter(v => v && !v.is_valid);
-      const allValid = problems.length === 0;
-
-      log('Results: valid=' + validHigh.length,
-          'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
-
-      return {
-        total: validations.length,
-        valid: validHigh.length,
-        invalid: invalid.length,
-        low_confidence: lowConfidence.length,
-        issues: !allValid ? [...invalid, ...lowConfidence].map(v => ({ claim: v.claim, evidence: v.evidence, correction: v.correction })) : [],
-        has_problems: problems.length > 0,
-        all_valid: allValid,
-        summary: allValid
-          ? 'All facts validated successfully ✅'
-          : 'Found ' + invalid.length + ' invalid and ' + lowConfidence.length + ' low-confidence facts ⚠️'
-      };
 
   # Retrigger noop removed — comment-assistant schedules overview directly
 
