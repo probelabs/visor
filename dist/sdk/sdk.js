@@ -807,25 +807,28 @@ var init_ai_review_service = __esm({
           ...config
         };
         this.sessionRegistry = SessionRegistry.getInstance();
-        if (!this.config.apiKey) {
-          if (process.env.CLAUDE_CODE_API_KEY) {
-            this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
-            this.config.provider = "claude-code";
-          } else if (process.env.GOOGLE_API_KEY) {
-            this.config.apiKey = process.env.GOOGLE_API_KEY;
-            this.config.provider = "google";
-          } else if (process.env.ANTHROPIC_API_KEY) {
-            this.config.apiKey = process.env.ANTHROPIC_API_KEY;
-            this.config.provider = "anthropic";
-          } else if (process.env.OPENAI_API_KEY) {
-            this.config.apiKey = process.env.OPENAI_API_KEY;
-            this.config.provider = "openai";
-          } else if (
-            // Check for AWS Bedrock credentials
-            process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_BEDROCK_API_KEY
-          ) {
-            this.config.provider = "bedrock";
-            this.config.apiKey = "AWS_CREDENTIALS";
+        const providerExplicit = typeof this.config.provider === "string" && this.config.provider.length > 0;
+        if (!providerExplicit) {
+          if (!this.config.apiKey) {
+            if (process.env.CLAUDE_CODE_API_KEY) {
+              this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+              this.config.provider = "claude-code";
+            } else if (process.env.GOOGLE_API_KEY) {
+              this.config.apiKey = process.env.GOOGLE_API_KEY;
+              this.config.provider = "google";
+            } else if (process.env.ANTHROPIC_API_KEY) {
+              this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+              this.config.provider = "anthropic";
+            } else if (process.env.OPENAI_API_KEY) {
+              this.config.apiKey = process.env.OPENAI_API_KEY;
+              this.config.provider = "openai";
+            } else if (
+              // Check for AWS Bedrock credentials
+              process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_BEDROCK_API_KEY
+            ) {
+              this.config.provider = "bedrock";
+              this.config.apiKey = "AWS_CREDENTIALS";
+            }
           }
         }
         if (!this.config.model && process.env.MODEL_NAME) {
@@ -866,39 +869,27 @@ var init_ai_review_service = __esm({
           log("\u{1F3AD} Using mock AI model/provider for testing - skipping API key validation");
         } else {
           if (!this.config.apiKey) {
+            try {
+              if (this.config.provider === "google" && process.env.GOOGLE_API_KEY) {
+                this.config.apiKey = process.env.GOOGLE_API_KEY;
+              } else if (this.config.provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
+                this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+              } else if (this.config.provider === "openai" && process.env.OPENAI_API_KEY) {
+                this.config.apiKey = process.env.OPENAI_API_KEY;
+              } else if (this.config.provider === "claude-code" && process.env.CLAUDE_CODE_API_KEY) {
+                this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+              }
+            } catch {
+            }
+          }
+          if (!this.config.apiKey) {
             const errorMessage = "No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).";
             if (debugInfo) {
               debugInfo.errors = [errorMessage];
-              debugInfo.processingTime = Date.now() - startTime;
-              debugInfo.rawResponse = "API call not attempted - no API key configured";
-              const isCustomSchema = typeof schema === "string" && schema !== "code-review" || typeof schema === "object";
-              if (isCustomSchema) {
-                const out = {
-                  // Provide a friendly, bounded fallback so built-in templates render
-                  text: "\u26A0\uFE0F AI provider is not configured for this run. Set GOOGLE_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY or AWS credentials to enable real responses.\n\nThis is a placeholder response so your workflow still posts a comment."
-                };
-                const res = {
-                  issues: [],
-                  output: out,
-                  debug: debugInfo
-                };
-                return res;
-              }
-              return {
-                issues: [
-                  {
-                    file: "system",
-                    line: 0,
-                    ruleId: "system/api-key-missing",
-                    message: errorMessage,
-                    severity: "error",
-                    category: "logic"
-                  }
-                ],
-                debug: debugInfo
-              };
+              debugInfo.rawResponse = "API call attempted in debug without API key (test mode)";
+            } else {
+              throw new Error(errorMessage);
             }
-            throw new Error(errorMessage);
           }
         }
         try {
@@ -944,6 +935,20 @@ var init_ai_review_service = __esm({
       async executeReviewWithSessionReuse(prInfo, customPrompt, parentSessionId, schema, checkName, sessionMode = "clone") {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        if (!this.config.apiKey) {
+          try {
+            if (this.config.provider === "google" && process.env.GOOGLE_API_KEY) {
+              this.config.apiKey = process.env.GOOGLE_API_KEY;
+            } else if (this.config.provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
+              this.config.apiKey = process.env.ANTHROPIC_API_KEY;
+            } else if (this.config.provider === "openai" && process.env.OPENAI_API_KEY) {
+              this.config.apiKey = process.env.OPENAI_API_KEY;
+            } else if (this.config.provider === "claude-code" && process.env.CLAUDE_CODE_API_KEY) {
+              this.config.apiKey = process.env.CLAUDE_CODE_API_KEY;
+            }
+          } catch {
+          }
+        }
         const existingAgent = this.sessionRegistry.getSession(parentSessionId);
         if (!existingAgent) {
           throw new Error(
@@ -1019,6 +1024,10 @@ var init_ai_review_service = __esm({
             debugInfo.processingTime = processingTime;
           }
           const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+          try {
+            result.sessionId = currentSessionId;
+          } catch {
+          }
           if (debugInfo) {
             result.debug = debugInfo;
           }
@@ -1287,6 +1296,16 @@ ${this.escapeXml(prInfo.body)}
     <total_deletions>${prInfo.totalDeletions}</total_deletions>
     <files_changed_count>${prInfo.files.length}</files_changed_count>
   </metadata>`;
+        try {
+          const firstFile = (prInfo.files || [])[0];
+          if (firstFile && firstFile.filename) {
+            context2 += `
+  <raw_diff_header>
+${this.escapeXml(`diff --git a/${firstFile.filename} b/${firstFile.filename}`)}
+  </raw_diff_header>`;
+          }
+        } catch {
+        }
         if (prInfo.body) {
           context2 += `
   <!-- Full pull request description provided by the author -->
@@ -1732,9 +1751,12 @@ ${"=".repeat(60)}
        */
       async callProbeAgent(prompt, schema, debugInfo, _checkName, providedSessionId) {
         if (this.config.model === "mock" || this.config.provider === "mock") {
-          log("\u{1F3AD} Using mock AI model/provider for testing");
-          const response = await this.generateMockResponse(prompt, _checkName, schema);
-          return { response, effectiveSchema: typeof schema === "object" ? "custom" : schema };
+          const inJest = !!process.env.JEST_WORKER_ID;
+          log("\u{1F3AD} Using mock AI model/provider");
+          if (!inJest) {
+            const response = await this.generateMockResponse(prompt, _checkName, schema);
+            return { response, effectiveSchema: typeof schema === "object" ? "custom" : schema };
+          }
         }
         const sessionId = providedSessionId || (() => {
           const timestamp = (/* @__PURE__ */ new Date()).toISOString();
@@ -2862,12 +2884,15 @@ var init_file_exclusion = __esm({
             const rawContent = fs2.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
-            console.error("\u2705 Loaded .gitignore patterns for file filtering");
+            if (process.env.VISOR_DEBUG === "true") {
+              console.error("\u2705 Loaded .gitignore patterns for file filtering");
+            }
           } else if (additionalPatterns && additionalPatterns.length > 0) {
-            console.error("\u26A0\uFE0F  No .gitignore found, using default exclusion patterns");
+            console.error("No .gitignore found, using default exclusion patterns");
+            console.warn("No .gitignore found, using default exclusion patterns");
           }
         } catch (error) {
-          console.warn("\u26A0\uFE0F Failed to load .gitignore:", error instanceof Error ? error.message : error);
+          console.warn("Failed to load .gitignore:", error instanceof Error ? error.message : error);
         }
       }
       /**
@@ -4313,10 +4338,75 @@ function configureLiquidWithExtensions(liquid) {
     if (typeof key !== "string") {
       return false;
     }
-    return memoryStore.has(key, namespace);
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {
+    }
+    return has;
   });
   liquid.registerFilter("memory_list", (namespace) => {
     return memoryStore.list(namespace);
+  });
+  liquid.registerFilter("get", (obj, pathExpr) => {
+    if (obj == null) return void 0;
+    const path16 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path16) return obj;
+    const parts = path16.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return void 0;
+      cur = cur[p];
+    }
+    return cur;
+  });
+  liquid.registerFilter("not_empty", (v) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === "string") return v.length > 0;
+    if (v && typeof v === "object") return Object.keys(v).length > 0;
+    return false;
+  });
+  liquid.registerFilter("coalesce", (first, ...rest) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === "string" && v.length > 0) return v;
+      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : first ?? void 0;
+  });
+  liquid.registerFilter("where_exp", (items, varName, expr) => {
+    const arr = Array.isArray(items) ? items : [];
+    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
+    const body = String(expr || "");
+    try {
+      const fn = new Function(
+        name,
+        "idx",
+        "arr",
+        `try { return (${body}); } catch { return false; }`
+      );
+      const out = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const i = arr[idx];
+        let ok = false;
+        try {
+          ok = !!fn(i, idx, arr);
+        } catch {
+          ok = false;
+        }
+        if (ok) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
+    }
   });
 }
 function createExtendedLiquid(options = {}) {
@@ -4977,12 +5067,56 @@ var init_ai_check_provider = __esm({
             }
             return hist;
           })(),
+          // Stage-scoped history slice calculated from baseline captured by the flow runner.
+          outputs_history_stage: (() => {
+            const stage = {};
+            try {
+              const base = eventContext?.__stageHistoryBase;
+              if (!outputHistory || !base) return stage;
+              for (const [k, v] of outputHistory.entries()) {
+                const start = base[k] || 0;
+                const arr = Array.isArray(v) ? v : [];
+                stage[k] = arr.slice(start);
+              }
+            } catch {
+            }
+            return stage;
+          })(),
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
           outputs_raw: outputsRaw
         };
         try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.error(
+              `[prompt-ctx] outputs.keys=${Object.keys(templateContext.outputs || {}).join(", ")} hist.validate-fact.len=${(() => {
+                try {
+                  const h = templateContext.outputs_history || {};
+                  const v = h["validate-fact"];
+                  return Array.isArray(v) ? v.length : 0;
+                } catch {
+                  return 0;
+                }
+              })()}`
+            );
+          }
+        } catch {
+        }
+        try {
           return await this.liquidEngine.parseAndRender(promptContent, templateContext);
         } catch (error) {
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              const lines = promptContent.split(/\r?\n/);
+              const preview = lines.slice(0, 20).map((l, i) => `${(i + 1).toString().padStart(3, " ")}| ${l}`).join("\n");
+              try {
+                process.stderr.write(
+                  "[prompt-error] First 20 lines of prompt before Liquid render:\n" + preview + "\n"
+                );
+              } catch {
+              }
+            }
+          } catch {
+          }
           throw new Error(
             `Failed to render prompt template: ${error instanceof Error ? error.message : "Unknown error"}`
           );
@@ -5001,6 +5135,12 @@ var init_ai_check_provider = __esm({
         return this.executeWithConfig(prInfo, config, _dependencyResults, sessionInfo);
       }
       async executeWithConfig(prInfo, config, _dependencyResults, sessionInfo) {
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.error(`[ai-exec] step=${String(config.checkName || "unknown")}`);
+          }
+        } catch {
+        }
         const aiConfig = {};
         if (config.ai) {
           if (config.ai.apiKey !== void 0) {
@@ -5050,13 +5190,7 @@ var init_ai_check_provider = __esm({
         }
         if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
           aiConfig.mcpServers = mcpServers;
-          if (aiConfig.debug) {
-            console.error(
-              `\u{1F527} Debug: AI check MCP configured with ${Object.keys(mcpServers).length} servers`
-            );
-          }
-        } else if (config.ai?.disable_tools && aiConfig.debug) {
-          console.error(`\u{1F527} Debug: AI check has tools disabled - MCP servers will not be passed`);
+        } else if (config.ai?.disable_tools) {
         }
         const templateContext = {
           pr: {
@@ -5093,30 +5227,73 @@ var init_ai_check_provider = __esm({
         } catch {
         }
         const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
+        const ctxWithStage = {
+          ...eventContext || {},
+          __stageHistoryBase: sessionInfo?.stageHistoryBase
+        };
         const processedPrompt = await this.processPrompt(
           customPrompt,
           prInfo,
-          eventContext,
+          ctxWithStage,
           _dependencyResults,
           config.__outputHistory
         );
-        const service = new AIReviewService(aiConfig);
-        const schema = config.schema;
-        if (aiConfig.debug) {
-          console.error(
-            `\u{1F527} Debug: AICheckProvider using processed prompt: ${processedPrompt.substring(0, 100)}...`
+        try {
+          const stepName = config.checkName || "unknown";
+          const serviceForCapture = new AIReviewService(aiConfig);
+          const finalPrompt = await serviceForCapture.buildCustomPrompt(
+            prInfo,
+            processedPrompt,
+            config.schema,
+            { checkName: config.checkName }
           );
-          console.error(`\u{1F527} Debug: AICheckProvider schema from config: ${JSON.stringify(schema)}`);
-          console.error(`\u{1F527} Debug: AICheckProvider full config: ${JSON.stringify(config, null, 2)}`);
+          sessionInfo?.hooks?.onPromptCaptured?.({
+            step: String(stepName),
+            provider: "ai",
+            prompt: finalPrompt
+          });
+        } catch {
         }
         try {
-          if (aiConfig.debug) {
-            console.error(
-              `\u{1F527} Debug: AICheckProvider passing checkName: ${config.checkName} to service`
-            );
+          const stepName = config.checkName || "unknown";
+          const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
+          if (mock !== void 0) {
+            return { issues: [], output: mock };
           }
+        } catch {
+        }
+        const service = new AIReviewService(aiConfig);
+        const schema = config.schema;
+        try {
           let result;
-          if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
+          const reuseEnabled = config.reuse_ai_session === true || typeof config.reuse_ai_session === "string";
+          if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
+            try {
+              const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
+              const reg = SessionRegistry2.getInstance();
+              if (!reg.hasSession(sessionInfo.parentSessionId)) {
+                if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
+                  console.warn(
+                    `\u26A0\uFE0F  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+                  );
+                }
+                const fresh = await service.executeReview(
+                  prInfo,
+                  processedPrompt,
+                  schema,
+                  config.checkName,
+                  config.sessionId
+                );
+                return {
+                  ...fresh,
+                  issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
+                    fresh.issues || [],
+                    process.cwd()
+                  )
+                };
+              }
+            } catch {
+            }
             const sessionMode = config.session_mode || "clone";
             if (aiConfig.debug) {
               console.error(
@@ -5633,7 +5810,7 @@ var init_http_client_provider = __esm({
           return false;
         }
       }
-      async execute(prInfo, config, dependencyResults, _sessionInfo) {
+      async execute(prInfo, config, dependencyResults, context2) {
         const url = config.url;
         const method = config.method || "GET";
         const headers = config.headers || {};
@@ -5665,7 +5842,9 @@ var init_http_client_provider = __esm({
             requestBody = renderedBody;
           }
           const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
-          const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+          const stepName = config.checkName || "unknown";
+          const mock = context2?.hooks?.mockForStep?.(String(stepName));
+          const data = mock !== void 0 ? mock : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
           let processedData = data;
           if (transform) {
             try {
@@ -6057,6 +6236,11 @@ var init_log_check_provider = __esm({
 });
 
 // src/utils/sandbox.ts
+var sandbox_exports = {};
+__export(sandbox_exports, {
+  compileAndRun: () => compileAndRun,
+  createSecureSandbox: () => createSecureSandbox
+});
 function createSecureSandbox() {
   const globals = {
     ...import_sandboxjs.default.SAFE_GLOBALS,
@@ -6072,15 +6256,31 @@ function createSecureSandbox() {
   };
   const prototypeWhitelist = new Map(import_sandboxjs.default.SAFE_PROTOTYPES);
   const arrayMethods = /* @__PURE__ */ new Set([
+    // Query/iteration
     "some",
     "every",
     "filter",
     "map",
     "reduce",
+    "reduceRight",
     "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
     "includes",
     "indexOf",
-    "length",
+    "lastIndexOf",
+    "keys",
+    "values",
+    "entries",
+    "forEach",
+    // Non‑mutating ES2023 additions
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "with",
+    "at",
+    // Mutators and common ops
     "slice",
     "concat",
     "join",
@@ -6090,8 +6290,13 @@ function createSecureSandbox() {
     "unshift",
     "sort",
     "reverse",
+    "copyWithin",
+    "fill",
+    // Flattening
     "flat",
-    "flatMap"
+    "flatMap",
+    // Meta
+    "length"
   ]);
   prototypeWhitelist.set(Array.prototype, arrayMethods);
   const stringMethods = /* @__PURE__ */ new Set([
@@ -6099,27 +6304,63 @@ function createSecureSandbox() {
     "toUpperCase",
     "includes",
     "indexOf",
+    "lastIndexOf",
     "startsWith",
     "endsWith",
     "slice",
     "substring",
-    "length",
+    "substr",
     "trim",
+    "trimStart",
+    "trimEnd",
     "split",
     "replace",
+    "replaceAll",
     "match",
+    "matchAll",
+    "charAt",
+    "charCodeAt",
+    "codePointAt",
+    "normalize",
+    "repeat",
     "padStart",
-    "padEnd"
+    "padEnd",
+    "at",
+    "length"
   ]);
   prototypeWhitelist.set(String.prototype, stringMethods);
   const objectMethods = /* @__PURE__ */ new Set([
     "hasOwnProperty",
+    "propertyIsEnumerable",
     "toString",
-    "valueOf",
-    "keys",
-    "values"
+    "valueOf"
   ]);
   prototypeWhitelist.set(Object.prototype, objectMethods);
+  const mapMethods = /* @__PURE__ */ new Set([
+    "get",
+    "set",
+    "has",
+    "delete",
+    "entries",
+    "keys",
+    "values",
+    "forEach"
+  ]);
+  prototypeWhitelist.set(Map.prototype, mapMethods);
+  const setMethods = /* @__PURE__ */ new Set([
+    "add",
+    "has",
+    "delete",
+    "entries",
+    "keys",
+    "values",
+    "forEach"
+  ]);
+  prototypeWhitelist.set(Set.prototype, setMethods);
+  const dateMethods = /* @__PURE__ */ new Set(["toISOString", "toJSON", "getTime"]);
+  prototypeWhitelist.set(Date.prototype, dateMethods);
+  const regexpMethods = /* @__PURE__ */ new Set(["test", "exec"]);
+  prototypeWhitelist.set(RegExp.prototype, regexpMethods);
   return new import_sandboxjs.default({ globals, prototypeWhitelist });
 }
 function compileAndRun(sandbox, userCode, scope, opts = { injectLog: true, wrapFunction: true, logPrefix: "[sandbox]" }) {
@@ -6166,6 +6407,26 @@ var init_sandbox = __esm({
   }
 });
 
+// src/test-runner/recorders/global-recorder.ts
+var global_recorder_exports = {};
+__export(global_recorder_exports, {
+  getGlobalRecorder: () => getGlobalRecorder,
+  setGlobalRecorder: () => setGlobalRecorder
+});
+function setGlobalRecorder(r) {
+  __rec = r;
+}
+function getGlobalRecorder() {
+  return __rec;
+}
+var __rec;
+var init_global_recorder = __esm({
+  "src/test-runner/recorders/global-recorder.ts"() {
+    "use strict";
+    __rec = null;
+  }
+});
+
 // src/providers/github-ops-provider.ts
 var GitHubOpsProvider;
 var init_github_ops_provider = __esm({
@@ -6174,6 +6435,7 @@ var init_github_ops_provider = __esm({
     init_check_provider_interface();
     init_sandbox();
     init_liquid_extensions();
+    init_logger();
     GitHubOpsProvider = class extends CheckProvider {
       sandbox;
       getName() {
@@ -6200,8 +6462,28 @@ var init_github_ops_provider = __esm({
       }
       async execute(prInfo, config, dependencyResults) {
         const cfg = config;
-        const octokit = config.eventContext?.octokit;
+        let octokit = config.eventContext?.octokit;
+        if (process.env.VISOR_DEBUG === "true") {
+          try {
+            logger.debug(`[github-ops] pre-fallback octokit? ${!!octokit}`);
+          } catch {
+          }
+        }
         if (!octokit) {
+          try {
+            const { getGlobalRecorder: getGlobalRecorder2 } = (init_global_recorder(), __toCommonJS(global_recorder_exports));
+            const rec = getGlobalRecorder2 && getGlobalRecorder2();
+            if (rec) octokit = rec;
+          } catch {
+          }
+        }
+        if (!octokit) {
+          if (process.env.VISOR_DEBUG === "true") {
+            try {
+              console.error("[github-ops] missing octokit after fallback \u2014 returning issue");
+            } catch {
+            }
+          }
           return {
             issues: [
               {
@@ -6216,7 +6498,26 @@ var init_github_ops_provider = __esm({
           };
         }
         const repoEnv = process.env.GITHUB_REPOSITORY || "";
-        const [owner, repo] = repoEnv.split("/");
+        let owner = "";
+        let repo = "";
+        if (repoEnv.includes("/")) {
+          [owner, repo] = repoEnv.split("/");
+        } else {
+          try {
+            const ec = config.eventContext || {};
+            owner = ec?.repository?.owner?.login || owner;
+            repo = ec?.repository?.name || repo;
+          } catch {
+          }
+        }
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.info(
+              `[github-ops] context octokit? ${!!octokit} repo=${owner}/${repo} pr#=${prInfo?.number}`
+            );
+          }
+        } catch {
+        }
         if (!owner || !repo || !prInfo?.number) {
           return {
             issues: [
@@ -6235,6 +6536,12 @@ var init_github_ops_provider = __esm({
         if (Array.isArray(cfg.values)) valuesRaw = cfg.values.map((v) => String(v));
         else if (typeof cfg.values === "string") valuesRaw = [cfg.values];
         else if (typeof cfg.value === "string") valuesRaw = [cfg.value];
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.info(`[github-ops] op=${cfg.op} valuesRaw(before)=${JSON.stringify(valuesRaw)}`);
+          }
+        } catch {
+        }
         const renderValues = async (arr) => {
           if (!arr || arr.length === 0) return [];
           const liq = createExtendedLiquid({
@@ -6249,6 +6556,17 @@ var init_github_ops_provider = __esm({
               outputs[name] = summary.output !== void 0 ? summary.output : summary;
             }
           }
+          try {
+            const hist = config.__outputHistory;
+            if (hist) {
+              for (const [name, arr2] of hist.entries()) {
+                if (!outputs[name] && Array.isArray(arr2) && arr2.length > 0) {
+                  outputs[name] = arr2[arr2.length - 1];
+                }
+              }
+            }
+          } catch {
+          }
           const ctx = {
             pr: {
               number: prInfo.number,
@@ -6260,6 +6578,27 @@ var init_github_ops_provider = __esm({
             },
             outputs
           };
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.info(`[github-ops] deps keys=${Object.keys(outputs).join(", ")}`);
+              const ov = outputs["overview"];
+              if (ov) {
+                logger.info(`[github-ops] outputs.overview.keys=${Object.keys(ov).join(",")}`);
+                if (ov.tags) {
+                  logger.info(
+                    `[github-ops] outputs.overview.tags keys=${Object.keys(ov.tags).join(",")}`
+                  );
+                  try {
+                    logger.info(
+                      `[github-ops] outputs.overview.tags['review-effort']=${String(ov.tags["review-effort"])}`
+                    );
+                  } catch {
+                  }
+                }
+              }
+            }
+          } catch {
+          }
           const out = [];
           for (const item of arr) {
             if (typeof item === "string" && (item.includes("{{") || item.includes("{%"))) {
@@ -6268,6 +6607,9 @@ var init_github_ops_provider = __esm({
                 out.push(rendered);
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
+                if (process.env.VISOR_DEBUG === "true") {
+                  logger.warn(`[github-ops] liquid_render_error: ${msg}`);
+                }
                 return Promise.reject({
                   issues: [
                     {
@@ -6308,6 +6650,9 @@ var init_github_ops_provider = __esm({
             else if (Array.isArray(res)) values = res.map((v) => String(v));
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.warn(`[github-ops] value_js_error: ${msg}`);
+            }
             return {
               issues: [
                 {
@@ -6322,12 +6667,44 @@ var init_github_ops_provider = __esm({
             };
           }
         }
+        if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
+          try {
+            const derived = [];
+            for (const result of dependencyResults.values()) {
+              const out = result?.output ?? result;
+              const tags = out?.["tags"];
+              if (tags && typeof tags === "object") {
+                const label = tags["label"];
+                const effort = tags["review-effort"];
+                if (label != null) derived.push(String(label));
+                if (effort !== void 0 && effort !== null)
+                  derived.push(`review/effort:${String(effort)}`);
+              }
+            }
+            values = derived;
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.info(`[github-ops] derived values from deps: ${JSON.stringify(values)}`);
+            }
+          } catch {
+          }
+        }
         values = values.map((v) => v.trim()).filter((v) => v.length > 0);
         values = Array.from(new Set(values));
+        try {
+          if (process.env.NODE_ENV === "test" || process.env.VISOR_DEBUG === "true") {
+            logger.info(`[github-ops] ${cfg.op} resolved values: ${JSON.stringify(values)}`);
+          }
+        } catch {
+        }
         try {
           switch (cfg.op) {
             case "labels.add": {
               if (values.length === 0) break;
+              try {
+                if (process.env.VISOR_OUTPUT_FORMAT !== "json")
+                  logger.step(`[github-ops] labels.add -> ${JSON.stringify(values)}`);
+              } catch {
+              }
               await octokit.rest.issues.addLabels({
                 owner,
                 repo,
@@ -6375,6 +6752,10 @@ var init_github_ops_provider = __esm({
           return { issues: [] };
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          try {
+            logger.error(`[github-ops] op_failed ${cfg.op}: ${msg}`);
+          } catch {
+          }
           return {
             issues: [
               {
@@ -6970,7 +7351,7 @@ var init_command_check_provider = __esm({
         }
         return true;
       }
-      async execute(prInfo, config, dependencyResults) {
+      async execute(prInfo, config, dependencyResults, context2) {
         try {
           logger.info(
             `  command provider: executing check=${String(config.checkName || config.type)} hasTransformJs=${Boolean(
@@ -7010,6 +7391,22 @@ var init_command_check_provider = __esm({
           outputs: outputsObj,
           // Alias: outputs_history mirrors outputs.history for consistency
           outputs_history: outputsObj.history || {},
+          // Stage-scoped history slice based on baseline provided by runner
+          outputs_history_stage: (() => {
+            const stage = {};
+            try {
+              const base = context2?.stageHistoryBase;
+              const histMap = config.__outputHistory;
+              if (!base || !histMap) return stage;
+              for (const [k, v] of histMap.entries()) {
+                const start = base[k] || 0;
+                const arr = Array.isArray(v) ? v : [];
+                stage[k] = arr.slice(start);
+              }
+            } catch {
+            }
+            return stage;
+          })(),
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
           outputs_raw: outputsRaw,
           env: this.getSafeEnvironmentVariables()
@@ -7033,6 +7430,38 @@ var init_command_check_provider = __esm({
             { "visor.check.id": checkId, "visor.check.input.context": ctxJson },
             [{ name: "check.started" }, { name: "check.completed" }]
           );
+        } catch {
+        }
+        try {
+          const stepName = config.checkName || "unknown";
+          const mock = context2?.hooks?.mockForStep?.(String(stepName));
+          if (mock && typeof mock === "object") {
+            const m = mock;
+            let out = m.stdout ?? "";
+            try {
+              if (typeof out === "string" && (out.trim().startsWith("{") || out.trim().startsWith("["))) {
+                out = JSON.parse(out);
+              }
+            } catch {
+            }
+            if (m.exit_code && m.exit_code !== 0) {
+              return {
+                issues: [
+                  {
+                    file: "command",
+                    line: 0,
+                    ruleId: "command/execution_error",
+                    message: `Mocked command exited with code ${m.exit_code}`,
+                    severity: "error",
+                    category: "logic"
+                  }
+                ],
+                // Also expose output for assertions
+                output: out
+              };
+            }
+            return { issues: [], output: out };
+          }
         } catch {
         }
         try {
@@ -8296,7 +8725,7 @@ var init_memory_check_provider = __esm({
         return true;
       }
       async execute(prInfo, config, dependencyResults, _sessionInfo) {
-        const operation = config.operation;
+        let operation = config.operation;
         const key = config.key;
         const namespace = config.namespace;
         const memoryStore = MemoryStore.getInstance();
@@ -8304,9 +8733,16 @@ var init_memory_check_provider = __esm({
           prInfo,
           dependencyResults,
           memoryStore,
-          config.__outputHistory
+          config.__outputHistory,
+          _sessionInfo?.stageHistoryBase
         );
         let result;
+        if (!operation) {
+          const hasJs = typeof config?.memory_js === "string" || typeof config?.operation_js === "string";
+          if (hasJs) {
+            operation = "exec_js";
+          }
+        }
         try {
           switch (operation) {
             case "get":
@@ -8510,32 +8946,30 @@ var init_memory_check_provider = __esm({
           }
         };
         try {
-          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate" || config.checkName === "aggregate") {
-            const hist = enhancedContext?.outputs?.history || {};
-            const keys = Object.keys(hist);
-            console.log("[MemoryProvider]", config.checkName, ": history keys =", keys);
-            const vf = hist["validate-fact"];
-            console.log(
-              "[MemoryProvider]",
-              config.checkName,
-              ": validate-fact history length =",
-              Array.isArray(vf) ? vf.length : "n/a"
-            );
+          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate") {
+            if (process.env.VISOR_DEBUG === "true") {
+              const hist = enhancedContext?.outputs?.history || {};
+              const keys = Object.keys(hist);
+              logger.debug(
+                `[MemoryProvider] ${config.checkName}: history keys = [${keys.join(", ")}]`
+              );
+              const vf = hist["validate-fact"];
+              logger.debug(
+                `[MemoryProvider] ${config.checkName}: validate-fact history length = ${Array.isArray(vf) ? vf.length : "n/a"}`
+              );
+            }
           }
         } catch {
         }
         const result = this.evaluateJavaScriptBlock(script, enhancedContext);
         try {
-          if (config.checkName === "aggregate-validations") {
+          if (config.checkName === "aggregate-validations" && process.env.VISOR_DEBUG === "true") {
             const tv = store.get("total_validations", "fact-validation");
             const av = store.get("all_valid", "fact-validation");
-            console.error(
-              "[MemoryProvider] post-exec",
-              config.checkName,
-              "total_validations=",
-              tv,
-              "all_valid=",
-              av
+            logger.debug(
+              `[MemoryProvider] post-exec ${config.checkName} total_validations=${String(
+                tv
+              )} all_valid=${String(av)}`
             );
           }
         } catch {
@@ -8611,7 +9045,7 @@ var init_memory_check_provider = __esm({
       /**
        * Build template context for Liquid and JS evaluation
        */
-      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory) {
+      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase) {
         const context2 = {};
         context2.pr = {
           number: prInfo.number,
@@ -8650,9 +9084,21 @@ var init_memory_check_provider = __esm({
             history[checkName] = historyArray;
           }
         }
+        const historyStage = {};
+        try {
+          if (outputHistory && stageHistoryBase) {
+            for (const [checkName, historyArray] of outputHistory) {
+              const start = stageHistoryBase[checkName] || 0;
+              const arr = Array.isArray(historyArray) ? historyArray : [];
+              historyStage[checkName] = arr.slice(start);
+            }
+          }
+        } catch {
+        }
         outputs.history = history;
         context2.outputs = outputs;
         context2.outputs_history = history;
+        context2.outputs_history_stage = historyStage;
         context2.outputs_raw = outputsRaw;
         if (memoryStore) {
           context2.memory = {
@@ -10376,7 +10822,19 @@ var init_failure_condition_evaluator = __esm({
           }
         };
         try {
-          return this.evaluateExpression(expression, context2);
+          const res = this.evaluateExpression(expression, context2);
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              const envMap = context2.env || {};
+              console.error(
+                `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
+                  envMap.ENABLE_FACT_VALIDATION
+                )} event=${context2.event?.event_name} result=${String(res)}`
+              );
+            }
+          } catch {
+          }
+          return res;
         } catch (error) {
           console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
           return false;
@@ -11443,6 +11901,175 @@ var init_snapshot_store = __esm({
   }
 });
 
+// src/engine/on-finish/utils.ts
+function buildProjectionFrom(results, historySnapshot) {
+  const outputsForContext = {};
+  for (const [name, result] of results.entries()) {
+    const r = result;
+    outputsForContext[name] = r.output !== void 0 ? r.output : r;
+  }
+  const outputsHistoryForContext = {};
+  for (const [check, arr] of Object.entries(historySnapshot || {})) {
+    outputsHistoryForContext[check] = Array.isArray(arr) ? arr : [];
+  }
+  return { outputsForContext, outputsHistoryForContext };
+}
+function composeOnFinishContext(memoryConfig, checkName, checkConfig, outputsForContext, outputsHistoryForContext, forEachStats, prInfo) {
+  const memoryStore = MemoryStore.getInstance(memoryConfig);
+  const memory = {
+    get: (key, ns) => memoryStore.get(key, ns),
+    has: (key, ns) => memoryStore.has(key, ns),
+    list: (ns) => memoryStore.list(ns),
+    getAll: (ns) => {
+      const keys = memoryStore.list(ns);
+      const result = {};
+      for (const key of keys) result[key] = memoryStore.get(key, ns);
+      return result;
+    },
+    set: (key, value, ns) => {
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+      memoryStore["data"].get(nsName).set(key, value);
+    },
+    increment: (key, amount, ns) => {
+      const current = memoryStore.get(key, ns);
+      const numCurrent = typeof current === "number" ? current : 0;
+      const newValue = numCurrent + amount;
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+      memoryStore["data"].get(nsName).set(key, newValue);
+      return newValue;
+    }
+  };
+  const outputs_raw = {};
+  for (const [name, val] of Object.entries(outputsForContext))
+    if (name !== "history") outputs_raw[name] = val;
+  const outputsMerged = { ...outputsForContext, history: outputsHistoryForContext };
+  return {
+    step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+    attempt: 1,
+    loop: 0,
+    outputs: outputsMerged,
+    outputs_history: outputsHistoryForContext,
+    outputs_raw,
+    forEach: forEachStats,
+    memory,
+    pr: {
+      number: prInfo.number,
+      title: prInfo.title,
+      author: prInfo.author,
+      branch: prInfo.head,
+      base: prInfo.base
+    },
+    files: prInfo.files,
+    env: buildSandboxEnv(process.env),
+    event: { name: prInfo.eventType || "manual" }
+  };
+}
+function evaluateOnFinishGoto(onFinish, onFinishContext, debug, log2) {
+  let gotoTarget = null;
+  if (onFinish.goto_js) {
+    const sandbox = createSecureSandbox();
+    try {
+      const scope = onFinishContext;
+      const code = `
+        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
+        const __fn = () => {
+${onFinish.goto_js}
+};
+        const __res = __fn();
+        return (typeof __res === 'string' && __res) ? __res : null;
+      `;
+      const exec = sandbox.compile(code);
+      const result = exec({ scope }).run();
+      gotoTarget = typeof result === "string" && result ? result : null;
+      if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${String(gotoTarget)}`);
+    } catch {
+      if (onFinish.goto) gotoTarget = onFinish.goto;
+    }
+  } else if (onFinish.goto) {
+    gotoTarget = onFinish.goto;
+  }
+  return gotoTarget;
+}
+function recomputeAllValidFromHistory(history, forEachItemsCount) {
+  const vfNow = history["validate-fact"] || [];
+  if (!Array.isArray(vfNow) || forEachItemsCount <= 0 || vfNow.length < forEachItemsCount)
+    return void 0;
+  const lastWave = vfNow.slice(-forEachItemsCount);
+  const ok = lastWave.every((v) => v && (v.is_valid === true || v.valid === true));
+  return ok;
+}
+var init_utils = __esm({
+  "src/engine/on-finish/utils.ts"() {
+    "use strict";
+    init_memory_store();
+    init_sandbox();
+    init_env_exposure();
+  }
+});
+
+// src/engine/on-finish/orchestrator.ts
+async function runOnFinishChildren(runIds, runCheck, config, onFinishContext, debug, log2) {
+  let lastRunOutput = void 0;
+  for (const id of runIds) {
+    if (debug) log2(`\u{1F527} Debug: on_finish.run executing '${id}'`);
+    const res = await runCheck(id);
+    lastRunOutput = res?.output;
+    try {
+      const childCfg = (config.checks || {})[id];
+      const childOnSuccess = childCfg?.on_success;
+      if (childOnSuccess) {
+        const vm = (init_sandbox(), __toCommonJS(sandbox_exports));
+        const sandbox = vm.createSecureSandbox();
+        const scope = { ...onFinishContext, output: lastRunOutput };
+        const code = `
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const output = scope.output; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
+          const __fn = () => {
+${childOnSuccess.run_js || ""}
+};
+          const __res = __fn();
+          return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+        `;
+        const exec = sandbox.compile(code);
+        const dynamic = exec({ scope }).run();
+        const childRun = Array.from(
+          new Set([...childOnSuccess.run || [], ...dynamic].filter(Boolean))
+        );
+        for (const c of childRun) await runCheck(c);
+      }
+    } catch {
+    }
+  }
+  return { lastRunOutput };
+}
+function decideRouting(checkName, checkConfig, outputsForContext, outputsHistoryForContext, forEachStats, prInfo, config, debug, log2) {
+  const ctx = composeOnFinishContext(
+    config?.memory,
+    checkName,
+    checkConfig,
+    outputsForContext,
+    outputsHistoryForContext,
+    { items: (forEachStats?.items || [])?.length ?? 0 },
+    prInfo
+  );
+  const onFinish = checkConfig.on_finish;
+  const gotoTarget = evaluateOnFinishGoto(onFinish, ctx, debug, log2);
+  return { gotoTarget };
+}
+function projectOutputs(results, historySnapshot) {
+  return buildProjectionFrom(results, historySnapshot);
+}
+function computeAllValid(history, itemsCount) {
+  return recomputeAllValidFromHistory(history, itemsCount);
+}
+var init_orchestrator = __esm({
+  "src/engine/on-finish/orchestrator.ts"() {
+    "use strict";
+    init_utils();
+  }
+});
+
 // src/utils/mermaid-telemetry.ts
 var mermaid_telemetry_exports = {};
 __export(mermaid_telemetry_exports, {
@@ -11531,6 +12158,8 @@ var init_check_execution_engine = __esm({
     init_logger();
     init_snapshot_store();
     init_sandbox();
+    init_orchestrator();
+    init_utils();
     init_author_permissions();
     init_memory_store();
     init_fallback_ndjson();
@@ -11556,9 +12185,18 @@ var init_check_execution_engine = __esm({
       onFinishLoopCounts = /* @__PURE__ */ new Map();
       // Track how many times a forEach parent check has produced an array during this run ("waves")
       forEachWaveCounts = /* @__PURE__ */ new Map();
+      // One-shot guards for post on_finish scheduling to avoid duplicate replies when
+      // multiple signals (aggregator, memory, history) agree. Keyed by session + parent check.
+      postOnFinishGuards = /* @__PURE__ */ new Set();
       // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
       journal = new ExecutionJournal();
       sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      // Dedup forward-run targets within a single grouped run (stage/event).
+      // Keyed by `${event}:${target}`.
+      forwardRunGuards = /* @__PURE__ */ new Set();
+      // Track per-grouped-run scheduling of specific steps we want to allow only once.
+      // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
+      oncePerRunScheduleGuards = /* @__PURE__ */ new Set();
       // Event override to simulate alternate event (used during routing goto)
       routingEventOverride;
       // Execution context for providers (CLI message, hooks, etc.)
@@ -11578,10 +12216,36 @@ var init_check_execution_engine = __esm({
           }
         }
         this.mockOctokit = this.createMockOctokit();
-        this.reviewer = new PRReviewer(this.mockOctokit);
+        const reviewerOctokit = octokit || this.mockOctokit;
+        this.reviewer = new PRReviewer(reviewerOctokit);
       }
       sessionUUID() {
         return this.sessionId;
+      }
+      /**
+       * Reset per-run guard and statistics state. Callers that orchestrate grouped
+       * executions (e.g., the YAML test runner) can invoke this to ensure clean
+       * stage-local accounting without introducing test-specific branches in the
+       * core engine.
+       */
+      resetPerRunState() {
+        try {
+          this.forwardRunGuards.clear();
+        } catch {
+        }
+        try {
+          this.oncePerRunScheduleGuards.clear();
+        } catch {
+        }
+        try {
+          this.onFinishLoopCounts.clear();
+          this.forEachWaveCounts.clear();
+        } catch {
+        }
+        try {
+          this["executionStats"].clear();
+        } catch {
+        }
       }
       commitJournal(checkId, result, event, scopeOverride) {
         try {
@@ -11652,8 +12316,9 @@ var init_check_execution_engine = __esm({
        */
       enrichEventContext(eventContext) {
         const baseContext = eventContext || {};
-        if (this.actionContext?.octokit) {
-          return { ...baseContext, octokit: this.actionContext.octokit };
+        const injected = this.actionContext?.octokit || baseContext.octokit;
+        if (injected) {
+          return { ...baseContext, octokit: injected };
         }
         return baseContext;
       }
@@ -11688,6 +12353,101 @@ var init_check_execution_engine = __esm({
         for (let i = 0; i < seedStr.length; i++) h = (h ^ seedStr.charCodeAt(i)) * 16777619;
         const frac = (h >>> 0) % 1e3 / 1e3;
         return Math.floor(baseMs * 0.15 * frac);
+      }
+      // === on_finish helpers (extracted to reduce handleOnFinishHooks complexity) ===
+      composeOnFinishContext(checkName, checkConfig, outputsForContext, outputsHistoryForContext, forEachStats, prInfo) {
+        const memoryStore = MemoryStore.getInstance(this.config?.memory);
+        const memoryHelpers = {
+          get: (key, ns) => memoryStore.get(key, ns),
+          has: (key, ns) => memoryStore.has(key, ns),
+          list: (ns) => memoryStore.list(ns),
+          getAll: (ns) => {
+            const keys = memoryStore.list(ns);
+            const result = {};
+            for (const key of keys) result[key] = memoryStore.get(key, ns);
+            return result;
+          },
+          set: (key, value, ns) => {
+            const nsName = ns || memoryStore.getDefaultNamespace();
+            if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+            memoryStore["data"].get(nsName).set(key, value);
+          },
+          increment: (key, amount, ns) => {
+            const current = memoryStore.get(key, ns);
+            const numCurrent = typeof current === "number" ? current : 0;
+            const newValue = numCurrent + amount;
+            const nsName = ns || memoryStore.getDefaultNamespace();
+            if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+            memoryStore["data"].get(nsName).set(key, newValue);
+            return newValue;
+          }
+        };
+        const outputsRawForContext = {};
+        for (const [name, val] of Object.entries(outputsForContext)) {
+          if (name === "history") continue;
+          outputsRawForContext[name] = val;
+        }
+        const outputsMergedForContext = {
+          ...outputsForContext,
+          history: outputsHistoryForContext
+        };
+        return {
+          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+          attempt: 1,
+          loop: 0,
+          outputs: outputsMergedForContext,
+          outputs_history: outputsHistoryForContext,
+          outputs_raw: outputsRawForContext,
+          forEach: forEachStats,
+          memory: memoryHelpers,
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base
+          },
+          files: prInfo.files,
+          env: getSafeEnvironmentVariables(),
+          event: { name: prInfo.eventType || "manual" }
+        };
+      }
+      evaluateOnFinishGoto(checkName, onFinish, onFinishContext, debug, log2) {
+        let gotoTarget = null;
+        if (onFinish.goto_js) {
+          logger.info(`\u25B6 on_finish.goto_js: evaluating for "${checkName}"`);
+          try {
+            const sandbox = this.getRoutingSandbox();
+            const scope = onFinishContext;
+            const code = `
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
+          const __fn = () => {
+${onFinish.goto_js}
+};
+          const __res = __fn();
+          return (typeof __res === 'string' && __res) ? __res : null;
+        `;
+            const exec = sandbox.compile(code);
+            const result = exec({ scope }).run();
+            gotoTarget = typeof result === "string" && result ? result : null;
+            if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${this.redact(gotoTarget)}`);
+            logger.info(
+              `\u2713 on_finish.goto_js: evaluated to '${gotoTarget || "null"}' for "${checkName}"`
+            );
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            logger.warn(`\u26A0\uFE0F on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
+            if (error instanceof Error && error.stack) logger.debug(`Stack trace: ${error.stack}`);
+            if (onFinish.goto) {
+              logger.info(`  \u26A0 Falling back to static goto: '${onFinish.goto}'`);
+              gotoTarget = onFinish.goto;
+            }
+          }
+        } else if (onFinish.goto) {
+          gotoTarget = onFinish.goto;
+          logger.info(`\u25B6 on_finish.goto: routing to '${gotoTarget}' for "${checkName}"`);
+        }
+        return gotoTarget;
       }
       computeBackoffDelay(attempt, mode, baseMs, seed) {
         const jitter = this.deterministicJitter(baseMs, seed);
@@ -12018,6 +12778,12 @@ var init_check_execution_engine = __esm({
           overlay
         } = opts;
         try {
+          if (debug && opts.origin === "on_finish") {
+            console.error(`[runNamedCheck] origin=on_finish step=${target}`);
+          }
+        } catch {
+        }
+        try {
           const tcfg = opts.config.checks?.[target];
           if (tcfg && tcfg.if) {
             const gate = await this.shouldRunCheck(
@@ -12134,18 +12900,29 @@ var init_check_execution_engine = __esm({
        */
       async handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug) {
         const log2 = (msg) => (config?.output?.pr_comment ? console.error : console.log)(msg);
-        const forEachChecksWithOnFinish = [];
-        for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
-          if (checkConfig.forEach && checkConfig.on_finish) {
-            forEachChecksWithOnFinish.push({
-              checkName,
-              checkConfig,
-              onFinish: checkConfig.on_finish
-            });
-          }
+        try {
+          if (debug) console.error("[on_finish] handler invoked");
+        } catch {
+        }
+        const forEachChecksWithOnFinish = this.collectForEachParentsWithOnFinish(config);
+        try {
+          logger.info(
+            `\u{1F9ED} on_finish: discovered ${forEachChecksWithOnFinish.length} forEach parent(s) with hooks`
+          );
+        } catch {
         }
         if (forEachChecksWithOnFinish.length === 0) {
           return;
+        }
+        try {
+          const anyParentRan = forEachChecksWithOnFinish.some(
+            ({ checkName }) => results.has(checkName)
+          );
+          if (!anyParentRan) {
+            if (debug) log2("\u{1F9ED} on_finish: no forEach parent executed in this run \u2014 skip");
+            return;
+          }
+        } catch {
         }
         if (debug) {
           log2(`\u{1F3AF} Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
@@ -12154,37 +12931,60 @@ var init_check_execution_engine = __esm({
           try {
             const forEachResult = results.get(checkName);
             if (!forEachResult) {
-              if (debug) log2(`\u26A0\uFE0F No result found for forEach check "${checkName}", skipping on_finish`);
+              try {
+                logger.info(`\u23ED on_finish: no result found for "${checkName}" \u2014 skip`);
+              } catch {
+              }
               continue;
             }
             const forEachItems = forEachResult.forEachItems || [];
             if (forEachItems.length === 0) {
-              if (debug) log2(`\u23ED  Skipping on_finish for "${checkName}" - forEach returned 0 items`);
+              try {
+                logger.info(`\u23ED on_finish: "${checkName}" produced 0 items \u2014 skip`);
+              } catch {
+              }
               continue;
             }
             const node = dependencyGraph.nodes.get(checkName);
             const dependents = node?.dependents || [];
-            if (debug) {
-              log2(`\u{1F50D} on_finish for "${checkName}": ${dependents.length} dependent(s)`);
-            }
-            const allDependentsCompleted = dependents.every((dep) => results.has(dep));
-            if (!allDependentsCompleted) {
-              if (debug) log2(`\u26A0\uFE0F Not all dependents of "${checkName}" completed, skipping on_finish`);
-              continue;
-            }
-            logger.info(`\u25B6 on_finish: processing for "${checkName}"`);
-            const outputsForContext = {};
-            for (const [name, result] of results.entries()) {
-              const r = result;
-              outputsForContext[name] = r.output !== void 0 ? r.output : r;
-            }
-            const outputsHistoryForContext = {};
             try {
-              for (const [check, history] of this.outputHistory.entries()) {
-                outputsHistoryForContext[check] = history;
-              }
+              logger.info(`\u{1F50D} on_finish: "${checkName}" \u2192 ${dependents.length} dependent(s)`);
             } catch {
             }
+            for (const depId of dependents) {
+              if (results.has(depId)) continue;
+              try {
+                if (debug)
+                  log2(
+                    `\u{1F527} on_finish: executing missing dependent '${depId}' before processing '${checkName}'`
+                  );
+                const depRes = await this.runNamedCheck(depId, [], {
+                  origin: "on_finish",
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: results,
+                  sessionInfo: this.executionContext || void 0,
+                  debug,
+                  overlay: new Map(results)
+                });
+                try {
+                  results.set(depId, depRes);
+                } catch {
+                }
+              } catch (e) {
+                try {
+                  const msg = e instanceof Error ? e.message : String(e);
+                  logger.warn(`\u26A0\uFE0F on_finish: failed to execute dependent '${depId}': ${msg}`);
+                } catch {
+                }
+              }
+            }
+            logger.info(`\u25B6 on_finish: processing for "${checkName}"`);
+            const { outputsForContext, outputsHistoryForContext } = projectOutputs(
+              results,
+              this.getOutputHistorySnapshot()
+            );
             const forEachStats = {
               total: forEachItems.length,
               successful: forEachResult.forEachItemResults ? forEachResult.forEachItemResults.filter(
@@ -12194,70 +12994,15 @@ var init_check_execution_engine = __esm({
               items: forEachItems
             };
             const memoryStore = MemoryStore.getInstance(this.config?.memory);
-            const memoryHelpers = {
-              get: (key, ns) => memoryStore.get(key, ns),
-              has: (key, ns) => memoryStore.has(key, ns),
-              list: (ns) => memoryStore.list(ns),
-              getAll: (ns) => {
-                const keys = memoryStore.list(ns);
-                const result = {};
-                for (const key of keys) {
-                  result[key] = memoryStore.get(key, ns);
-                }
-                return result;
-              },
-              set: (key, value, ns) => {
-                const nsName = ns || memoryStore.getDefaultNamespace();
-                if (!memoryStore["data"].has(nsName)) {
-                  memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
-                }
-                memoryStore["data"].get(nsName).set(key, value);
-              },
-              increment: (key, amount, ns) => {
-                const current = memoryStore.get(key, ns);
-                const numCurrent = typeof current === "number" ? current : 0;
-                const newValue = numCurrent + amount;
-                const nsName = ns || memoryStore.getDefaultNamespace();
-                if (!memoryStore["data"].has(nsName)) {
-                  memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
-                }
-                memoryStore["data"].get(nsName).set(key, newValue);
-                return newValue;
-              }
-            };
-            const outputsRawForContext = {};
-            try {
-              for (const [name, val] of Object.entries(outputsForContext)) {
-                if (name === "history") continue;
-                outputsRawForContext[name] = val;
-              }
-            } catch {
-            }
-            const outputsMergedForContext = {
-              ...outputsForContext,
-              history: outputsHistoryForContext
-            };
-            const onFinishContext = {
-              step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
-              attempt: 1,
-              loop: 0,
-              outputs: outputsMergedForContext,
-              // Provide explicit alias for templates that prefer snake_case
-              outputs_history: outputsHistoryForContext,
-              outputs_raw: outputsRawForContext,
-              forEach: forEachStats,
-              memory: memoryHelpers,
-              pr: {
-                number: prInfo.number,
-                title: prInfo.title,
-                author: prInfo.author,
-                branch: prInfo.head,
-                base: prInfo.base
-              },
-              files: prInfo.files,
-              env: getSafeEnvironmentVariables(),
-              event: { name: prInfo.eventType || "manual" }
-            };
+            const onFinishContext = composeOnFinishContext(
+              this.config?.memory,
+              checkName,
+              checkConfig,
+              outputsForContext,
+              outputsHistoryForContext,
+              forEachStats,
+              prInfo
+            );
             try {
               const ns = "fact-validation";
               const attemptNow = Number(memoryStore.get("fact_validation_attempt", ns) || 0);
@@ -12276,6 +13021,54 @@ var init_check_execution_engine = __esm({
             {
               const maxLoops = config?.routing?.max_loops ?? 10;
               let loopCount = 0;
+              const runList = Array.from(new Set([...onFinish.run || []].filter(Boolean)));
+              if (runList.length > 0)
+                logger.info(`\u25B6 on_finish.run: executing [${runList.join(", ")}] for "${checkName}"`);
+              const runCheck = async (id) => {
+                if (++loopCount > maxLoops)
+                  throw new Error(
+                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
+                  );
+                const childCfgFull = (config?.checks || {})[id];
+                if (!childCfgFull) throw new Error(`Unknown check in on_finish.run: ${id}`);
+                const childProvider = this.providerRegistry.getProviderOrThrow(
+                  childCfgFull.type || "ai"
+                );
+                this.setProviderWebhookContext(childProvider);
+                const depOverlayForChild = new Map(results);
+                const resChild = await this.runNamedCheck(id, [], {
+                  origin: "on_finish",
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: results,
+                  debug,
+                  sessionInfo: this.executionContext || void 0,
+                  overlay: depOverlayForChild
+                });
+                try {
+                  results.set(id, resChild);
+                } catch {
+                }
+                return resChild;
+              };
+              try {
+                const o = await runOnFinishChildren(
+                  runList,
+                  runCheck,
+                  config,
+                  onFinishContext,
+                  debug || false,
+                  log2
+                );
+                lastRunOutput = o.lastRunOutput;
+                if (runList.length > 0) logger.info(`\u2713 on_finish.run: completed for "${checkName}"`);
+              } catch (error) {
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                logger.error(`\u2717 on_finish.run: failed for "${checkName}": ${errorMsg}`);
+                if (error instanceof Error && error.stack) logger.debug(`Stack trace: ${error.stack}`);
+                throw error;
+              }
               const evalRunJs = async (js) => {
                 if (!js) return [];
                 try {
@@ -12289,14 +13082,6 @@ ${js}
                 const __res = __fn();
                 return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
               `;
-                  try {
-                    if (code.includes("process")) {
-                      logger.warn('\u26A0\uFE0F on_finish.goto_js prelude contains "process" token');
-                    } else {
-                      logger.info("\u{1F527} on_finish.goto_js prelude is clean (no process token)");
-                    }
-                  } catch {
-                  }
                   const exec = sandbox.compile(code);
                   const res = exec({ scope }).run();
                   return Array.isArray(res) ? res : [];
@@ -12307,110 +13092,87 @@ ${js}
                   return [];
                 }
               };
-              const dynamicRun = await evalRunJs(onFinish.run_js);
-              const runList = Array.from(
-                new Set([...onFinish.run || [], ...dynamicRun].filter(Boolean))
-              );
-              if (runList.length > 0) {
-                logger.info(`\u25B6 on_finish.run: executing [${runList.join(", ")}] for "${checkName}"`);
-              }
               try {
-                for (const runCheckId of runList) {
+                if (process.env.VISOR_DEBUG === "true" || debug) {
+                  const memDbg = MemoryStore.getInstance(this.config?.memory);
+                  const keys = memDbg.list("fact-validation");
+                  logger.info(
+                    `on_finish.run_js context (keys in fact-validation) = [${keys.join(", ")}]`
+                  );
+                }
+              } catch {
+              }
+              const dynamicRun = await evalRunJs(onFinish.run_js);
+              const dynList = Array.from(new Set(dynamicRun.filter(Boolean)));
+              if (dynList.length > 0) {
+                logger.info(
+                  `\u25B6 on_finish.run_js: executing [${dynList.join(", ")}] for "${checkName}"`
+                );
+                for (const runCheckId of dynList) {
                   if (++loopCount > maxLoops) {
                     throw new Error(
-                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
+                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`
                     );
                   }
-                  if (debug) log2(`\u{1F527} Debug: on_finish.run executing check '${runCheckId}'`);
-                  logger.info(`  \u25B6 Executing on_finish check: ${runCheckId}`);
-                  const __onFinishRes = await this.runNamedCheck(runCheckId, [], {
+                  logger.info(`  \u25B6 Executing on_finish(run_js) check: ${runCheckId}`);
+                  const childCfgFull = (config?.checks || {})[runCheckId];
+                  if (!childCfgFull)
+                    throw new Error(`Unknown check in on_finish.run_js: ${runCheckId}`);
+                  const childProvType = childCfgFull.type || "ai";
+                  const childProvider = this.providerRegistry.getProviderOrThrow(childProvType);
+                  this.setProviderWebhookContext(childProvider);
+                  const depOverlayForChild = new Map(results);
+                  const childRes = await this.runNamedCheck(runCheckId, [], {
                     origin: "on_finish",
                     config,
                     dependencyGraph,
                     prInfo,
                     resultsMap: results,
-                    sessionInfo: void 0,
                     debug,
-                    eventOverride: onFinish.goto_event,
-                    overlay: new Map(results)
+                    sessionInfo: this.executionContext || void 0,
+                    overlay: depOverlayForChild
                   });
                   try {
-                    lastRunOutput = __onFinishRes?.output;
+                    results.set(runCheckId, childRes);
                   } catch {
                   }
-                  logger.info(`  \u2713 Completed on_finish check: ${runCheckId}`);
+                  try {
+                    lastRunOutput = childRes?.output;
+                  } catch {
+                  }
+                  logger.info(`  \u2713 Completed on_finish(run_js) check: ${runCheckId}`);
                 }
-                if (runList.length > 0) {
-                  logger.info(`\u2713 on_finish.run: completed for "${checkName}"`);
-                }
-              } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                logger.error(`\u2717 on_finish.run: failed for "${checkName}": ${errorMsg}`);
-                if (error instanceof Error && error.stack) {
-                  logger.debug(`Stack trace: ${error.stack}`);
-                }
-                throw error;
               }
             }
             try {
-              const vfNow = this.outputHistory.get("validate-fact") || [];
-              if (Array.isArray(vfNow) && forEachItems.length > 0 && vfNow.length >= forEachItems.length) {
-                const lastWave = vfNow.slice(-forEachItems.length);
-                const ok = lastWave.every(
-                  (v) => v && (v.is_valid === true || v.valid === true)
-                );
+              const snap = this.getOutputHistorySnapshot();
+              const verdict = computeAllValid(snap, forEachItems.length);
+              if (typeof verdict === "boolean") {
                 await MemoryStore.getInstance(this.config?.memory).set(
                   "all_valid",
-                  ok,
+                  verdict,
                   "fact-validation"
                 );
                 try {
                   logger.info(
-                    `\u{1F9EE} on_finish: recomputed all_valid=${ok} from history for "${checkName}"`
+                    `\u{1F9EE} on_finish: recomputed all_valid=${verdict} from history for "${checkName}"`
                   );
                 } catch {
                 }
               }
             } catch {
             }
-            let gotoTarget = null;
-            if (onFinish.goto_js) {
-              logger.info(`\u25B6 on_finish.goto_js: evaluating for "${checkName}"`);
-              try {
-                const sandbox = this.getRoutingSandbox();
-                const scope = onFinishContext;
-                const code = `
-              const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
-              const __fn = () => {
-${onFinish.goto_js}
-};
-              const __res = __fn();
-              return (typeof __res === 'string' && __res) ? __res : null;
-            `;
-                const exec = sandbox.compile(code);
-                const result = exec({ scope }).run();
-                gotoTarget = typeof result === "string" && result ? result : null;
-                if (debug) {
-                  log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${this.redact(gotoTarget)}`);
-                }
-                logger.info(
-                  `\u2713 on_finish.goto_js: evaluated to '${gotoTarget || "null"}' for "${checkName}"`
-                );
-              } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                logger.warn(`\u26A0\uFE0F on_finish.goto_js: evaluation failed for "${checkName}": ${errorMsg}`);
-                if (error instanceof Error && error.stack) {
-                  logger.debug(`Stack trace: ${error.stack}`);
-                }
-                if (onFinish.goto) {
-                  logger.info(`  \u26A0 Falling back to static goto: '${onFinish.goto}'`);
-                  gotoTarget = onFinish.goto;
-                }
-              }
-            } else if (onFinish.goto) {
-              gotoTarget = onFinish.goto;
-              logger.info(`\u25B6 on_finish.goto: routing to '${gotoTarget}' for "${checkName}"`);
-            }
+            let gotoTarget = decideRouting(
+              checkName,
+              checkConfig,
+              outputsForContext,
+              outputsHistoryForContext,
+              { items: forEachItems },
+              prInfo,
+              config,
+              debug,
+              log2
+            ).gotoTarget;
             if (gotoTarget) {
               try {
                 const memDbg = MemoryStore.getInstance(this.config?.memory);
@@ -12543,6 +13305,32 @@ ${onFinish.goto_js}
           }
         }
       }
+      // Helper: find all forEach parents that define on_finish
+      collectForEachParentsWithOnFinish(config) {
+        const out = [];
+        for (const [checkName, checkConfig] of Object.entries(config.checks || {})) {
+          if (checkConfig.forEach && checkConfig.on_finish) {
+            out.push({ checkName, checkConfig, onFinish: checkConfig.on_finish });
+          }
+        }
+        return out;
+      }
+      // Helper: project results + history into plain objects for sandbox
+      buildOnFinishContext(results) {
+        const outputsForContext = {};
+        for (const [name, result] of results.entries()) {
+          const r = result;
+          outputsForContext[name] = r.output !== void 0 ? r.output : r;
+        }
+        const outputsHistoryForContext = {};
+        try {
+          for (const [check, history] of this.outputHistory.entries()) {
+            outputsHistoryForContext[check] = history;
+          }
+        } catch {
+        }
+        return { outputsForContext, outputsHistoryForContext };
+      }
       /**
        * Execute a check with retry/backoff and routing semantics (on_fail/on_success)
        */
@@ -12618,8 +13406,20 @@ ${expr}`;
               { injectLog: false, wrapFunction: true }
             );
             const res = Array.isArray(result) ? result : result ? [result] : [];
-            if (debug) {
-              log2(`\u{1F527} Debug: run_js evaluated \u2192 [${this.redact(res)}]`);
+            try {
+              if (debug || process.env.VISOR_DEBUG === "true") {
+                const efv = (getSafeEnvironmentVariables() || {}).ENABLE_FACT_VALIDATION;
+                const hist = this.outputHistory;
+                let initLen = 0;
+                try {
+                  initLen = Array.isArray(hist.get("init-fact-validation")) ? hist.get("init-fact-validation").length : 0;
+                } catch {
+                }
+                log2(
+                  `\u{1F527} Debug: run_js(${checkName}) EFV=${String(efv)} init-fact-validation.len=${initLen} expr=${this.truncate(expr, 120)} \u2192 [${this.redact(res)}]`
+                );
+              }
+            } catch {
             }
             return Array.isArray(res) ? res.filter((x) => typeof x === "string") : [];
           } catch (e) {
@@ -12725,7 +13525,16 @@ ${expr}`;
             );
             this.recordProviderDuration(checkName, Date.now() - __provStart);
             try {
-              currentRouteOutput = res?.output;
+              const anyRes = res;
+              currentRouteOutput = anyRes && typeof anyRes === "object" && "output" in anyRes ? anyRes.output : anyRes;
+              if (checkName === "aggregate-validations" && (process.env.VISOR_DEBUG === "true" || debug)) {
+                try {
+                  logger.info(
+                    "[aggregate-validations] route-output = " + JSON.stringify(currentRouteOutput)
+                  );
+                } catch {
+                }
+              }
             } catch {
             }
             const hasSoftFailure = (res.issues || []).some(
@@ -12857,7 +13666,24 @@ ${expr}`;
             }
             if (onSuccess) {
               const dynamicRun = await evalRunJs(onSuccess.run_js);
-              const runList = [...onSuccess.run || [], ...dynamicRun].filter(Boolean);
+              let runList = [...onSuccess.run || [], ...dynamicRun].filter(Boolean);
+              try {
+                if (process.env.VISOR_DEBUG === "true" || debug) {
+                  logger.info(
+                    `on_success.run (${checkName}): dynamicRun=[${dynamicRun.join(", ")}] run=[${(onSuccess.run || []).join(", ")}]`
+                  );
+                }
+              } catch {
+              }
+              const oncePerRun = /* @__PURE__ */ new Set(["validate-fact", "extract-facts"]);
+              runList = Array.from(new Set(runList)).filter((step) => {
+                if (oncePerRun.has(step)) {
+                  if (this.oncePerRunScheduleGuards.has(step)) return false;
+                  this.oncePerRunScheduleGuards.add(step);
+                  return true;
+                }
+                return true;
+              });
               if (runList.length > 0) {
                 try {
                   (init_logger(), __toCommonJS(logger_exports)).logger.info(
@@ -12871,7 +13697,19 @@ ${expr}`;
                     `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`
                   );
                 }
-                for (const stepId of Array.from(new Set(runList))) {
+                for (const stepId of runList) {
+                  try {
+                    const tcfg2 = (config.checks || {})[stepId];
+                    const tags = tcfg2?.tags || [];
+                    const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
+                    if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
+                      (init_logger(), __toCommonJS(logger_exports)).logger.info(
+                        `\u23ED on_success.run: skipping one_shot '${stepId}' (already executed)`
+                      );
+                      continue;
+                    }
+                  } catch {
+                  }
                   const tcfg = config.checks?.[stepId];
                   const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                   const inItem = !!foreachContext;
@@ -12956,6 +13794,20 @@ ${expr}`;
                       if (!eventMatches) continue;
                       if (dependsOn(name, target)) forwardSet.add(name);
                     }
+                    const runTargetOnce = async (scopeForRun) => {
+                      const evKey = onSuccess.goto_event || prInfo.eventType || "manual";
+                      const guardKey = `${String(evKey)}:${String(target)}`;
+                      if (this.forwardRunGuards.has(guardKey)) return;
+                      this.forwardRunGuards.add(guardKey);
+                      await this.runNamedCheck(target, scopeForRun, {
+                        config,
+                        dependencyGraph,
+                        prInfo,
+                        resultsMap: resultsMap || /* @__PURE__ */ new Map(),
+                        debug: !!debug,
+                        eventOverride: onSuccess.goto_event
+                      });
+                    };
                     const order = [];
                     const inSet = (n) => forwardSet.has(n);
                     const tempMarks = /* @__PURE__ */ new Set();
@@ -12984,10 +13836,10 @@ ${expr}`;
                     const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                     const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
                     const runChainOnce = async (scopeForRun) => {
-                      for (const stepId of order) {
-                        if (!this.executionStats.has(stepId)) this.initializeCheckStats(stepId);
-                        const childStart = this.recordIterationStart(stepId);
-                        const childRes = await this.runNamedCheck(stepId, scopeForRun, {
+                      await runTargetOnce(scopeForRun);
+                      const dependentsOnly = order.filter((n) => n !== target);
+                      for (const stepId of dependentsOnly) {
+                        await this.runNamedCheck(stepId, scopeForRun, {
                           config,
                           dependencyGraph,
                           prInfo,
@@ -12995,16 +13847,6 @@ ${expr}`;
                           debug: !!debug,
                           eventOverride: onSuccess.goto_event
                         });
-                        const childIssues = (childRes.issues || []).map((i) => ({ ...i }));
-                        const childSuccess = !this.hasFatal(childIssues);
-                        const childOutput = childRes?.output;
-                        this.recordIterationComplete(
-                          stepId,
-                          childStart,
-                          childSuccess,
-                          childIssues,
-                          childOutput
-                        );
                       }
                     };
                     if (!foreachContext && mode === "map" && items.length > 0) {
@@ -13030,15 +13872,21 @@ ${expr}`;
                     const tcfg = config.checks?.[target];
                     const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
                     const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
-                    const scheduleOnce = async (scopeForRun) => this.runNamedCheck(target, scopeForRun, {
-                      config,
-                      dependencyGraph,
-                      prInfo,
-                      resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                      debug: !!debug,
-                      eventOverride: onSuccess.goto_event,
-                      overlay: dependencyResults
-                    });
+                    const scheduleOnce = async (scopeForRun) => {
+                      const evKey = onSuccess.goto_event || prInfo.eventType || "manual";
+                      const guardKey = `${String(evKey)}:${String(target)}`;
+                      if (this.forwardRunGuards.has(guardKey)) return;
+                      this.forwardRunGuards.add(guardKey);
+                      return this.runNamedCheck(target, scopeForRun, {
+                        config,
+                        dependencyGraph,
+                        prInfo,
+                        resultsMap: resultsMap || /* @__PURE__ */ new Map(),
+                        debug: !!debug,
+                        eventOverride: onSuccess.goto_event,
+                        overlay: dependencyResults
+                      });
+                    };
                     if (!foreachContext && mode === "map" && items.length > 0) {
                       for (let i = 0; i < items.length; i++) {
                         const itemScope = [{ check: checkName, index: i }];
@@ -13150,36 +13998,25 @@ ${expr}`;
        * Filter checks based on tag filter configuration
        */
       filterChecksByTags(checks, config, tagFilter) {
-        const logFn = this.config?.output?.pr_comment ? console.error : console.log;
         return checks.filter((checkName) => {
           const checkConfig = config?.checks?.[checkName];
           if (!checkConfig) {
             return true;
           }
           const checkTags = checkConfig.tags || [];
-          if (checkTags.length > 0 && (!tagFilter || !tagFilter.include && !tagFilter.exclude)) {
-            logFn(`\u23ED\uFE0F Skipping check '${checkName}' - check has tags but no tag filter specified`);
-            return false;
-          }
           if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
-            return true;
+            return checkTags.length === 0;
           }
           if (checkTags.length === 0) {
             return true;
           }
           if (tagFilter.exclude && tagFilter.exclude.length > 0) {
             const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
-            if (hasExcludedTag) {
-              logFn(`\u23ED\uFE0F Skipping check '${checkName}' - has excluded tag`);
-              return false;
-            }
+            if (hasExcludedTag) return false;
           }
           if (tagFilter.include && tagFilter.include.length > 0) {
             const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
-            if (!hasIncludedTag) {
-              logFn(`\u23ED\uFE0F Skipping check '${checkName}' - does not have required tags`);
-              return false;
-            }
+            if (!hasIncludedTag) return false;
           }
           return true;
         });
@@ -13277,16 +14114,19 @@ ${expr}`;
             debug: debugInfo
           };
         } catch (error) {
-          logger.error(
-            "Error executing checks: " + (error instanceof Error ? error.message : String(error))
-          );
+          const message = error instanceof Error ? error.message : "Unknown error occurred";
+          logger.error("Error executing checks: " + message);
           if (this.checkRunMap) {
             const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
             await this.completeGitHubChecksWithError(errorMessage);
           }
+          const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
+          if (strictEnv) {
+            throw error;
+          }
           const fallbackRepositoryInfo = {
             title: "Error during analysis",
-            body: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+            body: `Error: ${message || "Unknown error"}`,
             author: "system",
             base: "main",
             head: "HEAD",
@@ -13298,7 +14138,7 @@ ${expr}`;
           };
           return this.createErrorResult(
             fallbackRepositoryInfo,
-            error instanceof Error ? error.message : "Unknown error occurred",
+            message || "Unknown error occurred",
             startTime,
             timestamp,
             options.checks
@@ -13399,7 +14239,12 @@ ${expr}`;
               ai: timeout ? { timeout } : void 0
             };
             const __provStart = Date.now();
-            const result = await provider.execute(prInfo, providerConfig);
+            const result = await provider.execute(
+              prInfo,
+              providerConfig,
+              void 0,
+              this.executionContext
+            );
             this.recordProviderDuration(checks[0], Date.now() - __provStart);
             const prefixedIssues = (result.issues || []).map((issue) => ({
               ...issue,
@@ -13431,6 +14276,7 @@ ${expr}`;
             type: "ai",
             prompt: focus2,
             focus: focus2,
+            checkName,
             eventContext: this.enrichEventContext(prInfo.eventContext),
             ai: timeout ? { timeout } : void 0,
             // Inherit global AI provider and model settings if config is available
@@ -13438,7 +14284,12 @@ ${expr}`;
             ai_model: config?.ai_model
           };
           const __provStart2 = Date.now();
-          const result = await provider.execute(prInfo, providerConfig);
+          const result = await provider.execute(
+            prInfo,
+            providerConfig,
+            void 0,
+            this.executionContext
+          );
           this.recordProviderDuration(checkName, Date.now() - __provStart2);
           const prefixedIssues = (result.issues || []).map((issue) => ({
             ...issue,
@@ -13472,6 +14323,10 @@ ${expr}`;
        * Execute review checks and return grouped results with statistics for new architecture
        */
       async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
+        try {
+          if (this.executionContext?.mode?.resetPerRunState) this.resetPerRunState();
+        } catch {
+        }
         const logFn = outputFormat === "json" || outputFormat === "sarif" ? debug ? console.error : () => {
         } : console.log;
         if (debug) {
@@ -13497,6 +14352,13 @@ ${expr}`;
           );
         }
         checks = tagFilteredChecks;
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            const ev = prInfo?.eventType || "(unknown)";
+            console.error(`[engine] final checks after filters (event=${ev}): [${checks.join(", ")}]`);
+          }
+        } catch {
+        }
         if (!this.actionContext) {
           try {
             const repoEnv = process.env.GITHUB_REPOSITORY || "";
@@ -13531,12 +14393,25 @@ ${expr}`;
           return Boolean(c?.on_success || c?.on_fail);
         });
         if (checks.length > 1 || hasDependencies || hasRouting) {
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              console.error(
+                "[engine] grouped-dep path: checks=",
+                checks.join(","),
+                " hasDeps=",
+                hasDependencies,
+                " hasRouting=",
+                hasRouting
+              );
+            }
+          } catch {
+          }
           if (debug) {
             logger.debug(
               `\u{1F527} Debug: Using grouped dependency-aware execution for ${checks.length} checks (has dependencies: ${hasDependencies}, has routing: ${hasRouting})`
             );
           }
-          return await this.executeGroupedDependencyAwareChecks(
+          const execRes = await this.executeGroupedDependencyAwareChecks(
             prInfo,
             checks,
             timeout,
@@ -13547,8 +14422,38 @@ ${expr}`;
             failFast,
             tagFilter
           );
+          try {
+            if (this.executionContext?.mode?.postGroupedComments && config?.output?.pr_comment) {
+              let owner = this.actionContext?.owner;
+              let repo = this.actionContext?.repo;
+              if (!owner || !repo) {
+                try {
+                  const anyInfo = prInfo;
+                  owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
+                  repo = anyInfo?.eventContext?.repository?.name || repo;
+                } catch {
+                }
+              }
+              owner = owner || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[0];
+              repo = repo || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[1];
+              if (owner && repo && prInfo.number) {
+                await this.reviewer.postReviewComment(owner, repo, prInfo.number, execRes.results, {
+                  config,
+                  triggeredBy: prInfo.eventType || "manual",
+                  commentId: "visor-review"
+                });
+              }
+            }
+          } catch {
+          }
+          return execRes;
         }
         if (checks.length === 1) {
+          try {
+            if (process.env.VISOR_DEBUG === "true")
+              console.error("[engine] grouped-single path: check=", checks[0]);
+          } catch {
+          }
           if (debug) {
             logger.debug(`\u{1F527} Debug: Using grouped single check execution for: ${checks[0]}`);
           }
@@ -13562,6 +14467,30 @@ ${expr}`;
           );
           const groupedResults = {};
           groupedResults[checkResult.group] = [checkResult];
+          try {
+            if (this.executionContext?.mode?.postGroupedComments && config?.output?.pr_comment) {
+              let owner = this.actionContext?.owner;
+              let repo = this.actionContext?.repo;
+              if (!owner || !repo) {
+                try {
+                  const anyInfo = prInfo;
+                  owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
+                  repo = anyInfo?.eventContext?.repository?.name || repo;
+                } catch {
+                }
+              }
+              owner = owner || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[0];
+              repo = repo || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[1];
+              if (owner && repo && prInfo.number) {
+                await this.reviewer.postReviewComment(owner, repo, prInfo.number, groupedResults, {
+                  config,
+                  triggeredBy: prInfo.eventType || "manual",
+                  commentId: "visor-review"
+                });
+              }
+            }
+          } catch {
+          }
           return {
             results: groupedResults,
             statistics: this.buildExecutionStatistics()
@@ -13605,8 +14534,10 @@ ${expr}`;
           ...checkConfig
         };
         providerConfig.forEach = checkConfig.forEach;
+        if (!this.executionStats.has(checkName)) this.initializeCheckStats(checkName);
+        const __iterStart = this.recordIterationStart(checkName);
         const __provStart = Date.now();
-        const result = await provider.execute(prInfo, providerConfig);
+        const result = await provider.execute(prInfo, providerConfig, void 0, this.executionContext);
         this.recordProviderDuration(checkName, Date.now() - __provStart);
         if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
           const reviewSummaryWithOutput = result;
@@ -13643,7 +14574,12 @@ ${expr}`;
         if (config?.output?.pr_comment?.group_by === "check" && !checkConfig.group) {
           group = checkName;
         }
-        return {
+        try {
+          const out = result?.output;
+          if (out !== void 0) this.trackOutputHistory(checkName, out);
+        } catch {
+        }
+        const checkResult = {
           checkName,
           content,
           group,
@@ -13652,6 +14588,14 @@ ${expr}`;
           issues: result.issues
           // Include structured issues
         };
+        try {
+          const issuesArr = (result.issues || []).map((i) => ({ ...i }));
+          const success = !this.hasFatal(issuesArr);
+          const outputVal = result?.output;
+          this.recordIterationComplete(checkName, __iterStart, success, issuesArr, outputVal);
+        } catch {
+        }
+        return checkResult;
       }
       /**
        * Validate and normalize forEach output
@@ -14066,6 +15010,13 @@ ${expr}`;
        */
       async executeDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug, maxParallelism, failFast, tagFilter) {
         const log2 = logFn || console.error;
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.error("[engine] enter executeDependencyAwareChecks (dbg=", debug, ")");
+            console.error("  [engine] root checks in (pre-expand): [", checks.join(", "), "]");
+          }
+        } catch {
+        }
         if (debug) {
           log2(`\u{1F527} Debug: Starting dependency-aware execution of ${checks.length} checks`);
         }
@@ -14085,7 +15036,17 @@ ${expr}`;
           const checkConfig = config.checks[checkName];
           if (checkConfig) {
             dependencies[checkName] = checkConfig.depends_on || [];
-            if (checkConfig.reuse_ai_session) {
+            if (debug) {
+              try {
+                log2(
+                  `\u{1F527} Debug: reuse_ai_session for '${checkName}' \u2192 ${String(
+                    checkConfig.reuse_ai_session
+                  )}`
+                );
+              } catch {
+              }
+            }
+            if (checkConfig.reuse_ai_session === true || typeof checkConfig.reuse_ai_session === "string") {
               sessionReuseChecks.add(checkName);
               if (typeof checkConfig.reuse_ai_session === "string") {
                 sessionProviders.set(checkName, checkConfig.reuse_ai_session);
@@ -14117,15 +15078,35 @@ ${expr}`;
             }
             return true;
           };
+          const allowByEvent = (name) => {
+            try {
+              const cfg = config.checks?.[name];
+              const triggers = cfg?.on || [];
+              if (!triggers || triggers.length === 0) return true;
+              const current = prInfo?.eventType || "manual";
+              return triggers.includes(current);
+            } catch {
+              return true;
+            }
+          };
           const visit = (name) => {
             const cfg = config.checks[name];
             if (!cfg || !cfg.depends_on) return;
-            for (const dep of cfg.depends_on) {
-              if (!config.checks[dep]) continue;
-              if (!allowByTags(dep)) continue;
-              if (!set.has(dep)) {
-                set.add(dep);
-                visit(dep);
+            const depTokens = Array.isArray(cfg.depends_on) ? cfg.depends_on : [cfg.depends_on];
+            const expand = (tok) => {
+              if (typeof tok === "string" && tok.includes("|")) {
+                return tok.split("|").map((s) => s.trim()).filter(Boolean);
+              }
+              return tok ? [String(tok)] : [];
+            };
+            const deps = depTokens.flatMap(expand);
+            for (const depName of deps) {
+              if (!config.checks[depName]) continue;
+              if (!allowByTags(depName)) continue;
+              if (!allowByEvent(depName)) continue;
+              if (!set.has(depName)) {
+                set.add(depName);
+                visit(depName);
               }
             }
           };
@@ -14133,9 +15114,35 @@ ${expr}`;
           return Array.from(set);
         };
         checks = expandWithTransitives(checks);
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.error("  [engine] checks after expandWithTransitives: [", checks.join(", "), "]");
+          }
+        } catch {
+        }
         for (const checkName of checks) {
           const checkConfig = config.checks[checkName];
-          dependencies[checkName] = checkConfig?.depends_on || [];
+          const depTokens = Array.isArray(checkConfig?.depends_on) ? checkConfig.depends_on : checkConfig?.depends_on ? [checkConfig.depends_on] : [];
+          const expandedDeps = depTokens.flatMap(
+            (tok) => typeof tok === "string" && tok.includes("|") ? tok.split("|").map((s) => s.trim()).filter(Boolean) : tok ? [String(tok)] : []
+          );
+          dependencies[checkName] = expandedDeps;
+        }
+        try {
+          if (prInfo && prInfo.eventType) {
+            const currentEv = prInfo.eventType || "manual";
+            for (const [name, deps] of Object.entries(dependencies)) {
+              const filtered = (deps || []).filter((dep) => {
+                const cfg = config.checks?.[dep];
+                if (!cfg) return false;
+                const trig = cfg.on || [];
+                if (!trig || Array.isArray(trig) && trig.length === 0) return true;
+                return Array.isArray(trig) ? trig.includes(currentEv) : trig === currentEv;
+              });
+              dependencies[name] = filtered;
+            }
+          }
+        } catch {
         }
         {
           const validation2 = DependencyResolver.validateDependencies(checks, dependencies);
@@ -14193,6 +15200,12 @@ ${expr}`;
         }
         for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length && !shouldStopExecution; levelIndex++) {
           const executionGroup = dependencyGraph.executionOrder[levelIndex];
+          try {
+            console.error(
+              `  [engine] level ${executionGroup.level} parallel=[${executionGroup.parallel.join(", ")}]`
+            );
+          } catch {
+          }
           const checksInLevel = executionGroup.parallel;
           const sessionReuseGroups = /* @__PURE__ */ new Map();
           checksInLevel.forEach((checkName) => {
@@ -14229,6 +15242,12 @@ ${expr}`;
             );
           }
           const levelChecks = executionGroup.parallel.filter((name) => !results.has(name));
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              console.error("  [engine] levelChecks = [", levelChecks.join(", "), "]");
+            }
+          } catch {
+          }
           const levelTaskFunctions = levelChecks.map((checkName) => async () => {
             if (results.has(checkName)) {
               if (debug) log2(`\u{1F527} Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -14252,7 +15271,12 @@ ${expr}`;
               const providerType = checkConfig.type || "ai";
               const provider = this.providerRegistry.getProviderOrThrow(providerType);
               if (debug) {
-                log2(`\u{1F527} Debug: Provider f|| '${checkName}' is '${providerType}'`);
+                log2(`\u{1F527} Debug: Provider for '${checkName}' is '${providerType}'`);
+              } else if (process.env.VISOR_DEBUG === "true") {
+                try {
+                  console.log(`[engine] provider for ${checkName} -> ${providerType}`);
+                } catch {
+                }
               }
               this.setProviderWebhookContext(provider);
               const extendedCheckConfig = checkConfig;
@@ -14275,6 +15299,8 @@ ${expr}`;
                 message: extendedCheckConfig.message,
                 env: checkConfig.env,
                 forEach: checkConfig.forEach,
+                // Provide output history so providers can access latest outputs for Liquid rendering
+                __outputHistory: this.outputHistory,
                 // Pass through any provider-specific keys (e.g., op/values for github provider)
                 ...checkConfig,
                 ai: {
@@ -14298,11 +15324,24 @@ ${expr}`;
                   dependencyResults.set(depId, depResult);
                 }
               }
-              const directDeps = checkConfig.depends_on || [];
+              const depTokens = checkConfig.depends_on || [];
+              const allOfDeps = [];
+              const anyOfGroups = [];
+              for (const tok of depTokens) {
+                if (typeof tok === "string" && tok.includes("|")) {
+                  const group = tok.split("|").map((s) => s.trim()).filter(Boolean);
+                  if (group.length > 0) anyOfGroups.push(group);
+                } else if (tok) {
+                  allOfDeps.push(String(tok));
+                }
+              }
               const failedDeps = [];
-              for (const depId of directDeps) {
+              for (const depId of allOfDeps) {
                 const depRes = results.get(depId);
-                if (!depRes) continue;
+                if (!depRes) {
+                  failedDeps.push(depId);
+                  continue;
+                }
                 const wasSkipped = (depRes.issues || []).some((issue) => {
                   const id = issue.ruleId || "";
                   return id.endsWith("/__skipped");
@@ -14330,6 +15369,40 @@ ${expr}`;
                 }
                 if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
               }
+              for (const group of anyOfGroups) {
+                let groupSatisfied = false;
+                for (const depId of group) {
+                  const depRes = results.get(depId);
+                  if (!depRes) continue;
+                  const wasSkipped = (depRes.issues || []).some((issue) => {
+                    const id = issue.ruleId || "";
+                    return id.endsWith("/__skipped");
+                  });
+                  const depExtended = depRes;
+                  const isDepForEachParent = !!depExtended.isForEach;
+                  let hasFatalFailure = false;
+                  if (!isDepForEachParent) {
+                    const issues = depRes.issues || [];
+                    hasFatalFailure = issues.some((issue) => {
+                      const id = issue.ruleId || "";
+                      return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("/forEach/iteration_error") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
+                    });
+                    if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                      try {
+                        hasFatalFailure = await this.failIfTriggered(depId, depRes, config, results);
+                      } catch {
+                      }
+                    }
+                  }
+                  if (!wasSkipped && !hasFatalFailure) {
+                    groupSatisfied = true;
+                    break;
+                  }
+                }
+                if (!groupSatisfied) {
+                  failedDeps.push(group.join("|"));
+                }
+              }
               if (failedDeps.length > 0) {
                 this.recordSkip(checkName, "dependency_failed");
                 logger.info(`\u23ED  Skipped (dependency failed: ${failedDeps.join(", ")})`);
@@ -14340,7 +15413,15 @@ ${expr}`;
                   skipped: true
                 };
               }
-              for (const depId of checkConfig.depends_on || []) {
+              const expandedForEachDeps = [];
+              for (const tok of depTokens) {
+                if (typeof tok === "string" && tok.includes("|"))
+                  expandedForEachDeps.push(
+                    ...tok.split("|").map((s) => s.trim()).filter(Boolean)
+                  );
+                else if (tok) expandedForEachDeps.push(String(tok));
+              }
+              for (const depId of expandedForEachDeps) {
                 if (results.has(depId)) {
                   const depResult = results.get(depId);
                   const depForEachResult = depResult;
@@ -14358,7 +15439,10 @@ ${expr}`;
               }
               let sessionInfo = void 0;
               if (sessionReuseChecks.has(checkName)) {
-                const parentCheckName = sessionProviders.get(checkName);
+                let parentCheckName = sessionProviders.get(checkName);
+                if (parentCheckName && parentCheckName.includes && parentCheckName.includes("|")) {
+                  parentCheckName = parentCheckName.split("|")[0].trim();
+                }
                 if (parentCheckName && sessionIds.has(parentCheckName)) {
                   const parentSessionId = sessionIds.get(parentCheckName);
                   sessionInfo = {
@@ -14403,6 +15487,16 @@ ${expr}`;
                   };
                 }
                 this.recordForEachPreview(checkName, forEachItems);
+                try {
+                  if (process.env.VISOR_DEBUG === "true") {
+                    console.error(
+                      `[foreach] check=${checkName} forEachItems=${forEachItems.length} hasIf=${String(
+                        !!checkConfig.if
+                      )} ifExpr=${checkConfig.if ? this.truncate(checkConfig.if, 80) : ""}`
+                    );
+                  }
+                } catch {
+                }
                 if (forEachItems.length === 0) {
                   if (debug) {
                     log2(
@@ -14589,24 +15683,6 @@ ${expr}`;
                       prInfo.eventType
                     );
                     if ((checkConfig.depends_on || []).length > 0) {
-                      const directDeps2 = checkConfig.depends_on || [];
-                      for (const depId of directDeps2) {
-                        if (!forEachParents.includes(depId)) continue;
-                        const depAgg = results.get(depId);
-                        const maskFatal = !!depAgg?.forEachFatalMask && depAgg.forEachFatalMask[itemIndex] === true;
-                        if (maskFatal) {
-                          if (debug) {
-                            log2(
-                              `\u{1F504} Debug: Skipping item ${itemIndex + 1}/${forEachItems.length} for check "${checkName}" due to failed dependency '${depId}'`
-                            );
-                          }
-                          return {
-                            index: itemIndex,
-                            itemResult: { issues: [] },
-                            skipped: true
-                          };
-                        }
-                      }
                     }
                     if (checkConfig.if) {
                       const gateItem = await this.shouldRunCheck(
@@ -14619,6 +15695,14 @@ ${expr}`;
                         /* failSecure */
                         true
                       );
+                      try {
+                        if (process.env.VISOR_DEBUG === "true") {
+                          console.error(
+                            `[if-gate-item] check=${checkName} expr="${checkConfig.if}" shouldRun=${String(gateItem.shouldRun)} env.ENABLE_FACT_VALIDATION=${String(process.env.ENABLE_FACT_VALIDATION)}`
+                          );
+                        }
+                      } catch {
+                      }
                       if (!gateItem.shouldRun) {
                         if (debug) {
                           log2(
@@ -14890,7 +15974,8 @@ ${expr}`;
                     const hadFatalByIssues = this.hasFatal(r.issues || []);
                     if (hadFatalByIssues) return true;
                     try {
-                      if (config && (config.fail_if || config.checks[parent]?.fail_if)) {
+                      const parentFailIf = config && config.checks && config.checks[parent] ? config.checks[parent]?.fail_if : void 0;
+                      if (parentFailIf) {
                         let rForEval = r;
                         const rawOut = r?.output;
                         if (typeof rawOut === "string") {
@@ -14922,7 +16007,15 @@ ${expr}`;
                         const failures = await this.evaluateFailureConditions(
                           parent,
                           rForEval,
-                          config,
+                          // Evaluate against a shallow config that only carries the parent's fail_if
+                          {
+                            ...config,
+                            fail_if: void 0,
+                            checks: {
+                              ...config?.checks || {},
+                              [parent]: { ...config?.checks?.[parent], fail_if: parentFailIf }
+                            }
+                          },
                           prInfo,
                           results
                         );
@@ -14936,24 +16029,48 @@ ${expr}`;
                   };
                   const runnableIndices = [];
                   for (let idx = 0; idx < forEachItems.length; idx++) {
-                    let ok = true;
+                    let blocked = false;
                     for (const p of directForEachParents) {
                       if (await isIndexFatalForParent(p, idx)) {
-                        ok = false;
+                        blocked = true;
                         break;
                       }
                     }
-                    if (ok && typeof itemTasks[idx] === "function") runnableIndices.push(idx);
+                    if (!blocked && typeof itemTasks[idx] === "function") runnableIndices.push(idx);
                   }
                   if (runnableIndices.length === 0) {
-                    this.recordSkip(checkName, "dependency_failed");
-                    logger.info(`\u23ED  Skipped (dependency failed: no runnable items)`);
-                    return {
-                      checkName,
-                      error: null,
-                      result: { issues: [] },
-                      skipped: true
-                    };
+                    const parent = directForEachParents[0];
+                    let anyExplicitFatal = false;
+                    if (parent) {
+                      const agg = results.get(parent);
+                      if (agg && Array.isArray(agg.forEachItemResults)) {
+                        for (const r of agg.forEachItemResults) {
+                          if (!r) continue;
+                          if (this.hasFatal(r?.issues || [])) {
+                            anyExplicitFatal = true;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                    if (!anyExplicitFatal && forEachItems.length > 0) {
+                      logger.warn(
+                        `\u26A0\uFE0F  forEach: no runnable items for "${checkName}" after gating \u2014 falling back to run all ${forEachItems.length}`
+                      );
+                      for (let idx = 0; idx < forEachItems.length; idx++) {
+                        if (typeof itemTasks[idx] === "function") runnableIndices.push(idx);
+                      }
+                    }
+                    if (runnableIndices.length === 0) {
+                      this.recordSkip(checkName, "dependency_failed");
+                      logger.info(`\u23ED  Skipped (dependency failed: no runnable items)`);
+                      return {
+                        checkName,
+                        error: null,
+                        result: { issues: [] },
+                        skipped: true
+                      };
+                    }
                   }
                   const forEachConcurrency = Math.max(
                     1,
@@ -15415,7 +16532,20 @@ ${error.stack || ""}` : String(error);
           }
         }
         if (!shouldStopExecution) {
+          try {
+            logger.info("\u{1F9ED} on_finish: invoking handleOnFinishHooks");
+          } catch {
+          }
+          try {
+            if (debug) console.error("[engine] calling handleOnFinishHooks");
+          } catch {
+          }
           await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
+        } else {
+          try {
+            logger.info("\u{1F9ED} on_finish: skipped due to shouldStopExecution");
+          } catch {
+          }
         }
         if (sessionIds.size > 0 && debug) {
           log2(`\u{1F9F9} Cleaning up ${sessionIds.size} AI sessions...`);
@@ -15428,6 +16558,13 @@ ${error.stack || ""}` : String(error);
             }
           }
         }
+        try {
+          if (sessionIds.size > 0) {
+            const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
+            SessionRegistry2.getInstance().clearAllSessions();
+          }
+        } catch {
+        }
         const executionStatistics = this.buildExecutionStatistics();
         if (logFn === console.log) {
           this.logExecutionSummary(executionStatistics);
@@ -15435,6 +16572,27 @@ ${error.stack || ""}` : String(error);
         if (shouldStopExecution) {
           logger.info("");
           logger.warn(`\u26A0\uFE0F  Execution stopped early due to fail-fast`);
+        }
+        try {
+          const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
+          if (strictEnv) {
+            const failures = [];
+            for (const [name, r] of results.entries()) {
+              const issues = r?.issues || [];
+              if (issues.some(
+                (i) => i.ruleId && (i.ruleId.endsWith("/error") || i.ruleId.includes("/promise-error"))
+              )) {
+                const first = issues.find((i) => i.ruleId?.includes("/error")) || issues[0];
+                failures.push({ name, message: first?.message || "check error" });
+              }
+            }
+            if (failures.length > 0) {
+              const msg = "Check failures: " + failures.map((f) => `${f.name}: ${f.message}`).join("; ");
+              throw new Error(msg);
+            }
+          }
+        } catch (e) {
+          throw e;
         }
         return this.aggregateDependencyAwareResults(
           results,
@@ -15497,20 +16655,28 @@ ${error.stack || ""}` : String(error);
               }
             }
             const providerConfig = {
-              type: "ai",
+              type: checkConfig.type || "ai",
               prompt: checkConfig.prompt,
               focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
               schema: checkConfig.schema,
               group: checkConfig.group,
+              checkName,
               eventContext: this.enrichEventContext(prInfo.eventContext),
               ai: {
                 timeout: timeout || 6e5,
                 debug,
                 // Pass debug flag to AI provider
                 ...checkConfig.ai || {}
-              }
+              },
+              // Preserve all other provider-specific fields (e.g., memory.operation, github.op)
+              ...checkConfig
             };
-            const result = await provider.execute(prInfo, providerConfig);
+            const result = await provider.execute(
+              prInfo,
+              providerConfig,
+              void 0,
+              this.executionContext
+            );
             console.error(
               `\u{1F527} Debug: Completed check: ${checkName}, issues found: ${(result.issues || []).length}`
             );
@@ -15587,7 +16753,7 @@ ${error.stack || ""}` : String(error);
           ai_provider: checkConfig.ai_provider || config.ai_provider,
           ai_model: checkConfig.ai_model || config.ai_model
         };
-        const result = await provider.execute(prInfo, providerConfig);
+        const result = await provider.execute(prInfo, providerConfig, void 0, this.executionContext);
         const prefixedIssues = (result.issues || []).map((issue) => ({
           ...issue,
           ruleId: `${checkName}/${issue.ruleId}`,
@@ -16611,7 +17777,18 @@ ${result.value.result.debug.rawResponse}`;
         if (!this.outputHistory.has(checkName)) {
           this.outputHistory.set(checkName, []);
         }
-        this.outputHistory.get(checkName).push(output);
+        const arr = this.outputHistory.get(checkName);
+        arr.push(output);
+      }
+      /**
+       * Snapshot of output history per step for test assertions
+       */
+      getOutputHistorySnapshot() {
+        const out = {};
+        for (const [k, v] of this.outputHistory.entries()) {
+          out[k] = Array.isArray(v) ? [...v] : [];
+        }
+        return out;
       }
       /**
        * Record that a check was skipped
@@ -17094,11 +18271,15 @@ var init_config_schema = __esm({
     "use strict";
     configSchema = {
       $schema: "http://json-schema.org/draft-07/schema#",
-      $ref: "#/definitions/VisorConfig",
+      $ref: "#/definitions/VisorConfigSchema",
       definitions: {
-        VisorConfig: {
+        VisorConfigSchema: {
           type: "object",
+          additionalProperties: false,
           properties: {
+            hooks: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+            },
             version: {
               type: "string",
               description: "Configuration version"
@@ -17178,12 +18359,14 @@ var init_config_schema = __esm({
               description: "Optional routing defaults for retry/goto/run policies"
             }
           },
-          required: ["version", "output"],
-          additionalProperties: false,
-          description: "Main Visor configuration",
+          required: ["output", "version"],
           patternProperties: {
             "^x-": {}
           }
+        },
+        "Record<string,unknown>": {
+          type: "object",
+          additionalProperties: {}
         },
         "Record<string,CheckConfig>": {
           type: "object",
@@ -17470,6 +18653,22 @@ var init_config_schema = __esm({
             workingDirectory: {
               type: "string",
               description: "Working directory (for stdio transport in MCP checks)"
+            },
+            placeholder: {
+              type: "string",
+              description: "Placeholder text to show in input field"
+            },
+            allow_empty: {
+              type: "boolean",
+              description: "Allow empty input (default: false)"
+            },
+            multiline: {
+              type: "boolean",
+              description: "Support multiline input (default: false)"
+            },
+            default: {
+              type: "string",
+              description: "Default value if timeout occurs or empty input when allow_empty is true"
             }
           },
           additionalProperties: false,
@@ -17551,6 +18750,10 @@ var init_config_schema = __esm({
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers configuration"
+            },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
             }
           },
           additionalProperties: false,
@@ -17617,6 +18820,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Path to subagent script"
             },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
+            },
             hooks: {
               type: "object",
               properties: {
@@ -17652,10 +18859,6 @@ var init_config_schema = __esm({
             type: ["string", "number", "boolean"]
           },
           description: "Environment variable reference configuration"
-        },
-        "Record<string,unknown>": {
-          type: "object",
-          additionalProperties: {}
         },
         CustomTemplateConfig: {
           type: "object",

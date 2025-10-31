@@ -1,10 +1,14 @@
 export declare const configSchema: {
     readonly $schema: "http://json-schema.org/draft-07/schema#";
-    readonly $ref: "#/definitions/VisorConfig";
+    readonly $ref: "#/definitions/VisorConfigSchema";
     readonly definitions: {
-        readonly VisorConfig: {
+        readonly VisorConfigSchema: {
             readonly type: "object";
+            readonly additionalProperties: false;
             readonly properties: {
+                readonly hooks: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                };
                 readonly version: {
                     readonly type: "string";
                     readonly description: "Configuration version";
@@ -81,12 +85,14 @@ export declare const configSchema: {
                     readonly description: "Optional routing defaults for retry/goto/run policies";
                 };
             };
-            readonly required: readonly ["version", "output"];
-            readonly additionalProperties: false;
-            readonly description: "Main Visor configuration";
+            readonly required: readonly ["output", "version"];
             readonly patternProperties: {
                 readonly '^x-': {};
             };
+        };
+        readonly 'Record<string,unknown>': {
+            readonly type: "object";
+            readonly additionalProperties: {};
         };
         readonly 'Record<string,CheckConfig>': {
             readonly type: "object";
@@ -368,6 +374,22 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Working directory (for stdio transport in MCP checks)";
                 };
+                readonly placeholder: {
+                    readonly type: "string";
+                    readonly description: "Placeholder text to show in input field";
+                };
+                readonly allow_empty: {
+                    readonly type: "boolean";
+                    readonly description: "Allow empty input (default: false)";
+                };
+                readonly multiline: {
+                    readonly type: "boolean";
+                    readonly description: "Support multiline input (default: false)";
+                };
+                readonly default: {
+                    readonly type: "string";
+                    readonly description: "Default value if timeout occurs or empty input when allow_empty is true";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Configuration for a single check";
@@ -426,6 +448,10 @@ export declare const configSchema: {
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers configuration";
+                };
+                readonly enableDelegate: {
+                    readonly type: "boolean";
+                    readonly description: "Enable the delegate tool for task distribution to subagents";
                 };
             };
             readonly additionalProperties: false;
@@ -492,6 +518,10 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Path to subagent script";
                 };
+                readonly enableDelegate: {
+                    readonly type: "boolean";
+                    readonly description: "Enable the delegate tool for task distribution to subagents";
+                };
                 readonly hooks: {
                     readonly type: "object";
                     readonly properties: {
@@ -527,10 +557,6 @@ export declare const configSchema: {
                 readonly type: readonly ["string", "number", "boolean"];
             };
             readonly description: "Environment variable reference configuration";
-        };
-        readonly 'Record<string,unknown>': {
-            readonly type: "object";
-            readonly additionalProperties: {};
         };
         readonly CustomTemplateConfig: {
             readonly type: "object";

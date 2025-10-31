@@ -318,7 +318,11 @@ steps:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
     value_js: |
-      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
+      // Normalize, trim, and drop empties (ES5-safe)
+      return values
+        .map(v => (v == null ? '' : String(v)))
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -328,21 +332,30 @@ steps:
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
-        {% assign has_issues = "fact_validation_issues" | memory_has: "fact-validation" %}
-        {% if has_issues %}
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          # Keep only invalid or non-high confidence items using where_exp
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+        -%}
+        {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
-        {{ outputs.history['issue-assistant'][-1].text }}
+        {% assign prev_comment = outputs_history["comment-assistant"].last %}
+        {{ prev_comment.text }}
         </previous_response>
 
         **Validation Errors Found:**
-        {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
         {% for issue in issues %}
-        - **{{ issue.claim }}**: {{ issue.evidence }}
+        {% if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' %}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
           {% if issue.correction %}
-          ✏️  Correction: {{ issue.correction }}
+          Correction: {{ issue.correction }}
           {% endif %}
+        Claim: {{ issue.claim }}
+        {% if issue.correction %}Correction: {{ issue.correction }}{% endif %}
+        {% endif %}
         {% endfor %}
 
         Please provide a corrected response that addresses these factual errors.
@@ -389,8 +402,6 @@ steps:
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
     on: [issue_opened]
-    on_success:
-      goto: init-fact-validation
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
@@ -401,22 +412,30 @@ steps:
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
-        {% assign has_issues = "fact_validation_issues" | memory_has: "fact-validation" %}
-        {% if has_issues %}
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+          assign prev_comment = outputs_history["comment-assistant"].last
+        -%}
+        {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
-        {{ outputs.history['comment-assistant'][-1].text }}
+        {{ prev_comment.text | default: "" }}
         </previous_response>
 
         **Validation Errors Found:**
-        {% assign issues = "fact_validation_issues" | memory_get: "fact-validation" %}
-        {% for issue in issues %}
-        - **{{ issue.claim }}**: {{ issue.evidence }}
-          {% if issue.correction %}
-          ✏️  Correction: {{ issue.correction }}
-          {% endif %}
-        {% endfor %}
+        {%- for issue in issues -%}
+        {%- if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' -%}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
+          {%- if issue.correction %}
+          Correction: {{ issue.correction }}
+          {%- endif %}
+        Claim: {{ issue.claim }}
+        {%- if issue.correction %}Correction: {{ issue.correction }}{% endif -%}
+        {%- endif -%}
+        {%- endfor -%}
 
         Please provide a corrected response that addresses these factual errors.
         {% endif %}
@@ -426,6 +445,7 @@ steps:
         - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
         - `labels`: omit for comments (do not include).
 
+        {% raw %}
         Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
 
         References:
@@ -440,6 +460,7 @@ steps:
           ```refs
           none
           ```
+        {% endraw %}
 
         Rules:
         - Never suggest rerun/disable unless asked explicitly.
@@ -452,14 +473,11 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      # Always initialize fact validation attempt counter
-      run: [init-fact-validation]
-      # Preserve intent-based rerun: allow members to retrigger overview from a comment
       goto_js: |
-        const intent = (typeof output === 'object' && output) ? output.intent : undefined;
-        const isComment = (event && event.name) ? (event.name == 'issue_comment') : true;
+        const intent = output?.intent;
+        const isComment = event?.name === 'issue_comment';
         const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return (isComment && allowed && intent === 'comment_retrigger') ? 'overview' : null
+        return isComment && allowed && intent === 'comment_retrigger' ? 'overview' : null;
       goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
@@ -471,13 +489,14 @@ steps:
     op: labels.add
     value_js: |
       try {
-        const issueAssistant = outputs['issue-assistant'];
-        const labels = Array.isArray(issueAssistant?.labels) ? issueAssistant.labels : [];
+        const labels = Array.isArray(outputs['issue-assistant']?.labels)
+          ? outputs['issue-assistant'].labels
+          : [];
         // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
         return labels
-          .map(v => (v == null ? '' : String(v)))
+          .map(v => String(v ?? ''))
           .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
-          .filter(s => s.length > 0);
+          .filter(Boolean);
       } catch (error) {
         log('Error processing issue labels:', error);
         return [];
@@ -503,16 +522,6 @@ steps:
   #
   # To enable: Set ENABLE_FACT_VALIDATION=true environment variable
   # ============================================================================
-
-  # Initialize fact validation attempt counter
-  init-fact-validation:
-    type: memory
-    operation: set
-    key: fact_validation_attempt
-    value: 0
-    namespace: fact-validation
-    on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
 
   # Extract verifiable facts from assistant responses
   # This is a forEach check that triggers validation for each fact
@@ -549,10 +558,11 @@ steps:
                   description: Line or range, e.g., "120-145" or "88"
               required: [path]
         required: [id, category, claim, verifiable]
-    depends_on: [init-fact-validation, issue-assistant, comment-assistant]
+    # Declarative OR dependency: run after either assistant in the same stage
+    depends_on: ["issue-assistant|comment-assistant"]
     on: [issue_opened, issue_comment]
-    # Only when validation is enabled and assistants produced text
-    if: "env.ENABLE_FACT_VALIDATION === 'true' && (outputs['issue-assistant'] || outputs['comment-assistant'])"
+    # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
       skip_code_context: true
       disable_tools: true
@@ -616,19 +626,17 @@ steps:
 
     forEach: true
 
-    # After all facts are validated, aggregate results and decide next action
+    # After facts are validated, run the aggregator; it decides about corrections in its on_success
     on_finish:
-      run: [aggregate-validations]
-      goto_js: |
-        const allValid = memory.get('all_valid', 'fact-validation');
-        const attempt = memory.get('fact_validation_attempt', 'fact-validation') || 0;
-
-        log('🔍 Fact validation complete - allValid:', allValid, 'attempt:', attempt);
-
-        // 0 retries policy: never schedule another extract-facts pass
-        // If not allValid, we simply stop here and surface issues via aggregate-validations
-        return null;
-      # keep event context as-is to avoid cross-event leakage
+      run_js: |
+        // ES2023 style: use at() and concise arrows; inspect only the last wave
+        const facts = (outputs_history['extract-facts'] || []).at(-1) || [];
+        const ids = facts.map(f => String(f.id || '')).filter(Boolean);
+        const vf = outputs_history['validate-fact'] || [];
+        const lastItems = vf.filter(v => ids.includes(String((v && v.fact_id) || '')));
+        const hasProblems = lastItems.some(v => v.is_valid !== true || v.confidence !== 'high');
+        if (!hasProblems) return [];
+        return (event && event.name) === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
 
   # Validate each extracted fact
   validate-fact:
@@ -674,7 +682,8 @@ steps:
 
       If references were provided for this fact (parsed earlier), use them FIRST and prefer them strongly:
       {% assign refs = outputs['extract-facts'].refs %}
-      {% if refs and refs.size > 0 %}
+      {% assign __refs_len = refs | size %}
+      {% if refs and __refs_len > 0 %}
       Provided References:
       {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}{% if r.symbol %}#{{ r.symbol }}{% endif %}
       {% endfor %}
@@ -693,62 +702,6 @@ steps:
       - Evidence of what you found in the codebase
       - Confidence level (high/medium/low) in your validation
       - If the claim is incorrect, provide the accurate information as a correction
-
-  # Aggregate all validation results
-  aggregate-validations:
-    type: memory
-    operation: exec_js
-    namespace: fact-validation
-    on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    on_success:
-      goto_js: |
-        // Route back to the appropriate assistant if there are issues
-        if (!output || output.all_valid) return null;
-        const hasComment = !!(outputs['comment-assistant']) || (outputs.history && (outputs.history['comment-assistant'] || []).length > 0);
-        return hasComment ? 'comment-assistant' : 'issue-assistant';
-    memory_js: |
-      const validations = outputs.history['validate-fact'] || [];
-
-      log('📊 Aggregating', validations.length, 'validation results');
-
-      // Only HIGH confidence counts as valid. Everything else returns to loop.
-      const validHigh = validations.filter(v => v.is_valid && v.confidence === 'high');
-      const problems = validations.filter(v => !(v.is_valid && v.confidence === 'high'));
-      const lowConfidence = validations.filter(v => v.is_valid && v.confidence !== 'high');
-      const invalid = validations.filter(v => !v.is_valid);
-      const allValid = problems.length === 0;
-
-      log('Results: valid=' + (validations.length - invalid.length - lowConfidence.length),
-          'invalid=' + invalid.length, 'low-confidence=' + lowConfidence.length);
-
-      memory.set('all_valid', allValid, 'fact-validation');
-      memory.set('total_validations', validations.length, 'fact-validation');
-      memory.set('validation_results', validations, 'fact-validation');
-      memory.set('invalid_facts', invalid, 'fact-validation');
-      memory.set('low_confidence_facts', lowConfidence, 'fact-validation');
-
-      if (!allValid) {
-        const issues = [...invalid, ...lowConfidence].map(v => ({
-          claim: v.claim,
-          issue: v.is_valid ? 'low confidence' : 'incorrect',
-          evidence: v.evidence,
-          correction: v.correction
-        }));
-        memory.set('fact_validation_issues', issues, 'fact-validation');
-        log('⚠️  Stored', issues.length, 'validation issues for retry');
-      }
-
-      return {
-        total: validations.length,
-        valid: validHigh.length,
-        invalid: invalid.length,
-        low_confidence: lowConfidence.length,
-        all_valid: allValid,
-        summary: allValid
-          ? 'All facts validated successfully ✅'
-          : 'Found ' + invalid.length + ' invalid and ' + lowConfidence.length + ' low-confidence facts ⚠️'
-      };
 
   # Retrigger noop removed — comment-assistant schedules overview directly
 

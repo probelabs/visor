@@ -665,9 +665,37 @@ interface ExecutionContext {
     reuseSession?: boolean;
     /** CLI message value (from --message argument) */
     cliMessage?: string;
+    /**
+     * Stage-local baseline of output history lengths per check name.
+     * When present, providers should expose an `outputs_history_stage` object in
+     * Liquid/JS contexts that slices the global history from this baseline.
+     * This enables stage-scoped assertions in the YAML test runner without
+     * relying on global execution history.
+     */
+    stageHistoryBase?: Record<string, number>;
     /** SDK hooks for human input */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
+        onPromptCaptured?: (info: {
+            step: string;
+            provider: string;
+            prompt: string;
+        }) => void;
+        mockForStep?: (step: string) => unknown | undefined;
+    };
+    /**
+     * Optional execution mode hints. The core engine does not read environment
+     * variables directly; callers (CLI, test runner) can set these flags to
+     * request certain behaviors without polluting core logic with test-specific
+     * branches.
+     */
+    mode?: {
+        /** true when running under the YAML test runner */
+        test?: boolean;
+        /** post review comments from grouped execution paths (used by tests) */
+        postGroupedComments?: boolean;
+        /** reset per-run guard state before grouped execution */
+        resetPerRunState?: boolean;
     };
 }
 

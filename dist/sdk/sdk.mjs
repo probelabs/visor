@@ -1,11 +1,11 @@
 import {
   CheckExecutionEngine
-} from "./chunk-QR4HY5WO.mjs";
+} from "./chunk-IJLNUW4E.mjs";
 import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
   logger
-} from "./chunk-AN5E5XGX.mjs";
+} from "./chunk-NUE2THCT.mjs";
 import "./chunk-U7X54EMV.mjs";
 import {
   ConfigMerger
@@ -29,11 +29,15 @@ var init_config_schema = __esm({
     "use strict";
     configSchema = {
       $schema: "http://json-schema.org/draft-07/schema#",
-      $ref: "#/definitions/VisorConfig",
+      $ref: "#/definitions/VisorConfigSchema",
       definitions: {
-        VisorConfig: {
+        VisorConfigSchema: {
           type: "object",
+          additionalProperties: false,
           properties: {
+            hooks: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+            },
             version: {
               type: "string",
               description: "Configuration version"
@@ -113,12 +117,14 @@ var init_config_schema = __esm({
               description: "Optional routing defaults for retry/goto/run policies"
             }
           },
-          required: ["version", "output"],
-          additionalProperties: false,
-          description: "Main Visor configuration",
+          required: ["output", "version"],
           patternProperties: {
             "^x-": {}
           }
+        },
+        "Record<string,unknown>": {
+          type: "object",
+          additionalProperties: {}
         },
         "Record<string,CheckConfig>": {
           type: "object",
@@ -405,6 +411,22 @@ var init_config_schema = __esm({
             workingDirectory: {
               type: "string",
               description: "Working directory (for stdio transport in MCP checks)"
+            },
+            placeholder: {
+              type: "string",
+              description: "Placeholder text to show in input field"
+            },
+            allow_empty: {
+              type: "boolean",
+              description: "Allow empty input (default: false)"
+            },
+            multiline: {
+              type: "boolean",
+              description: "Support multiline input (default: false)"
+            },
+            default: {
+              type: "string",
+              description: "Default value if timeout occurs or empty input when allow_empty is true"
             }
           },
           additionalProperties: false,
@@ -486,6 +508,10 @@ var init_config_schema = __esm({
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers configuration"
+            },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
             }
           },
           additionalProperties: false,
@@ -552,6 +578,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Path to subagent script"
             },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
+            },
             hooks: {
               type: "object",
               properties: {
@@ -587,10 +617,6 @@ var init_config_schema = __esm({
             type: ["string", "number", "boolean"]
           },
           description: "Environment variable reference configuration"
-        },
-        "Record<string,unknown>": {
-          type: "object",
-          additionalProperties: {}
         },
         CustomTemplateConfig: {
           type: "object",
