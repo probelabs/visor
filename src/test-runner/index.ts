@@ -782,11 +782,19 @@ export class VisorTestRunner {
       if (selected.has(n) || depth > 50) return;
       selected.add(n);
       const chk = cfg.checks[n] || {};
-      const deps: string[] = Array.isArray(chk.depends_on)
+      const depTokens: any[] = Array.isArray(chk.depends_on)
         ? chk.depends_on
         : chk.depends_on
           ? [chk.depends_on]
           : [];
+      const deps: string[] = depTokens.flatMap(d =>
+        typeof d === 'string' && d.includes('|')
+          ? d
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean)
+          : [d]
+      );
       for (const d of deps) visit(d, depth + 1);
     };
     for (const n of desired) visit(n);

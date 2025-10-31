@@ -4198,9 +4198,24 @@ export class CheckExecutionEngine {
           }
 
           // If any direct dependency failed or was skipped, skip this check
-          const directDeps = checkConfig.depends_on || [];
+          // Support OR-groups using pipe syntax: "a|b|c" means any of these satisfies the dependency
+          const depTokens = checkConfig.depends_on || [];
+          const allOfDeps: string[] = [];
+          const anyOfGroups: string[][] = [];
+          for (const tok of depTokens) {
+            if (typeof tok === 'string' && tok.includes('|')) {
+              const group = tok
+                .split('|')
+                .map(s => s.trim())
+                .filter(Boolean);
+              if (group.length > 0) anyOfGroups.push(group);
+            } else if (tok) {
+              allOfDeps.push(String(tok));
+            }
+          }
           const failedDeps: string[] = [];
-          for (const depId of directDeps) {
+          // Evaluate ALL-OF dependencies normally
+          for (const depId of allOfDeps) {
             const depRes = results.get(depId);
             // If a direct dependency has not produced a result in this run, consider it unsatisfied
             // and gate the current check. This prevents executing dependents before their prerequisites.
@@ -4266,6 +4281,59 @@ export class CheckExecutionEngine {
             if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
           }
 
+          // Evaluate ANY-OF groups: each group must have at least one satisfied dependency
+          for (const group of anyOfGroups) {
+            let groupSatisfied = false;
+            for (const depId of group) {
+              const depRes = results.get(depId);
+              if (!depRes) continue;
+              const wasSkipped = (depRes.issues || []).some(issue => {
+                const id = issue.ruleId || '';
+                return id.endsWith('/__skipped');
+              });
+              const depExtended = depRes as ExtendedReviewSummary;
+              const isDepForEachParent = !!depExtended.isForEach;
+              let hasFatalFailure = false;
+              if (!isDepForEachParent) {
+                const issues = depRes.issues || [];
+                hasFatalFailure = issues.some(issue => {
+                  const id = issue.ruleId || '';
+                  return (
+                    id === 'command/execution_error' ||
+                    id.endsWith('/command/execution_error') ||
+                    id === 'command/timeout' ||
+                    id.endsWith('/command/timeout') ||
+                    id === 'command/transform_js_error' ||
+                    id.endsWith('/command/transform_js_error') ||
+                    id === 'command/transform_error' ||
+                    id.endsWith('/command/transform_error') ||
+                    id === 'forEach/undefined_output' ||
+                    id.endsWith('/forEach/undefined_output') ||
+                    id.endsWith('/forEach/iteration_error') ||
+                    id.endsWith('_fail_if') ||
+                    id.endsWith('/global_fail_if')
+                  );
+                });
+                if (
+                  !hasFatalFailure &&
+                  config &&
+                  (config.fail_if || config.checks![depId]?.fail_if)
+                ) {
+                  try {
+                    hasFatalFailure = await this.failIfTriggered(depId, depRes, config, results);
+                  } catch {}
+                }
+              }
+              if (!wasSkipped && !hasFatalFailure) {
+                groupSatisfied = true;
+                break;
+              }
+            }
+            if (!groupSatisfied) {
+              failedDeps.push(group.join('|'));
+            }
+          }
+
           if (failedDeps.length > 0) {
             // Record skip and provide a concise console message
             this.recordSkip(checkName, 'dependency_failed');
@@ -4278,8 +4346,19 @@ export class CheckExecutionEngine {
             };
           }
 
-          // Check direct dependencies for forEach behavior
-          for (const depId of checkConfig.depends_on || []) {
+          // Check direct dependencies (including OR-group members) for forEach behavior
+          const expandedForEachDeps: string[] = [];
+          for (const tok of depTokens) {
+            if (typeof tok === 'string' && tok.includes('|'))
+              expandedForEachDeps.push(
+                ...tok
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              );
+            else if (tok) expandedForEachDeps.push(String(tok));
+          }
+          for (const depId of expandedForEachDeps) {
             if (results.has(depId)) {
               const depResult = results.get(depId)!;
 
@@ -4313,7 +4392,10 @@ export class CheckExecutionEngine {
           let sessionInfo: { parentSessionId?: string; reuseSession?: boolean } | undefined =
             undefined;
           if (sessionReuseChecks.has(checkName)) {
-            const parentCheckName = sessionProviders.get(checkName);
+            let parentCheckName = sessionProviders.get(checkName);
+            if (parentCheckName && parentCheckName.includes && parentCheckName.includes('|')) {
+              parentCheckName = parentCheckName.split('|')[0].trim();
+            }
             if (parentCheckName && sessionIds.has(parentCheckName)) {
               const parentSessionId = sessionIds.get(parentCheckName)!;
 

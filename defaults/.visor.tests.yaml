@@ -350,14 +350,14 @@ tests:
           fixture: gh.issue_comment.standard
           env:
             ENABLE_FACT_VALIDATION: "false"
-      expect:
-        calls:
-          - step: comment-assistant
-            exactly: 1
-        no_calls:
-          - step: extract-facts
-          - step: validate-fact
-          - step: aggregate-validations
+          expect:
+            calls:
+              - step: comment-assistant
+                exactly: 1
+            no_calls:
+              - step: extract-facts
+              - step: validate-fact
+              - step: aggregate-validations
 
         - name: facts-enabled (issue)
           description: Fact validation runs from an issue creation path.

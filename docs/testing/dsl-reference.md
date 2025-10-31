@@ -126,6 +126,8 @@ expect:
 ```
 ```
 
+Note on dependencies: test execution honors your base config routing, including `depends_on`. You can express ANY‑OF groups using pipe syntax in the base config (e.g., `depends_on: ["issue-assistant|comment-assistant"]`). The runner mixes these with normal ALL‑OF deps.
+
 ## Strict mode semantics
 
 - When `strict: true` (default), any executed step must appear in `expect.calls` with a matching count; otherwise the case/stage fails.

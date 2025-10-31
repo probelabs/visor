@@ -351,6 +351,7 @@ Rules:
 - Recording providers:
   - GitHub: recording Octokit (default) captures every call; no network.
   - AI: mock provider that emits objects/arrays/strings per mocks and records the final prompt text per step for `expect.prompts`.
+  - Dependency routing: the runner uses the same engine logic as Visor, including `depends_on` semantics. Pipe‑separated tokens inside `depends_on` (e.g., `"a|b"`) form ANY‑OF groups. You can mix ALL‑OF and ANY‑OF (e.g., `["a|b", "c"]`).
 
 ### Call History and Recursion
 
@@ -629,10 +630,12 @@ visor test --config defaults/.visor.tests.yaml --max-parallel 4
 visor test --config defaults/.visor.tests.yaml --prompt-max-chars 16000
 ```
 
-Milestone 10 — Docs, examples, and migration (0.5 week) — IN PROGRESS 2025-10-27
+Milestone 10 — Docs, examples, and migration (0.5 week) — IN PROGRESS 2025-10-31
 - Update README to link the RFC and defaults/.visor.tests.yaml.
 - Document built-in fixtures catalog and examples.
 - Migration note: how to move from embedded tests and from `returns` to new mocks.
+- Document `depends_on` ANY‑OF (pipe) groups with examples (done).
+- Add initial unit tests for OR‑groups and session‑reuse semantics (landed as skipped; will enable when executionStatistics exposes all requested checks).
 - Success criteria: docs reviewed; examples copy‑paste clean.
 
 Risks & Mitigations
