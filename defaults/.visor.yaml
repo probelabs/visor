@@ -329,16 +329,15 @@ steps:
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
         {%- liquid
-          # Single source of truth: last aggregate-validations result
-          assign agg          = outputs_history | get: "aggregate-validations" | last
-          assign issues       = agg | get: "issues"
-          assign has_problems = agg | get: "has_problems"
+          # Single source of truth: last aggregate-validations result (dot syntax)
+          assign has_problems = outputs_history["aggregate-validations"].last.has_problems | default: false
+          assign issues       = outputs_history["aggregate-validations"].last.issues       | default: empty
         -%}
         {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
 
         <previous_response>
-        {% assign prev_comment = outputs_history["comment-assistant"] | last %}
+        {% assign prev_comment = outputs_history["comment-assistant"].last %}
         {{ prev_comment.text }}
         </previous_response>
 
@@ -412,11 +411,10 @@ steps:
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
         {%- liquid
-          # Single source of truth: last aggregate-validations result
-          assign agg          = outputs_history | get: "aggregate-validations" | last
-          assign issues       = agg | get: "issues"
-          assign has_problems = agg | get: "has_problems"
-          assign prev_comment = outputs_history | get: "comment-assistant" | last
+          # Single source of truth: last aggregate-validations result (dot syntax)
+          assign has_problems = outputs_history["aggregate-validations"].last.has_problems | default: false
+          assign issues       = outputs_history["aggregate-validations"].last.issues       | default: empty
+          assign prev_comment = outputs_history["comment-assistant"].last
         -%}
         {% if has_problems %}
         ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
