@@ -157,6 +157,10 @@
           "type": "string",
           "description": "Transform using JavaScript expressions (evaluated in secure sandbox) - optional"
         },
+        "content": {
+          "type": "string",
+          "description": "Script content to execute for script checks"
+        },
         "schedule": {
           "type": "string",
           "description": "Cron schedule expression (e.g., \"0 2 * * *\") - optional for any check type"
@@ -444,6 +448,7 @@
       "enum": [
         "ai",
         "command",
+        "script",
         "http",
         "http_input",
         "http_client",

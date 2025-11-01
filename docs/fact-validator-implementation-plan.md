@@ -397,10 +397,9 @@ checks:
 
 ```yaml
   aggregate-validations:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       // Get ALL validation results from forEach iterations
       const validations = outputs.history['validate-fact'];
 
@@ -981,11 +980,10 @@ This fact validation system significantly improves AI response accuracy while ma
   - **File:** `examples/fact-validator.yaml`
 
 - [x] **3.6** Create aggregate-validations check ✅
-  - [x] Type: `memory`
-  - [x] Operation: `exec_js`
+  - [x] Type: `script`
   - [x] Namespace: `fact-validation`
-  - [x] Write `memory_js` to:
-    - [x] Get all validation results from `outputs.history['validate-fact']`
+  - [x] Use `content` to:
+    - [x] Read all validation results from `outputs.history['validate-fact']`
     - [x] Calculate `all_facts_valid`
     - [x] Store `invalid_facts`
     - [x] Store `low_confidence_facts`

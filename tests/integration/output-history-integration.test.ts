@@ -18,19 +18,17 @@ describe('Output History Integration Tests', () => {
           forEach: true,
         },
         'process-item': {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           depends_on: ['list-items'],
-          memory_js: `
+          content: `
             const item = outputs["list-items"];
             return { processedItem: item, doubled: item * 2 };
           `,
         },
         'verify-history': {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           depends_on: ['process-item'],
-          memory_js: `
+          content: `
             const history = outputs.history["process-item"];
             log("History length:", history ? history.length : 0);
             log("History:", history);
@@ -71,9 +69,8 @@ describe('Output History Integration Tests', () => {
       routing: { max_loops: 3 },
       checks: {
         counter: {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: `
+          type: 'script',
+          content: `
             const current = memory.get('counter') || 0;
             const next = current + 1;
             memory.set('counter', next);
@@ -81,10 +78,9 @@ describe('Output History Integration Tests', () => {
           `,
         },
         'loop-check': {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           depends_on: ['counter'],
-          memory_js: `
+          content: `
             const counter = outputs["counter"];
             return { counterValue: counter.iteration };
           `,
@@ -96,10 +92,9 @@ describe('Output History Integration Tests', () => {
           },
         },
         'verify-final': {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           depends_on: ['loop-check'],
-          memory_js: `
+          content: `
             const counterHistory = outputs.history["counter"];
             const loopHistory = outputs.history["loop-check"];
 
@@ -141,19 +136,17 @@ describe('Output History Integration Tests', () => {
       routing: { max_loops: 2 },
       checks: {
         increment: {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: `
+          type: 'script',
+          content: `
             const count = memory.get('count') || 0;
             memory.set('count', count + 1);
             return count + 1;
           `,
         },
         'check-values': {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           depends_on: ['increment'],
-          memory_js: `
+          content: `
             const currentValue = outputs["increment"];
             const historyArray = outputs.history["increment"];
 

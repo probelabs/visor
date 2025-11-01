@@ -184,6 +184,7 @@ export interface FailureConditionResult {
 export type ConfigCheckType =
   | 'ai'
   | 'command'
+  | 'script'
   | 'http'
   | 'http_input'
   | 'http_client'
@@ -326,6 +327,8 @@ export interface CheckConfig {
   transform?: string;
   /** Transform using JavaScript expressions (evaluated in secure sandbox) - optional */
   transform_js?: string;
+  /** Script content to execute for script checks */
+  content?: string;
   /** Cron schedule expression (e.g., "0 2 * * *") - optional for any check type */
   schedule?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
@@ -413,15 +416,15 @@ export interface CheckConfig {
    * Memory provider specific options (optional, only used when type === 'memory').
    */
   /** Memory operation to perform */
-  operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list' | 'exec_js';
+  /** Memory operation to perform. Use `type: 'script'` for custom JavaScript. */
+  operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list';
   /** Key for memory operation */
   key?: string;
   /** Value for set/append operations */
   value?: unknown;
   /** JavaScript expression to compute value dynamically */
   value_js?: string;
-  /** JavaScript code for exec_js operation with full memory access */
-  memory_js?: string;
+  // Custom JavaScript lives under the script provider using `content`
   /** Override namespace for this check */
   namespace?: string;
   /**

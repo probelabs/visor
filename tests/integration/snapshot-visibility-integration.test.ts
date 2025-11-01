@@ -22,10 +22,10 @@ describe('Snapshot Visibility Integration', () => {
           },
         },
         consumer: {
-          type: 'memory',
-          operation: 'exec_js',
-          // NO depends_on on purpose — relies on snapshot visibility
-          memory_js: `
+          type: 'script',
+          depends_on: ['producer'],
+          // Note: with script provider, we provide explicit dependency
+          content: `
             // Read producer output via snapshot-provided outputs
             const value = outputs["producer"]?.msg;
             if (value !== 'hello') {

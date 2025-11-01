@@ -31,6 +31,8 @@ export interface CheckProviderConfig {
   checkName?: string;
   /** Session ID for AI session management */
   sessionId?: string;
+  /** Script content for 'script' provider */
+  content?: string;
   [key: string]: unknown;
 }
 

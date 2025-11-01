@@ -37,22 +37,20 @@ describe('on_finish non-converging loop (pre-fix repro)', () => {
       },
       // Always invalid; ensures aggregator never flips to "all valid"
       validate: {
-        type: 'memory',
-        operation: 'exec_js',
+        type: 'script',
         namespace: NS,
         depends_on: ['extract-facts'],
         fanout: 'map',
-        memory_js: `
+        content: `
           const f = outputs['extract-facts'];
           return { fact_id: f.id, claim: f.claim, is_valid: false, evidence: 'bad' };
         `,
       },
       // Aggregator computes wave from history so we count each full fan-out once
       aggregate: {
-        type: 'memory',
-        operation: 'exec_js',
+        type: 'script',
         namespace: NS,
-        memory_js: `
+        content: `
           const nested = outputs.history['validate'] || [];
           const flat = Array.isArray(nested) ? nested.flatMap(x => Array.isArray(x) ? x : [x]) : [];
           const total = flat.length;

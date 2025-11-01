@@ -17,7 +17,7 @@ The Memory provider enables persistent key-value storage across checks, allowing
 
 The Memory provider acts as a shared data store that persists across check executions. It supports:
 
-- **Multiple operations**: get, set, append, increment, delete, clear, list, exec_js
+- **Multiple operations**: get, set, append, increment, delete, clear, list
 - **Namespace isolation**: Separate data contexts for different workflows
 - **In-memory or file-based storage**: Choose between speed or persistence
 - **Multiple formats**: JSON or CSV for file storage
@@ -66,7 +66,7 @@ steps:
     type: memory
 
     # Operation (required)
-    operation: get | set | append | increment | delete | clear | list | exec_js
+    operation: get | set | append | increment | delete | clear | list
 
     # Key (required for get/set/append/increment/delete)
     key: string
@@ -77,8 +77,10 @@ steps:
     # OR compute value dynamically
     value_js: "javascript_expression"
 
-    # OR execute custom JavaScript with full memory access (for exec_js operation)
-    memory_js: |
+    # Or run custom JavaScript as a separate step
+  my-script-step:
+    type: script
+    content: |
       // Full JavaScript with statements, loops, conditionals
       memory.set('key', 'value');
       return result;
@@ -211,16 +213,15 @@ steps:
 
 Returns an array of key names.
 
-### exec_js
+### Script
 
-Execute custom JavaScript with full memory access. This operation allows complex logic, loops, conditionals, and direct manipulation of memory state.
+Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper.
 
 ```yaml
 steps:
   complex-logic:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Access existing values
       const errors = memory.get('errors') || [];
       const warnings = memory.get('warnings') || [];
@@ -241,7 +242,9 @@ steps:
       };
 ```
 
-**Available memory operations in exec_js:**
+ 
+
+**Available memory operations (in script context):**
 - `memory.get(key, namespace?)` - Get value
 - `memory.set(key, value, namespace?)` - Set value
 - `memory.append(key, value, namespace?)` - Append to array
@@ -253,7 +256,7 @@ steps:
 - `memory.getAll(namespace?)` - Get all key-value pairs
 - `memory.listNamespaces()` - List all namespaces
 
-**Context available in exec_js:**
+**Context available in script content:**
 - `memory` - Memory operations object
 - `pr` - PR information (number, title, author, etc.)
 - `outputs` - Previous check outputs (current values)
@@ -605,7 +608,7 @@ steps:
     depends_on: [calculate-score]
 ```
 
-### Complex Logic with exec_js
+### Complex Logic with script
 
 ```yaml
 memory:
@@ -620,10 +623,9 @@ steps:
 
   # Analyze results with complex logic
   analyze-results:
-    type: memory
-    operation: exec_js
+    type: script
     depends_on: [run-tests]
-    memory_js: |
+    content: |
       // Get test results
       const results = outputs['run-tests'];
 
@@ -711,6 +713,8 @@ steps:
     depends_on: [report]
     fail_if: "memory.get('test_status') === 'poor'"
 ```
+
+ 
 
 ## Best Practices
 

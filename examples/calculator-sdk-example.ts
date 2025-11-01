@@ -102,11 +102,9 @@ const calculatorConfig: CalculatorConfig = {
 
     // Step 7: Perform calculation using memory and JavaScript
     "calculate": {
-      type: "memory",
+      type: "script",
       depends_on: ["store-operation"],
-      operation: "exec_js",
-      namespace: "calculator",
-      memory_js: `
+      content: `
         // Get values from memory
         const num1 = memory.get('number1', 'calculator');
         const num2 = memory.get('number2', 'calculator');
@@ -136,9 +134,6 @@ const calculatorConfig: CalculatorConfig = {
           default:
             throw new Error('Invalid operation: ' + op);
         }
-
-        // Store result in memory
-        memory.set('result', result, 'calculator');
 
         // Return result for output
         return result;

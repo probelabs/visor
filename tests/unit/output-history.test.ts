@@ -1,5 +1,5 @@
 import { CommandCheckProvider } from '../../src/providers/command-check-provider';
-import { MemoryCheckProvider } from '../../src/providers/memory-check-provider';
+import { ScriptCheckProvider } from '../../src/providers/script-check-provider';
 import { LogCheckProvider } from '../../src/providers/log-check-provider';
 import { PRInfo } from '../../src/pr-analyzer';
 import { ReviewSummary } from '../../src/reviewer';
@@ -8,12 +8,12 @@ import { MemoryStore } from '../../src/memory-store';
 
 describe('Output History', () => {
   let commandProvider: CommandCheckProvider;
-  let memoryProvider: MemoryCheckProvider;
+  let memoryProvider: ScriptCheckProvider;
   let logProvider: LogCheckProvider;
 
   beforeEach(() => {
     commandProvider = new CommandCheckProvider();
-    memoryProvider = new MemoryCheckProvider();
+    memoryProvider = new ScriptCheckProvider();
     logProvider = new LogCheckProvider();
     MemoryStore.resetInstance();
   });
@@ -63,9 +63,8 @@ describe('Output History', () => {
     outputHistory.set('counter', [1, 2, 3, 4, 5]);
 
     const config: CheckProviderConfig = {
-      type: 'memory',
-      operation: 'exec_js',
-      memory_js: `
+      type: 'script',
+      content: `
         log('History check:', outputs.history);
         if (!outputs.history || !outputs.history.counter) {
           throw new Error('outputs.history.counter should exist');
@@ -121,9 +120,8 @@ describe('Output History', () => {
   it('should handle empty output history gracefully', async () => {
     // No output history provided
     const config: CheckProviderConfig = {
-      type: 'memory',
-      operation: 'exec_js',
-      memory_js: `
+      type: 'script',
+      content: `
         // outputs.history should exist but be empty
         if (!outputs.history) {
           throw new Error('outputs.history should exist even if empty');
@@ -146,9 +144,8 @@ describe('Output History', () => {
     outputHistory.set('check-b', ['x', 'y', 'z']);
 
     const config: CheckProviderConfig = {
-      type: 'memory',
-      operation: 'exec_js',
-      memory_js: `
+      type: 'script',
+      content: `
         if (outputs.history['check-a'].length !== 3) {
           throw new Error('check-a should have 3 items');
         }

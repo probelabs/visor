@@ -149,9 +149,8 @@ checks:
     # Runs 3 times (once per fact)
 
   aggregate-validations:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Access ALL validation results
       const results = outputs.history['validate-fact'];
       const allValid = results.every(r => r.is_valid);
@@ -247,9 +246,8 @@ checks:
 
   # Step 4a: Aggregate ALL results
   aggregate-all-validations:
-    type: memory
-    operation: exec_js
-    memory_js: |
+    type: script
+    content: |
       // Get results from BOTH dependent checks
       const securityResults = outputs.history['validate-security'];
       const technicalResults = outputs.history['validate-technical'];
@@ -318,11 +316,10 @@ checks:
     # Has access to: outputs['extract-items'] (current item)
 
   summarize-all:
-    type: memory
-    operation: exec_js
+    type: script
     # Runs ONCE after all 3 process-item iterations
     # Has access to: outputs.history['process-item'] (all 3 results)
-    memory_js: |
+    content: |
       const allResults = outputs.history['process-item'];
       return { processed: allResults.length };
 ```

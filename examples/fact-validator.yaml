@@ -215,13 +215,12 @@ checks:
   # Aggregate all validation results from forEach iterations
   # This check is triggered by the on_finish hook after all validate-fact runs complete
   aggregate-validations:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
     on: [issue_opened, issue_comment]
 
-    # Complex aggregation logic using memory_js
-    memory_js: |
+    # Complex aggregation logic
+    content: |
       // Get ALL validation results from forEach iterations
       // outputs.history['validate-fact'] contains all N validation results
       const validations = outputs.history['validate-fact'] || [];

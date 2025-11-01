@@ -428,18 +428,16 @@ checks:
     forEach: true
 
   summarize:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: |
+    content: |
       const arr = outputs_raw['list'] || [];
       return { total: arr.length };
 
   branch-by-size:
-    type: memory
+    type: script
     depends_on: [list]
-    operation: exec_js
-    memory_js: 'return true'
+    content: 'return true'
     on_success:
       goto_js: |
         return (outputs_raw['list'] || []).length >= 3 ? 'after' : null;
@@ -673,9 +671,10 @@ Learn more: [docs/http.md](docs/http.md)
 
 ## 🔧 Pluggable Architecture
 
-Mix providers (`ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code`) or add your own.
+Mix providers (`ai`, `mcp`, `http`, `http_client`, `log`, `command`, `script`, `github`, `claude-code`) or add your own.
 
 - **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
+- **Script Provider**: Run JavaScript in a secure sandbox - [docs/script.md](docs/script.md)
 - **MCP Provider**: Call MCP tools directly via stdio, SSE, or HTTP transports - [docs/mcp-provider.md](docs/mcp-provider.md)
 - **MCP Tools for AI**: Enhance AI providers with MCP context - [docs/mcp.md](docs/mcp.md)
 - **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)

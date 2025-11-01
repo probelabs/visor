@@ -606,32 +606,33 @@ export class CheckExecutionEngine {
       }
     }
 
-    // Get provider for this check
-    const providerType = checkConfig.type || 'ai';
+    // No legacy adapters; use configuration as-is
+    const adaptedConfig: any = { ...checkConfig };
+    const providerType = adaptedConfig.type || 'ai';
     const provider = this.providerRegistry.getProviderOrThrow(providerType);
     this.setProviderWebhookContext(provider);
 
     // Build provider configuration
     const provCfg: CheckProviderConfig = {
       type: providerType,
-      prompt: checkConfig.prompt,
-      exec: checkConfig.exec,
-      focus: checkConfig.focus || this.mapCheckNameToFocus(checkId),
-      schema: checkConfig.schema,
-      group: checkConfig.group,
+      prompt: adaptedConfig.prompt,
+      exec: adaptedConfig.exec,
+      focus: adaptedConfig.focus || this.mapCheckNameToFocus(checkId),
+      schema: adaptedConfig.schema,
+      group: adaptedConfig.group,
       checkName: checkId,
       eventContext: this.enrichEventContext(prInfo.eventContext),
-      transform: checkConfig.transform,
-      transform_js: checkConfig.transform_js,
-      env: checkConfig.env,
-      forEach: checkConfig.forEach,
+      transform: adaptedConfig.transform,
+      transform_js: adaptedConfig.transform_js,
+      env: adaptedConfig.env,
+      forEach: adaptedConfig.forEach,
       // Pass output history for loop/goto scenarios
       __outputHistory: this.outputHistory,
       // Include provider-specific keys (e.g., op/values for github)
-      ...checkConfig,
+      ...adaptedConfig,
       ai: {
-        ...(checkConfig.ai || {}),
-        timeout: checkConfig.ai?.timeout || 600000,
+        ...(adaptedConfig.ai || {}),
+        timeout: adaptedConfig.ai?.timeout || 600000,
         debug: !!debug,
       },
     };
