@@ -251,11 +251,15 @@ export class VisorTestRunner {
   }
 
   /**
-   * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml (or legacy .visor.tests.yaml)
+   * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml
    */
   public resolveTestsPath(explicit?: string): string {
     if (explicit) {
-      return path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
+      const resolved = path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`Explicit tests file not found: ${explicit} (resolved to ${resolved})`);
+      }
+      return resolved;
     }
     const candidates = [
       // New non-dot defaults filename only
@@ -268,8 +272,9 @@ export class VisorTestRunner {
     for (const p of candidates) {
       if (fs.existsSync(p)) return p;
     }
+    const attemptedPaths = candidates.join(', ');
     throw new Error(
-      'No tests file found. Provide --config <path> or add defaults/visor.tests.yaml.'
+      `No tests file found. Attempted: ${attemptedPaths}. Provide --config <path> or add defaults/visor.tests.yaml.`
     );
   }
 
