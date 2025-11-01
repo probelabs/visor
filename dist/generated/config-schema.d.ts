@@ -151,6 +151,10 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Transform using JavaScript expressions (evaluated in secure sandbox) - optional";
                 };
+                readonly content: {
+                    readonly type: "string";
+                    readonly description: "Script content to execute for script checks";
+                };
                 readonly schedule: {
                     readonly type: "string";
                     readonly description: "Cron schedule expression (e.g., \"0 2 * * *\") - optional for any check type";
@@ -309,8 +313,8 @@ export declare const configSchema: {
                 };
                 readonly operation: {
                     readonly type: "string";
-                    readonly enum: readonly ["get", "set", "append", "increment", "delete", "clear", "list", "exec_js"];
-                    readonly description: "Memory operation to perform";
+                    readonly enum: readonly ["get", "set", "append", "increment", "delete", "clear", "list"];
+                    readonly description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript.";
                 };
                 readonly key: {
                     readonly type: "string";
@@ -322,10 +326,6 @@ export declare const configSchema: {
                 readonly value_js: {
                     readonly type: "string";
                     readonly description: "JavaScript expression to compute value dynamically";
-                };
-                readonly memory_js: {
-                    readonly type: "string";
-                    readonly description: "JavaScript code for exec_js operation with full memory access";
                 };
                 readonly namespace: {
                     readonly type: "string";
@@ -399,7 +399,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,string>': {

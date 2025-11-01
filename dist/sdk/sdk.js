@@ -8659,6 +8659,158 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
   }
 });
 
+// src/utils/template-context.ts
+function prCacheKey(pr) {
+  let sum = 0;
+  for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
+  return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join("|");
+}
+function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = { attachMemoryReadHelpers: true }) {
+  const context2 = {};
+  const key = prCacheKey(prInfo);
+  let prObj = prCache.get(key);
+  if (!prObj) {
+    prObj = {
+      number: prInfo.number,
+      title: prInfo.title,
+      body: prInfo.body,
+      author: prInfo.author,
+      base: prInfo.base,
+      head: prInfo.head,
+      totalAdditions: prInfo.totalAdditions,
+      totalDeletions: prInfo.totalDeletions,
+      files: prInfo.files.map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes
+      }))
+    };
+    prCache.set(key, prObj);
+    if (prCache.size > PR_CACHE_LIMIT) {
+      const first = prCache.keys().next();
+      if (!first.done) prCache.delete(first.value);
+    }
+  }
+  context2.pr = prObj;
+  const outputs = {};
+  const outputsRaw = {};
+  const history = {};
+  if (dependencyResults) {
+    for (const [checkName, result] of dependencyResults.entries()) {
+      if (typeof checkName !== "string") continue;
+      const summary = result;
+      if (checkName.endsWith("-raw")) {
+        const name = checkName.slice(0, -4);
+        outputsRaw[name] = summary.output !== void 0 ? summary.output : summary;
+      } else {
+        outputs[checkName] = summary.output !== void 0 ? summary.output : summary;
+      }
+    }
+  }
+  if (outputHistory) {
+    for (const [checkName, historyArray] of outputHistory) {
+      history[checkName] = historyArray;
+    }
+  }
+  const historyStage = {};
+  try {
+    if (outputHistory && stageHistoryBase) {
+      for (const [checkName, historyArray] of outputHistory) {
+        const start = stageHistoryBase[checkName] || 0;
+        const arr = Array.isArray(historyArray) ? historyArray : [];
+        historyStage[checkName] = arr.slice(start);
+      }
+    }
+  } catch {
+  }
+  outputs.history = history;
+  context2.outputs = outputs;
+  context2.outputs_history = history;
+  context2.outputs_history_stage = historyStage;
+  context2.outputs_raw = outputsRaw;
+  if (opts.attachMemoryReadHelpers && memoryStore) {
+    context2.memory = {
+      get: (key2, ns) => memoryStore.get(key2, ns),
+      has: (key2, ns) => memoryStore.has(key2, ns),
+      list: (ns) => memoryStore.list(ns),
+      getAll: (ns) => memoryStore.getAll(ns)
+    };
+  }
+  return context2;
+}
+var PR_CACHE_LIMIT, prCache;
+var init_template_context = __esm({
+  "src/utils/template-context.ts"() {
+    "use strict";
+    PR_CACHE_LIMIT = 16;
+    prCache = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/utils/script-memory-ops.ts
+function createSyncMemoryOps(store) {
+  let saveNeeded = false;
+  const ensureNs = (ns) => {
+    const nsName = ns || store.getDefaultNamespace();
+    const anyStore = store;
+    if (!anyStore["data"].has(nsName)) {
+      anyStore["data"].set(nsName, /* @__PURE__ */ new Map());
+    }
+    return nsName;
+  };
+  const ops = {
+    get: (key, ns) => store.get(key, ns),
+    has: (key, ns) => store.has(key, ns),
+    list: (ns) => store.list(ns),
+    getAll: (ns) => store.getAll(ns),
+    set: (key, value, ns) => {
+      const nsName = ensureNs(ns);
+      store["data"].get(nsName).set(key, value);
+      saveNeeded = true;
+      return value;
+    },
+    append: (key, value, ns) => {
+      const existing = store.get(key, ns);
+      let newValue;
+      if (existing === void 0) newValue = [value];
+      else if (Array.isArray(existing)) newValue = [...existing, value];
+      else newValue = [existing, value];
+      const nsName = ensureNs(ns);
+      store["data"].get(nsName).set(key, newValue);
+      saveNeeded = true;
+      return newValue;
+    },
+    increment: (key, amount = 1, ns) => {
+      const nsName = ensureNs(ns);
+      const current = store.get(key, nsName);
+      const numCurrent = typeof current === "number" ? current : 0;
+      const newValue = numCurrent + amount;
+      store["data"].get(nsName).set(key, newValue);
+      saveNeeded = true;
+      return newValue;
+    },
+    delete: (key, ns) => {
+      const nsName = ensureNs(ns);
+      const d = store["data"].get(nsName)?.delete(key) || false;
+      if (d) saveNeeded = true;
+      return d;
+    },
+    clear: (ns) => {
+      if (ns) store["data"].delete(ns);
+      else store["data"].clear();
+      saveNeeded = true;
+    }
+  };
+  return { ops, needsSave: () => saveNeeded };
+}
+var init_script_memory_ops = __esm({
+  "src/utils/script-memory-ops.ts"() {
+    "use strict";
+  }
+});
+
 // src/providers/memory-check-provider.ts
 var MemoryCheckProvider;
 var init_memory_check_provider = __esm({
@@ -8669,6 +8821,8 @@ var init_memory_check_provider = __esm({
     init_liquid_extensions();
     init_logger();
     init_sandbox();
+    init_template_context();
+    init_script_memory_ops();
     MemoryCheckProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -8703,7 +8857,7 @@ var init_memory_check_provider = __esm({
           return false;
         }
         const operation = cfg.operation;
-        const validOps = ["get", "set", "append", "increment", "delete", "clear", "list", "exec_js"];
+        const validOps = ["get", "set", "append", "increment", "delete", "clear", "list"];
         if (!validOps.includes(operation)) {
           return false;
         }
@@ -8717,15 +8871,10 @@ var init_memory_check_provider = __esm({
             return false;
           }
         }
-        if (operation === "exec_js") {
-          if (!cfg.memory_js || typeof cfg.memory_js !== "string") {
-            return false;
-          }
-        }
         return true;
       }
       async execute(prInfo, config, dependencyResults, _sessionInfo) {
-        let operation = config.operation;
+        const operation = config.operation;
         const key = config.key;
         const namespace = config.namespace;
         const memoryStore = MemoryStore.getInstance();
@@ -8737,12 +8886,6 @@ var init_memory_check_provider = __esm({
           _sessionInfo?.stageHistoryBase
         );
         let result;
-        if (!operation) {
-          const hasJs = typeof config?.memory_js === "string" || typeof config?.operation_js === "string";
-          if (hasJs) {
-            operation = "exec_js";
-          }
-        }
         try {
           switch (operation) {
             case "get":
@@ -8771,9 +8914,6 @@ var init_memory_check_provider = __esm({
               break;
             case "list":
               result = await this.handleList(memoryStore, namespace);
-              break;
-            case "exec_js":
-              result = await this.handleExecJs(memoryStore, config, templateContext);
               break;
             default:
               throw new Error(`Unknown memory operation: ${operation}`);
@@ -8848,138 +8988,7 @@ var init_memory_check_provider = __esm({
         logger.debug(`Memory LIST: ${namespace || store.getDefaultNamespace()} (${keys.length} keys)`);
         return keys;
       }
-      async handleExecJs(store, config, context2) {
-        const script = config.memory_js;
-        const pendingOps = [];
-        const enhancedContext = {
-          ...context2,
-          memory: {
-            get: (key, ns) => store.get(key, ns),
-            set: (key, value, ns) => {
-              const nsName = ns || store.getDefaultNamespace();
-              if (!store["data"].has(nsName)) {
-                store["data"].set(nsName, /* @__PURE__ */ new Map());
-              }
-              store["data"].get(nsName).set(key, value);
-              pendingOps.push(async () => {
-                if (store.getConfig().storage === "file" && store.getConfig().auto_save) {
-                  await store.save();
-                }
-              });
-              return value;
-            },
-            append: (key, value, ns) => {
-              const existing = store.get(key, ns);
-              let newValue;
-              if (existing === void 0) {
-                newValue = [value];
-              } else if (Array.isArray(existing)) {
-                newValue = [...existing, value];
-              } else {
-                newValue = [existing, value];
-              }
-              const nsName = ns || store.getDefaultNamespace();
-              if (!store["data"].has(nsName)) {
-                store["data"].set(nsName, /* @__PURE__ */ new Map());
-              }
-              store["data"].get(nsName).set(key, newValue);
-              pendingOps.push(async () => {
-                if (store.getConfig().storage === "file" && store.getConfig().auto_save) {
-                  await store.save();
-                }
-              });
-              return newValue;
-            },
-            increment: (key, amount = 1, ns) => {
-              const existing = store.get(key, ns);
-              let newValue;
-              if (existing === void 0 || existing === null) {
-                newValue = amount;
-              } else if (typeof existing === "number") {
-                newValue = existing + amount;
-              } else {
-                throw new Error(
-                  `Cannot increment non-numeric value at key '${key}' (type: ${typeof existing})`
-                );
-              }
-              const nsName = ns || store.getDefaultNamespace();
-              if (!store["data"].has(nsName)) {
-                store["data"].set(nsName, /* @__PURE__ */ new Map());
-              }
-              store["data"].get(nsName).set(key, newValue);
-              pendingOps.push(async () => {
-                if (store.getConfig().storage === "file" && store.getConfig().auto_save) {
-                  await store.save();
-                }
-              });
-              return newValue;
-            },
-            delete: (key, ns) => {
-              const nsName = ns || store.getDefaultNamespace();
-              const nsData = store["data"].get(nsName);
-              const deleted = nsData?.delete(key) || false;
-              if (deleted) {
-                pendingOps.push(async () => {
-                  if (store.getConfig().storage === "file" && store.getConfig().auto_save) {
-                    await store.save();
-                  }
-                });
-              }
-              return deleted;
-            },
-            clear: (ns) => {
-              if (ns) {
-                store["data"].delete(ns);
-              } else {
-                store["data"].clear();
-              }
-              pendingOps.push(async () => {
-                if (store.getConfig().storage === "file" && store.getConfig().auto_save) {
-                  await store.save();
-                }
-              });
-            },
-            list: (ns) => store.list(ns),
-            has: (key, ns) => store.has(key, ns),
-            getAll: (ns) => store.getAll(ns),
-            listNamespaces: () => store.listNamespaces()
-          }
-        };
-        try {
-          if (config.checkName === "aggregate-validations" || config.checkName === "aggregate") {
-            if (process.env.VISOR_DEBUG === "true") {
-              const hist = enhancedContext?.outputs?.history || {};
-              const keys = Object.keys(hist);
-              logger.debug(
-                `[MemoryProvider] ${config.checkName}: history keys = [${keys.join(", ")}]`
-              );
-              const vf = hist["validate-fact"];
-              logger.debug(
-                `[MemoryProvider] ${config.checkName}: validate-fact history length = ${Array.isArray(vf) ? vf.length : "n/a"}`
-              );
-            }
-          }
-        } catch {
-        }
-        const result = this.evaluateJavaScriptBlock(script, enhancedContext);
-        try {
-          if (config.checkName === "aggregate-validations" && process.env.VISOR_DEBUG === "true") {
-            const tv = store.get("total_validations", "fact-validation");
-            const av = store.get("all_valid", "fact-validation");
-            logger.debug(
-              `[MemoryProvider] post-exec ${config.checkName} total_validations=${String(
-                tv
-              )} all_valid=${String(av)}`
-            );
-          }
-        } catch {
-        }
-        if (pendingOps.length > 0 && store.getConfig().storage === "file" && store.getConfig().auto_save) {
-          await store.save();
-        }
-        logger.debug(`Memory EXEC_JS: Executed custom script with ${pendingOps.length} operations`);
-        return result;
-      }
+      // For custom JavaScript execution use ScriptCheckProvider.
       /**
        * Compute value from config using value, value_js, transform, or transform_js
        */
@@ -9021,113 +9030,23 @@ var init_memory_check_provider = __esm({
           throw new Error(`Failed to evaluate value_js: ${errorMsg}`);
         }
       }
-      /**
-       * Evaluate JavaScript block (multi-line script) using SandboxJS for secure execution
-       * Unlike evaluateJavaScript, this supports full scripts with statements, not just expressions
-       */
-      evaluateJavaScriptBlock(script, context2) {
-        if (!this.sandbox) {
-          this.sandbox = this.createSecureSandbox();
-        }
-        try {
-          const scope = { ...context2 };
-          return compileAndRun(this.sandbox, script, scope, {
-            injectLog: true,
-            wrapFunction: false,
-            logPrefix: "[memory:exec_js]"
-          });
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : "Unknown error";
-          logger.error(`[memory-js] Script execution error: ${errorMsg}`);
-          throw new Error(`Failed to execute memory_js: ${errorMsg}`);
-        }
-      }
+      // No full-script execution in memory provider. Use ScriptCheckProvider.
       /**
        * Build template context for Liquid and JS evaluation
        */
       buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase) {
-        const context2 = {};
-        context2.pr = {
-          number: prInfo.number,
-          title: prInfo.title,
-          body: prInfo.body,
-          author: prInfo.author,
-          base: prInfo.base,
-          head: prInfo.head,
-          totalAdditions: prInfo.totalAdditions,
-          totalDeletions: prInfo.totalDeletions,
-          files: prInfo.files.map((f) => ({
-            filename: f.filename,
-            status: f.status,
-            additions: f.additions,
-            deletions: f.deletions,
-            changes: f.changes
-          }))
-        };
-        const outputs = {};
-        const outputsRaw = {};
-        const history = {};
-        if (dependencyResults) {
-          for (const [checkName, result] of dependencyResults.entries()) {
-            if (typeof checkName !== "string") continue;
-            const summary = result;
-            if (typeof checkName === "string" && checkName.endsWith("-raw")) {
-              const name = checkName.slice(0, -4);
-              outputsRaw[name] = summary.output !== void 0 ? summary.output : summary;
-            } else {
-              outputs[checkName] = summary.output !== void 0 ? summary.output : summary;
-            }
-          }
-        }
-        if (outputHistory) {
-          for (const [checkName, historyArray] of outputHistory) {
-            history[checkName] = historyArray;
-          }
-        }
-        const historyStage = {};
-        try {
-          if (outputHistory && stageHistoryBase) {
-            for (const [checkName, historyArray] of outputHistory) {
-              const start = stageHistoryBase[checkName] || 0;
-              const arr = Array.isArray(historyArray) ? historyArray : [];
-              historyStage[checkName] = arr.slice(start);
-            }
-          }
-        } catch {
-        }
-        outputs.history = history;
-        context2.outputs = outputs;
-        context2.outputs_history = history;
-        context2.outputs_history_stage = historyStage;
-        context2.outputs_raw = outputsRaw;
+        const base = buildProviderTemplateContext(
+          prInfo,
+          dependencyResults,
+          memoryStore,
+          outputHistory,
+          stageHistoryBase
+        );
         if (memoryStore) {
-          context2.memory = {
-            get: (key, ns) => memoryStore.get(key, ns),
-            has: (key, ns) => memoryStore.has(key, ns),
-            list: (ns) => memoryStore.list(ns),
-            getAll: (ns) => memoryStore.getAll(ns),
-            set: (key, value, ns) => {
-              const nsName = ns || memoryStore.getDefaultNamespace();
-              if (!memoryStore["data"].has(nsName)) {
-                memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
-              }
-              memoryStore["data"].get(nsName).set(key, value);
-              return true;
-            },
-            increment: (key, amount = 1, ns) => {
-              const nsName = ns || memoryStore.getDefaultNamespace();
-              const current = memoryStore.get(key, nsName);
-              const numCurrent = typeof current === "number" ? current : 0;
-              const newValue = numCurrent + amount;
-              if (!memoryStore["data"].has(nsName)) {
-                memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
-              }
-              memoryStore["data"].get(nsName).set(key, newValue);
-              return newValue;
-            }
-          };
+          const { ops } = createSyncMemoryOps(memoryStore);
+          base.memory = ops;
         }
-        return context2;
+        return base;
       }
       getSupportedConfigKeys() {
         return [
@@ -9136,7 +9055,6 @@ var init_memory_check_provider = __esm({
           "key",
           "value",
           "value_js",
-          "memory_js",
           "transform",
           "transform_js",
           "namespace",
@@ -10194,6 +10112,126 @@ var init_human_input_check_provider = __esm({
   }
 });
 
+// src/providers/script-check-provider.ts
+var ScriptCheckProvider;
+var init_script_check_provider = __esm({
+  "src/providers/script-check-provider.ts"() {
+    "use strict";
+    init_check_provider_interface();
+    init_liquid_extensions();
+    init_logger();
+    init_memory_store();
+    init_sandbox();
+    init_template_context();
+    init_script_memory_ops();
+    ScriptCheckProvider = class extends CheckProvider {
+      liquid;
+      constructor() {
+        super();
+        this.liquid = createExtendedLiquid({
+          strictVariables: false,
+          strictFilters: false
+        });
+      }
+      createSecureSandbox() {
+        return createSecureSandbox();
+      }
+      getName() {
+        return "script";
+      }
+      getDescription() {
+        return "Execute JavaScript with access to PR context, dependency outputs, and memory.";
+      }
+      async validateConfig(config) {
+        if (!config || typeof config !== "object") return false;
+        const cfg = config;
+        if (typeof cfg.content !== "string") return false;
+        const trimmed = cfg.content.trim();
+        if (trimmed.length === 0) return false;
+        try {
+          const bytes = Buffer.byteLength(cfg.content, "utf8");
+          if (bytes > 1024 * 1024) return false;
+        } catch {
+        }
+        if (cfg.content.indexOf("\0") >= 0) return false;
+        return true;
+      }
+      async execute(prInfo, config, dependencyResults, _sessionInfo) {
+        const script = String(config.content || "");
+        const memoryStore = MemoryStore.getInstance();
+        const ctx = buildProviderTemplateContext(
+          prInfo,
+          dependencyResults,
+          memoryStore,
+          config.__outputHistory,
+          _sessionInfo?.stageHistoryBase,
+          { attachMemoryReadHelpers: false }
+        );
+        const { ops, needsSave } = createSyncMemoryOps(memoryStore);
+        ctx.memory = ops;
+        const sandbox = this.createSecureSandbox();
+        let result;
+        try {
+          result = compileAndRun(
+            sandbox,
+            script,
+            { ...ctx },
+            {
+              injectLog: true,
+              wrapFunction: false,
+              logPrefix: "[script]"
+            }
+          );
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "Unknown error";
+          logger.error(`[script] execution error: ${msg}`);
+          return {
+            issues: [
+              {
+                file: "script",
+                line: 0,
+                ruleId: "script/execution_error",
+                message: msg,
+                severity: "error",
+                category: "logic"
+              }
+            ],
+            output: null
+          };
+        }
+        try {
+          if (needsSave() && memoryStore.getConfig().storage === "file" && memoryStore.getConfig().auto_save) {
+            await memoryStore.save();
+          }
+        } catch (e) {
+          logger.warn(`[script] memory save failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return { issues: [], output: result };
+      }
+      getSupportedConfigKeys() {
+        return [
+          "type",
+          "content",
+          "depends_on",
+          "group",
+          "on",
+          "if",
+          "fail_if",
+          "on_fail",
+          "on_success"
+        ];
+      }
+      async isAvailable() {
+        return true;
+      }
+      getRequirements() {
+        return ["No external dependencies required"];
+      }
+      // No local buildTemplateContext; uses shared builder above
+    };
+  }
+});
+
 // src/providers/check-provider-registry.ts
 var CheckProviderRegistry;
 var init_check_provider_registry = __esm({
@@ -10211,6 +10249,7 @@ var init_check_provider_registry = __esm({
     init_memory_check_provider();
     init_mcp_check_provider();
     init_human_input_check_provider();
+    init_script_check_provider();
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
@@ -10232,6 +10271,7 @@ var init_check_provider_registry = __esm({
       registerDefaultProviders() {
         this.register(new AICheckProvider());
         this.register(new CommandCheckProvider());
+        this.register(new ScriptCheckProvider());
         this.register(new HttpCheckProvider());
         this.register(new HttpInputProvider());
         this.register(new HttpClientProvider());
@@ -12509,29 +12549,30 @@ ${onFinish.goto_js}
             }
           }
         }
-        const providerType = checkConfig.type || "ai";
+        const adaptedConfig = { ...checkConfig };
+        const providerType = adaptedConfig.type || "ai";
         const provider = this.providerRegistry.getProviderOrThrow(providerType);
         this.setProviderWebhookContext(provider);
         const provCfg = {
           type: providerType,
-          prompt: checkConfig.prompt,
-          exec: checkConfig.exec,
-          focus: checkConfig.focus || this.mapCheckNameToFocus(checkId),
-          schema: checkConfig.schema,
-          group: checkConfig.group,
+          prompt: adaptedConfig.prompt,
+          exec: adaptedConfig.exec,
+          focus: adaptedConfig.focus || this.mapCheckNameToFocus(checkId),
+          schema: adaptedConfig.schema,
+          group: adaptedConfig.group,
           checkName: checkId,
           eventContext: this.enrichEventContext(prInfo.eventContext),
-          transform: checkConfig.transform,
-          transform_js: checkConfig.transform_js,
-          env: checkConfig.env,
-          forEach: checkConfig.forEach,
+          transform: adaptedConfig.transform,
+          transform_js: adaptedConfig.transform_js,
+          env: adaptedConfig.env,
+          forEach: adaptedConfig.forEach,
           // Pass output history for loop/goto scenarios
           __outputHistory: this.outputHistory,
           // Include provider-specific keys (e.g., op/values for github)
-          ...checkConfig,
+          ...adaptedConfig,
           ai: {
-            ...checkConfig.ai || {},
-            timeout: checkConfig.ai?.timeout || 6e5,
+            ...adaptedConfig.ai || {},
+            timeout: adaptedConfig.ai?.timeout || 6e5,
             debug: !!debug
           }
         };
@@ -18425,6 +18466,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Transform using JavaScript expressions (evaluated in secure sandbox) - optional"
             },
+            content: {
+              type: "string",
+              description: "Script content to execute for script checks"
+            },
             schedule: {
               type: "string",
               description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type'
@@ -18586,8 +18631,8 @@ var init_config_schema = __esm({
             },
             operation: {
               type: "string",
-              enum: ["get", "set", "append", "increment", "delete", "clear", "list", "exec_js"],
-              description: "Memory operation to perform"
+              enum: ["get", "set", "append", "increment", "delete", "clear", "list"],
+              description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript."
             },
             key: {
               type: "string",
@@ -18599,10 +18644,6 @@ var init_config_schema = __esm({
             value_js: {
               type: "string",
               description: "JavaScript expression to compute value dynamically"
-            },
-            memory_js: {
-              type: "string",
-              description: "JavaScript code for exec_js operation with full memory access"
             },
             namespace: {
               type: "string",
@@ -18682,6 +18723,7 @@ var init_config_schema = __esm({
           enum: [
             "ai",
             "command",
+            "script",
             "http",
             "http_input",
             "http_client",

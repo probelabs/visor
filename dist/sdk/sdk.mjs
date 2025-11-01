@@ -1,6 +1,6 @@
 import {
   CheckExecutionEngine
-} from "./chunk-IJLNUW4E.mjs";
+} from "./chunk-CL7LJBWZ.mjs";
 import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
@@ -183,6 +183,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Transform using JavaScript expressions (evaluated in secure sandbox) - optional"
             },
+            content: {
+              type: "string",
+              description: "Script content to execute for script checks"
+            },
             schedule: {
               type: "string",
               description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type'
@@ -344,8 +348,8 @@ var init_config_schema = __esm({
             },
             operation: {
               type: "string",
-              enum: ["get", "set", "append", "increment", "delete", "clear", "list", "exec_js"],
-              description: "Memory operation to perform"
+              enum: ["get", "set", "append", "increment", "delete", "clear", "list"],
+              description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript."
             },
             key: {
               type: "string",
@@ -357,10 +361,6 @@ var init_config_schema = __esm({
             value_js: {
               type: "string",
               description: "JavaScript expression to compute value dynamically"
-            },
-            memory_js: {
-              type: "string",
-              description: "JavaScript code for exec_js operation with full memory access"
             },
             namespace: {
               type: "string",
@@ -440,6 +440,7 @@ var init_config_schema = __esm({
           enum: [
             "ai",
             "command",
+            "script",
             "http",
             "http_input",
             "http_client",

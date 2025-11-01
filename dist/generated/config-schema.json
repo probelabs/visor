@@ -346,10 +346,9 @@
             "increment",
             "delete",
             "clear",
-            "list",
-            "exec_js"
+            "list"
           ],
-          "description": "Memory operation to perform"
+          "description": "Memory operation to perform. Use `type: 'script'` for custom JavaScript."
         },
         "key": {
           "type": "string",
@@ -361,10 +360,6 @@
         "value_js": {
           "type": "string",
           "description": "JavaScript expression to compute value dynamically"
-        },
-        "memory_js": {
-          "type": "string",
-          "description": "JavaScript code for exec_js operation with full memory access"
         },
         "namespace": {
           "type": "string",
