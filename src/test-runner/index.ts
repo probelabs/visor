@@ -256,6 +256,14 @@ export class VisorTestRunner {
   public resolveTestsPath(explicit?: string): string {
     if (explicit) {
       const resolved = path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
+      // Security: prevent path traversal outside the working directory
+      const normalizedPath = path.normalize(resolved);
+      const normalizedCwd = path.normalize(this.cwd);
+      if (!normalizedPath.startsWith(normalizedCwd)) {
+        throw new Error(
+          `Security error: Path traversal detected. Cannot access files outside working directory: ${this.cwd}`
+        );
+      }
       if (!fs.existsSync(resolved)) {
         throw new Error(`Explicit tests file not found: ${explicit} (resolved to ${resolved})`);
       }

@@ -35,6 +35,15 @@ describe('VisorTestRunner.resolveTestsPath', () => {
     );
   });
 
+  it('rejects explicit paths that escape the working directory (path traversal)', () => {
+    const explicit = '../outside.yaml';
+    // existsSync shouldn't even matter; traversal should be caught first
+    mockFs.existsSync.mockReturnValue(true);
+    expect(() => runner.resolveTestsPath(explicit)).toThrow(
+      'Security error: Path traversal detected.'
+    );
+  });
+
   it('discovers defaults/visor.tests.yaml', () => {
     const candidate = path.resolve(cwd, 'defaults/visor.tests.yaml');
     mockFs.existsSync.mockImplementation((p: any) => p === candidate);
