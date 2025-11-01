@@ -17,22 +17,22 @@ describe('VisorTestRunner.resolveTestsPath', () => {
 
   it('validates explicit path existence and readability', () => {
     const explicit = 'suite.yaml';
-    const resolved = path.resolve(cwd, explicit);
+    // const resolved = path.resolve(cwd, explicit);
 
     // Not exists → throws with resolved
-    mockFs.existsSync.mockReturnValue(false);
-    expect(() => runner.resolveTestsPath(explicit)).toThrow(
-      `Explicit tests file not found: ${explicit} (resolved to ${resolved})`
-    );
+    (mockFs.statSync as any).mockImplementation(() => {
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
+    expect(() => runner.resolveTestsPath(explicit)).toThrow('Explicit tests file not accessible');
 
     // Exists but not readable → access throws
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.accessSync.mockImplementation(() => {
+    (mockFs.statSync as any).mockImplementation(() => ({ isFile: () => true }));
+    (mockFs.openSync as any).mockImplementation(() => {
       throw new Error('EACCES');
     });
-    expect(() => runner.resolveTestsPath(explicit)).toThrow(
-      `Explicit tests file not readable: ${resolved}`
-    );
+    expect(() => runner.resolveTestsPath(explicit)).toThrow('Explicit tests file not accessible');
   });
 
   it('rejects explicit paths that escape the working directory (path traversal)', () => {
@@ -46,20 +46,34 @@ describe('VisorTestRunner.resolveTestsPath', () => {
 
   it('discovers defaults/visor.tests.yaml', () => {
     const candidate = path.resolve(cwd, 'defaults/visor.tests.yaml');
-    mockFs.existsSync.mockImplementation((p: any) => p === candidate);
+    (mockFs.statSync as any).mockImplementation((p: any) => {
+      if (p === candidate) return { isFile: () => true } as fs.Stats;
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
     const found = runner.resolveTestsPath();
     expect(found).toBe(candidate);
   });
 
   it('falls back to project-local .visor.tests.yaml', () => {
     const candidate = path.resolve(cwd, '.visor.tests.yaml');
-    mockFs.existsSync.mockImplementation((p: any) => p === candidate);
+    (mockFs.statSync as any).mockImplementation((p: any) => {
+      if (p === candidate) return { isFile: () => true } as fs.Stats;
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
     const found = runner.resolveTestsPath();
     expect(found).toBe(candidate);
   });
 
   it('reports attempted paths on failure', () => {
-    mockFs.existsSync.mockReturnValue(false);
+    (mockFs.statSync as any).mockImplementation(() => {
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
     expect(() => runner.resolveTestsPath()).toThrow('defaults/visor.tests.yaml');
   });
 });

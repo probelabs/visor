@@ -264,13 +264,16 @@ export class VisorTestRunner {
           `Security error: Path traversal detected. Cannot access files outside working directory: ${this.cwd}`
         );
       }
-      if (!fs.existsSync(resolved)) {
-        throw new Error(`Explicit tests file not found: ${explicit} (resolved to ${resolved})`);
-      }
       try {
-        fs.accessSync(resolved, fs.constants?.R_OK ?? 4);
+        // Atomic-ish validation: stat then open a descriptor
+        const stats = fs.statSync(resolved);
+        if (!stats.isFile()) {
+          throw new Error(`Explicit tests file is not a regular file: ${resolved}`);
+        }
+        const fd = fs.openSync(resolved, 'r');
+        fs.closeSync(fd);
       } catch {
-        throw new Error(`Explicit tests file not readable: ${resolved}`);
+        throw new Error(`Explicit tests file not accessible: ${resolved}`);
       }
       return resolved;
     }
@@ -287,7 +290,13 @@ export class VisorTestRunner {
       // Security: validate candidate paths don't escape working directory
       const normalizedPath = path.normalize(p);
       if (!normalizedPath.startsWith(normalizedCwd)) continue;
-      if (fs.existsSync(p)) return p;
+      try {
+        const stats = fs.statSync(p);
+        if (stats.isFile()) return p;
+      } catch {
+        // not accessible; skip
+        continue;
+      }
     }
     const attemptedPaths = candidates.join(', ');
     throw new Error(

@@ -149,10 +149,6 @@ export class ConfigLoader {
     // Validate against path traversal attacks
     this.validateLocalPath(resolvedPath);
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Configuration file not found: ${resolvedPath}`);
-    }
-
     try {
       const content = fs.readFileSync(resolvedPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
@@ -177,7 +173,10 @@ export class ConfigLoader {
         // Restore previous base directory
         this.options.baseDir = previousBaseDir;
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      }
       if (error instanceof Error) {
         throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
       }

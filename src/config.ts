@@ -73,11 +73,18 @@ export class ConfigManager {
       : path.resolve(process.cwd(), configPath);
 
     try {
-      if (!fs.existsSync(resolvedPath)) {
-        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      let configContent: string;
+      try {
+        // Attempt to read directly; if not found or not accessible, an error will be thrown
+        configContent = fs.readFileSync(resolvedPath, 'utf8');
+      } catch (readErr: any) {
+        if (readErr && (readErr.code === 'ENOENT' || readErr.code === 'ENOTDIR')) {
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
+        }
+        throw new Error(
+          `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
+        );
       }
-
-      const configContent = fs.readFileSync(resolvedPath, 'utf8');
       let parsedConfig: Partial<VisorConfig>;
 
       try {
@@ -177,16 +184,26 @@ export class ConfigManager {
 
       // Prefer non-dot files
       for (const p of preferred) {
-        if (fs.existsSync(p)) return this.loadConfig(p, options);
+        try {
+          const st = fs.statSync(p);
+          if (st.isFile()) return this.loadConfig(p, options);
+        } catch (e: any) {
+          if (!(e && e.code === 'ENOENT')) throw e;
+        }
       }
 
       // If legacy dotfile is present, instruct migration for consistency
       for (const lp of legacy) {
-        if (fs.existsSync(lp)) {
-          const rel = path.relative(baseDir, lp);
-          throw new Error(
-            `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
-          );
+        try {
+          const st = fs.statSync(lp);
+          if (st.isFile()) {
+            const rel = path.relative(baseDir, lp);
+            throw new Error(
+              `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+            );
+          }
+        } catch (e: any) {
+          if (!(e && e.code === 'ENOENT')) throw e;
         }
       }
     }
