@@ -17,7 +17,7 @@ The Memory provider enables persistent key-value storage across checks, allowing
 
 The Memory provider acts as a shared data store that persists across check executions. It supports:
 
-- **Multiple operations**: get, set, append, increment, delete, clear, list, exec_js
+- **Multiple operations**: get, set, append, increment, delete, clear, list
 - **Namespace isolation**: Separate data contexts for different workflows
 - **In-memory or file-based storage**: Choose between speed or persistence
 - **Multiple formats**: JSON or CSV for file storage
@@ -66,7 +66,7 @@ steps:
     type: memory
 
     # Operation (required)
-    operation: get | set | append | increment | delete | clear | list | exec_js
+    operation: get | set | append | increment | delete | clear | list
 
     # Key (required for get/set/append/increment/delete)
     key: string
@@ -215,7 +215,7 @@ Returns an array of key names.
 
 ### Script
 
-Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper.
+Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper. The script provider replaces the removed `exec_js` operation.
 
 ```yaml
 steps:
@@ -244,7 +244,7 @@ steps:
 
  
 
-**Available memory operations in exec_js:**
+**Available memory operations (in script context):**
 - `memory.get(key, namespace?)` - Get value
 - `memory.set(key, value, namespace?)` - Set value
 - `memory.append(key, value, namespace?)` - Append to array
@@ -256,7 +256,7 @@ steps:
 - `memory.getAll(namespace?)` - Get all key-value pairs
 - `memory.listNamespaces()` - List all namespaces
 
-**Context available in exec_js:**
+**Context available in script content:**
 - `memory` - Memory operations object
 - `pr` - PR information (number, title, author, etc.)
 - `outputs` - Previous check outputs (current values)

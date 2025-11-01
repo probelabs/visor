@@ -20,10 +20,9 @@ describe('Routing fanout (map) vs reduce', () => {
           message: 'item: {{ outputs["list"] }}',
         },
         aggregate: {
-          type: 'memory',
+          type: 'script',
           fanout: 'reduce',
-          operation: 'exec_js',
-          memory_js: 'return { n: (outputs_raw["list"]||[]).length }',
+          content: 'return { n: (outputs_raw["list"]||[]).length }',
         },
       },
     } as any;

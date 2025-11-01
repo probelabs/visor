@@ -340,8 +340,9 @@ export const configSchema = {
         },
         operation: {
           type: 'string',
-          enum: ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list', 'exec_js'],
-          description: 'Memory operation to perform',
+          enum: ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list'],
+          description:
+            "Memory operation to perform (exec_js removed; use type: 'script' for custom JS).",
         },
         key: {
           type: 'string',
@@ -353,10 +354,6 @@ export const configSchema = {
         value_js: {
           type: 'string',
           description: 'JavaScript expression to compute value dynamically',
-        },
-        memory_js: {
-          type: 'string',
-          description: 'JavaScript code for exec_js operation with full memory access',
         },
         namespace: {
           type: 'string',

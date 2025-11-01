@@ -1,6 +1,6 @@
-# Memory Example: exec_js for Complex Logic
+# Script Example: Complex Logic with Memory
 #
-# This example demonstrates using the exec_js operation to perform
+# This example demonstrates using the script provider to perform
 # complex data analysis and manipulation with full JavaScript support.
 
 version: "1.0"

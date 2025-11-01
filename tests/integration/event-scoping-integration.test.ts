@@ -8,17 +8,15 @@ describe('Event scoping integration', () => {
       checks: {
         // Runs under issue_comment; produces an output
         seed: {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: 'return { from: "issue" }',
+          type: 'script',
+          content: 'return { from: "issue" }',
           on: ['issue_comment'],
         },
         // Intended to run under pr_updated via goto_event; attempts to read seed
         pr_only: {
-          type: 'memory',
-          operation: 'exec_js',
+          type: 'script',
           // If event scoping works, outputs['seed'] should be undefined here
-          memory_js: 'return { seedSeen: !!(outputs["seed"] && outputs["seed"].from) }',
+          content: 'return { seedSeen: !!(outputs["seed"] && outputs["seed"].from) }',
           on: ['pr_updated'],
         },
         // Triggers the cross-event jump
@@ -57,15 +55,13 @@ describe('Event scoping integration', () => {
       version: '2.0',
       checks: {
         seed_pr: {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: 'return { from: "pr" }',
+          type: 'script',
+          content: 'return { from: "pr" }',
           on: ['pr_updated'],
         },
         use_pr: {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: 'return { ok: !!(outputs["seed_pr"] && outputs["seed_pr"].from) }',
+          type: 'script',
+          content: 'return { ok: !!(outputs["seed_pr"] && outputs["seed_pr"].from) }',
           on: ['pr_updated'],
           depends_on: ['seed_pr'],
         },

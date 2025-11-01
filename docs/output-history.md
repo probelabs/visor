@@ -238,7 +238,7 @@ steps:
 
 ### JavaScript Expressions
 
-In `memory_js`, `transform_js`, `goto_js`, `fail_if`, etc.:
+In script content, `transform_js`, `goto_js`, `fail_if`, etc.:
 
 ```javascript
 // Current value

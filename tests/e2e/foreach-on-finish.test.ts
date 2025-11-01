@@ -445,12 +445,10 @@ checks:
 
   check-history:
     type: memory
-    operation: exec_js
-    memory_js: |
-      const history = outputs.history['process-item'] || [];
-      const loopCount = memory.get('loop_count', 'test') || 0;
-      memory.set('history_size', Array.isArray(history) ? history.length : 1, 'test');
-      return { history_size: Array.isArray(history) ? history.length : 1, loop_count: loopCount };
+    operation: set
+    key: history_size
+    namespace: test
+    value_js: '(Array.isArray(outputs_history[\'process-item\']) ? outputs_history[\'process-item\'].length : 1)'
 
 output:
   pr_comment:
@@ -512,13 +510,10 @@ checks:
 
   aggregate-validations:
     type: memory
-    operation: exec_js
+    operation: set
     namespace: fact-validation
-    memory_js: |
-      const validations = outputs.history['validate-fact'] || [];
-      const allValid = validations.every(v => v.valid === true);
-      memory.set('all_valid', allValid, 'fact-validation');
-      return { total: validations.length, all_valid: allValid };
+    key: all_valid
+    value_js: "Array.isArray(outputs_history['validate-fact']) ? outputs_history['validate-fact'].every(v => v.valid === true) : true"
 
   post-response:
     type: log
@@ -569,10 +564,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const validations = outputs.history['validate-fact'] || [];
       const allValid = validations.every(v => v.is_valid === true);
       memory.set('all_valid', allValid, 'fact-validation');
@@ -648,10 +642,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const validations = outputs.history['validate-fact'] || [];
       const allValid = validations.every(v => v.is_valid === true);
       memory.set('all_valid', allValid, 'fact-validation');
@@ -717,10 +710,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const validations = outputs.history['validate-fact'] || [];
       const allValid = validations.every(v => v.is_valid === true);
       memory.set('all_valid', allValid, 'fact-validation');
@@ -790,10 +782,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const validations = outputs.history['validate-fact'] || [];
       const allValid = validations.every(v => v.is_valid === true);
       memory.set('all_valid', allValid, 'fact-validation');
@@ -888,10 +879,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const validations = outputs.history['validate-fact'] || [];
       memory.set('fact_count', validations.length, 'fact-validation');
       memory.set('all_valid', validations.length === 0, 'fact-validation');
@@ -987,10 +977,9 @@ checks:
     output_format: json
 
   handle-error:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       const items = outputs['extract-facts'] || [];
       memory.set('parse_error', Array.isArray(items) && items.length === 0, 'fact-validation');
       return { handled_error: true };
@@ -1102,10 +1091,9 @@ checks:
     output_format: json
 
   aggregate:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
-    memory_js: |
+    content: |
       memory.set('validation_ran', true, 'fact-validation');
       return { validation_ran: true };
 

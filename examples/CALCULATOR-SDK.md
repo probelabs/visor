@@ -192,7 +192,7 @@ async function main() {
 - Storing values between checks
 - Namespace isolation
 - JavaScript value transformation (`value_js`)
-- JavaScript execution (`exec_js`)
+- Script provider (`type: script`)
 
 ### 3. Dependency Management
 - Sequential workflow with `depends_on`

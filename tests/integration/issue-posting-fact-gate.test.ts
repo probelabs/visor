@@ -109,23 +109,21 @@ none
         return null;
 
   validate-fact:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
     depends_on: [extract-facts]
     on: [issue_opened]
-    memory_js: |
+    content: |
       const NS = 'fact-validation';
       const f = outputs['extract-facts'];
       const attempt = Number(memory.get('attempt', NS) || 0);
       const is_valid = ${allValid ? 'true' : 'false'}; return { fact_id: f.id, claim: f.claim, is_valid, confidence: '${allValid ? "'ok'" : "'bad'"} };
 
   aggregate-validations:
-    type: memory
-    operation: exec_js
+    type: script
     namespace: fact-validation
     on: [issue_opened]
-    memory_js: |
+    content: |
       const vals = outputs.history['validate-fact'] || [];
       const invalid = (Array.isArray(vals) ? vals : []).filter(v => v && v.is_valid === false);
       const all_valid = invalid.length === 0;

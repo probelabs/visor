@@ -416,15 +416,15 @@ export interface CheckConfig {
    * Memory provider specific options (optional, only used when type === 'memory').
    */
   /** Memory operation to perform */
-  operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list' | 'exec_js';
+  /** Memory operation to perform (exec_js removed; use type: 'script' for custom JS). */
+  operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list';
   /** Key for memory operation */
   key?: string;
   /** Value for set/append operations */
   value?: unknown;
   /** JavaScript expression to compute value dynamically */
   value_js?: string;
-  /** JavaScript code for exec_js operation with full memory access */
-  memory_js?: string;
+  // exec_js removed: use 'type: script' with 'content'
   /** Override namespace for this check */
   namespace?: string;
   /**

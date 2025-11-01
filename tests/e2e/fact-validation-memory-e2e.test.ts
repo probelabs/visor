@@ -53,12 +53,11 @@ describe('Fact Validation Flow (memory, fast e2e)', () => {
       },
 
       'validate-fact': {
-        type: 'memory',
-        operation: 'exec_js',
+        type: 'script',
         namespace: ns,
         depends_on: ['extract-facts'],
         fanout: 'map',
-        memory_js: `
+        content: `
           const NS = '${ns}';
           const attempt = memory.get('attempt', NS) || 0;
           const f = outputs['extract-facts'];
@@ -70,10 +69,9 @@ describe('Fact Validation Flow (memory, fast e2e)', () => {
       },
 
       'aggregate-validations': {
-        type: 'memory',
-        operation: 'exec_js',
+        type: 'script',
         namespace: ns,
-        memory_js: `
+        content: `
           const NS = '${ns}';
           const nested = outputs.history['validate-fact'] || [];
           const vals = Array.isArray(nested) ? nested.flatMap(x => Array.isArray(x) ? x : [x]) : [];
@@ -89,10 +87,9 @@ describe('Fact Validation Flow (memory, fast e2e)', () => {
       },
 
       'comment-assistant': {
-        type: 'memory',
-        operation: 'exec_js',
+        type: 'script',
         namespace: ns,
-        memory_js: `
+        content: `
           const NS = '${ns}';
           const prev = outputs.history['comment-assistant'] || [];
           const allFactsNested = outputs.history['validate-fact'] || [];

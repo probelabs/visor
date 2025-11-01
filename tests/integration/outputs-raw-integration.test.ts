@@ -9,20 +9,18 @@ describe('outputs_raw exposure across providers and routing', () => {
       checks: {
         list: { type: 'command', exec: 'echo \'["a","b","c"]\'', forEach: true },
         'use-raw-memory': {
-          type: 'memory',
+          type: 'script',
           depends_on: ['list'],
-          operation: 'exec_js',
-          memory_js: `
+          content: `
             const arr = outputs_raw["list"];
             if (!Array.isArray(arr)) throw new Error('outputs_raw.list not array');
             return { rawLength: arr.length, first: arr[0], last: arr[arr.length-1] };
           `,
         },
         'route-by-raw': {
-          type: 'memory',
+          type: 'script',
           depends_on: ['list'],
-          operation: 'exec_js',
-          memory_js: `return 'ok';`,
+          content: `return 'ok';`,
           on_success: {
             goto_js: `
               const n = (outputs_raw["list"] || []).length;
@@ -31,9 +29,8 @@ describe('outputs_raw exposure across providers and routing', () => {
           },
         },
         'after-route': {
-          type: 'memory',
-          operation: 'exec_js',
-          memory_js: `return { reached: true };`,
+          type: 'script',
+          content: `return { reached: true };`,
         },
       },
       output: { pr_comment: { format: 'markdown', group_by: 'check' } },

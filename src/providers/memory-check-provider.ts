@@ -13,15 +13,7 @@ import { createSyncMemoryOps } from '../utils/script-memory-ops';
 /**
  * Memory operation types
  */
-export type MemoryOperation =
-  | 'get'
-  | 'set'
-  | 'append'
-  | 'increment'
-  | 'delete'
-  | 'clear'
-  | 'list'
-  | 'exec_js';
+export type MemoryOperation = 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list';
 
 /**
  * Check provider for memory/state management
@@ -68,19 +60,11 @@ export class MemoryCheckProvider extends CheckProvider {
 
     // Operation is required
     if (!cfg.operation || typeof cfg.operation !== 'string') {
-      // Offer a helpful migration hint if user provided exec body without operation
-      if (typeof (cfg as any).memory_js === 'string') {
-        try {
-          require('../logger').logger.warn(
-            "Memory provider: 'operation' is required. To execute JavaScript, either set operation: 'exec_js' explicitly or switch to type: 'script' with a 'content' block."
-          );
-        } catch {}
-      }
       return false;
     }
 
     const operation = cfg.operation as string;
-    const validOps = ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list', 'exec_js'];
+    const validOps = ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list'];
     if (!validOps.includes(operation)) {
       return false;
     }
@@ -99,12 +83,7 @@ export class MemoryCheckProvider extends CheckProvider {
       }
     }
 
-    // exec_js requires memory_js
-    if (operation === 'exec_js') {
-      if (!cfg.memory_js || typeof cfg.memory_js !== 'string') {
-        return false;
-      }
-    }
+    // no exec_js support here; use type: script instead
 
     return true;
   }
@@ -166,9 +145,6 @@ export class MemoryCheckProvider extends CheckProvider {
           break;
         case 'list':
           result = await this.handleList(memoryStore, namespace);
-          break;
-        case 'exec_js':
-          result = await this.handleExecJs(memoryStore, config, templateContext);
           break;
         default:
           throw new Error(`Unknown memory operation: ${operation}`);
@@ -278,172 +254,7 @@ export class MemoryCheckProvider extends CheckProvider {
     return keys;
   }
 
-  private async handleExecJs(
-    store: MemoryStore,
-    config: CheckProviderConfig,
-    context: Record<string, unknown>
-  ): Promise<unknown> {
-    const script = config.memory_js as string;
-
-    // Track operations that need to be saved
-    const pendingOps: Array<() => Promise<void>> = [];
-
-    // Create enhanced context with memory operations
-    // Note: These operations are synchronous for simplicity in scripts
-    // The actual async save happens after script execution
-    const enhancedContext = {
-      ...context,
-      memory: {
-        get: (key: string, ns?: string) => store.get(key, ns),
-        set: (key: string, value: unknown, ns?: string) => {
-          // Store operation synchronously in memory
-          const nsName = ns || store.getDefaultNamespace();
-          if (!store['data'].has(nsName)) {
-            store['data'].set(nsName, new Map());
-          }
-          store['data'].get(nsName)!.set(key, value);
-          // Queue async save for later
-          pendingOps.push(async () => {
-            if (store.getConfig().storage === 'file' && store.getConfig().auto_save) {
-              await store.save();
-            }
-          });
-          return value;
-        },
-        append: (key: string, value: unknown, ns?: string) => {
-          const existing = store.get(key, ns);
-          let newValue: unknown[];
-          if (existing === undefined) {
-            newValue = [value];
-          } else if (Array.isArray(existing)) {
-            newValue = [...existing, value];
-          } else {
-            newValue = [existing, value];
-          }
-          // Use sync set
-          const nsName = ns || store.getDefaultNamespace();
-          if (!store['data'].has(nsName)) {
-            store['data'].set(nsName, new Map());
-          }
-          store['data'].get(nsName)!.set(key, newValue);
-          // Queue async save
-          pendingOps.push(async () => {
-            if (store.getConfig().storage === 'file' && store.getConfig().auto_save) {
-              await store.save();
-            }
-          });
-          return newValue;
-        },
-        increment: (key: string, amount = 1, ns?: string) => {
-          const existing = store.get(key, ns);
-          let newValue: number;
-          if (existing === undefined || existing === null) {
-            newValue = amount;
-          } else if (typeof existing === 'number') {
-            newValue = existing + amount;
-          } else {
-            throw new Error(
-              `Cannot increment non-numeric value at key '${key}' (type: ${typeof existing})`
-            );
-          }
-          // Use sync set
-          const nsName = ns || store.getDefaultNamespace();
-          if (!store['data'].has(nsName)) {
-            store['data'].set(nsName, new Map());
-          }
-          store['data'].get(nsName)!.set(key, newValue);
-          // Queue async save
-          pendingOps.push(async () => {
-            if (store.getConfig().storage === 'file' && store.getConfig().auto_save) {
-              await store.save();
-            }
-          });
-          return newValue;
-        },
-        delete: (key: string, ns?: string) => {
-          const nsName = ns || store.getDefaultNamespace();
-          const nsData = store['data'].get(nsName);
-          const deleted = nsData?.delete(key) || false;
-          // Queue async save
-          if (deleted) {
-            pendingOps.push(async () => {
-              if (store.getConfig().storage === 'file' && store.getConfig().auto_save) {
-                await store.save();
-              }
-            });
-          }
-          return deleted;
-        },
-        clear: (ns?: string) => {
-          if (ns) {
-            store['data'].delete(ns);
-          } else {
-            store['data'].clear();
-          }
-          // Queue async save
-          pendingOps.push(async () => {
-            if (store.getConfig().storage === 'file' && store.getConfig().auto_save) {
-              await store.save();
-            }
-          });
-        },
-        list: (ns?: string) => store.list(ns),
-        has: (key: string, ns?: string) => store.has(key, ns),
-        getAll: (ns?: string) => store.getAll(ns),
-        listNamespaces: () => store.listNamespaces(),
-      },
-    };
-
-    try {
-      if (
-        (config as any).checkName === 'aggregate-validations' ||
-        (config as any).checkName === 'aggregate'
-      ) {
-        if (process.env.VISOR_DEBUG === 'true') {
-          const hist = (enhancedContext as any)?.outputs?.history || {};
-          const keys = Object.keys(hist);
-          logger.debug(
-            `[MemoryProvider] ${(config as any).checkName}: history keys = [${keys.join(', ')}]`
-          );
-          const vf = (hist as any)['validate-fact'];
-          logger.debug(
-            `[MemoryProvider] ${(config as any).checkName}: validate-fact history length = ${
-              Array.isArray(vf) ? vf.length : 'n/a'
-            }`
-          );
-        }
-      }
-    } catch {}
-
-    const result = this.evaluateJavaScriptBlock(script, enhancedContext);
-    try {
-      if (
-        (config as any).checkName === 'aggregate-validations' &&
-        process.env.VISOR_DEBUG === 'true'
-      ) {
-        const tv = store.get('total_validations', 'fact-validation');
-        const av = store.get('all_valid', 'fact-validation');
-        logger.debug(
-          `[MemoryProvider] post-exec ${(config as any).checkName} total_validations=${String(
-            tv
-          )} all_valid=${String(av)}`
-        );
-      }
-    } catch {}
-
-    // Execute pending async operations
-    if (
-      pendingOps.length > 0 &&
-      store.getConfig().storage === 'file' &&
-      store.getConfig().auto_save
-    ) {
-      // Only save once after all operations
-      await store.save();
-    }
-
-    logger.debug(`Memory EXEC_JS: Executed custom script with ${pendingOps.length} operations`);
-    return result;
-  }
+  // exec_js was removed; use ScriptCheckProvider for custom JavaScript execution.
 
   /**
    * Compute value from config using value, value_js, transform, or transform_js
@@ -499,28 +310,7 @@ export class MemoryCheckProvider extends CheckProvider {
     }
   }
 
-  /**
-   * Evaluate JavaScript block (multi-line script) using SandboxJS for secure execution
-   * Unlike evaluateJavaScript, this supports full scripts with statements, not just expressions
-   */
-  private evaluateJavaScriptBlock(script: string, context: Record<string, unknown>): unknown {
-    if (!this.sandbox) {
-      this.sandbox = this.createSecureSandbox();
-    }
-
-    try {
-      const scope: Record<string, unknown> = { ...context };
-      return compileAndRun<unknown>(this.sandbox, script, scope, {
-        injectLog: true,
-        wrapFunction: false,
-        logPrefix: '[memory:exec_js]',
-      });
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      logger.error(`[memory-js] Script execution error: ${errorMsg}`);
-      throw new Error(`Failed to execute memory_js: ${errorMsg}`);
-    }
-  }
+  // No full-script execution in memory provider (exec_js removed). Use ScriptCheckProvider.
 
   /**
    * Build template context for Liquid and JS evaluation
@@ -553,7 +343,6 @@ export class MemoryCheckProvider extends CheckProvider {
       'key',
       'value',
       'value_js',
-      'memory_js',
       'transform',
       'transform_js',
       'namespace',
