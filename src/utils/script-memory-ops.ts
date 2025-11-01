@@ -2,7 +2,7 @@ import { MemoryStore } from '../memory-store';
 
 /**
  * Create synchronous memory helpers for sandboxed script execution. These mirror
- * the behavior used in the memory provider's exec_js path: mutate in-memory state
+ * the legacy behavior previously used for in-provider scripting: mutate in-memory state
  * synchronously and perform at most one save() afterward if needed.
  */
 export function createSyncMemoryOps(store: MemoryStore): {
