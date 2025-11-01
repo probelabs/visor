@@ -185,7 +185,7 @@ export class ConfigManager {
         if (fs.existsSync(lp)) {
           const rel = path.relative(baseDir, lp);
           throw new Error(
-            `Legacy config detected: ${rel}. Please rename to visor.yaml (non-dot) for consistency.`
+            `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
           );
         }
       }
