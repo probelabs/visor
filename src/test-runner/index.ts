@@ -259,6 +259,11 @@ export class VisorTestRunner {
       if (!fs.existsSync(resolved)) {
         throw new Error(`Explicit tests file not found: ${explicit} (resolved to ${resolved})`);
       }
+      try {
+        fs.accessSync(resolved, fs.constants?.R_OK ?? 4);
+      } catch {
+        throw new Error(`Explicit tests file not readable: ${resolved}`);
+      }
       return resolved;
     }
     const candidates = [
