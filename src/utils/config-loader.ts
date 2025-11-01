@@ -268,13 +268,23 @@ export class ConfigLoader {
   private async fetchDefaultConfig(): Promise<Partial<VisorConfig>> {
     // Try different paths to find the bundled default config
     const possiblePaths = [
-      // When running as GitHub Action (bundled in dist/)
-      path.join(__dirname, 'defaults', '.visor.yaml'),
+      // Prefer new non-dot filename
+      path.join(__dirname, 'defaults', 'visor.yaml'),
       // When running from source
+      path.join(__dirname, '..', '..', 'defaults', 'visor.yaml'),
+      // Fallbacks for backward compatibility (legacy dotfile name)
+      path.join(__dirname, 'defaults', '.visor.yaml'),
       path.join(__dirname, '..', '..', 'defaults', '.visor.yaml'),
       // Try via package root
+      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', 'visor.yaml') : '',
       this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
       // GitHub Action environment variable
+      process.env.GITHUB_ACTION_PATH
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml')
+        : '',
+      process.env.GITHUB_ACTION_PATH
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
+        : '',
       process.env.GITHUB_ACTION_PATH
         ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
         : '',

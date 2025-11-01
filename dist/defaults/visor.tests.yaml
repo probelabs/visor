@@ -1,5 +1,5 @@
 version: "1.0"
-extends: ".visor.yaml"
+extends: "visor.yaml"
 
 # Integration test suite for Visor default configuration
 # - Driven by events + fixtures; no manual step lists
