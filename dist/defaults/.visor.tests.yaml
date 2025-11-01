@@ -1,5 +1,5 @@
 version: "1.0"
-extends: "visor.yaml"
+extends: ".visor.yaml"
 
 # Integration test suite for Visor default configuration
 # - Driven by events + fixtures; no manual step lists
@@ -244,7 +244,7 @@ tests:
             ENABLE_FACT_VALIDATION: "true"
           mocks:
             comment-assistant:
-              text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4."
+              text: "We rely on defaults/.visor.yaml line 11 for max_parallelism=4."
               intent: comment_reply
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
@@ -253,7 +253,7 @@ tests:
                 claim: "max_parallelism defaults to 4"
                 is_valid: true
                 confidence: high
-                evidence: "defaults/visor.yaml:11"
+                evidence: "defaults/.visor.yaml:11"
           expect:
             calls:
               - step: comment-assistant
@@ -275,7 +275,7 @@ tests:
             ENABLE_FACT_VALIDATION: "true"
           mocks:
             comment-assistant:
-              text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4."
+              text: "We rely on defaults/.visor.yaml line 11 for max_parallelism=4."
               intent: comment_reply
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
@@ -284,7 +284,7 @@ tests:
                 claim: "max_parallelism defaults to 4"
                 is_valid: false
                 confidence: high
-                evidence: "defaults/visor.yaml:11 does not set 4"
+                evidence: "defaults/.visor.yaml:11 does not set 4"
                 correction: "max_parallelism defaults to 3"
           expect:
             calls:
@@ -309,13 +309,13 @@ tests:
             ENABLE_FACT_VALIDATION: "true"
           mocks:
             comment-assistant:
-              text: "We rely on defaults/visor.yaml for concurrency defaults."
+              text: "We rely on defaults/.visor.yaml for concurrency defaults."
               intent: comment_reply
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
               - { id: f2, category: Feature,       claim: "Fast mode is enabled by default", verifiable: true }
             validate-fact[]:
-              - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: false, confidence: high, evidence: "defaults/visor.yaml:11", correction: "max_parallelism defaults to 3" }
+              - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: false, confidence: high, evidence: "defaults/.visor.yaml:11", correction: "max_parallelism defaults to 3" }
               - { fact_id: f2, claim: "Fast mode is enabled by default", is_valid: true, confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
           expect:
             calls:
@@ -362,7 +362,7 @@ tests:
             ENABLE_FACT_VALIDATION: "true"
           mocks:
             issue-assistant:
-              text: "Opening issue with claim about defaults/visor.yaml"
+              text: "Opening issue with claim about defaults/.visor.yaml"
               intent: issue_triage
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
@@ -371,7 +371,7 @@ tests:
                 claim: "max_parallelism defaults to 4"
                 is_valid: true
                 confidence: high
-                evidence: "defaults/visor.yaml:11"
+                evidence: "defaults/.visor.yaml:11"
           expect:
             calls:
               - step: issue-assistant
@@ -398,7 +398,7 @@ tests:
                 claim: "max_parallelism defaults to 4"
                 is_valid: false
                 confidence: high
-                evidence: "defaults/visor.yaml:11 does not set 4"
+                evidence: "defaults/.visor.yaml:11 does not set 4"
                 correction: "max_parallelism defaults to 3"
           expect:
             calls:
@@ -577,7 +577,7 @@ tests:
         ENABLE_FACT_VALIDATION: "true"
       mocks:
         comment-assistant:
-          text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4."
+          text: "We rely on defaults/.visor.yaml line 11 for max_parallelism=4."
           intent: comment_reply
         extract-facts:
           - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
@@ -586,7 +586,7 @@ tests:
             claim: "max_parallelism defaults to 4"
             is_valid: false
             confidence: high
-            evidence: "defaults/visor.yaml:11 does not set 4"
+            evidence: "defaults/.visor.yaml:11 does not set 4"
             correction: "max_parallelism defaults to 3"
       expect:
         calls:

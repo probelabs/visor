@@ -608,7 +608,7 @@ steps:
 
       Example of GOOD claims:
         - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
-        - "Configuration file defaults/visor.yaml sets max_parallelism to 4 at line 11"
+        - "Configuration file defaults/.visor.yaml sets max_parallelism to 4 at line 11"
 
       Example of BAD claims (missing context):
       - "Default is 3" (missing: default of what? where?)
