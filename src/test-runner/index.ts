@@ -282,7 +282,11 @@ export class VisorTestRunner {
       path.resolve(this.cwd, '.visor.tests.yaml'),
       path.resolve(this.cwd, '.visor.tests.yml'),
     ];
+    const normalizedCwd = path.normalize(this.cwd);
     for (const p of candidates) {
+      // Security: validate candidate paths don't escape working directory
+      const normalizedPath = path.normalize(p);
+      if (!normalizedPath.startsWith(normalizedCwd)) continue;
       if (fs.existsSync(p)) return p;
     }
     const attemptedPaths = candidates.join(', ');

@@ -35,13 +35,10 @@ describe('Config discovery variants (visor.yaml vs .visor.yaml)', () => {
     expect((mockFs.readFileSync.mock.calls[0][0] as string).endsWith('visor.yaml')).toBe(true);
   });
 
-  it('supports .visor.yaml when non-dot files are absent', async () => {
+  it('throws with helpful message when only legacy .visor.yaml is present', async () => {
     const dotYaml = path.join(repoDir, '.visor.yaml');
     mockFs.existsSync.mockImplementation((p: any) => p === dotYaml);
-    mockFs.readFileSync.mockReturnValue('version: "1.0"\nchecks: {}\n');
-
-    const config = await mgr.findAndLoadConfig();
-    expect(config.version).toBe('1.0');
+    await expect(mgr.findAndLoadConfig()).rejects.toThrow('Legacy config detected');
   });
 
   it('falls back to bundled/defaults when nothing exists (then to minimal)', async () => {

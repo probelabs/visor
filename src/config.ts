@@ -172,17 +172,21 @@ export class ConfigManager {
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
 
     for (const baseDir of searchDirs) {
-      const possiblePaths = [
-        // Support both non-dot and dot variants for user configs
-        path.join(baseDir, 'visor.yaml'),
-        path.join(baseDir, 'visor.yml'),
-        path.join(baseDir, '.visor.yaml'),
-        path.join(baseDir, '.visor.yml'),
-      ];
+      const preferred = [path.join(baseDir, 'visor.yaml'), path.join(baseDir, 'visor.yml')];
+      const legacy = [path.join(baseDir, '.visor.yaml'), path.join(baseDir, '.visor.yml')];
 
-      for (const configPath of possiblePaths) {
-        if (fs.existsSync(configPath)) {
-          return this.loadConfig(configPath, options);
+      // Prefer non-dot files
+      for (const p of preferred) {
+        if (fs.existsSync(p)) return this.loadConfig(p, options);
+      }
+
+      // If legacy dotfile is present, instruct migration for consistency
+      for (const lp of legacy) {
+        if (fs.existsSync(lp)) {
+          const rel = path.relative(baseDir, lp);
+          throw new Error(
+            `Legacy config detected: ${rel}. Please rename to visor.yaml (non-dot) for consistency.`
+          );
         }
       }
     }
