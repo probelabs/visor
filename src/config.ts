@@ -279,7 +279,7 @@ export class ConfigManager {
         }
       }
 
-      if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
+      if (bundledConfigPath) {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
