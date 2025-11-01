@@ -149,10 +149,6 @@ export class ConfigLoader {
     // Validate against path traversal attacks
     this.validateLocalPath(resolvedPath);
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Configuration file not found: ${resolvedPath}`);
-    }
-
     try {
       const content = fs.readFileSync(resolvedPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
@@ -177,7 +173,10 @@ export class ConfigLoader {
         // Restore previous base directory
         this.options.baseDir = previousBaseDir;
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      }
       if (error instanceof Error) {
         throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
       }
@@ -268,18 +267,18 @@ export class ConfigLoader {
   private async fetchDefaultConfig(): Promise<Partial<VisorConfig>> {
     // Try different paths to find the bundled default config
     const possiblePaths = [
-      // When running as GitHub Action (bundled in dist/)
-      path.join(__dirname, 'defaults', '.visor.yaml'),
+      // Only support new non-dot filename
+      path.join(__dirname, 'defaults', 'visor.yaml'),
       // When running from source
-      path.join(__dirname, '..', '..', 'defaults', '.visor.yaml'),
+      path.join(__dirname, '..', '..', 'defaults', 'visor.yaml'),
       // Try via package root
-      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
+      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', 'visor.yaml') : '',
       // GitHub Action environment variable
       process.env.GITHUB_ACTION_PATH
-        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml')
         : '',
       process.env.GITHUB_ACTION_PATH
-        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
         : '',
     ].filter(p => p); // Remove empty paths
 
@@ -291,7 +290,7 @@ export class ConfigLoader {
       }
     }
 
-    if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
+    if (defaultConfigPath) {
       // Always log to stderr to avoid contaminating formatted output
       console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');

@@ -14,7 +14,8 @@ function main() {
   const repoRoot = path.resolve(__dirname, '..');
   const distCli = path.join(repoRoot, 'dist', 'index.js');
   const srcCli = path.join(repoRoot, 'src', 'index.ts');
-  const testsPath = process.env.VISOR_TESTS_PATH || path.join(repoRoot, 'defaults', '.visor.tests.yaml');
+  // Prefer new non-dot tests filename; test runner still discovers legacy name
+  const testsPath = process.env.VISOR_TESTS_PATH || path.join(repoRoot, 'defaults', 'visor.tests.yaml');
   const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
   let nodeArgs = [];
