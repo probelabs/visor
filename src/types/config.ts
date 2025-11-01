@@ -416,7 +416,7 @@ export interface CheckConfig {
    * Memory provider specific options (optional, only used when type === 'memory').
    */
   /** Memory operation to perform */
-  /** Memory operation to perform (exec_js removed; use type: 'script' for custom JS). */
+  /** Memory operation to perform. Use `type: 'script'` for custom JavaScript. */
   operation?: 'get' | 'set' | 'append' | 'increment' | 'delete' | 'clear' | 'list';
   /** Key for memory operation */
   key?: string;
@@ -424,7 +424,7 @@ export interface CheckConfig {
   value?: unknown;
   /** JavaScript expression to compute value dynamically */
   value_js?: string;
-  // exec_js removed: use 'type: script' with 'content'
+  // Custom JavaScript lives under the script provider using `content`
   /** Override namespace for this check */
   namespace?: string;
   /**

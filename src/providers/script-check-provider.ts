@@ -11,9 +11,8 @@ import { buildProviderTemplateContext } from '../utils/template-context';
 import { createSyncMemoryOps } from '../utils/script-memory-ops';
 
 /**
- * Provider that executes JavaScript in a secure sandbox.
- * Intended to replace most uses of the memory provider's exec_js operation with a
- * first-class step: `type: 'script'` + `content: | ...`.
+ * Provider that executes JavaScript in a secure sandbox using
+ * a first-class step: `type: 'script'` + `content: | ...`.
  */
 export class ScriptCheckProvider extends CheckProvider {
   private liquid: Liquid;

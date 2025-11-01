@@ -341,8 +341,7 @@ export const configSchema = {
         operation: {
           type: 'string',
           enum: ['get', 'set', 'append', 'increment', 'delete', 'clear', 'list'],
-          description:
-            "Memory operation to perform (exec_js removed; use type: 'script' for custom JS).",
+          description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript.",
         },
         key: {
           type: 'string',

@@ -215,7 +215,7 @@ Returns an array of key names.
 
 ### Script
 
-Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper. The script provider replaces the removed `exec_js` operation.
+Execute custom JavaScript with full memory access. Useful for complex logic, loops, conditionals, and direct manipulation of memory state via the `memory` helper.
 
 ```yaml
 steps:

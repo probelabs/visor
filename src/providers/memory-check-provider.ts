@@ -83,7 +83,7 @@ export class MemoryCheckProvider extends CheckProvider {
       }
     }
 
-    // no exec_js support here; use type: script instead
+    // For custom scripting use the ScriptCheckProvider (type: 'script').
 
     return true;
   }
@@ -254,7 +254,7 @@ export class MemoryCheckProvider extends CheckProvider {
     return keys;
   }
 
-  // exec_js was removed; use ScriptCheckProvider for custom JavaScript execution.
+  // For custom JavaScript execution use ScriptCheckProvider.
 
   /**
    * Compute value from config using value, value_js, transform, or transform_js
@@ -310,7 +310,7 @@ export class MemoryCheckProvider extends CheckProvider {
     }
   }
 
-  // No full-script execution in memory provider (exec_js removed). Use ScriptCheckProvider.
+  // No full-script execution in memory provider. Use ScriptCheckProvider.
 
   /**
    * Build template context for Liquid and JS evaluation

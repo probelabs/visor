@@ -104,4 +104,26 @@ describe('ScriptCheckProvider', () => {
     const big = 'x'.repeat(1024 * 1024 + 10);
     expect(await provider.validateConfig({ type: 'script', content: big } as any)).toBe(false);
   });
+
+  it('blocks access to Node globals like process/require', async () => {
+    // Direct reference should trigger a ReferenceError inside the sandbox
+    const res1 = (await provider.execute(pr, {
+      type: 'script',
+      content: 'return process.pid',
+    })) as ReviewSummary;
+    expect(Array.isArray(res1.issues)).toBe(true);
+    expect((res1.issues || [])[0]?.ruleId).toBe('script/execution_error');
+
+    const res2 = (await provider.execute(pr, {
+      type: 'script',
+      content: 'return require("fs")',
+    })) as ReviewSummary;
+    expect(Array.isArray(res2.issues)).toBe(true);
+    expect((res2.issues || [])[0]?.ruleId).toBe('script/execution_error');
+  });
+
+  it('accepts content exactly at size limit (1MB)', async () => {
+    const atLimit = 'x'.repeat(1024 * 1024);
+    expect(await provider.validateConfig({ type: 'script', content: atLimit })).toBe(true);
+  });
 });
