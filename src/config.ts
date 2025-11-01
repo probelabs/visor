@@ -240,31 +240,24 @@ export class ConfigManager {
 
       // __dirname is available in CJS; guard for ESM builds
       if (typeof __dirname !== 'undefined') {
-        // Prefer new non-dot filename, keep legacy as fallback
+        // Only support new non-dot filename
         possiblePaths.push(
           path.join(__dirname, 'defaults', 'visor.yaml'),
-          path.join(__dirname, '..', 'defaults', 'visor.yaml'),
-          path.join(__dirname, 'defaults', '.visor.yaml'),
-          path.join(__dirname, '..', 'defaults', '.visor.yaml')
+          path.join(__dirname, '..', 'defaults', 'visor.yaml')
         );
       }
 
       // Try via package root
       const pkgRoot = this.findPackageRoot();
       if (pkgRoot) {
-        possiblePaths.push(
-          path.join(pkgRoot, 'defaults', 'visor.yaml'),
-          path.join(pkgRoot, 'defaults', '.visor.yaml')
-        );
+        possiblePaths.push(path.join(pkgRoot, 'defaults', 'visor.yaml'));
       }
 
       // GitHub Action environment variable
       if (process.env.GITHUB_ACTION_PATH) {
         possiblePaths.push(
           path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml'),
-          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml'),
-          path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml'),
-          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
         );
       }
 

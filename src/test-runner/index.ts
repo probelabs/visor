@@ -258,20 +258,18 @@ export class VisorTestRunner {
       return path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
     }
     const candidates = [
-      // New non-dot defaults filename
+      // New non-dot defaults filename only
       path.resolve(this.cwd, 'defaults/visor.tests.yaml'),
       path.resolve(this.cwd, 'defaults/visor.tests.yml'),
+      // Allow project-local dotfile tests names (not legacy defaults)
       path.resolve(this.cwd, '.visor.tests.yaml'),
       path.resolve(this.cwd, '.visor.tests.yml'),
-      // Legacy defaults dotfile names for backward compatibility
-      path.resolve(this.cwd, 'defaults/.visor.tests.yaml'),
-      path.resolve(this.cwd, 'defaults/.visor.tests.yml'),
     ];
     for (const p of candidates) {
       if (fs.existsSync(p)) return p;
     }
     throw new Error(
-      'No tests file found. Provide --config <path> or add .visor.tests.yaml (or defaults/visor.tests.yaml).'
+      'No tests file found. Provide --config <path> or add defaults/visor.tests.yaml.'
     );
   }
 
