@@ -179,31 +179,26 @@ export class ConfigManager {
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
 
     for (const baseDir of searchDirs) {
-      const preferred = [path.join(baseDir, 'visor.yaml'), path.join(baseDir, 'visor.yml')];
-      const legacy = [path.join(baseDir, '.visor.yaml'), path.join(baseDir, '.visor.yml')];
+      const candidates = ['visor.yaml', 'visor.yml', '.visor.yaml', '.visor.yml'].map(p =>
+        path.join(baseDir, p)
+      );
 
-      // Prefer non-dot files
-      for (const p of preferred) {
+      for (const p of candidates) {
         try {
           const st = fs.statSync(p);
-          if (st.isFile()) return this.loadConfig(p, options);
-        } catch (e: any) {
-          if (!(e && e.code === 'ENOENT')) throw e;
-        }
-      }
-
-      // If legacy dotfile is present, instruct migration for consistency
-      for (const lp of legacy) {
-        try {
-          const st = fs.statSync(lp);
-          if (st.isFile()) {
-            const rel = path.relative(baseDir, lp);
+          if (!st.isFile()) continue;
+          const isLegacy = path.basename(p).startsWith('.');
+          if (isLegacy) {
+            const rel = path.relative(baseDir, p);
             throw new Error(
               `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
             );
           }
+          return this.loadConfig(p, options);
         } catch (e: any) {
-          if (!(e && e.code === 'ENOENT')) throw e;
+          if (e && e.code === 'ENOENT') continue; // try next
+          // Surface unexpected errors
+          if (e) throw e;
         }
       }
     }
