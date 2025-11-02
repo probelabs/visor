@@ -1289,9 +1289,6 @@ var ConfigLoader = class {
     const basePath = this.options.baseDir || process.cwd();
     const resolvedPath = path.resolve(basePath, filePath);
     this.validateLocalPath(resolvedPath);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Configuration file not found: ${resolvedPath}`);
-    }
     try {
       const content = fs.readFileSync(resolvedPath, "utf8");
       const config = yaml.load(content);
@@ -1310,6 +1307,9 @@ var ConfigLoader = class {
         this.options.baseDir = previousBaseDir;
       }
     } catch (error) {
+      if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      }
       if (error instanceof Error) {
         throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
       }
@@ -1378,15 +1378,15 @@ var ConfigLoader = class {
    */
   async fetchDefaultConfig() {
     const possiblePaths = [
-      // When running as GitHub Action (bundled in dist/)
-      path.join(__dirname, "defaults", ".visor.yaml"),
+      // Only support new non-dot filename
+      path.join(__dirname, "defaults", "visor.yaml"),
       // When running from source
-      path.join(__dirname, "..", "..", "defaults", ".visor.yaml"),
+      path.join(__dirname, "..", "..", "defaults", "visor.yaml"),
       // Try via package root
-      this.findPackageRoot() ? path.join(this.findPackageRoot(), "defaults", ".visor.yaml") : "",
+      this.findPackageRoot() ? path.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
       // GitHub Action environment variable
-      process.env.GITHUB_ACTION_PATH ? path.join(process.env.GITHUB_ACTION_PATH, "defaults", ".visor.yaml") : "",
-      process.env.GITHUB_ACTION_PATH ? path.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", ".visor.yaml") : ""
+      process.env.GITHUB_ACTION_PATH ? path.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
+      process.env.GITHUB_ACTION_PATH ? path.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
     ].filter((p) => p);
     let defaultConfigPath;
     for (const possiblePath of possiblePaths) {
@@ -1395,7 +1395,7 @@ var ConfigLoader = class {
         break;
       }
     }
-    if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
+    if (defaultConfigPath) {
       console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, "utf8");
       let config = yaml.load(content);
@@ -1587,10 +1587,17 @@ var ConfigManager = class {
     const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
     const resolvedPath = path2.isAbsolute(configPath) ? configPath : path2.resolve(process.cwd(), configPath);
     try {
-      if (!fs2.existsSync(resolvedPath)) {
-        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      let configContent;
+      try {
+        configContent = fs2.readFileSync(resolvedPath, "utf8");
+      } catch (readErr) {
+        if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
+        }
+        throw new Error(
+          `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
+        );
       }
-      const configContent = fs2.readFileSync(resolvedPath, "utf8");
       let parsedConfig;
       try {
         parsedConfig = yaml2.load(configContent);
@@ -1653,10 +1660,27 @@ var ConfigManager = class {
     const gitRoot = await this.findGitRepositoryRoot();
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
     for (const baseDir of searchDirs) {
-      const possiblePaths = [path2.join(baseDir, ".visor.yaml"), path2.join(baseDir, ".visor.yml")];
-      for (const configPath of possiblePaths) {
-        if (fs2.existsSync(configPath)) {
-          return this.loadConfig(configPath, options);
+      const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
+        (p) => path2.join(baseDir, p)
+      );
+      for (const p of candidates) {
+        try {
+          const st = fs2.statSync(p);
+          if (!st.isFile()) continue;
+          const isLegacy = path2.basename(p).startsWith(".");
+          if (isLegacy) {
+            if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
+              const rel = path2.relative(baseDir, p);
+              throw new Error(
+                `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+              );
+            }
+            return this.loadConfig(p, options);
+          }
+          return this.loadConfig(p, options);
+        } catch (e) {
+          if (e && e.code === "ENOENT") continue;
+          if (e) throw e;
         }
       }
     }
@@ -1709,18 +1733,18 @@ var ConfigManager = class {
       const possiblePaths = [];
       if (typeof __dirname !== "undefined") {
         possiblePaths.push(
-          path2.join(__dirname, "defaults", ".visor.yaml"),
-          path2.join(__dirname, "..", "defaults", ".visor.yaml")
+          path2.join(__dirname, "defaults", "visor.yaml"),
+          path2.join(__dirname, "..", "defaults", "visor.yaml")
         );
       }
       const pkgRoot = this.findPackageRoot();
       if (pkgRoot) {
-        possiblePaths.push(path2.join(pkgRoot, "defaults", ".visor.yaml"));
+        possiblePaths.push(path2.join(pkgRoot, "defaults", "visor.yaml"));
       }
       if (process.env.GITHUB_ACTION_PATH) {
         possiblePaths.push(
-          path2.join(process.env.GITHUB_ACTION_PATH, "defaults", ".visor.yaml"),
-          path2.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", ".visor.yaml")
+          path2.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
+          path2.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
         );
       }
       let bundledConfigPath;
@@ -1730,7 +1754,7 @@ var ConfigManager = class {
           break;
         }
       }
-      if (bundledConfigPath && fs2.existsSync(bundledConfigPath)) {
+      if (bundledConfigPath) {
         console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs2.readFileSync(bundledConfigPath, "utf8");
         let parsedConfig = yaml2.load(configContent);
