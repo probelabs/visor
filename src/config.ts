@@ -73,11 +73,18 @@ export class ConfigManager {
       : path.resolve(process.cwd(), configPath);
 
     try {
-      if (!fs.existsSync(resolvedPath)) {
-        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      let configContent: string;
+      try {
+        // Attempt to read directly; if not found or not accessible, an error will be thrown
+        configContent = fs.readFileSync(resolvedPath, 'utf8');
+      } catch (readErr: any) {
+        if (readErr && (readErr.code === 'ENOENT' || readErr.code === 'ENOTDIR')) {
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
+        }
+        throw new Error(
+          `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
+        );
       }
-
-      const configContent = fs.readFileSync(resolvedPath, 'utf8');
       let parsedConfig: Partial<VisorConfig>;
 
       try {
@@ -172,11 +179,30 @@ export class ConfigManager {
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
 
     for (const baseDir of searchDirs) {
-      const possiblePaths = [path.join(baseDir, '.visor.yaml'), path.join(baseDir, '.visor.yml')];
+      const candidates = ['visor.yaml', 'visor.yml', '.visor.yaml', '.visor.yml'].map(p =>
+        path.join(baseDir, p)
+      );
 
-      for (const configPath of possiblePaths) {
-        if (fs.existsSync(configPath)) {
-          return this.loadConfig(configPath, options);
+      for (const p of candidates) {
+        try {
+          const st = fs.statSync(p);
+          if (!st.isFile()) continue;
+          const isLegacy = path.basename(p).startsWith('.');
+          if (isLegacy) {
+            // Allow legacy dotfile unless strict mode enabled
+            if (process.env.VISOR_STRICT_CONFIG_NAME === 'true') {
+              const rel = path.relative(baseDir, p);
+              throw new Error(
+                `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+              );
+            }
+            return this.loadConfig(p, options);
+          }
+          return this.loadConfig(p, options);
+        } catch (e: any) {
+          if (e && e.code === 'ENOENT') continue; // try next
+          // Surface unexpected errors
+          if (e) throw e;
         }
       }
     }
@@ -240,23 +266,24 @@ export class ConfigManager {
 
       // __dirname is available in CJS; guard for ESM builds
       if (typeof __dirname !== 'undefined') {
+        // Only support new non-dot filename
         possiblePaths.push(
-          path.join(__dirname, 'defaults', '.visor.yaml'),
-          path.join(__dirname, '..', 'defaults', '.visor.yaml')
+          path.join(__dirname, 'defaults', 'visor.yaml'),
+          path.join(__dirname, '..', 'defaults', 'visor.yaml')
         );
       }
 
       // Try via package root
       const pkgRoot = this.findPackageRoot();
       if (pkgRoot) {
-        possiblePaths.push(path.join(pkgRoot, 'defaults', '.visor.yaml'));
+        possiblePaths.push(path.join(pkgRoot, 'defaults', 'visor.yaml'));
       }
 
       // GitHub Action environment variable
       if (process.env.GITHUB_ACTION_PATH) {
         possiblePaths.push(
-          path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml'),
-          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+          path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml'),
+          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
         );
       }
 
@@ -268,7 +295,7 @@ export class ConfigManager {
         }
       }
 
-      if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
+      if (bundledConfigPath) {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
         const configContent = fs.readFileSync(bundledConfigPath, 'utf8');

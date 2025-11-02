@@ -46,7 +46,7 @@ describe('Config Extends in GitHub Action Context', () => {
       },
     };
 
-    const configPath = path.join(testConfigDir, '.visor.yaml');
+    const configPath = path.join(testConfigDir, 'visor.yaml');
     fs.writeFileSync(configPath, yaml.dump(userConfig));
 
     const configManager = new ConfigManager();
@@ -135,7 +135,7 @@ describe('Config Extends in GitHub Action Context', () => {
         },
       };
 
-      fs.writeFileSync(path.join(testConfigDir, '.visor.yaml'), yaml.dump(userConfig));
+      fs.writeFileSync(path.join(testConfigDir, 'visor.yaml'), yaml.dump(userConfig));
 
       // Change to test directory
       process.chdir(testConfigDir);

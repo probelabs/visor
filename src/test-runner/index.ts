@@ -251,23 +251,56 @@ export class VisorTestRunner {
   }
 
   /**
-   * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/.visor.tests.yaml
+   * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml
    */
   public resolveTestsPath(explicit?: string): string {
     if (explicit) {
-      return path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
+      const resolved = path.isAbsolute(explicit) ? explicit : path.resolve(this.cwd, explicit);
+      // Security: prevent path traversal outside the working directory
+      const normalizedPath = path.normalize(resolved);
+      const normalizedCwd = path.normalize(this.cwd);
+      if (!normalizedPath.startsWith(normalizedCwd)) {
+        throw new Error(
+          `Security error: Path traversal detected. Cannot access files outside working directory: ${this.cwd}`
+        );
+      }
+      try {
+        // Atomic-ish validation: stat then open a descriptor
+        const stats = fs.statSync(resolved);
+        if (!stats.isFile()) {
+          throw new Error(`Explicit tests file is not a regular file: ${resolved}`);
+        }
+        const fd = fs.openSync(resolved, 'r');
+        fs.closeSync(fd);
+      } catch {
+        throw new Error(`Explicit tests file not accessible: ${resolved}`);
+      }
+      return resolved;
     }
     const candidates = [
+      // New non-dot defaults filename only
+      path.resolve(this.cwd, 'defaults/visor.tests.yaml'),
+      path.resolve(this.cwd, 'defaults/visor.tests.yml'),
+      // Allow project-local dotfile tests names (not legacy defaults)
       path.resolve(this.cwd, '.visor.tests.yaml'),
       path.resolve(this.cwd, '.visor.tests.yml'),
-      path.resolve(this.cwd, 'defaults/.visor.tests.yaml'),
-      path.resolve(this.cwd, 'defaults/.visor.tests.yml'),
     ];
+    const normalizedCwd = path.normalize(this.cwd);
     for (const p of candidates) {
-      if (fs.existsSync(p)) return p;
+      // Security: validate candidate paths don't escape working directory
+      const normalizedPath = path.normalize(p);
+      if (!normalizedPath.startsWith(normalizedCwd)) continue;
+      try {
+        const stats = fs.statSync(p);
+        if (stats.isFile()) return p;
+      } catch {
+        // not accessible; skip
+        continue;
+      }
     }
+    const attemptedPaths = candidates.join(', ');
     throw new Error(
-      'No tests file found. Provide --config <path> or add .visor.tests.yaml (or defaults/.visor.tests.yaml).'
+      `No tests file found. Attempted: ${attemptedPaths}. Provide --config <path> or add defaults/visor.tests.yaml.`
     );
   }
 
