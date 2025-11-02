@@ -189,10 +189,14 @@ export class ConfigManager {
           if (!st.isFile()) continue;
           const isLegacy = path.basename(p).startsWith('.');
           if (isLegacy) {
-            const rel = path.relative(baseDir, p);
-            throw new Error(
-              `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
-            );
+            // Allow legacy dotfile unless strict mode enabled
+            if (process.env.VISOR_STRICT_CONFIG_NAME === 'true') {
+              const rel = path.relative(baseDir, p);
+              throw new Error(
+                `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+              );
+            }
+            return this.loadConfig(p, options);
           }
           return this.loadConfig(p, options);
         } catch (e: any) {

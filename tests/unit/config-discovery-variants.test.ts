@@ -38,19 +38,18 @@ describe('Config discovery variants (visor.yaml vs .visor.yaml)', () => {
   });
 
   it('throws with helpful message when only legacy .visor.yaml is present', async () => {
+    const prevStrict = process.env.VISOR_STRICT_CONFIG_NAME;
+    process.env.VISOR_STRICT_CONFIG_NAME = 'true';
     const dotYaml = path.join(repoDir, '.visor.yaml');
     (mockFs.statSync as any).mockImplementation((p: any) => {
-      if (p === path.join(repoDir, 'visor.yaml') || p === path.join(repoDir, 'visor.yml')) {
-        const err: any = new Error('ENOENT');
-        err.code = 'ENOENT';
-        throw err;
-      }
       if (p === dotYaml) return { isFile: () => true } as fs.Stats;
       const err: any = new Error('ENOENT');
       err.code = 'ENOENT';
       throw err;
     });
     await expect(mgr.findAndLoadConfig()).rejects.toThrow('Legacy config detected');
+    if (prevStrict === undefined) delete process.env.VISOR_STRICT_CONFIG_NAME;
+    else process.env.VISOR_STRICT_CONFIG_NAME = prevStrict;
   });
 
   it('falls back to bundled/defaults when nothing exists (then to minimal)', async () => {
