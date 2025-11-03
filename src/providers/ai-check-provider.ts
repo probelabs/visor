@@ -680,13 +680,13 @@ export class AICheckProvider extends CheckProvider {
     // This is a light-weight preamble, not a rewriting of the user's prompt.
     const aiAny = (config.ai || {}) as any;
     // Persona (underscore only)
-    const persona = (aiAny?.ai_persona || (config as any).ai_persona || '')
-      .toString()
-      .trim();
+    const persona = (aiAny?.ai_persona || (config as any).ai_persona || '').toString().trim();
     const finalPrompt = persona ? `Persona: ${persona}\n\n${processedPrompt}` : processedPrompt;
     // Expose promptType to AIReviewService via env (bridge until ProbeAgent supports it in our SDK surface)
     try {
-      const pt = ((config.ai as any)?.promptType || (config as any).ai_prompt_type || '').toString().trim();
+      const pt = ((config.ai as any)?.promptType || (config as any).ai_prompt_type || '')
+        .toString()
+        .trim();
       if (pt) process.env.VISOR_PROMPT_TYPE = pt;
     } catch {}
 
@@ -719,13 +719,9 @@ export class AICheckProvider extends CheckProvider {
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     try {
-      const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '')
-        .toString()
-        .trim();
+      const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '').toString().trim();
       if (pt) (aiConfig as any).promptType = pt;
-      const cp = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '')
-        .toString()
-        .trim();
+      const cp = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '').toString().trim();
       if (cp) (aiConfig as any).customPrompt = cp;
     } catch {}
     const service = new AIReviewService(aiConfig);

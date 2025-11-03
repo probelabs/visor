@@ -258,7 +258,10 @@ export class GitHubOpsProvider extends CheckProvider {
             const uniq = new Set<string>();
             for (const v of arr) {
               let s = String(v ?? '');
-              s = s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/+?/g, '/').trim();
+              s = s
+                .replace(/[^A-Za-z0-9:\/\- ]/g, '')
+                .replace(/\/+?/g, '/')
+                .trim();
               if (s) uniq.add(s);
             }
             return Array.from(uniq);

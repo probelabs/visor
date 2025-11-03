@@ -391,7 +391,10 @@ export class CheckExecutionEngine {
       sourceOutputForItems,
     } = opts;
 
-    const cfgChecks = (config?.checks || {}) as Record<string, import('./types/config').CheckConfig>;
+    const cfgChecks = (config?.checks || {}) as Record<
+      string,
+      import('./types/config').CheckConfig
+    >;
     if (!cfgChecks[target]) return;
 
     // Build forward closure (target + transitive dependents of target)
@@ -427,7 +430,9 @@ export class CheckExecutionEngine {
       if (tempMarks.has(n)) {
         const idx = stack.indexOf(n);
         const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
-        throw new Error(`Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`);
+        throw new Error(
+          `Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`
+        );
       }
       tempMarks.add(n);
       stack.push(n);
@@ -466,14 +471,14 @@ export class CheckExecutionEngine {
 
       // Determine mapping mode for the target step
       const tcfg = cfgChecks[target];
-      const mode = tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
+      const mode =
+        tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
 
-      const items =
-        foreachScope
-          ? []
-          : sourceCheckConfig?.forEach && Array.isArray(sourceOutputForItems)
-            ? (sourceOutputForItems as unknown[])
-            : [];
+      const items = foreachScope
+        ? []
+        : sourceCheckConfig?.forEach && Array.isArray(sourceOutputForItems)
+          ? (sourceOutputForItems as unknown[])
+          : [];
 
       const runChainOnce = async (scopeForRun: ScopePath) => {
         await runTargetOnce(scopeForRun);
@@ -507,7 +512,9 @@ export class CheckExecutionEngine {
       // We intentionally do not evaluate goto_js here to keep this deterministic
       // in routing, but we do honor static goto + goto_event.
       let hopCount = 0;
-      let nextTarget: string | undefined = (cfgChecks[target]?.on_success as OnSuccessConfig | undefined)?.goto;
+      let nextTarget: string | undefined = (
+        cfgChecks[target]?.on_success as OnSuccessConfig | undefined
+      )?.goto;
       while (nextTarget && hopCount < 5) {
         const nextOnSuccess = (cfgChecks[target]?.on_success as OnSuccessConfig | undefined) || {};
         const nextEvent = nextOnSuccess.goto_event || gotoEvent;
@@ -2338,7 +2345,9 @@ export class CheckExecutionEngine {
               const delay = 0;
               await this.runNamedCheck(
                 target,
-                foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [],
+                foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : [],
                 {
                   config: config!,
                   dependencyGraph,
@@ -2351,8 +2360,8 @@ export class CheckExecutionEngine {
             }
           }
         }
-          // No re-run after goto
-          return res;
+        // No re-run after goto
+        return res;
       } catch (err) {
         // Failure path
         if (!onFail) {
@@ -5658,16 +5667,25 @@ export class CheckExecutionEngine {
                       try {
                         const sandbox = this.getRoutingSandbox();
                         const scope = {
-                          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+                          step: {
+                            id: checkName,
+                            tags: checkConfig.tags || [],
+                            group: checkConfig.group,
+                          },
                           outputs: Object.fromEntries(results.entries()),
                           output: (finalResult as any)?.output,
                           event: { name: prInfo.eventType || 'manual' },
                         };
                         const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
-                        const res = compileAndRun<string | null>(sandbox, code, { scope }, {
-                          injectLog: false,
-                          wrapFunction: true,
-                        });
+                        const res = compileAndRun<string | null>(
+                          sandbox,
+                          code,
+                          { scope },
+                          {
+                            injectLog: false,
+                            wrapFunction: true,
+                          }
+                        );
                         target = typeof res === 'string' && res ? res : null;
                       } catch {}
                     }

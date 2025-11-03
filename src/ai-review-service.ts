@@ -1364,9 +1364,14 @@ ${'='.repeat(60)}
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
         // Prefer config promptType, then env override, else fallback to code-review when schema is set
-        promptType: (this.config.promptType && this.config.promptType.trim())
-          ? (this.config.promptType.trim() as any)
-          : (explicitPromptType ? (explicitPromptType as any) : (schema ? ('code-review' as any) : undefined)),
+        promptType:
+          this.config.promptType && this.config.promptType.trim()
+            ? (this.config.promptType.trim() as any)
+            : explicitPromptType
+              ? (explicitPromptType as any)
+              : schema
+                ? ('code-review' as any)
+                : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
         customPrompt: this.config.customPrompt,

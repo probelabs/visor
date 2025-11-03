@@ -347,7 +347,7 @@ export class FlowStage {
           // In that case, ignore baseline.
           const ctx: any = (this.engine as any).executionContext || {};
           const stageOnly = !!(ctx.mode && ctx.mode.resetPerRunState);
-          const base = stageOnly ? 0 : (statBase[name] || 0);
+          const base = stageOnly ? 0 : statBase[name] || 0;
           const d = Math.max(0, resTotal - base);
           runs = d > 0 ? d : 0;
         } else {
@@ -362,12 +362,19 @@ export class FlowStage {
         try {
           let parentMax = 0;
           const depList = ((this.cfg.checks || {})[name] || {}).depends_on || [];
-          const parents: string[] = Array.isArray(depList) ? (depList as any[]).flatMap((t: any) => (typeof t === 'string' && t.includes('|') ? t.split('|').map((s: string) => s.trim()) : [String(t)])) : [];
+          const parents: string[] = Array.isArray(depList)
+            ? (depList as any[]).flatMap((t: any) =>
+                typeof t === 'string' && t.includes('|')
+                  ? t.split('|').map((s: string) => s.trim())
+                  : [String(t)]
+              )
+            : [];
           for (const p of parents) {
             if (!p) continue;
             const baseP = statBase[p] || 0;
             const resTotP = fromResStats[p];
-            const dP = typeof resTotP === 'number' ? Math.max(0, resTotP - baseP) : (deltaMap[p] || 0);
+            const dP =
+              typeof resTotP === 'number' ? Math.max(0, resTotP - baseP) : deltaMap[p] || 0;
             parentMax = Math.max(parentMax, dP);
           }
           // Apply only for non-forEach checks with no observable history in this stage
@@ -410,8 +417,10 @@ export class FlowStage {
           } catch {}
           const baseTotals: Record<string, number> = {};
           for (const [n, b] of Object.entries(statBase)) baseTotals[n] = b || 0;
-          // eslint-disable-next-line no-console
-          console.error(`[stage-counts] ${stageName} totals=${JSON.stringify(totals)} resTotals=${JSON.stringify(resTotals)} base=${JSON.stringify(baseTotals)}`);
+
+          console.error(
+            `[stage-counts] ${stageName} totals=${JSON.stringify(totals)} resTotals=${JSON.stringify(resTotals)} base=${JSON.stringify(baseTotals)}`
+          );
         }
       } catch {}
 

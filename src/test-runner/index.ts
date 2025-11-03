@@ -130,7 +130,9 @@ export class VisorTestRunner {
     );
     setGlobalRecorder(recorder);
     // Always clear in-memory store between cases to prevent cross-case leakage
-    try { MemoryStore.resetInstance(); } catch {}
+    try {
+      MemoryStore.resetInstance();
+    } catch {}
     const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
 
     // Prompts and mocks setup
@@ -651,66 +653,67 @@ export class VisorTestRunner {
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
     {
-      const silentSummary = String(process.env.VISOR_TEST_SUMMARY_SILENT || '')
-        .toLowerCase()
-        .trim() === 'true';
+      const silentSummary =
+        String(process.env.VISOR_TEST_SUMMARY_SILENT || '')
+          .toLowerCase()
+          .trim() === 'true';
       if (!silentSummary) {
-      const fsSync = require('fs');
-      const write = (s: string) => {
-        try {
-          fsSync.writeSync(2, s + '\n');
-        } catch {
+        const fsSync = require('fs');
+        const write = (s: string) => {
           try {
-            console.log(s);
-          } catch {}
-        }
-      };
-      const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
-      write('\n' + this.line('Summary'));
-      write(
-        `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
-      );
-      if (passedCases.length > 0) {
-        const names = passedCases.map(r => r.name).join(', ');
-        write(`   • ${names}`);
-      }
-      write(`  Failed: ${failedCases.length}/${selected.length}`);
-      if (failedCases.length > 0) {
-        const maxErrs = Math.max(
-          1,
-          parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+            fsSync.writeSync(2, s + '\n');
+          } catch {
+            try {
+              console.log(s);
+            } catch {}
+          }
+        };
+        const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
+        write('\n' + this.line('Summary'));
+        write(
+          `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
         );
-        for (const fc of failedCases) {
-          write(`   • ${fc.name}`);
-          // If flow case, print failing stages with their first errors
-          if (Array.isArray(fc.stages) && fc.stages.length > 0) {
-            const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
-            for (const st of bad) {
-              write(`     - ${st.name}`);
-              const errs = (st.errors || []).slice(0, maxErrs);
-              for (const e of errs) write(`       • ${e}`);
-              const more = (st.errors?.length || 0) - errs.length;
-              if (more > 0) write(`       • … and ${more} more`);
+        if (passedCases.length > 0) {
+          const names = passedCases.map(r => r.name).join(', ');
+          write(`   • ${names}`);
+        }
+        write(`  Failed: ${failedCases.length}/${selected.length}`);
+        if (failedCases.length > 0) {
+          const maxErrs = Math.max(
+            1,
+            parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+          );
+          for (const fc of failedCases) {
+            write(`   • ${fc.name}`);
+            // If flow case, print failing stages with their first errors
+            if (Array.isArray(fc.stages) && fc.stages.length > 0) {
+              const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
+              for (const st of bad) {
+                write(`     - ${st.name}`);
+                const errs = (st.errors || []).slice(0, maxErrs);
+                for (const e of errs) write(`       • ${e}`);
+                const more = (st.errors?.length || 0) - errs.length;
+                if (more > 0) write(`       • … and ${more} more`);
+              }
+              if (bad.length === 0) {
+                // No per-stage errors captured; print names for context
+                const names = fc.stages.map(s => s.name).join(', ');
+                write(`     stages: ${names}`);
+              }
             }
-            if (bad.length === 0) {
-              // No per-stage errors captured; print names for context
-              const names = fc.stages.map(s => s.name).join(', ');
-              write(`     stages: ${names}`);
+            // Non-flow case errors
+            if (
+              (!fc.stages || fc.stages.length === 0) &&
+              Array.isArray(fc.errors) &&
+              fc.errors.length > 0
+            ) {
+              const errs = fc.errors.slice(0, maxErrs);
+              for (const e of errs) write(`     • ${e}`);
+              const more = fc.errors.length - errs.length;
+              if (more > 0) write(`     • … and ${more} more`);
             }
-          }
-          // Non-flow case errors
-          if (
-            (!fc.stages || fc.stages.length === 0) &&
-            Array.isArray(fc.errors) &&
-            fc.errors.length > 0
-          ) {
-            const errs = fc.errors.slice(0, maxErrs);
-            for (const e of errs) write(`     • ${e}`);
-            const more = fc.errors.length - errs.length;
-            if (more > 0) write(`     • … and ${more} more`);
           }
         }
-      }
       }
     }
     try {
@@ -774,7 +777,9 @@ export class VisorTestRunner {
 
       try {
         // Clear in-memory store before each stage to avoid leakage across stages
-        try { MemoryStore.resetInstance(); } catch {}
+        try {
+          MemoryStore.resetInstance();
+        } catch {}
         // Prepare default tag filters for this flow (inherit suite defaults)
         const parseTags = (v: unknown): string[] | undefined => {
           if (!v) return undefined;

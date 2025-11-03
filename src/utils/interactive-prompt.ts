@@ -58,7 +58,10 @@ export async function interactivePrompt(options: PromptOptions): Promise<string>
     if (options.prompt && options.prompt.trim()) header.push(options.prompt.trim());
     if (multiline) header.push('(Ctrl+D to submit)');
     if (options.placeholder && !multiline) header.push(options.placeholder);
-    const width = Math.max(20, Math.min((process.stdout && (process.stdout as any).columns) || 80, 100));
+    const width = Math.max(
+      20,
+      Math.min((process.stdout && (process.stdout as any).columns) || 80, 100)
+    );
     const dash = '-'.repeat(width);
     try {
       console.log('\n' + dash);

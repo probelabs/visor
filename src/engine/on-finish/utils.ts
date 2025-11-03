@@ -106,14 +106,19 @@ export function evaluateOnFinishGoto(
       `;
       // Use shared compileAndRun helper for consistent behavior
       const { compileAndRun } = require('../../utils/sandbox');
-      const result = compileAndRun(sandbox, code, { scope }, { injectLog: false, wrapFunction: false });
+      const result = compileAndRun(
+        sandbox,
+        code,
+        { scope },
+        { injectLog: false, wrapFunction: false }
+      );
       gotoTarget = typeof result === 'string' && result ? result : null;
       if (debug) log(`🔧 Debug: on_finish.goto_js evaluated → ${String(gotoTarget)}`);
     } catch (e) {
       try {
         // Surface evaluation problems in debug logs to aid diagnosis
         const msg = e instanceof Error ? e.message : String(e);
-        // eslint-disable-next-line no-console
+
         console.error(`✗ on_finish.goto_js: evaluation error: ${msg}`);
       } catch {}
       // Fall back to static goto
