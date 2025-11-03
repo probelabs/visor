@@ -606,13 +606,24 @@ export async function main(): Promise<void> {
 
     // Include dependencies of requested checks
     const checksWithDependencies = new Set(checksToRun);
+    const availableChecks = Object.keys(config.checks || {});
     const addDependencies = (checkName: string) => {
       const checkConfig = config.checks?.[checkName];
       if (checkConfig?.depends_on) {
-        for (const dep of checkConfig.depends_on) {
-          if (!checksWithDependencies.has(dep)) {
-            checksWithDependencies.add(dep);
-            addDependencies(dep); // Recursively add dependencies of dependencies
+        for (const raw of checkConfig.depends_on) {
+          const parts =
+            typeof raw === 'string' && raw.includes('|')
+              ? raw
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : [String(raw)];
+          for (const dep of parts) {
+            if (!availableChecks.includes(dep)) continue; // ignore OR tokens that are not real checks
+            if (!checksWithDependencies.has(dep)) {
+              checksWithDependencies.add(dep);
+              addDependencies(dep); // Recursively add dependencies of dependencies
+            }
           }
         }
       }

@@ -32,6 +32,8 @@ steps:
     group: agent-builder
     # Triggered via goto by agent-brief (manual) or agent-start (CI/tests)
     on: []
+    # Ensure the human brief (manual) OR CI bootstrap step satisfied before drafting
+    depends_on: ["agent-brief|agent-start"]
     ai_prompt_type: engineer
     schema:
       type: object
