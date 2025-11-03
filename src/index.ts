@@ -209,7 +209,7 @@ export async function run(): Promise<void> {
     const configManager = new ConfigManager();
     let config: import('./types/config').VisorConfig;
 
-    // First try to load user config, then fall back to defaults/.visor.yaml
+    // First try to load user config, then fall back to defaults/visor.yaml
     const configPath = inputs['config-path'] || inputs['visor-config-path'];
 
     try {
@@ -235,7 +235,7 @@ export async function run(): Promise<void> {
         config = bundledConfig;
         console.log('📋 Using bundled default configuration (fallback due to error)');
       } else {
-        // Ultimate fallback if even defaults/.visor.yaml can't be loaded
+        // Ultimate fallback if even defaults/visor.yaml can't be loaded
         config = {
           version: '1.0',
           checks: {},
@@ -247,7 +247,7 @@ export async function run(): Promise<void> {
             },
           },
         };
-        console.log('⚠️ Could not load defaults/.visor.yaml, using minimal configuration');
+        console.log('⚠️ Could not load defaults/visor.yaml, using minimal configuration');
       }
     }
 

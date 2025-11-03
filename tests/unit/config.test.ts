@@ -52,7 +52,11 @@ output:
     });
 
     it('should handle missing config file gracefully', async () => {
-      mockFs.existsSync.mockReturnValue(false);
+      (mockFs.readFileSync as any).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
 
       await expect(configManager.loadConfig('/nonexistent/config.yaml')).rejects.toThrow(
         'Configuration file not found: /nonexistent/config.yaml'
@@ -101,25 +105,20 @@ checks:
     prompt: "Test"
 `;
 
-      // Mock existsSync to check that the resolved path is used
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        // Should be called with the resolved absolute path
-        return path.isAbsolute(filePath as string);
+      // Mock readFileSync to succeed when absolute path is used
+      (mockFs.readFileSync as any).mockImplementation((p: any) => {
+        if (!path.isAbsolute(p as string)) {
+          throw new Error('Expected absolute path');
+        }
+        return validConfig;
       });
-
-      mockFs.readFileSync.mockReturnValue(validConfig);
 
       // Pass a relative path
       await configManager.loadConfig('./test-config/.visor.yaml');
 
-      // Verify that existsSync was called with an absolute path
-      expect(mockFs.existsSync).toHaveBeenCalled();
-      const callArg = mockFs.existsSync.mock.calls[0][0] as string;
-      expect(path.isAbsolute(callArg)).toBe(true);
-
-      // Verify that readFileSync was also called with an absolute path
+      // Verify that readFileSync was called with an absolute path
       expect(mockFs.readFileSync).toHaveBeenCalled();
-      const readCallArg = mockFs.readFileSync.mock.calls[0][0] as string;
+      const readCallArg = (mockFs.readFileSync as any).mock.calls[0][0] as string;
       expect(path.isAbsolute(readCallArg)).toBe(true);
     });
   });
@@ -272,7 +271,7 @@ checks:
   });
 
   describe('Configuration File Discovery', () => {
-    it('should find .visor.yaml in current directory', async () => {
+    it('should find visor.yaml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -285,18 +284,22 @@ checks:
       // Mock process.cwd() to return our test directory
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
 
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        return filePath === path.join(testConfigDir, '.visor.yaml');
+      // Simulate presence of visor.yaml via statSync
+      const visorPath = path.join(testConfigDir, 'visor.yaml');
+      (mockFs.statSync as any).mockImplementation((p: any) => {
+        if (p === visorPath) {
+          return { isFile: () => true } as fs.Stats;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 
       const config = await configManager.findAndLoadConfig();
 
-      expect(mockFs.existsSync).toHaveBeenCalledWith(path.join(testConfigDir, '.visor.yaml'));
       expect(config.version).toBe('1.0');
     });
 
-    it('should find .visor.yml in current directory', async () => {
+    it('should find visor.yml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -308,9 +311,14 @@ checks:
 
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
 
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        // First check for .yaml fails, second check for .yml succeeds
-        return filePath === path.join(testConfigDir, '.visor.yml');
+      (mockFs.statSync as any).mockImplementation((p: any) => {
+        if (p === path.join(testConfigDir, 'visor.yaml')) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (p === path.join(testConfigDir, 'visor.yml')) {
+          return { isFile: () => true } as fs.Stats;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 
@@ -321,7 +329,14 @@ checks:
 
     it('should return default config when no file found', async () => {
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
-      mockFs.existsSync.mockReturnValue(false);
+      // No user configs present
+      (mockFs.statSync as any).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
+      // No bundled defaults present
+      (mockFs.existsSync as any).mockReturnValue(false);
 
       const config = await configManager.findAndLoadConfig();
 

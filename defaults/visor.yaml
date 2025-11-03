@@ -1,0 +1,738 @@
+version: "1.0"
+
+# Default Visor configuration - provides comprehensive code analysis out-of-the-box
+# Uses mock provider for CI compatibility when no AI API keys are configured
+# Users can override this by creating their own .visor.yaml in their project root
+
+# Global AI provider settings - users should configure their preferred provider
+# For CI testing, use --provider mock CLI flag instead
+
+# Run up to 4 steps in parallel for faster execution
+max_parallelism: 4
+
+# Global fail condition - fail if critical or error severity issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
+
+# Workflow steps (formerly 'checks' - both keys are supported for backward compatibility)
+steps:
+  # AI-powered release notes generation - manual execution only for release workflows
+  release-notes:
+    type: ai
+    group: release
+    schema: plain
+    prompt: |
+      Generate professional release notes for version {{ env.TAG_NAME }} of this project.
+
+      Analyze the git commits since the last release:
+      ```
+      {{ env.GIT_LOG }}
+      ```
+
+      And the file changes summary:
+      ```
+      {{ env.GIT_DIFF_STAT }}
+      ```
+
+      Create release notes with these sections:
+
+      ## 🚀 What's New in {{ env.TAG_NAME }}
+
+      ### ✨ New Features
+      List any new features added (look for feat: commits)
+
+      ### 🐛 Bug Fixes
+      List any bugs fixed (look for fix: commits)
+
+      ### 📈 Improvements
+      List any improvements or refactoring (look for refactor:, perf:, chore:, build: commits)
+
+      ### 🔥 Breaking Changes
+      List any breaking changes if present (look for BREAKING CHANGE or ! in commits)
+
+      ### 📊 Statistics
+      - Number of commits since last release
+      - Number of contributors involved
+      - Number of files changed
+
+      Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
+      Use present tense and action-oriented language. Group similar changes together.
+    on: [manual]
+
+  # PR overview with intelligent analysis - runs first to establish context
+  overview:
+    type: ai
+    group: overview
+    schema: overview
+    prompt: |
+        You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
+
+        ## Files Changed Analysis
+        After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
+
+        Next ensure you cover all below:
+
+        ## Architecture & Impact Assessment
+          - What this PR accomplishes
+          - Key technical changes introduced
+          - Affected system components
+          - Include one or more mermaid diagrams when useful to visualize component relationships or flow.
+          
+        ## Scope Discovery & Context Expansion
+        - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
+        - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
+
+        You may also be asked to assign labels to PR; if so use this:
+        - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
+        - `tags.label`: one of [bug, chore, documentation, enhancement, feature]. Choose the best fit.
+
+        Important:
+        - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
+        - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
+
+        Be concise, specific, and actionable. Avoid praise or celebration.
+    on: [pr_opened, pr_updated]
+
+  # Security analysis - Critical for all projects
+  security:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Based on our overview discussion, please perform a comprehensive security analysis of the code changes.
+
+        Analyze the files listed in the `<files_summary>` section and focus on the code changes shown in the diff sections.
+
+        ## Security Analysis Areas
+
+        **Input Validation & Injection:**
+        - SQL injection in database queries
+        - XSS vulnerabilities in user input handling
+        - Command injection in system calls
+        - Path traversal in file operations
+
+        **Authentication & Authorization:**
+        - Weak authentication mechanisms
+        - Session management flaws
+        - Access control bypasses
+        - Privilege escalation opportunities
+
+        **Data Protection:**
+        - Sensitive data exposure in logs/errors
+        - Unencrypted data storage
+        - API key or credential leaks
+        - Privacy regulation compliance
+
+        **Infrastructure Security:**
+        - Insecure configurations
+        - Missing security headers
+        - Vulnerable dependencies
+        - Resource exhaustion vulnerabilities
+
+        Provide specific findings with clear explanations and actionable remediation steps.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Security vulnerabilities that could lead to immediate compromise (RCE, SQL injection, authentication bypass, exposed secrets)
+        - **error**: Security issues that must be fixed before production (XSS, path traversal, weak crypto, missing auth checks)
+        - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
+        - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Architecture analysis - Ensures sound design and avoids over-engineering
+  architecture:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview analysis, evaluate the architectural decisions and design patterns.
+
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
+
+        ## Architecture Analysis Areas
+        **Design Simplicity & Pragmatism:**
+        - Over-engineering: Is the solution more complex than necessary?
+        - YAGNI violations: Are we building features not currently needed?
+        - Can this be implemented more simply using existing patterns?
+        - Are there existing functions/modules that could be reused instead?
+        - Is the abstraction level appropriate for the problem size?
+
+        **Special Cases & Edge Cases:**
+        - Does the code introduce special case handling that could be generalized?
+        - Are there hard-coded values or logic for specific scenarios?
+        - Can special cases be eliminated through better design?
+        - Are edge cases handled through general patterns rather than one-offs?
+
+        **Consistency & Reusability:**
+        - Does this follow existing architectural patterns in the codebase?
+        - Are there similar problems already solved differently elsewhere?
+        - Could this functionality be generalized to handle more cases?
+        - Does it duplicate existing functionality that could be extended?
+
+        **Design Patterns & Structure:**
+        - Are design patterns used appropriately (not forced)?
+        - Is the separation of concerns clear and logical?
+        - Are dependencies and coupling minimized?
+        - Is the code organized in a way that makes sense?
+
+        **Scalability & Extensibility:**
+        - Will this design scale with future requirements?
+        - Is it easy to extend without major refactoring?
+        - Are boundaries and interfaces well-defined?
+
+        Flag issues where simpler solutions exist, special cases are introduced unnecessarily, or existing functionality could be reused.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Architectural decisions that will cause system failures or major technical debt (circular dependencies, tight coupling causing deadlocks)
+        - **error**: Significant architectural problems (over-engineering, unnecessary special cases, violation of core patterns, missed reuse opportunities)
+        - **warning**: Architectural concerns that should be addressed (minor over-abstraction, could be simplified, inconsistent patterns)
+        - **info**: Architectural suggestions and alternative approaches (simpler patterns available, potential for future reuse)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Performance analysis - Important for all applications
+  performance:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview analysis, now review the code changes for performance issues.
+
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
+
+        ## Performance Analysis Areas
+        **Algorithm & Data Structure Efficiency:**
+        - Time complexity analysis (O(n), O(n²), etc.)
+        - Space complexity and memory usage
+        - Inefficient loops and nested operations
+        - Suboptimal data structure choices
+
+        **Database Performance:**
+        - N+1 query problems
+        - Missing database indexes
+        - Inefficient JOIN operations
+        - Large result set retrievals
+
+        **Resource Management:**
+        - Memory leaks and excessive allocations
+        - File handle management
+        - Connection pooling issues
+        - Resource cleanup patterns
+
+        **Async & Concurrency:**
+        - Blocking operations in async contexts
+        - Race conditions and deadlocks
+        - Inefficient parallel processing
+
+        Building on our overview analysis, identify performance issues and provide optimization recommendations.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Performance issues causing system failure or severe degradation (infinite loops, memory leaks causing OOM)
+        - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
+        - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
+        - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+
+  # Code quality and maintainability
+  quality:
+    type: ai
+    group: review
+    schema: code-review
+    prompt: |
+        Building on our overview discussion, evaluate the code quality and maintainability.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Quality Assessment Areas
+        **Code Structure & Design:**
+        - SOLID principles adherence
+        - Design pattern appropriateness
+        - Separation of concerns
+        - Code organization and clarity
+
+        **Error Handling & Reliability:**
+        - Exception handling completeness
+        - Error propagation patterns
+        - Input validation thoroughness
+        - Edge case coverage
+
+        **Testing & Test Coverage:**
+        - Missing tests for critical functionality
+        - Test coverage gaps
+        - Test quality and effectiveness
+        - Edge cases and error scenarios coverage
+
+        **Test Quality - Critical Checks:**
+        - **Magic Numbers in Tests**: Are tests using hard-coded values just to make assertions pass?
+          - Look for arbitrary numbers without clear meaning (e.g., `expect(result).toBe(42)` where 42 has no semantic meaning)
+          - Tests should use meaningful constants or derive expected values from the input
+          - Tests that "cut corners" by adjusting expected values to match output are fragile
+          - Flag tests where the expected value seems arbitrary or reverse-engineered from implementation
+        - **Test Integrity**: Do tests actually validate correct behavior or just check current behavior?
+          - Are tests meaningful and would catch real bugs?
+          - Do tests explain why a value should be expected (through variable names, comments, or clear logic)?
+          - Are test assertions based on requirements rather than implementation details?
+        - **Negative Testing Coverage**: Are failure cases and error conditions properly tested?
+          - Are there tests for invalid inputs, boundary conditions, and error states?
+          - Do tests verify error messages and error handling paths?
+          - Are edge cases like null, empty, undefined, zero, negative values tested?
+          - Do tests cover "unhappy path" scenarios (authentication failures, network errors, invalid data)?
+          - Are exception handling and error recovery mechanisms validated?
+          - Flag missing negative tests for critical functionality
+
+        **Maintainability:**
+        - Code testability issues
+        - Dependencies and coupling problems
+        - Technical debt introduction
+        - Code duplication (DRY violations)
+
+        **Language-Specific Best Practices:**
+        - Idiomatic code usage
+        - Framework/library best practices
+        - Type safety (if applicable)
+
+        Focus on actionable improvements that enhance code maintainability based on the overview analysis.
+        Pay special attention to test quality - tests that use magic numbers or cut corners undermine reliability.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Code quality issues that will cause bugs or failures (logic errors, race conditions, null pointer issues)
+        - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling, tests with magic numbers)
+        - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming, unclear test expectations)
+        - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements, test clarity)
+    depends_on: [overview]
+    on: [pr_opened, pr_updated]
+
+  # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
+  apply-overview-labels:
+    type: github
+    tags: [github]
+    depends_on: [overview]
+    on: [pr_opened]
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    value_js: |
+      // Normalize, trim, and drop empties (ES5-safe)
+      return values
+        .map(v => (v == null ? '' : String(v)))
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+  # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
+  issue-assistant:
+    type: ai
+    group: dynamic  # New issue triage posts a standalone comment
+    schema: issue-assistant
+    prompt: |
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
+
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          # Keep only invalid or non-high confidence items using where_exp
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+        -%}
+        {% if has_problems %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        <previous_response>
+        {% assign prev_comment = outputs_history["comment-assistant"].last %}
+        {{ prev_comment.text }}
+        </previous_response>
+
+        **Validation Errors Found:**
+        {% for issue in issues %}
+        {% if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' %}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
+          {% if issue.correction %}
+          Correction: {{ issue.correction }}
+          {% endif %}
+        Claim: {{ issue.claim }}
+        {% if issue.correction %}Correction: {{ issue.correction }}{% endif %}
+        {% endif %}
+        {% endfor %}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
+        - `intent`: must be "issue_triage" for this flow.
+        - `labels` (optional): array of labels that would help organization for this new issue.
+
+        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+
+        References:
+        ```refs
+        path/to/file.ext[:start[-end]|#SymbolName] - very short note
+        ```
+
+        Rules for References:
+        - Only include files/lines/symbols you actually used. Keep it minimal and relevant.
+        - If you didn’t consult code, write:
+          References:
+          ```refs
+          none
+          ```
+
+        Use this triage rubric (adopted from our main prompt):
+        1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
+        2) Assess priority (low/medium/high/urgent)
+        3) Estimate complexity (trivial/simple/moderate/complex)
+        4) Recommend labels from the categories above
+        5) Identify potential areas affected or relevant documentation
+        6) Provide an initial response with clarifying questions if needed
+
+        Response style:
+        - Professional and welcoming
+        - Start by acknowledging what you understand from the issue report
+        - Clearly state what you're confident about based on the information provided
+        - Identify what is unclear or missing, and explicitly ask follow-up questions to help with debugging
+        - When information is incomplete, ask specific questions that would help diagnose the issue
+        - Provide actionable guidance and clear next steps
+        - Use natural markdown formatting; include code snippets where useful
+        - Be honest about what you know and what you don't know
+        - NEVER make promises about timelines, release dates, or team commitments
+        - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
+        - Focus on technical analysis and helpful information rather than commitments
+    on: [issue_opened]
+
+  # Comment Assistant (comments only) — intent detection and reply
+  comment-assistant:
+    type: ai
+    group: dynamic
+    schema: issue-assistant
+    command: "visor"
+    prompt: |
+        You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
+
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+          assign prev_comment = outputs_history["comment-assistant"].last
+        -%}
+        {% if has_problems %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        <previous_response>
+        {{ prev_comment.text | default: "" }}
+        </previous_response>
+
+        **Validation Errors Found:**
+        {%- for issue in issues -%}
+        {%- if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' -%}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
+          {%- if issue.correction %}
+          Correction: {{ issue.correction }}
+          {%- endif %}
+        Claim: {{ issue.claim }}
+        {%- if issue.correction %}Correction: {{ issue.correction }}{% endif -%}
+        {%- endif -%}
+        {%- endfor -%}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: a concise, helpful markdown reply to the latest comment.
+        - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
+        - `labels`: omit for comments (do not include).
+
+        {% raw %}
+        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+
+        References:
+        ```refs
+        path/to/file.ext[:start[-end]] - very short note
+        ```
+
+        Rules for References:
+        - Only include files/lines you actually used. Keep it minimal and relevant.
+        - If you didn’t consult code, write:
+          References:
+          ```refs
+          none
+          ```
+        {% endraw %}
+
+        Rules:
+        - Never suggest rerun/disable unless asked explicitly.
+        - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
+        - Stay technical, direct, and specific; add code snippets or links when helpful.
+        - When answering questions, acknowledge what you can answer confidently based on the context provided
+        - If you need more information to provide a complete answer, ask specific follow-up questions
+        - Be honest when you don't know something or can't find the answer in the available context
+        - If the question requires information not available in the PR/issue context, clearly state what's missing
+        - Provide partial answers when possible, and indicate what additional information would help give a complete response
+    on: [issue_comment]
+    on_success:
+      goto_js: |
+        const intent = output?.intent;
+        const isComment = event?.name === 'issue_comment';
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return isComment && allowed && intent === 'comment_retrigger' ? 'overview' : null;
+      goto_event: pr_updated
+
+  # Apply labels to new issues based on assistant output (GitHub-only)
+  apply-issue-labels:
+    type: github
+    tags: [github]
+    depends_on: [issue-assistant]
+    on: [issue_opened]
+    op: labels.add
+    value_js: |
+      const raw = (outputs && outputs['issue-assistant'] && outputs['issue-assistant'].labels) || [];
+      const labels = Array.isArray(raw) ? raw : [];
+      // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
+      return labels
+        .map(v => String(v ?? ''))
+        .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
+        .filter(Boolean);
+
+  # External origin labelling for PRs and Issues
+  external-label:
+    type: github
+    tags: [github]
+    on: [pr_opened, issue_opened]
+    if: "!isMember() && !isContributor()"
+    op: labels.add
+    values:
+      - "external"
+
+  # ============================================================================
+  # Fact Validation System (enabled with ENABLE_FACT_VALIDATION env var)
+  # ============================================================================
+  # This system validates factual claims made by AI assistants before posting
+  # responses to GitHub issues and comments. It uses forEach with on_finish hooks
+  # to validate all facts, aggregate results, and retry with correction context
+  # if needed.
+  #
+  # To enable: Set ENABLE_FACT_VALIDATION=true environment variable
+  # ============================================================================
+
+  # Extract verifiable facts from assistant responses
+  # This is a forEach check that triggers validation for each fact
+  extract-facts:
+    type: ai
+    group: fact-validation
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique identifier for the fact (e.g., fact-1, fact-2)
+          category:
+            type: string
+            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
+          claim:
+            type: string
+            description: The exact factual statement being made
+          verifiable:
+            type: boolean
+            description: Whether this claim can be verified against the codebase
+          refs:
+            type: array
+            description: Optional list of code references (parsed from assistant References block)
+            items:
+              type: object
+              properties:
+                path:
+                  type: string
+                lines:
+                  type: string
+                  description: Line or range, e.g., "120-145" or "88"
+              required: [path]
+        required: [id, category, claim, verifiable]
+    # Declarative OR dependency: run after either assistant in the same stage
+    depends_on: ["issue-assistant|comment-assistant"]
+    on: [issue_opened, issue_comment]
+    # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    ai:
+      skip_code_context: true
+      disable_tools: true
+    prompt: |
+      Your task is to EXTRACT factual claims from the assistant's response below.
+
+      IMPORTANT: Do NOT investigate, verify, or validate any facts. Simply identify and list them.
+      Do NOT use any tools or search the codebase. Just read the response and extract claims.
+
+      Assistant's response to analyze:
+      ```
+      {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
+      ```
+
+      If the response ends with a “References” section in a fenced block labeled `refs`, parse it. Each line will be in the form:
+      path/to/file.ext[:start[-end]|#SymbolName] - note
+      Capture it as an array of objects `{ path, lines?, symbol? }` where `lines` is the numeric line or range if present, or `symbol` is the string after `#`.
+      When assigning references to facts:
+      - If a reference clearly maps to a specific fact, include only those refs for that fact.
+      - If mapping is ambiguous, include the entire refs list for that fact (better recall than omission).
+
+      Extract verifiable factual claims about:
+      - Configuration variables and their values (e.g., "max_parallelism defaults to 4")
+      - Feature capabilities (what is/isn't supported, how features work)
+      - File paths and locations mentioned (e.g., "config is in src/config.ts")
+      - Function/class names and their behavior
+      - Command syntax and available options
+      - API endpoints and their methods
+      - Environment variables and usage
+      - Default values and constants
+      - Line numbers or code locations mentioned
+      - Data structures and schemas
+      - Dependencies and version requirements
+
+      Guidelines:
+      - Extract claims AS STATED in the response (don't verify or investigate)
+      - Focus on specific, testable assertions
+      - Each claim MUST be self-contained with ALL necessary context
+      - Include file paths, line numbers, values in the claim itself
+      - AVOID duplicates - if same fact appears multiple times, extract it once
+      - Group related info when it's the SAME fact (e.g., "value is 3 at lines 100 and 200")
+      - Each fact should be atomic and independently verifiable
+
+      Example of GOOD claims:
+        - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
+        - "Configuration file defaults/visor.yaml sets max_parallelism to 4 at line 11"
+
+      Example of BAD claims (missing context):
+      - "Default is 3" (missing: default of what? where?)
+      - "Code has hardcoded value" (missing: what value? where? which file?)
+
+      Do NOT extract:
+      - Recommendations (e.g., "you should change X to Y")
+      - Opinions or preferences (e.g., "this is better than")
+      - General explanations without specific claims
+      - Your own knowledge - only extract what's IN the response
+      - Duplicate facts (same claim stated multiple ways)
+
+      Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
+      Each item must be: { id, category, claim, verifiable, refs? } where refs items may contain `lines` or `symbol`.
+
+    forEach: true
+
+    # After one validation wave completes, route back to the appropriate assistant
+    # using goto_js so the engine forward-runs dependents (assistant → extract-facts → validate-fact).
+    # This replaces the older run_js-only approach which didn’t forward-run the chain.
+    on_finish:
+      goto_js: |
+        // Decide whether to loop again using CURRENT wave only, without memory.
+        // 1) Take the last extract-facts batch and collect unique IDs.
+        // 2) From validate-fact history, walk backwards to pick the last result per ID.
+        // 3) If any are missing/invalid/not-high confidence → route back to the assistant.
+        var factsHist = outputs_history['extract-facts'] || [];
+        var lastFacts = (Array.isArray(factsHist) && factsHist.length > 0) ? factsHist[factsHist.length - 1] : [];
+        if (!Array.isArray(lastFacts) || lastFacts.length === 0) return null;
+        var ids = [];
+        for (var i = 0; i < lastFacts.length; i++) {
+          var f = lastFacts[i];
+          var id = f && f.id ? String(f.id) : '';
+          if (id && ids.indexOf(id) === -1) ids.push(id);
+        }
+        if (ids.length === 0) return null;
+        var vfAll = Array.isArray(outputs_history['validate-fact']) ? outputs_history['validate-fact'] : [];
+        var lastById = {};
+        var filled = 0;
+        for (var j = vfAll.length - 1; j >= 0; j--) {
+          var v = vfAll[j];
+          if (!v) { /* skip */ } else {
+            var vidRaw = (v.fact_id != null ? v.fact_id : v.id);
+            var vid = vidRaw != null ? String(vidRaw) : '';
+            if (vid && ids.indexOf(vid) !== -1 && lastById[vid] === undefined) {
+              lastById[vid] = v;
+              filled = filled + 1;
+              if (filled >= ids.length) j = -9999; // force loop end without break
+            }
+          }
+        }
+        for (var k = 0; k < ids.length; k++) {
+          var key = ids[k];
+          var res = lastById[key];
+          if (!res) return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
+          if (res.is_valid !== true || res.confidence !== 'high') return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
+        }
+        // All good → stop looping
+        return null;
+        return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
+
+  # Validate each extracted fact
+  validate-fact:
+    type: ai
+    group: fact-validation
+    schema:
+      type: object
+      properties:
+        fact_id:
+          type: string
+          description: ID of the fact being validated
+        claim:
+          type: string
+          description: The original claim being validated
+        is_valid:
+          type: boolean
+          description: Whether the claim is accurate
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence level in the validation
+        evidence:
+          type: string
+          description: Evidence found in the codebase supporting the validation
+        correction:
+          type: string
+          description: If invalid, the correct information (optional)
+      required: [fact_id, claim, is_valid, confidence, evidence]
+    depends_on: [extract-facts]
+    on: [issue_opened, issue_comment]
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    ai:
+      timeout: 180000 # 3 minutes hard cap per validation
+    # always validate each fact
+    prompt: |
+      Validate this factual claim against the codebase:
+
+      **Claim:** {{ outputs['extract-facts'].claim }}
+      **Category:** {{ outputs['extract-facts'].category }}
+      **Fact ID:** {{ outputs['extract-facts'].id }}
+
+      Use code search and file reading tools to verify if this claim is accurate.
+
+      If references were provided for this fact (parsed earlier), use them FIRST and prefer them strongly:
+      {% assign refs = outputs['extract-facts'].refs %}
+      {% assign __refs_len = refs | size %}
+      {% if refs and __refs_len > 0 %}
+      Provided References:
+      {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}{% if r.symbol %}#{{ r.symbol }}{% endif %}
+      {% endfor %}
+      Strategy:
+      - If a reference has `lines`, open those line ranges first and try to validate from there.
+      - If a reference has `symbol`, locate the symbol definition in the referenced file (e.g., function/class/const). Search for common patterns like:
+        - `function SYMBOL(`, `const SYMBOL`, `let SYMBOL`, `class SYMBOL`, `export .* SYMBOL`, `SYMBOL:\s*` (TypeScript), etc.
+        Then analyze ~100 lines around the definition (±50 lines) before expanding.
+      - Expand search to nearby lines in the same files if needed (±50 lines).
+      - Only if still inconclusive, perform a broader search.
+      {% else %}
+      No provided references. Perform a targeted search (prefer exact identifiers from the claim) before broader queries.
+      {% endif %}
+
+      Provide:
+      - Evidence of what you found in the codebase
+      - Confidence level (high/medium/low) in your validation
+      - If the claim is incorrect, provide the accurate information as a correction
+
+  # Retrigger noop removed — comment-assistant schedules overview directly
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
