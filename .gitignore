@@ -142,3 +142,4 @@ dist/output/**/*.ndjson
 # Local schema temp and scratch
 scripts/.schema-tmp/
 tmp/
+.visor-agent-files.json
