@@ -36,7 +36,16 @@ function mapGithubOp(op: string): string {
 function buildExecutedMap(stats: ExecStats): Record<string, number> {
   const executed: Record<string, number> = {};
   for (const s of stats.checks) {
-    if (!s.skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
+    const name = (s as any)?.checkName;
+    if (
+      !s.skipped &&
+      (s.totalRuns || 0) > 0 &&
+      typeof name === 'string' &&
+      name.trim().length > 0 &&
+      name !== 'undefined'
+    ) {
+      executed[name] = s.totalRuns || 0;
+    }
   }
   return executed;
 }

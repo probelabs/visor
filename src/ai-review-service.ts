@@ -30,6 +30,7 @@ interface TracedProbeAgentOptions extends ProbeAgentOptions {
   tracer?: unknown; // SimpleTelemetry tracer
   _telemetryConfig?: unknown; // SimpleTelemetry config
   _traceFilePath?: string;
+  customPrompt?: string;
 }
 
 export interface AIReviewConfig {
@@ -43,6 +44,10 @@ export interface AIReviewConfig {
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
   // Enable delegate tool for task distribution to subagents
   enableDelegate?: boolean;
+  // ProbeAgent persona/prompt family (e.g., 'engineer', 'code-review', 'architect')
+  promptType?: string;
+  // ProbeAgent baseline/system prompt to prepend
+  customPrompt?: string;
 }
 
 export interface AIDebugInfo {
@@ -1355,11 +1360,16 @@ ${'='.repeat(60)}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
+      const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || '').trim();
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
-        promptType: schema ? ('code-review-template' as 'code-review') : undefined,
+        // Prefer config promptType, then env override, else fallback to code-review when schema is set
+        promptType: (this.config.promptType && this.config.promptType.trim())
+          ? (this.config.promptType.trim() as any)
+          : (explicitPromptType ? (explicitPromptType as any) : (schema ? ('code-review' as any) : undefined)),
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
+        customPrompt: this.config.customPrompt,
       };
 
       // Enable tracing in debug mode for better diagnostics

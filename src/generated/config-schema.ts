@@ -207,6 +207,18 @@ export const configSchema = {
           type: 'string',
           description: 'AI provider to use for this check - overrides global setting',
         },
+        ai_persona: {
+          type: 'string',
+          description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'",
+        },
+        ai_prompt_type: {
+          type: 'string',
+          description: 'Probe promptType for this check (underscore style)',
+        },
+        ai_custom_prompt: {
+          type: 'string',
+          description: 'Probe customPrompt for this check (underscore style)',
+        },
         ai_mcp_servers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers for this AI check - overrides global setting',
@@ -491,6 +503,14 @@ export const configSchema = {
         debug: {
           type: 'boolean',
           description: 'Enable debug mode',
+        },
+        prompt_type: {
+          type: 'string',
+          description: 'Probe promptType to use (e.g., engineer, code-review, architect)',
+        },
+        custom_prompt: {
+          type: 'string',
+          description: 'Probe customPrompt (baseline/system prompt)',
         },
         skip_code_context: {
           type: 'boolean',

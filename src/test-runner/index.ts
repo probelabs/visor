@@ -6,6 +6,7 @@ import { ConfigManager } from '../config';
 import { CheckExecutionEngine } from '../check-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
+import { MemoryStore } from '../memory-store';
 import { setGlobalRecorder } from './recorders/global-recorder';
 // import { FixtureLoader } from './fixture-loader';
 import { type ExpectBlock } from './assertions';
@@ -128,6 +129,8 @@ export class VisorTestRunner {
       rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
     );
     setGlobalRecorder(recorder);
+    // Always clear in-memory store between cases to prevent cross-case leakage
+    try { MemoryStore.resetInstance(); } catch {}
     const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
 
     // Prompts and mocks setup
@@ -382,6 +385,30 @@ export class VisorTestRunner {
         configFileToLoad = resolved;
       }
     }
+
+    // If the tests file is also a full Visor config (co-located tests),
+    // sanitize it by stripping the top-level `tests` key into a temp file
+    // before loading via ConfigManager (which validates against config schema).
+    if (configFileToLoad === testsPath) {
+      try {
+        const rawCfg = fs.readFileSync(testsPath, 'utf8');
+        const docAny = yaml.load(rawCfg) as any;
+        if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
+          const { tests: _omit, ...cfgObj } = docAny;
+          const tmpDir = path.join(process.cwd(), 'tmp');
+          try {
+            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+          } catch {}
+          const tmpPath = path.join(
+            tmpDir,
+            `visor-config-sanitized-${Date.now()}-${Math.random().toString(36).slice(2)}.yaml`
+          );
+          fs.writeFileSync(tmpPath, yaml.dump(cfgObj), 'utf8');
+          configFileToLoad = tmpPath;
+        }
+      } catch {}
+    }
+
     const config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
     if (!config.checks) {
       throw new Error('Loaded config has no checks; cannot run tests');
@@ -586,11 +613,15 @@ export class VisorTestRunner {
       await Promise.all(Array.from({ length: workers }, runWorker));
     }
 
-    // Summary
+    // Summary (suppressible for embedded runs)
     const passedCount = caseResults.filter(r => r.passed).length;
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
     {
+      const silentSummary = String(process.env.VISOR_TEST_SUMMARY_SILENT || '')
+        .toLowerCase()
+        .trim() === 'true';
+      if (!silentSummary) {
       const fsSync = require('fs');
       const write = (s: string) => {
         try {
@@ -646,6 +677,7 @@ export class VisorTestRunner {
             if (more > 0) write(`     • … and ${more} more`);
           }
         }
+      }
       }
     }
     try {
@@ -708,6 +740,8 @@ export class VisorTestRunner {
       ) as boolean;
 
       try {
+        // Clear in-memory store before each stage to avoid leakage across stages
+        try { MemoryStore.resetInstance(); } catch {}
         // Prepare default tag filters for this flow (inherit suite defaults)
         const parseTags = (v: unknown): string[] | undefined => {
           if (!v) return undefined;
@@ -800,7 +834,8 @@ export class VisorTestRunner {
     try {
       const executed = stats.checks
         .filter(s => !s.skipped && (s.totalRuns || 0) > 0)
-        .map(s => s.checkName);
+        .map(s => (s as any)?.checkName)
+        .filter(name => typeof name === 'string' && name.trim().length > 0 && name !== 'undefined');
       for (const name of executed) {
         const chk = (cfg.checks || {})[name] || {};
         const t = chk.type || 'ai';

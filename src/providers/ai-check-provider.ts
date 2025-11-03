@@ -676,22 +676,34 @@ export class AICheckProvider extends CheckProvider {
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
-    // No implicit prompt mutations here — prompts should come from YAML.
+    // Optional persona (vendor extension): ai.x-persona or x-persona.
+    // This is a light-weight preamble, not a rewriting of the user's prompt.
+    const aiAny = (config.ai || {}) as any;
+    // Persona (underscore only)
+    const persona = (aiAny?.ai_persona || (config as any).ai_persona || '')
+      .toString()
+      .trim();
+    const finalPrompt = persona ? `Persona: ${persona}\n\n${processedPrompt}` : processedPrompt;
+    // Expose promptType to AIReviewService via env (bridge until ProbeAgent supports it in our SDK surface)
+    try {
+      const pt = ((config.ai as any)?.promptType || (config as any).ai_prompt_type || '').toString().trim();
+      if (pt) process.env.VISOR_PROMPT_TYPE = pt;
+    } catch {}
 
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
       const stepName = (config as any).checkName || 'unknown';
       const serviceForCapture = new AIReviewService(aiConfig);
-      const finalPrompt = await (serviceForCapture as any).buildCustomPrompt(
+      const finalPromptCapture = await (serviceForCapture as any).buildCustomPrompt(
         prInfo,
-        processedPrompt,
+        finalPrompt,
         config.schema,
         { checkName: (config as any).checkName }
       );
       sessionInfo?.hooks?.onPromptCaptured?.({
         step: String(stepName),
         provider: 'ai',
-        prompt: finalPrompt,
+        prompt: finalPromptCapture,
       });
       // capture hook retained; no extra console diagnostics
     } catch {}
@@ -706,6 +718,16 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
+    try {
+      const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '')
+        .toString()
+        .trim();
+      if (pt) (aiConfig as any).promptType = pt;
+      const cp = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '')
+        .toString()
+        .trim();
+      if (cp) (aiConfig as any).customPrompt = cp;
+    } catch {}
     const service = new AIReviewService(aiConfig);
 
     // Pass the custom prompt and schema - no fallbacks
@@ -773,7 +795,7 @@ export class AICheckProvider extends CheckProvider {
         }
         result = await service.executeReview(
           prInfo,
-          processedPrompt,
+          finalPrompt,
           schema,
           config.checkName,
           config.sessionId
@@ -862,6 +884,9 @@ export class AICheckProvider extends CheckProvider {
       'ai.timeout',
       'ai.mcpServers',
       'ai.enableDelegate',
+      'ai_persona',
+      'ai_prompt_type',
+      'ai_custom_prompt',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',

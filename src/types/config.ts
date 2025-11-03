@@ -250,6 +250,10 @@ export interface AIProviderConfig {
   timeout?: number;
   /** Enable debug mode */
   debug?: boolean;
+  /** Probe promptType to use (e.g., engineer, code-review, architect) */
+  prompt_type?: string;
+  /** Probe customPrompt (baseline/system prompt) */
+  custom_prompt?: string;
   /** Skip adding code context (diffs, files, PR info) to the prompt */
   skip_code_context?: boolean;
   /** Disable MCP tools - AI will only have access to the prompt text */
@@ -345,6 +349,12 @@ export interface CheckConfig {
   ai_model?: string;
   /** AI provider to use for this check - overrides global setting */
   ai_provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | string;
+  /** Optional persona hint, prepended to the prompt as 'Persona: <value>' */
+  ai_persona?: string;
+  /** Probe promptType for this check (underscore style) */
+  ai_prompt_type?: string;
+  /** Probe customPrompt for this check (underscore style) */
+  ai_custom_prompt?: string;
   /** MCP servers for this AI check - overrides global setting */
   ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Claude Code configuration (for claude-code type checks) */

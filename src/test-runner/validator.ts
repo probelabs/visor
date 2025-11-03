@@ -6,12 +6,20 @@ import addFormats from 'ajv-formats';
 const schema: any = {
   $id: 'https://visor/probe/tests-dsl.schema.json',
   type: 'object',
+  // Allow co-locating a full Visor config in the same YAML by tolerating
+  // extra top-level keys like 'steps'/'checks'. We still validate only the
+  // 'tests' block structure here.
   additionalProperties: false,
   properties: {
     version: { type: 'string' },
     extends: {
       oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
     },
+    // Optional: co-located config (ignored by tests DSL validator)
+    steps: { type: 'object' },
+    checks: { type: 'object' },
+    output: { type: 'object' },
+    hooks: { type: 'object' },
     tests: {
       type: 'object',
       additionalProperties: false,
@@ -371,13 +379,49 @@ function hintForAdditionalProperty(err: ErrorObject): string | undefined {
 
 function formatError(e: ErrorObject): string {
   const path = toYamlPath(e.instancePath || '');
-  let msg = `${path}: ${e.message}`;
-  const hint = hintForAdditionalProperty(e);
-  if (hint) msg += ` (${hint})`;
-  if (e.keyword === 'enum' && Array.isArray((e.params as any)?.allowedValues)) {
-    msg += ` (allowed: ${(e.params as any).allowedValues.join(', ')})`;
+  const p = (e.params as any) || {};
+
+  // Tailored messages for common Ajv keywords to make guidance concrete
+  switch (e.keyword) {
+    case 'additionalProperties': {
+      const prop = typeof p.additionalProperty === 'string' ? p.additionalProperty : undefined;
+      let msg = prop
+        ? `${path}: unknown field "${prop}" is not allowed`
+        : `${path}: contains unknown field(s)`;
+      const hint = hintForAdditionalProperty(e);
+      if (hint) msg += ` (${hint})`;
+      // Small curated allow-list for frequent nodes to reduce guesswork
+      if (path.endsWith('expect')) {
+        msg += ` (allowed: use, calls, prompts, outputs, no_calls, fail, strict_violation)`;
+      } else if (path.endsWith('env')) {
+        msg += ` (values must be strings)`;
+      } else if (path.endsWith('tests')) {
+        msg += ` (allowed: defaults, fixtures, cases)`;
+      }
+      return msg;
+    }
+    case 'required': {
+      if (typeof p.missingProperty === 'string') {
+        return `${path}: missing required property "${p.missingProperty}"`;
+      }
+      return `${path}: missing required property`;
+    }
+    case 'type': {
+      const expected = p.type ? String(p.type) : 'valid type';
+      return `${path}: expected ${expected}`;
+    }
+    case 'enum': {
+      const allowed = Array.isArray(p.allowedValues) ? p.allowedValues.join(', ') : undefined;
+      return allowed ? `${path}: ${e.message} (allowed: ${allowed})` : `${path}: ${e.message}`;
+    }
+    default: {
+      // Fallback to Ajv's message with path and any available hint
+      let msg = `${path}: ${e.message}`;
+      const hint = hintForAdditionalProperty(e);
+      if (hint) msg += ` (${hint})`;
+      return msg;
+    }
   }
-  return msg;
 }
 
 export type ValidationResult = { ok: true } | { ok: false; errors: string[] };

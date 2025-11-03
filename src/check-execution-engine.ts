@@ -349,6 +349,191 @@ export class CheckExecutionEngine {
   }
 
   /**
+   * Schedule a forward-run starting from `target` and continuing through all
+   * transitive dependents that declare a dependency (direct or indirect) on
+   * `target`. Execution honors optional `gotoEvent` by filtering dependents to
+   * only those steps whose `on` includes that event. The `target` itself is
+   * always executed first regardless of event filtering.
+   *
+   * This helper is used for goto across all origins (on_success, on_fail,
+   * on_finish) to ensure consistent semantics and avoid duplicating logic.
+   */
+  private async scheduleForwardRun(
+    target: string,
+    opts: {
+      origin: 'on_success' | 'on_fail' | 'on_finish' | 'inline';
+      gotoEvent?: import('./types/config').EventTrigger;
+      config: VisorConfig;
+      dependencyGraph: DependencyGraph;
+      prInfo: PRInfo;
+      resultsMap: Map<string, ReviewSummary>;
+      debug: boolean;
+      // When executing inside a forEach item, pass the scope for that item
+      foreachScope?: ScopePath;
+      // If not in a forEach item, but the source step was a map, we may need the
+      // source identity and items to produce per-item scopes.
+      sourceCheckName?: string;
+      sourceCheckConfig?: CheckConfig;
+      sourceOutputForItems?: unknown;
+    }
+  ): Promise<void> {
+    const {
+      origin,
+      gotoEvent,
+      config,
+      dependencyGraph,
+      prInfo,
+      resultsMap,
+      debug,
+      foreachScope,
+      sourceCheckName,
+      sourceCheckConfig,
+      sourceOutputForItems,
+    } = opts;
+
+    const cfgChecks = (config?.checks || {}) as Record<string, import('./types/config').CheckConfig>;
+    if (!cfgChecks[target]) return;
+
+    // Build forward closure (target + transitive dependents of target)
+    const forwardSet = new Set<string>([target]);
+    const dependsOn = (name: string, root: string): boolean => {
+      const seen = new Set<string>();
+      const dfs = (n: string): boolean => {
+        if (seen.has(n)) return false;
+        seen.add(n);
+        const deps = cfgChecks[n]?.depends_on || [];
+        if (deps.includes(root)) return true;
+        return deps.some(d => dfs(d));
+      };
+      return dfs(name);
+    };
+    const ev = gotoEvent || prInfo.eventType || 'manual';
+    for (const name of Object.keys(cfgChecks)) {
+      if (name === target) continue;
+      const onArr = cfgChecks[name]?.on as any;
+      const eventMatches = !onArr || (Array.isArray(onArr) && onArr.includes(ev));
+      if (!eventMatches) continue;
+      if (dependsOn(name, target)) forwardSet.add(name);
+    }
+
+    // Topologically order the subset to run target before dependents respecting depends_on
+    const order: string[] = [];
+    const inSet = (n: string) => forwardSet.has(n);
+    const tempMarks = new Set<string>();
+    const permMarks = new Set<string>();
+    const stack: string[] = [];
+    const visit = (n: string) => {
+      if (permMarks.has(n)) return;
+      if (tempMarks.has(n)) {
+        const idx = stack.indexOf(n);
+        const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
+        throw new Error(`Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`);
+      }
+      tempMarks.add(n);
+      stack.push(n);
+      const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
+      for (const d of deps) visit(d);
+      stack.pop();
+      tempMarks.delete(n);
+      permMarks.add(n);
+      order.push(n);
+    };
+    for (const n of forwardSet) visit(n);
+
+    const prevEventOverride = this.routingEventOverride;
+    if (gotoEvent) this.routingEventOverride = gotoEvent;
+    try {
+      // Ensure we only execute the target once per grouped run for a given event
+      const evKey = gotoEvent || prInfo.eventType || 'manual';
+      const guardKey = `${String(evKey)}:${String(target)}`;
+      const runTargetOnce = async (scopeForRun: ScopePath) => {
+        // Allow on_finish-driven loops to schedule the same target multiple
+        // times within a single grouped run (facts correction waves). We still
+        // guard duplicates for other origins to avoid accidental double work.
+        const shouldGuard = origin !== 'on_finish';
+        if (shouldGuard && this.forwardRunGuards.has(guardKey)) return;
+        if (shouldGuard) this.forwardRunGuards.add(guardKey);
+        await this.runNamedCheck(target, scopeForRun, {
+          origin,
+          config,
+          dependencyGraph,
+          prInfo,
+          resultsMap,
+          debug,
+          eventOverride: gotoEvent,
+        });
+      };
+
+      // Determine mapping mode for the target step
+      const tcfg = cfgChecks[target];
+      const mode = tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
+
+      const items =
+        foreachScope
+          ? []
+          : sourceCheckConfig?.forEach && Array.isArray(sourceOutputForItems)
+            ? (sourceOutputForItems as unknown[])
+            : [];
+
+      const runChainOnce = async (scopeForRun: ScopePath) => {
+        await runTargetOnce(scopeForRun);
+        const dependentsOnly = order.filter(n => n !== target);
+        for (const stepId of dependentsOnly) {
+          await this.runNamedCheck(stepId, scopeForRun, {
+            origin,
+            config,
+            dependencyGraph,
+            prInfo,
+            resultsMap,
+            debug,
+            eventOverride: gotoEvent,
+          });
+        }
+      };
+
+      if (foreachScope && foreachScope.length > 0) {
+        await runChainOnce(foreachScope);
+      } else if (mode === 'map' && items.length > 0 && sourceCheckName) {
+        for (let i = 0; i < items.length; i++) {
+          const itemScope: ScopePath = [{ check: sourceCheckName, index: i }];
+          await runChainOnce(itemScope);
+        }
+      } else {
+        await runChainOnce([]);
+      }
+
+      // Follow explicit on_success.goto edges from the target, if present,
+      // to naturally support anchor-style chains (e.g., refine → write → validate → test).
+      // We intentionally do not evaluate goto_js here to keep this deterministic
+      // in routing, but we do honor static goto + goto_event.
+      let hopCount = 0;
+      let nextTarget: string | undefined = (cfgChecks[target]?.on_success as OnSuccessConfig | undefined)?.goto;
+      while (nextTarget && hopCount < 5) {
+        const nextOnSuccess = (cfgChecks[target]?.on_success as OnSuccessConfig | undefined) || {};
+        const nextEvent = nextOnSuccess.goto_event || gotoEvent;
+        await this.scheduleForwardRun(nextTarget, {
+          origin: 'on_success',
+          gotoEvent: nextEvent,
+          config,
+          dependencyGraph,
+          prInfo,
+          resultsMap,
+          debug,
+          foreachScope,
+          sourceCheckName,
+          sourceCheckConfig,
+          sourceOutputForItems,
+        });
+        hopCount++;
+        // advance chain if there is a further goto from the just-executed step
+        nextTarget = (cfgChecks[nextTarget]?.on_success as OnSuccessConfig | undefined)?.goto;
+      }
+    } finally {
+      this.routingEventOverride = prevEventOverride;
+    }
+  }
+
+  /**
    * Set execution context for providers (CLI message, hooks, etc.)
    * This allows passing state without using static properties
    */
@@ -1382,18 +1567,20 @@ export class CheckExecutionEngine {
         // sees a consistent value even if a prior aggregate step ran out of order.
         // Recompute all_valid from the latest validate-fact history for deterministic routing,
         // independent of execution environment.
+        let recomputedVerdict: boolean | undefined = undefined;
         try {
           const snap = this.getOutputHistorySnapshot();
-          const verdict = ofAllValid(snap, forEachItems.length);
-          if (typeof verdict === 'boolean') {
+          const verdictLocal = ofAllValid(snap, forEachItems.length);
+          if (typeof verdictLocal === 'boolean') {
+            recomputedVerdict = verdictLocal;
             await MemoryStore.getInstance(this.config?.memory).set(
               'all_valid',
-              verdict,
+              verdictLocal,
               'fact-validation'
             );
             try {
               logger.info(
-                `🧮 on_finish: recomputed all_valid=${verdict} from history for "${checkName}"`
+                `🧮 on_finish: recomputed all_valid=${verdictLocal} from history for "${checkName}"`
               );
             } catch {}
           }
@@ -1410,6 +1597,10 @@ export class CheckExecutionEngine {
           debug,
           log
         ).gotoTarget;
+
+        // If goto_js returns null, rely on configuration only (no hardcoded
+        // names in engine). Determinism for fact loops is achieved by making
+        // the configuration's goto_js evaluate the current wave only.
 
         // Execute routing if we have a target
         if (gotoTarget) {
@@ -1522,25 +1713,35 @@ export class CheckExecutionEngine {
             const tcfg = config.checks?.[gotoTarget as string];
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
-            const scheduleOnce = async (scopeForRun: ScopePath) =>
-              this.runNamedCheck(gotoTarget!, scopeForRun, {
+            if (mode === 'map' && forEachItems.length > 0) {
+              for (let i = 0; i < forEachItems.length; i++) {
+                const itemScope: ScopePath = [{ check: checkName, index: i }];
+                await this.scheduleForwardRun(gotoTarget!, {
+                  origin: 'on_finish',
+                  gotoEvent: onFinish.goto_event,
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: results,
+                  debug,
+                  foreachScope: itemScope,
+                  sourceCheckName: checkName,
+                  sourceCheckConfig: checkConfig,
+                });
+              }
+            } else {
+              await this.scheduleForwardRun(gotoTarget!, {
                 origin: 'on_finish',
+                gotoEvent: onFinish.goto_event,
                 config,
                 dependencyGraph,
                 prInfo,
                 resultsMap: results,
-                sessionInfo: undefined,
                 debug,
-                eventOverride: onFinish.goto_event,
-                overlay: new Map(results),
+                foreachScope: [],
+                sourceCheckName: checkName,
+                sourceCheckConfig: checkConfig,
               });
-            if (mode === 'map' && forEachItems.length > 0) {
-              for (let i = 0; i < forEachItems.length; i++) {
-                const itemScope: ScopePath = [{ check: checkName, index: i }];
-                await scheduleOnce(itemScope);
-              }
-            } else {
-              await scheduleOnce([]);
             }
 
             logger.info(`  ✓ Routed to: ${gotoTarget}`);
@@ -1929,10 +2130,22 @@ export class CheckExecutionEngine {
               );
             } catch {}
             if (!allAncestors.includes(target)) {
-              if (debug)
-                log(
-                  `⚠️ Debug: on_fail.goto (soft) '${target}' is not an ancestor of '${checkName}' — skipping`
-                );
+              // New behavior: allow goto to any step and forward-run dependents
+              await this.scheduleForwardRun(target, {
+                origin: 'on_fail',
+                gotoEvent: onFail.goto_event,
+                config: config!,
+                dependencyGraph,
+                prInfo,
+                resultsMap: resultsMap || new Map(),
+                debug: !!debug,
+                foreachScope: foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : undefined,
+                sourceCheckName: checkName,
+                sourceCheckConfig: checkConfig,
+                sourceOutputForItems: currentRouteOutput,
+              });
             } else {
               loopCount++;
               if (loopCount > maxLoops) {
@@ -1940,42 +2153,20 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
                 );
               }
-              {
-                const tcfg = config!.checks?.[target] as
-                  | import('./types/config').CheckConfig
-                  | undefined;
-                const mode =
-                  tcfg?.fanout === 'map'
-                    ? 'map'
-                    : tcfg?.reduce
-                      ? 'reduce'
-                      : tcfg?.fanout || 'default';
-                const inItem = !!foreachContext;
-                const items =
-                  checkConfig.forEach && Array.isArray(currentRouteOutput)
-                    ? (currentRouteOutput as unknown[])
-                    : [];
-                const scheduleOnce = async (scopeForRun: ScopePath) =>
-                  this.runNamedCheck(target, scopeForRun, {
-                    config: config!,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: resultsMap || new Map(),
-                    debug: !!debug,
-                    eventOverride: onFail.goto_event,
-                  });
-                if (!inItem && mode === 'map' && items.length > 0) {
-                  for (let i = 0; i < items.length; i++) {
-                    const itemScope: ScopePath = [{ check: checkName, index: i }];
-                    await scheduleOnce(itemScope);
-                  }
-                } else {
-                  const scopeForRun: ScopePath = foreachContext
-                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
-                    : [];
-                  await scheduleOnce(scopeForRun);
+              await this.runNamedCheck(
+                target,
+                foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : [],
+                {
+                  config: config!,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: resultsMap || new Map(),
+                  debug: !!debug,
+                  eventOverride: onFail.goto_event,
                 }
-              }
+              );
             }
           }
 
@@ -2121,126 +2312,21 @@ export class CheckExecutionEngine {
               );
             } catch {}
             if (!allAncestors.includes(target)) {
-              // Forward-run from target under goto_event: execute target and all dependents matching event
-              const prevEventOverride2 = this.routingEventOverride;
-              if (onSuccess.goto_event) {
-                this.routingEventOverride = onSuccess.goto_event;
-              }
-              try {
-                // Build forward closure (target + transitive dependents)
-                const cfgChecks = (config?.checks || {}) as Record<
-                  string,
-                  import('./types/config').CheckConfig
-                >;
-                const forwardSet = new Set<string>();
-                if (cfgChecks[target]) forwardSet.add(target);
-                const dependsOn = (name: string, root: string): boolean => {
-                  const seen = new Set<string>();
-                  const dfs = (n: string): boolean => {
-                    if (seen.has(n)) return false;
-                    seen.add(n);
-                    const deps = cfgChecks[n]?.depends_on || [];
-                    if (deps.includes(root)) return true;
-                    return deps.some(d => dfs(d));
-                  };
-                  return dfs(name);
-                };
-                const ev = onSuccess.goto_event || prInfo.eventType || 'issue_comment';
-                for (const name of Object.keys(cfgChecks)) {
-                  if (name === target) continue;
-                  const onArr = cfgChecks[name]?.on as any;
-                  const eventMatches = !onArr || (Array.isArray(onArr) && onArr.includes(ev));
-                  if (!eventMatches) continue;
-                  if (dependsOn(name, target)) forwardSet.add(name);
-                }
-                // Always execute the target itself first (goto target), regardless of event filtering
-                // Then, optionally execute its dependents that match the goto_event
-                const runTargetOnce = async (scopeForRun: ScopePath) => {
-                  const evKey = onSuccess.goto_event || prInfo.eventType || 'manual';
-                  const guardKey = `${String(evKey)}:${String(target)}`;
-                  if (this.forwardRunGuards.has(guardKey)) return;
-                  this.forwardRunGuards.add(guardKey);
-                  await this.runNamedCheck(target, scopeForRun, {
-                    config: config!,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: resultsMap || new Map(),
-                    debug: !!debug,
-                    eventOverride: onSuccess.goto_event,
-                  });
-                };
-
-                // Topologically order forwardSet based on depends_on within this subset
-                const order: string[] = [];
-                const inSet = (n: string) => forwardSet.has(n);
-                const tempMarks = new Set<string>();
-                const permMarks = new Set<string>();
-                const stack: string[] = [];
-                const visit = (n: string) => {
-                  if (permMarks.has(n)) return;
-                  if (tempMarks.has(n)) {
-                    // Cycle detected — build a readable cycle path
-                    const idx = stack.indexOf(n);
-                    const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
-                    throw new Error(
-                      `Cycle detected in forward-run dependency subset: ${cyclePath.join(' -> ')}`
-                    );
-                  }
-                  tempMarks.add(n);
-                  stack.push(n);
-                  const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
-                  for (const d of deps) visit(d);
-                  stack.pop();
-                  tempMarks.delete(n);
-                  permMarks.add(n);
-                  order.push(n);
-                };
-                for (const n of forwardSet) visit(n);
-                // Execute target (once) and then dependents with event override; update statistics per step
-                const tcfg = cfgChecks[target];
-                const mode =
-                  tcfg?.fanout === 'map'
-                    ? 'map'
-                    : tcfg?.reduce
-                      ? 'reduce'
-                      : tcfg?.fanout || 'default';
-                const items =
-                  checkConfig.forEach && Array.isArray(currentRouteOutput)
-                    ? (currentRouteOutput as unknown[])
-                    : [];
-                const runChainOnce = async (scopeForRun: ScopePath) => {
-                  // Run the goto target itself first
-                  await runTargetOnce(scopeForRun);
-                  // Exclude the target itself from the dependent execution order to avoid double-run
-                  const dependentsOnly = order.filter(n => n !== target);
-                  for (const stepId of dependentsOnly) {
-                    await this.runNamedCheck(stepId, scopeForRun, {
-                      config: config!,
-                      dependencyGraph,
-                      prInfo,
-                      resultsMap: resultsMap || new Map(),
-                      debug: !!debug,
-                      eventOverride: onSuccess.goto_event,
-                    });
-                  }
-                };
-                if (!foreachContext && mode === 'map' && items.length > 0) {
-                  for (let i = 0; i < items.length; i++) {
-                    const itemScope: ScopePath = [{ check: checkName, index: i }];
-                    await runChainOnce(itemScope);
-                  }
-                } else {
-                  const scopeForRun: ScopePath = foreachContext
-                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
-                    : [];
-                  await runChainOnce(scopeForRun);
-                }
-                // Do NOT append forward-run child issues to the current check result.
-                // Child results are recorded independently in resultsMap and statistics,
-                // and aggregators will include them without double-counting under the parent.
-              } finally {
-                this.routingEventOverride = prevEventOverride2;
-              }
+              await this.scheduleForwardRun(target, {
+                origin: 'on_success',
+                gotoEvent: onSuccess.goto_event,
+                config: config!,
+                dependencyGraph,
+                prInfo,
+                resultsMap: resultsMap || new Map(),
+                debug: !!debug,
+                foreachScope: foreachContext
+                  ? [{ check: foreachContext.parent, index: foreachContext.index }]
+                  : undefined,
+                sourceCheckName: checkName,
+                sourceCheckConfig: checkConfig,
+                sourceOutputForItems: currentRouteOutput,
+              });
             } else {
               loopCount++;
               if (loopCount > maxLoops) {
@@ -2248,53 +2334,25 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                 );
               }
-              {
-                const tcfg = config!.checks?.[target] as
-                  | import('./types/config').CheckConfig
-                  | undefined;
-                const mode =
-                  tcfg?.fanout === 'map'
-                    ? 'map'
-                    : tcfg?.reduce
-                      ? 'reduce'
-                      : tcfg?.fanout || 'default';
-                const items =
-                  checkConfig.forEach && Array.isArray(currentRouteOutput)
-                    ? (currentRouteOutput as unknown[])
-                    : [];
-                const scheduleOnce = async (scopeForRun: ScopePath) => {
-                  const evKey = onSuccess.goto_event || prInfo.eventType || 'manual';
-                  const guardKey = `${String(evKey)}:${String(target)}`;
-                  if (this.forwardRunGuards.has(guardKey)) return;
-                  this.forwardRunGuards.add(guardKey);
-                  return this.runNamedCheck(target, scopeForRun, {
-                    config: config!,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: resultsMap || new Map(),
-                    debug: !!debug,
-                    eventOverride: onSuccess.goto_event,
-                    overlay: dependencyResults,
-                  });
-                };
-                if (!foreachContext && mode === 'map' && items.length > 0) {
-                  for (let i = 0; i < items.length; i++) {
-                    const itemScope: ScopePath = [{ check: checkName, index: i }];
-                    await scheduleOnce(itemScope);
-                  }
-                } else {
-                  const scopeForRun: ScopePath = foreachContext
-                    ? [{ check: foreachContext.parent, index: foreachContext.index }]
-                    : [];
-                  await scheduleOnce(scopeForRun);
+              // on_success.goto does not support retry/backoff in schema; keep immediate rerun for ancestor case
+              const delay = 0;
+              await this.runNamedCheck(
+                target,
+                foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [],
+                {
+                  config: config!,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: resultsMap || new Map(),
+                  debug: !!debug,
+                  eventOverride: onSuccess.goto_event,
                 }
-              }
-              // Do not re-run the current check after goto; target (and its dependents) will run.
+              );
             }
           }
         }
-        // No re-run after goto
-        return res;
+          // No re-run after goto
+          return res;
       } catch (err) {
         // Failure path
         if (!onFail) {
@@ -2342,10 +2400,19 @@ export class CheckExecutionEngine {
             );
           } catch {}
           if (!allAncestors.includes(target)) {
-            if (debug)
-              log(
-                `⚠️ Debug: on_fail.goto '${target}' is not an ancestor of '${checkName}' — skipping`
-              );
+            await this.scheduleForwardRun(target, {
+              origin: 'on_fail',
+              gotoEvent: onFail.goto_event,
+              config: config!,
+              dependencyGraph,
+              prInfo,
+              resultsMap: resultsMap || new Map(),
+              debug: !!debug,
+              foreachScope: [],
+              sourceCheckName: checkName,
+              sourceCheckConfig: checkConfig,
+              sourceOutputForItems: undefined,
+            });
           } else {
             loopCount++;
             if (loopCount > maxLoops) {
@@ -2447,6 +2514,48 @@ export class CheckExecutionEngine {
     });
   }
 
+  // Resolve a sensible fallback goto target without hardcoding names.
+  // Strategy: inspect the current check's depends_on list and expand any
+  // union tokens (e.g., "a|b"). Prefer a dependency whose `on` includes the
+  // current event; otherwise, fall back to the first existing dependency.
+  private resolveFallbackGotoTarget(
+    checkConfig: import('./types/config').CheckConfig,
+    prInfo: PRInfo,
+    config: import('./types/config').VisorConfig
+  ): string | null {
+    try {
+      const depTokens: any[] = Array.isArray(checkConfig.depends_on)
+        ? checkConfig.depends_on
+        : checkConfig.depends_on
+          ? [checkConfig.depends_on]
+          : [];
+      const expand = (tok: any): string[] =>
+        typeof tok === 'string' && tok.includes('|')
+          ? tok
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean)
+          : tok
+            ? [String(tok)]
+            : [];
+      const candidates = depTokens.flatMap(expand).filter(Boolean) as string[];
+      if (candidates.length === 0) return null;
+      const event = prInfo.eventType || 'manual';
+      const matchEvent = (name: string): boolean => {
+        const cfg = (config.checks || {})[name];
+        if (!cfg) return false;
+        const triggers: any[] = Array.isArray(cfg.on) ? (cfg.on as any[]) : cfg.on ? [cfg.on] : [];
+        if (triggers.length === 0) return true; // treat untagged as match-all
+        return triggers.includes(event as any);
+      };
+      for (const n of candidates) if ((config.checks || {})[n] && matchEvent(n)) return n;
+      for (const n of candidates) if ((config.checks || {})[n]) return n;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Execute checks on the local repository
    */
@@ -2455,6 +2564,15 @@ export class CheckExecutionEngine {
     const timestamp = new Date().toISOString();
 
     try {
+      // Fresh in-memory state for every engine execution.
+      // Do not wipe file-based state here; tests can clean those explicitly.
+      try {
+        const storage = options.config?.memory?.storage || 'memory';
+        if (storage !== 'file') {
+          MemoryStore.resetInstance();
+        }
+      } catch {}
+
       // Initialize memory store if configured
       if (options.config?.memory) {
         const memoryStore = MemoryStore.getInstance(options.config.memory);
@@ -3016,7 +3134,10 @@ export class CheckExecutionEngine {
         }
       } catch {}
 
-      return execRes;
+      // Recompute statistics at the top level to ensure post on_finish inline runs
+      // are reflected in counts (e.g., routed apply-issue-labels second pass).
+      const freshStats = this.buildExecutionStatistics();
+      return { results: execRes.results, statistics: freshStats };
     }
 
     // Single check execution
@@ -3295,6 +3416,22 @@ export class CheckExecutionEngine {
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter
   ): Promise<ExecutionResult> {
+    // Ensure per-run guards do not leak across stages in a flow. In particular,
+    // forwardRunGuards must be cleared so on_finish routed targets (e.g.,
+    // issue-assistant) can be scheduled again in later stages that use the same
+    // event type. This fixes flaky counts like apply-issue-labels=1 instead of 2
+    // when running the entire pr-review-e2e-flow.
+    try {
+      this.resetPerRunState();
+    } catch {}
+    // Also clear transient verdict memory that should be scoped to a single stage
+    // (e.g., fact-validation verdict). Persisted values across stages can short-circuit
+    // goto_js decisions unexpectedly (e.g., skipping the second issue-assistant pass).
+    try {
+      const mem = MemoryStore.getInstance(this.config?.memory);
+      // Clear only the known transient namespace; avoid wiping unrelated state.
+      await mem.clear('fact-validation');
+    } catch {}
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
       prInfo,
@@ -5503,6 +5640,60 @@ export class CheckExecutionEngine {
                     category: 'logic' as const,
                   }));
                 finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
+
+                // Post-evaluation routing: if fail_if produced fatal issues and on_fail.goto is configured,
+                // honor goto routing here as a soft-failure. This ensures checks that signal failure via
+                // fail_if (without provider errors) can still drive refine loops.
+                try {
+                  const hasFatal = failureIssues.some(
+                    i => i.severity === 'error' || i.severity === 'critical'
+                  );
+                  const ofCfg: OnFailConfig | undefined = checkConfig.on_fail
+                    ? { ...(config?.routing?.defaults?.on_fail || {}), ...checkConfig.on_fail }
+                    : undefined;
+                  if (hasFatal && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
+                    let target: string | null = null;
+                    if (ofCfg.goto_js) {
+                      // Build minimal scope for goto_js similar to executeWithRouting
+                      try {
+                        const sandbox = this.getRoutingSandbox();
+                        const scope = {
+                          step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
+                          outputs: Object.fromEntries(results.entries()),
+                          output: (finalResult as any)?.output,
+                          event: { name: prInfo.eventType || 'manual' },
+                        };
+                        const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
+                        const res = compileAndRun<string | null>(sandbox, code, { scope }, {
+                          injectLog: false,
+                          wrapFunction: true,
+                        });
+                        target = typeof res === 'string' && res ? res : null;
+                      } catch {}
+                    }
+                    if (!target && ofCfg.goto) target = ofCfg.goto;
+                    if (target) {
+                      try {
+                        require('./logger').logger.info(
+                          `↪ on_fail.goto(post-fail_if): jumping to '${target}' from '${checkName}'`
+                        );
+                      } catch {}
+                      await this.scheduleForwardRun(target, {
+                        origin: 'on_fail',
+                        gotoEvent: ofCfg.goto_event,
+                        config: config!,
+                        dependencyGraph,
+                        prInfo,
+                        resultsMap: results,
+                        debug: !!debug,
+                        foreachScope: [],
+                        sourceCheckName: checkName,
+                        sourceCheckConfig: checkConfig,
+                        sourceOutputForItems: undefined,
+                      });
+                    }
+                  }
+                } catch {}
               }
             }
 

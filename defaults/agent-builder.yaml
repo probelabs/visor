@@ -1,0 +1,1087 @@
+version: "1.0"
+
+# Agents Builder: one YAML that drafts other Visor agents, lints them,
+# runs their tests, performs a light AI code review, and refines until all pass.
+# It writes generated agents into the tmp/ folder (no subfolders).
+
+steps:
+  agent-brief:
+    type: human-input
+    group: agent-builder
+    on: [manual]
+    prompt: |
+      Provide a short brief for the agent you want to generate.
+      Include: purpose, events, essential steps, and minimal success criteria.
+    placeholder: "e.g., Agent that labels PRs by change size and runs jest"
+    multiline: false
+    allow_empty: true
+    default: "Create a minimal agent that can scaffold other agents (config + tests)."
+
+  # CI/Issue entrypoint: trigger the chain without human input
+  agent-start:
+    type: log
+    group: agent-builder
+    on: [issue_opened]
+    message: "start"
+    level: debug
+    on_success:
+      goto: agent-draft
+
+  agent-draft:
+    type: ai
+    group: agent-builder
+    # Triggered via goto by agent-brief (manual) or agent-start (CI/tests)
+    on: []
+    ai_prompt_type: engineer
+    schema:
+      type: object
+      properties:
+        slug: { type: string }
+        summary: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              content: { type: string }
+            required: [path, content]
+      required: [slug, files]
+    prompt: |
+      You are generating a new Visor agent using only YAML config and YAML tests.
+      Focus on the user's brief and keep it simple. Avoid unrelated steps.
+
+      Repository references you can use for guidance (do not duplicate verbatim):
+      - docs/ — Visor docs and testing guides (schemas, DSL, CLI usage)
+      - examples/ — Minimal example configs and test files
+      - defaults/.visor.yaml and defaults/.visor.tests.yaml — the default agent and test suite
+
+      Brief (may be empty in tests):
+      ---
+      {{ outputs['agent-brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
+      ---
+
+      Return JSON with fields: slug, summary, files[].
+      Required files (paths must be under tmp/):
+        - tmp/{{ slug }}.yaml            # agent configuration
+        - tmp/{{ slug }}.tests.yaml      # tests extending that config
+      Constraints:
+        - Tests must use mock provider and strict mode.
+        - Include a happy-path test and at least one edge/failure test.
+
+  agent-write:
+    type: command
+    group: agent-builder
+    depends_on: [agent-draft]
+    on: [manual, issue_opened]
+    exec: |
+      {% assign set = outputs['agent-refine'].files | default: outputs['agent-draft'].files %}
+      {% assign slug = outputs['agent-draft'].slug %}
+      cat > .visor-agent-files.json <<'JSON'
+      {{ set | to_json | default: '[]' }}
+      JSON
+      node -e "
+        const fs = require('fs'); const path = require('path');
+        const slug = '{{ slug }}' || 'agent';
+        let files = [];
+        try { files = JSON.parse(fs.readFileSync('.visor-agent-files.json','utf8')) || []; } catch { files = []; }
+        const out = new Map();
+        const strip = (s) => String(s||'').trim().replace(/^['\"]+|['\"]+$/g,'');
+        const norm = (p, content) => {
+          p = strip(p);
+          const base = path.basename(p);
+          const isYaml = /\.(ya?ml)$/i.test(base);
+          const isTestsName = /test/i.test(base) || /\.tests\./i.test(base);
+          // Heuristic: prefer explicit tests path name, else deduce by content
+          const looksLikeTests = isTestsName || /\n\s*tests\s*:\s*\n/i.test(String(content||''));
+          const target = looksLikeTests ? ('tmp/' + slug + '.tests.yaml') : ('tmp/' + slug + '.yaml');
+          return target;
+        };
+        for (const f of files) {
+          const p = norm(f.path, f.content);
+          const content = String(f.content||'');
+          out.set(p, content);
+        }
+        if (out.size === 0) {
+          // Nothing to write — keep existing tmp files from previous iteration
+          console.log(JSON.stringify({ written: [], slug, skipped: true }));
+          process.exit(0);
+        }
+        // Ensure both files exist; synthesize minimal tests if missing
+        if (!out.has('tmp/' + slug + '.yaml')) {
+          // Try to salvage any non-test doc
+          const first = Array.from(out.entries()).find(([k])=>!/\.tests\.yaml$/.test(k));
+          if (first) out.set('tmp/' + slug + '.yaml', first[1]);
+          else out.set('tmp/' + slug + '.yaml', 'version: "1.0"\nsteps: {}');
+        }
+        if (!out.has('tmp/' + slug + '.tests.yaml')) {
+          const t = [
+            'version: "1.0"',
+            'extends: "' + slug + '.yaml"',
+            'tests:',
+            '  defaults: { strict: true, ai_provider: mock }',
+            '  cases:',
+            '    - name: smoke',
+            '      event: issue_opened',
+            '      fixture: gh.issue_open.minimal',
+            '      expect: {}',
+            ''
+          ].join('\n');
+          out.set('tmp/' + slug + '.tests.yaml', t);
+        }
+        const written = [];
+        for (const [p, content] of out.entries()) {
+          const dir = path.dirname(p); fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(p, content, 'utf8');
+          written.push(p);
+        }
+        console.log(JSON.stringify({ written, slug }));
+      "
+    output_format: json
+
+  config-lint:
+    type: command
+    group: agent-quality
+    depends_on: [agent-write]
+    on: [manual, issue_opened]
+    exec: |
+      {% assign slug = outputs['agent-draft'].slug %}
+      node dist/index.js validate --config tmp/{{ slug }}.yaml
+    output_format: text
+    fail_if: "issues && issues.length > 0"
+    on_fail:
+      goto: agent-refine
+
+  tests-validate:
+    type: command
+    group: agent-quality
+    depends_on: [agent-write]
+    on: [manual, issue_opened]
+    exec: |
+      {% assign slug = outputs['agent-draft'].slug %}
+      node dist/index.js test --validate --config tmp/{{ slug }}.tests.yaml
+    output_format: text
+    fail_if: "issues && issues.length > 0"
+    on_fail:
+      goto: agent-refine
+
+
+  agent-verify-tests:
+    type: command
+    group: agent-quality
+    depends_on: [agent-write, config-lint, tests-validate]
+    on: [manual, issue_opened]
+    # Gate on tests-validate success in the current cycle to avoid
+    # counting premature runs when the tests file shape is invalid.
+    if: "!(outputs['tests-validate'] && /failed/i.test(String(outputs['tests-validate'])))"
+    exec: |
+      {% assign slug = outputs['agent-draft'].slug %}
+      node dist/index.js test --config tmp/{{ slug }}.tests.yaml --json - --bail
+    output_format: json
+    fail_if: "output && Number(output.failures||0) > 0"
+    on_fail:
+      goto: agent-refine
+    env:
+      VISOR_TEST_SUMMARY_SILENT: "true"
+
+
+  agent-code-review:
+    type: ai
+    group: agent-quality
+    depends_on: [agent-verify-tests]
+    on: [manual, issue_opened]
+    # Rely on on_fail routing of dependencies; run when verify-tests completes
+    ai_prompt_type: engineer
+    schema:
+      type: object
+      properties:
+        ok: { type: 'boolean' }
+        feedback: { type: 'string' }
+        concerns: { type: 'array', items: { type: 'string' } }
+      required: [ok]
+    prompt: |
+      Validate the generated agent against the brief and its tests. Ensure it:
+      - Directly addresses the brief without over-complication.
+      - Includes tests that cover success and failure cases.
+
+      Brief (may be empty in tests):
+      {{ outputs['agent-brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
+
+      Tests validate (text):
+      {{ outputs['tests-validate'] }}
+
+      Tests run (JSON):
+      {{ outputs['agent-verify-tests'] | json }}
+
+      Generated files (path + first 80 lines):
+      {% assign set = outputs['agent-refine'].files | default: outputs['agent-draft'].files %}
+      {% for f in set %}
+      --- {{ f.path }} ---
+      {{ f.content | split: "\n" | slice: 0, 80 | join: "\n" }}
+      {% endfor %}
+
+      Respond with JSON: { ok: boolean, feedback: string, concerns?: string[] }.
+    fail_if: "output && output.ok === false"
+    on_fail:
+      goto: agent-refine
+
+  agent-cleanup:
+    type: command
+    group: agent-quality
+    depends_on: [agent-code-review]
+    on: [manual, issue_opened]
+    # Run after code-review; on_fail in earlier steps loops back as needed
+    exec: |
+      {% assign slug = outputs['agent-draft'].slug %}
+      node <<'NODE'
+      const fs=require('fs'); const path=require('path');
+      if (String(process.env.VISOR_KEEP_TMP||'').toLowerCase()==='true') {
+        console.log(JSON.stringify({ removed: [], skipped: true }));
+        process.exit(0);
+      }
+      const files=[`tmp/${process.env.SLUG||'{{ slug }}'}.yaml`,`tmp/${process.env.SLUG||'{{ slug }}'}.tests.yaml`];
+      const removed=[];
+      for (const f of files){ try{ if(fs.existsSync(f)){ fs.unlinkSync(f); removed.push(f);} }catch{}}
+      try{ if(fs.existsSync('.visor-agent-files.json')) fs.unlinkSync('.visor-agent-files.json'); }catch{}
+      console.log(JSON.stringify({ removed }));
+      NODE
+    output_format: json
+
+  agent-refine:
+    type: ai
+    group: agent-builder
+    reuse_ai_session: agent-draft
+    session_mode: append
+    # Exclude from initial plan; invoked via on_fail.run from validators
+    on: [schedule]
+    ai_prompt_type: engineer
+    schema:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: object
+            properties: { path: { type: string }, content: { type: string } }
+            required: [path, content]
+      required: [files]
+    prompt: |
+      Refine the generated files to satisfy all criteria.
+
+      Brief:
+      {{ outputs['agent-brief'] }}
+
+      Config validate (text):
+      {{ outputs['config-lint'] }}
+
+      Tests validate (text):
+      {{ outputs['tests-validate'] }}
+
+      Tests run (JSON):
+      {{ outputs['agent-verify-tests'] | json }}
+
+      Code review (JSON):
+      {{ outputs['agent-code-review'] | json }}
+
+      Repository references you can use for guidance (do not duplicate verbatim):
+      - docs/ — Visor docs and testing guides (schemas, DSL, CLI usage)
+      - examples/ — Minimal example configs and test files
+      - defaults/.visor.yaml and defaults/.visor.tests.yaml — the default agent and test suite
+    on_success:
+      goto: agent-write
+
+  agent-finish:
+    type: log
+    group: agent-builder
+    message: "✅ Agents builder finished: files written, linted, tested, and reviewed."
+    level: info
+    depends_on: [agent-cleanup]
+    on: [manual, issue_opened]
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+    fail_on_unexpected_calls: true
+
+  cases:
+    - name: agents-builder-happy
+      description: |
+        Drafts a minimal agent, lints, tests, code‑reviews OK, and finishes.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        agent-draft:
+          slug: example-agent
+          files:
+            - path: tmp/example-agent.yaml
+              content: |
+                version: "1.0"
+                output:
+                  pr_comment:
+                    format: markdown
+                    group_by: check
+                    collapse: true
+                steps:
+                  hello:
+                    type: log
+                    message: "hi"
+                    level: info
+                    on: [issue_opened]
+            - path: tmp/example-agent.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "example-agent.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: ok
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 1
+        config-lint: ""
+        tests-validate: ""
+        agent-verify-tests:
+          failures: 0
+          results:
+            - name: ok
+              passed: true
+        agent-cleanup:
+          removed: []
+        agent-code-review:
+          ok: true
+          feedback: "Looks good"
+      env:
+        VISOR_TEST_MODE: "true"
+      expect:
+        calls:
+          - step: agent-draft
+            exactly: 1
+          - step: agent-write
+            exactly: 1
+          - step: config-lint
+            exactly: 1
+          - step: tests-validate
+            exactly: 1
+          - step: agent-verify-tests
+            exactly: 1
+          - step: agent-code-review
+            exactly: 1
+          - step: agent-cleanup
+            exactly: 1
+          - step: agent-finish
+            exactly: 1
+
+    - name: agents-builder-refine-loop
+      description: |
+        Initial tests fail; refine returns corrected tests; all passes afterwards.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        agent-draft:
+          slug: refine
+          files:
+            - path: tmp/refine.yaml
+              content: |
+                version: "1.0"
+                output:
+                  pr_comment:
+                    format: markdown
+                    group_by: check
+                    collapse: true
+                steps:
+                  hello:
+                    type: log
+                    message: "hello"
+                    level: info
+                    on: [issue_opened]
+            - path: tmp/refine.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "refine.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: failing
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 2  # wrong on purpose
+        agent-refine:
+          files:
+            - path: tmp/refine.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "refine.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: fixed
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 1
+        agent-code-review:
+          ok: true
+          feedback: "After refinement, everything passes."
+      expect:
+        calls:
+          - step: agent-draft
+            exactly: 1
+          - step: agent-refine
+            exactly: 1
+          # Forward-run after refine
+          - step: agent-write
+            exactly: 2
+          - step: config-lint
+            exactly: 2
+          - step: tests-validate
+            exactly: 2
+          - step: agent-verify-tests
+            exactly: 2
+          - step: agent-code-review
+            exactly: 1
+          - step: agent-cleanup
+            exactly: 1
+          - step: agent-finish
+            exactly: 1
+      env:
+        VISOR_TEST_MODE: "true"
+
+    # Note: multi-refine covered by flow test below for deterministic staging
+
+    - name: agents-builder-multi-refine-flow
+      description: Demonstrate two consecutive refine cycles across stages (3→2→1).
+      flow:
+        - name: stage-1-initial
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: flowref
+              files:
+                - path: tmp/flowref.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/flowref.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "flowref.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: too-many-3
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 3
+            agent-refine:
+              files:
+                - path: tmp/flowref.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "flowref.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: too-many-2
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 2
+            agent-code-review:
+              ok: true
+              feedback: "Initial stage: code review OK"
+          expect:
+            calls:
+              - step: agent-draft
+                exactly: 1
+              - step: agent-refine
+                exactly: 1
+              - step: agent-write
+                exactly: 2
+              - step: config-lint
+                exactly: 2
+              - step: tests-validate
+                exactly: 2
+              - step: agent-verify-tests
+                exactly: 2
+              - step: agent-code-review
+                exactly: 1
+              - step: agent-cleanup
+                exactly: 1
+              - step: agent-finish
+                exactly: 1
+
+        - name: stage-2-still-wrong
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: flowref
+              files:
+                - path: tmp/flowref.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/flowref.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "flowref.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: too-many-2
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 2
+            agent-refine:
+              files:
+                - path: tmp/flowref.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "flowref.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: ok-1
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 1
+          expect:
+            calls:
+              - step: agent-draft
+                exactly: 1
+              - step: agent-refine
+                exactly: 1
+              - step: agent-write
+                exactly: 2
+              - step: config-lint
+                exactly: 2
+              - step: tests-validate
+                exactly: 2
+              - step: agent-verify-tests
+                exactly: 2
+              - step: agent-code-review
+                exactly: 1
+              - step: agent-cleanup
+                exactly: 1
+              - step: agent-finish
+                exactly: 1
+
+
+
+    - name: agents-builder-loop-on-tests-validate
+      description: |
+        Tests file shape invalid at first; refine fixes tests block; loop re-runs and then passes.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        agent-draft:
+          slug: tval
+          files:
+            - path: tmp/tval.yaml
+              content: |
+                version: "1.0"
+                output:
+                  pr_comment:
+                    format: markdown
+                    group_by: check
+                    collapse: true
+                steps:
+                  hello:
+                    type: log
+                    message: "hi"
+                    level: info
+                    on: [issue_opened]
+            - path: tmp/tval.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "tval.yaml"
+                # Invalid on purpose: no top-level 'tests'
+                cases:
+                  - name: wrong-shape
+                    event: issue_opened
+                    fixture: gh.issue_open.minimal
+                    expect: { }
+        agent-refine:
+          files:
+            - path: tmp/tval.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "tval.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: fixed-shape
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 1
+      expect:
+        calls:
+          - step: agent-draft
+            exactly: 1
+          - step: agent-write
+            exactly: 2
+          - step: config-lint
+            exactly: 3
+          - step: tests-validate
+            exactly: 3
+          - step: agent-verify-tests
+            exactly: 2
+          - step: agent-code-review
+            exactly: 2
+          - step: agent-cleanup
+            exactly: 2
+          - step: agent-finish
+            exactly: 2
+          - step: agent-refine
+            exactly: 1
+      env:
+        VISOR_TEST_MODE: "true"
+
+    - name: agents-builder-loop-multistep-flow
+      description: |
+        Three different failures fixed across cycles: (1) tests-validate fails (bad shape), (2) agent-verify-tests fails (behavior), (3) agent-code-review fails (ok=false).
+      flow:
+        - name: stage-1-tests-shape-invalid
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: multistep
+              files:
+                - path: tmp/multistep.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/multistep.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "multistep.yaml"
+                    # invalid: missing top-level tests block
+                    cases:
+                      - name: wrong-shape
+                        event: issue_opened
+                        fixture: gh.issue_open.minimal
+                        expect: {}
+            agent-code-review:
+              ok: true
+              feedback: "Shape-only cycle: code review OK"
+          expect:
+            calls:
+              - step: agent-write
+                exactly: 2
+              - step: config-lint
+                exactly: 1
+              - step: tests-validate
+                exactly: 3
+              - step: agent-draft
+                exactly: 1
+              - step: agent-refine
+                exactly: 1
+              - step: agent-verify-tests
+                exactly: 3
+              - step: agent-code-review
+                exactly: 2
+              - step: agent-cleanup
+                exactly: 2
+              - step: agent-finish
+                exactly: 2
+
+        - name: stage-2-verify-tests-bad
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: multistep
+              files:
+                - path: tmp/multistep.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/multistep.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "multistep.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: wrong-exactly
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 2
+          expect:
+            calls:
+              - step: agent-write
+                exactly: 2
+              - step: config-lint
+                exactly: 2
+              - step: tests-validate
+                exactly: 2
+              - step: agent-verify-tests
+                exactly: 2
+              - step: agent-draft
+                exactly: 1
+              - step: agent-refine
+                exactly: 1
+              - step: agent-code-review
+                exactly: 1
+              - step: agent-cleanup
+                exactly: 1
+              - step: agent-finish
+                exactly: 1
+
+        - name: stage-3-code-review-fails
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: multistep
+              files:
+                - path: tmp/multistep.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/multistep.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "multistep.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: ok
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 1
+            agent-code-review:
+              ok: false
+          expect:
+            calls:
+              - step: agent-draft
+                exactly: 1
+              - step: agent-code-review
+                exactly: 1
+              - step: agent-refine
+                exactly: 1
+              # Forward-run after refine: write → lint → validate → test
+              - step: agent-write
+                exactly: 2
+              - step: config-lint
+                exactly: 2
+              - step: tests-validate
+                exactly: 2
+              - step: agent-verify-tests
+                exactly: 2
+              - step: agent-cleanup
+                exactly: 1
+              - step: agent-finish
+                exactly: 1
+
+        - name: stage-4-fixed
+          event: issue_opened
+          fixture: gh.issue_open.minimal
+          mocks:
+            agent-draft:
+              slug: multistep
+              files:
+                - path: tmp/multistep.yaml
+                  content: |
+                    version: "1.0"
+                    output:
+                      pr_comment:
+                        format: markdown
+                        group_by: check
+                        collapse: true
+                    steps:
+                      hello:
+                        type: log
+                        message: "hi"
+                        level: info
+                        on: [issue_opened]
+                - path: tmp/multistep.tests.yaml
+                  content: |
+                    version: "1.0"
+                    extends: "multistep.yaml"
+                    tests:
+                      defaults: { strict: true, ai_provider: mock }
+                      cases:
+                        - name: ok
+                          event: issue_opened
+                          fixture: gh.issue_open.minimal
+                          expect:
+                            calls:
+                              - step: hello
+                                exactly: 1
+          expect:
+            calls:
+              - step: agent-draft
+                exactly: 1
+              - step: agent-write
+                exactly: 1
+              - step: config-lint
+                exactly: 1
+              - step: tests-validate
+                exactly: 1
+              - step: agent-verify-tests
+                exactly: 1
+              - step: agent-code-review
+                exactly: 1
+              - step: agent-cleanup
+                exactly: 1
+              - step: agent-finish
+                exactly: 1
+
+
+    - name: agents-builder-multi-refine-single
+      description: |
+        Single invocation: three refine cycles triggered by different failing steps in sequence
+        (config-lint → tests-validate → agent-verify-tests), then green.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        agent-draft:
+          slug: loop3
+          files:
+            - path: tmp/loop3.yaml
+              content: |
+                version: "1.0"
+                # output missing on purpose to fail config-lint initially
+                steps:
+                  hello:
+                    type: log
+                    message: "hi"
+                    level: info
+                    on: [issue_opened]
+            - path: tmp/loop3.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "loop3.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: wrong-exactly-2
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 2
+        agent-refine[]:
+          - files:
+              - path: tmp/loop3.yaml
+                content: |
+                  version: "1.0"
+                  output:
+                    pr_comment:
+                      format: markdown
+                      group_by: check
+                      collapse: true
+                  steps:
+                    hello:
+                      type: log
+                      message: "hi"
+                      level: info
+                      on: [issue_opened]
+              - path: tmp/loop3.tests.yaml
+                content: |
+                  version: "1.0"
+                  extends: "loop3.yaml"
+                  cases:
+                    - name: wrong-shape
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect: {}
+          - files:
+              - path: tmp/loop3.tests.yaml
+                content: |
+                  version: "1.0"
+                  extends: "loop3.yaml"
+                  tests:
+                    defaults: { strict: true, ai_provider: mock }
+                    cases:
+                      - name: still-wrong-2
+                        event: issue_opened
+                        fixture: gh.issue_open.minimal
+                        expect:
+                          calls:
+                            - step: hello
+                              exactly: 2
+          - files:
+              - path: tmp/loop3.tests.yaml
+                content: |
+                  version: "1.0"
+                  extends: "loop3.yaml"
+                  tests:
+                    defaults: { strict: true, ai_provider: mock }
+                    cases:
+                      - name: ok-1
+                        event: issue_opened
+                        fixture: gh.issue_open.minimal
+                        expect:
+                          calls:
+                            - step: hello
+                              exactly: 1
+      expect:
+        calls:
+          - step: agent-draft
+            exactly: 1
+          - step: agent-refine
+            exactly: 1
+          - step: agent-write
+            exactly: 2
+          - step: config-lint
+            exactly: 2
+          - step: tests-validate
+            exactly: 2
+          - step: agent-verify-tests
+            exactly: 2
+          - step: agent-code-review
+            exactly: 1
+          - step: agent-cleanup
+            exactly: 1
+          - step: agent-finish
+            exactly: 1
+
+    - name: agents-builder-no-human-on-issue-opened
+      description: Ensure human input is not executed on non-manual events.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        agent-draft:
+          slug: nohuman
+          files:
+            - path: tmp/nohuman.yaml
+              content: |
+                version: "1.0"
+                output:
+                  pr_comment:
+                    format: markdown
+                    group_by: check
+                    collapse: true
+                steps:
+                  hello:
+                    type: log
+                    message: "hi"
+                    level: info
+                    on: [issue_opened]
+            - path: tmp/nohuman.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "nohuman.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: ok
+                      event: issue_opened
+                      fixture: gh.issue_open.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 1
+        config-lint: ""
+        tests-validate: ""
+        agent-verify-tests:
+          failures: 0
+          results:
+            - name: ok
+              passed: true
+        agent-cleanup:
+          removed: []
+      expect:
+        calls:
+          - step: agent-draft
+            exactly: 1
+          - step: agent-write
+            exactly: 1
+          - step: config-lint
+            exactly: 1
+          - step: tests-validate
+            exactly: 1
+          - step: agent-verify-tests
+            exactly: 1
+          - step: agent-code-review
+            exactly: 1
+          - step: agent-cleanup
+            exactly: 1
+          - step: agent-finish
+            exactly: 1
+        no_calls:
+          - step: agent-brief

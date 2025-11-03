@@ -488,19 +488,13 @@ steps:
     on: [issue_opened]
     op: labels.add
     value_js: |
-      try {
-        const labels = Array.isArray(outputs['issue-assistant']?.labels)
-          ? outputs['issue-assistant'].labels
-          : [];
-        // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
-        return labels
-          .map(v => String(v ?? ''))
-          .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
-          .filter(Boolean);
-      } catch (error) {
-        log('Error processing issue labels:', error);
-        return [];
-      }
+      const raw = (outputs && outputs['issue-assistant'] && outputs['issue-assistant'].labels) || [];
+      const labels = Array.isArray(raw) ? raw : [];
+      // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
+      return labels
+        .map(v => String(v ?? ''))
+        .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
+        .filter(Boolean);
 
   # External origin labelling for PRs and Issues
   external-label:
@@ -626,17 +620,49 @@ steps:
 
     forEach: true
 
-    # After facts are validated, run the aggregator; it decides about corrections in its on_success
+    # After one validation wave completes, route back to the appropriate assistant
+    # using goto_js so the engine forward-runs dependents (assistant → extract-facts → validate-fact).
+    # This replaces the older run_js-only approach which didn’t forward-run the chain.
     on_finish:
-      run_js: |
-        // ES2023 style: use at() and concise arrows; inspect only the last wave
-        const facts = (outputs_history['extract-facts'] || []).at(-1) || [];
-        const ids = facts.map(f => String(f.id || '')).filter(Boolean);
-        const vf = outputs_history['validate-fact'] || [];
-        const lastItems = vf.filter(v => ids.includes(String((v && v.fact_id) || '')));
-        const hasProblems = lastItems.some(v => v.is_valid !== true || v.confidence !== 'high');
-        if (!hasProblems) return [];
-        return (event && event.name) === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
+      goto_js: |
+        // Decide whether to loop again using CURRENT wave only, without memory.
+        // 1) Take the last extract-facts batch and collect unique IDs.
+        // 2) From validate-fact history, walk backwards to pick the last result per ID.
+        // 3) If any are missing/invalid/not-high confidence → route back to the assistant.
+        var factsHist = outputs_history['extract-facts'] || [];
+        var lastFacts = (Array.isArray(factsHist) && factsHist.length > 0) ? factsHist[factsHist.length - 1] : [];
+        if (!Array.isArray(lastFacts) || lastFacts.length === 0) return null;
+        var ids = [];
+        for (var i = 0; i < lastFacts.length; i++) {
+          var f = lastFacts[i];
+          var id = f && f.id ? String(f.id) : '';
+          if (id && ids.indexOf(id) === -1) ids.push(id);
+        }
+        if (ids.length === 0) return null;
+        var vfAll = Array.isArray(outputs_history['validate-fact']) ? outputs_history['validate-fact'] : [];
+        var lastById = {};
+        var filled = 0;
+        for (var j = vfAll.length - 1; j >= 0; j--) {
+          var v = vfAll[j];
+          if (!v) { /* skip */ } else {
+            var vidRaw = (v.fact_id != null ? v.fact_id : v.id);
+            var vid = vidRaw != null ? String(vidRaw) : '';
+            if (vid && ids.indexOf(vid) !== -1 && lastById[vid] === undefined) {
+              lastById[vid] = v;
+              filled = filled + 1;
+              if (filled >= ids.length) j = -9999; // force loop end without break
+            }
+          }
+        }
+        for (var k = 0; k < ids.length; k++) {
+          var key = ids[k];
+          var res = lastById[key];
+          if (!res) return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
+          if (res.is_valid !== true || res.confidence !== 'high') return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
+        }
+        // All good → stop looping
+        return null;
+        return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
 
   # Validate each extracted fact
   validate-fact:

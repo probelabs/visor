@@ -102,14 +102,20 @@ export function evaluateOnFinishGoto(
       const code = `
         const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
         const __fn = () => {\n${onFinish.goto_js}\n};
-        const __res = __fn();
-        return (typeof __res === 'string' && __res) ? __res : null;
+        return __fn();
       `;
-      const exec = sandbox.compile(code);
-      const result = exec({ scope }).run();
+      // Use shared compileAndRun helper for consistent behavior
+      const { compileAndRun } = require('../../utils/sandbox');
+      const result = compileAndRun(sandbox, code, { scope }, { injectLog: false, wrapFunction: false });
       gotoTarget = typeof result === 'string' && result ? result : null;
       if (debug) log(`🔧 Debug: on_finish.goto_js evaluated → ${String(gotoTarget)}`);
-    } catch {
+    } catch (e) {
+      try {
+        // Surface evaluation problems in debug logs to aid diagnosis
+        const msg = e instanceof Error ? e.message : String(e);
+        // eslint-disable-next-line no-console
+        console.error(`✗ on_finish.goto_js: evaluation error: ${msg}`);
+      } catch {}
       // Fall back to static goto
       if (onFinish.goto) gotoTarget = onFinish.goto;
     }
@@ -123,10 +129,26 @@ export function recomputeAllValidFromHistory(
   history: Record<string, unknown[]>,
   forEachItemsCount: number
 ): boolean | undefined {
-  const vfNow = (history['validate-fact'] || []) as unknown[];
-  if (!Array.isArray(vfNow) || forEachItemsCount <= 0 || vfNow.length < forEachItemsCount)
-    return undefined;
-  const lastWave = vfNow.slice(-forEachItemsCount);
+  const vfNow = Array.isArray(history['validate-fact'])
+    ? (history['validate-fact'] as unknown[])
+    : [];
+  if (forEachItemsCount <= 0) return undefined;
+  // Consider only per-item results (those that carry an id/fact_id),
+  // since some providers also append aggregate objects to history.
+  const perItem = vfNow.filter(v => {
+    try {
+      const o = v as any;
+      return (
+        o &&
+        (typeof o.fact_id === 'string' || typeof o.id === 'string') &&
+        String(o.fact_id || o.id).trim().length > 0
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (perItem.length < forEachItemsCount) return undefined;
+  const lastWave = perItem.slice(-forEachItemsCount);
   const ok = lastWave.every((v: any) => v && (v.is_valid === true || v.valid === true));
   return ok;
 }

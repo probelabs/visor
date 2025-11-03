@@ -289,10 +289,41 @@ export async function main(): Promise<void> {
   let debugServer: DebugVisualizerServer | null = null;
 
   try {
+    // Preflight: detect obviously stale dist relative to src and warn early.
+    // This avoids confusing behavior when engine routing changed but dist wasn't rebuilt.
+    (function warnIfStaleDist() {
+      try {
+        const projectRoot = process.cwd();
+        const distIndex = path.join(projectRoot, 'dist', 'index.js');
+        const srcDir = path.join(projectRoot, 'src');
+        const statDist = fs.existsSync(distIndex) ? fs.statSync(distIndex) : null;
+        const srcNewestMtime = (function walk(dir: string): number {
+          let newest = 0;
+          if (!fs.existsSync(dir)) return 0;
+          for (const entry of fs.readdirSync(dir)) {
+            if (entry === 'debug-visualizer' || entry === 'sdk') continue;
+            const full = path.join(dir, entry);
+            const st = fs.statSync(full);
+            if (st.isDirectory()) newest = Math.max(newest, walk(full));
+            else if (/\.tsx?$/.test(entry)) newest = Math.max(newest, st.mtimeMs);
+          }
+          return newest;
+        })(srcDir);
+        if (statDist && srcNewestMtime && srcNewestMtime > statDist.mtimeMs + 1) {
+          // Print once, concise but explicit.
+          console.error(
+            '⚠  Detected stale build: src/* is newer than dist/index.js. Run "npm run build:cli".'
+          );
+        }
+      } catch {
+        /* ignore preflight errors */
+      }
+    })();
+
     // IMPORTANT: detect subcommands before constructing CLI/commander to avoid
     // any argument parsing side-effects (e.g., extra positional args like 'test').
     // Also filter out the --cli flag if it exists (used to force CLI mode in GH Actions)
-    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
+    let filteredArgv = process.argv.filter(arg => arg !== '--cli');
 
     // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
     try {
@@ -327,6 +358,14 @@ export async function main(): Promise<void> {
     if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
       await handleTestCommand(filteredArgv);
       return;
+    }
+    // Check for build subcommand: run the official agent-builder config
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'build') {
+      // Transform into a standard run with --config defaults/agent-builder.yaml
+      const base = filteredArgv.slice(0, 2);
+      const rest = filteredArgv.slice(3); // preserve flags like --message
+      const cfgPath = path.resolve(process.cwd(), 'defaults', 'agent-builder.yaml');
+      filteredArgv = [...base, '--config', cfgPath, '--event', 'manual', ...rest];
     }
     // Construct CLI and ConfigManager only after subcommand handling
     const cli = new CLI();

@@ -114,6 +114,47 @@ steps:
       provider: openai
       model: gpt-4-turbo
     prompt: "Review code style and best practices"
+
+#### Prompt Controls (Probe promptType, customPrompt, and persona)
+
+Visor exposes Probe’s prompt controls to adjust the agent’s behavior for a given step. Use underscore names only.
+
+Accepted keys
+- Under `ai:`
+  - `prompt_type`: string — Probe persona/family, e.g., `engineer`, `code-review`, `architect`.
+  - `custom_prompt`: string — Baseline/system prompt prepended by the SDK.
+- At the check level (aliases if you prefer not to nest):
+  - `ai_prompt_type`: string
+  - `ai_custom_prompt`: string
+  - `ai_persona`: string — optional hint we prepend as a first line: `Persona: <value>`.
+
+Examples
+
+```yaml
+steps:
+  engineer-review:
+    type: ai
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-latest
+      prompt_type: engineer
+      custom_prompt: |
+        You are a specialist in analyzing security vulnerabilities.
+        Focus on injection, authn/z, crypto, and data exposure.
+    schema: code-review
+    prompt: |
+      Review the following changes.
+
+  quick-architect-check:
+    type: ai
+    ai_prompt_type: architect     # check-level alias
+    ai_custom_prompt: "Favor modular boundaries and low coupling."
+    prompt: "Assess high-level design risks in the diff"
+```
+
+Notes
+- If `prompt_type` is omitted and a `schema` is provided, Visor defaults to `code-review`.
+- `ai_persona` is a lightweight hint added as a first line; prefer `prompt_type` when integrating with Probe personas.
 ```
 
 #### AWS Bedrock Specific Configuration
@@ -208,4 +249,3 @@ If no key is configured, Visor falls back to fast, heuristic checks (simple patt
 
 ### MCP (Tools) Support
 See docs/mcp.md for adding MCP servers (Probe, Jira, Filesystem, etc.).
-
