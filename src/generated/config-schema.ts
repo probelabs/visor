@@ -508,6 +508,11 @@ export const configSchema = {
           type: 'boolean',
           description: 'Enable the delegate tool for task distribution to subagents',
         },
+        allow_edit: {
+          type: 'boolean',
+          description:
+            'Enable Edit and Create tools for file modification (disabled by default for security)',
+        },
       },
       additionalProperties: false,
       description: 'AI provider configuration',

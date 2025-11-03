@@ -161,6 +161,41 @@ output:
 
 ### Advanced AI Configuration
 
+#### File Editing (`allow_edit`)
+
+Enable Edit and Create tools to allow AI agents to modify files directly. This feature is disabled by default for security and requires explicit opt-in.
+
+```yaml
+steps:
+  auto-fix-security:
+    type: ai
+    prompt: "Fix the security vulnerabilities found in the code"
+    ai:
+      provider: anthropic
+      model: claude-3-opus
+      allow_edit: true  # Enable Edit and Create tools
+
+  read-only-review:
+    type: ai
+    prompt: "Review code for security issues"
+    ai:
+      provider: google
+      allow_edit: false  # Disable editing (default)
+```
+
+**When to enable editing:**
+- Automated fix workflows where the AI should apply changes
+- Code refactoring tasks
+- Auto-formatting or style correction
+- When working in a sandboxed or test environment
+
+**When to disable editing:**
+- Review-only workflows (default behavior)
+- Production environments without proper safeguards
+- When you want to review suggested changes before applying them
+
+**Security Note:** Edit tools respect existing `allowedFolders` configuration and perform exact string matching to prevent unintended modifications. Always review changes before merging.
+
 #### Task Delegation (`enableDelegate`)
 
 Enable the delegate tool to allow AI agents to break down complex tasks and distribute them to specialized subagents for parallel processing. This feature is available when using Probe as the AI provider (Google Gemini, Anthropic Claude, OpenAI GPT, AWS Bedrock).
