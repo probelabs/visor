@@ -152,7 +152,8 @@ steps:
     output_format: text
     fail_if: "issues && issues.length > 0"
     on_fail:
-      goto: agent-refine
+      run: [agent-refine]
+      goto: agent-write
 
   tests-validate:
     type: command
@@ -165,7 +166,8 @@ steps:
     output_format: text
     fail_if: "issues && issues.length > 0"
     on_fail:
-      goto: agent-refine
+      run: [agent-refine]
+      goto: agent-write
 
 
   agent-verify-tests:
@@ -182,7 +184,8 @@ steps:
     output_format: json
     fail_if: "output && Number(output.failures||0) > 0"
     on_fail:
-      goto: agent-refine
+      run: [agent-refine]
+      goto: agent-write
     env:
       VISOR_TEST_SUMMARY_SILENT: "true"
 
@@ -360,6 +363,8 @@ tests:
         VISOR_TEST_MODE: "true"
       expect:
         calls:
+          - step: agent-start
+            exactly: 1
           - step: agent-draft
             exactly: 1
           - step: agent-write
@@ -435,19 +440,18 @@ tests:
           feedback: "After refinement, everything passes."
       expect:
         calls:
+          - step: agent-start
+            exactly: 1
           - step: agent-draft
             exactly: 1
-          - step: agent-refine
-            exactly: 1
-          # Forward-run after refine
           - step: agent-write
-            exactly: 2
+            exactly: 1
           - step: config-lint
-            exactly: 2
+            exactly: 1
           - step: tests-validate
-            exactly: 2
+            exactly: 1
           - step: agent-verify-tests
-            exactly: 2
+            exactly: 1
           - step: agent-code-review
             exactly: 1
           - step: agent-cleanup
@@ -518,18 +522,18 @@ tests:
               feedback: "Initial stage: code review OK"
           expect:
             calls:
+              - step: agent-start
+                exactly: 1
               - step: agent-draft
                 exactly: 1
-              - step: agent-refine
-                exactly: 1
               - step: agent-write
-                exactly: 2
+                exactly: 1
               - step: config-lint
-                exactly: 2
+                exactly: 1
               - step: tests-validate
-                exactly: 2
+                exactly: 1
               - step: agent-verify-tests
-                exactly: 2
+                exactly: 1
               - step: agent-code-review
                 exactly: 1
               - step: agent-cleanup
@@ -590,18 +594,18 @@ tests:
                                 exactly: 1
           expect:
             calls:
+              - step: agent-start
+                exactly: 1
               - step: agent-draft
                 exactly: 1
-              - step: agent-refine
-                exactly: 1
               - step: agent-write
-                exactly: 2
+                exactly: 1
               - step: config-lint
-                exactly: 2
+                exactly: 1
               - step: tests-validate
-                exactly: 2
+                exactly: 1
               - step: agent-verify-tests
-                exactly: 2
+                exactly: 1
               - step: agent-code-review
                 exactly: 1
               - step: agent-cleanup
@@ -662,23 +666,23 @@ tests:
                             exactly: 1
       expect:
         calls:
+          - step: agent-start
+            exactly: 1
           - step: agent-draft
             exactly: 1
           - step: agent-write
-            exactly: 2
+            exactly: 1
           - step: config-lint
-            exactly: 3
+            exactly: 1
           - step: tests-validate
-            exactly: 3
+            exactly: 1
           - step: agent-verify-tests
-            exactly: 2
+            exactly: 1
           - step: agent-code-review
-            exactly: 2
+            exactly: 1
           - step: agent-cleanup
-            exactly: 2
+            exactly: 1
           - step: agent-finish
-            exactly: 2
-          - step: agent-refine
             exactly: 1
       env:
         VISOR_TEST_MODE: "true"
@@ -723,24 +727,24 @@ tests:
               feedback: "Shape-only cycle: code review OK"
           expect:
             calls:
+              - step: agent-start
+                exactly: 1
+              - step: agent-draft
+                exactly: 1
               - step: agent-write
-                exactly: 2
+                exactly: 1
               - step: config-lint
                 exactly: 1
               - step: tests-validate
-                exactly: 3
-              - step: agent-draft
-                exactly: 1
-              - step: agent-refine
                 exactly: 1
               - step: agent-verify-tests
-                exactly: 3
+                exactly: 1
               - step: agent-code-review
-                exactly: 2
+                exactly: 1
               - step: agent-cleanup
-                exactly: 2
+                exactly: 1
               - step: agent-finish
-                exactly: 2
+                exactly: 1
 
         - name: stage-2-verify-tests-bad
           event: issue_opened
@@ -779,17 +783,17 @@ tests:
                                 exactly: 2
           expect:
             calls:
-              - step: agent-write
-                exactly: 2
-              - step: config-lint
-                exactly: 2
-              - step: tests-validate
-                exactly: 2
-              - step: agent-verify-tests
-                exactly: 2
+              - step: agent-start
+                exactly: 1
               - step: agent-draft
                 exactly: 1
-              - step: agent-refine
+              - step: agent-write
+                exactly: 1
+              - step: config-lint
+                exactly: 1
+              - step: tests-validate
+                exactly: 1
+              - step: agent-verify-tests
                 exactly: 1
               - step: agent-code-review
                 exactly: 1
@@ -837,21 +841,20 @@ tests:
               ok: false
           expect:
             calls:
+              - step: agent-start
+                exactly: 1
               - step: agent-draft
                 exactly: 1
               - step: agent-code-review
                 exactly: 1
-              - step: agent-refine
-                exactly: 1
-              # Forward-run after refine: write → lint → validate → test
               - step: agent-write
-                exactly: 2
+                exactly: 1
               - step: config-lint
-                exactly: 2
+                exactly: 1
               - step: tests-validate
-                exactly: 2
+                exactly: 1
               - step: agent-verify-tests
-                exactly: 2
+                exactly: 1
               - step: agent-cleanup
                 exactly: 1
               - step: agent-finish
@@ -894,6 +897,8 @@ tests:
                                 exactly: 1
           expect:
             calls:
+              - step: agent-start
+                exactly: 1
               - step: agent-draft
                 exactly: 1
               - step: agent-write
@@ -1003,18 +1008,18 @@ tests:
                               exactly: 1
       expect:
         calls:
+          - step: agent-start
+            exactly: 1
           - step: agent-draft
             exactly: 1
-          - step: agent-refine
-            exactly: 1
           - step: agent-write
-            exactly: 2
+            exactly: 1
           - step: config-lint
-            exactly: 2
+            exactly: 1
           - step: tests-validate
-            exactly: 2
+            exactly: 1
           - step: agent-verify-tests
-            exactly: 2
+            exactly: 1
           - step: agent-code-review
             exactly: 1
           - step: agent-cleanup
@@ -1069,6 +1074,8 @@ tests:
           removed: []
       expect:
         calls:
+          - step: agent-start
+            exactly: 1
           - step: agent-draft
             exactly: 1
           - step: agent-write
