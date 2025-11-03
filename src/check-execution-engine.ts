@@ -1574,12 +1574,10 @@ export class CheckExecutionEngine {
         // sees a consistent value even if a prior aggregate step ran out of order.
         // Recompute all_valid from the latest validate-fact history for deterministic routing,
         // independent of execution environment.
-        let recomputedVerdict: boolean | undefined = undefined;
         try {
           const snap = this.getOutputHistorySnapshot();
           const verdictLocal = ofAllValid(snap, forEachItems.length);
           if (typeof verdictLocal === 'boolean') {
-            recomputedVerdict = verdictLocal;
             await MemoryStore.getInstance(this.config?.memory).set(
               'all_valid',
               verdictLocal,
@@ -2341,8 +2339,7 @@ export class CheckExecutionEngine {
                   `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                 );
               }
-              // on_success.goto does not support retry/backoff in schema; keep immediate rerun for ancestor case
-              const delay = 0;
+              // on_success.goto does not support retry/backoff in schema; immediate rerun for ancestor case
               await this.runNamedCheck(
                 target,
                 foreachContext

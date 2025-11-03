@@ -429,7 +429,8 @@ export class VisorTestRunner {
         const rawCfg = fs.readFileSync(testsPath, 'utf8');
         const docAny = yaml.load(rawCfg) as any;
         if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
-          const { tests: _omit, ...cfgObj } = docAny;
+          const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
+          delete (cfgObj as Record<string, unknown>)['tests'];
           const tmpDir = path.join(process.cwd(), 'tmp');
           try {
             if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
