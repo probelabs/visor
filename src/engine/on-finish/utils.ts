@@ -1,4 +1,3 @@
-import { MemoryStore } from '../../memory-store';
 import { createSecureSandbox } from '../../utils/sandbox';
 import type { PRInfo } from '../../pr-analyzer';
 import type { ReviewSummary } from '../../reviewer';
@@ -25,7 +24,7 @@ export function buildProjectionFrom(
 }
 
 export function composeOnFinishContext(
-  memoryConfig: VisorConfig['memory'] | undefined,
+  _memoryConfig: VisorConfig['memory'] | undefined,
   checkName: string,
   checkConfig: CheckConfig,
   outputsForContext: Record<string, unknown>,
@@ -33,32 +32,7 @@ export function composeOnFinishContext(
   forEachStats: any,
   prInfo: PRInfo
 ) {
-  const memoryStore = MemoryStore.getInstance(memoryConfig);
-  const memory = {
-    get: (key: string, ns?: string) => memoryStore.get(key, ns),
-    has: (key: string, ns?: string) => memoryStore.has(key, ns),
-    list: (ns?: string) => memoryStore.list(ns),
-    getAll: (ns?: string) => {
-      const keys = memoryStore.list(ns);
-      const result: Record<string, unknown> = {};
-      for (const key of keys) result[key] = memoryStore.get(key, ns);
-      return result;
-    },
-    set: (key: string, value: unknown, ns?: string) => {
-      const nsName = ns || memoryStore.getDefaultNamespace();
-      if (!memoryStore['data'].has(nsName)) memoryStore['data'].set(nsName, new Map());
-      memoryStore['data'].get(nsName)!.set(key, value);
-    },
-    increment: (key: string, amount: number, ns?: string) => {
-      const current = memoryStore.get(key, ns);
-      const numCurrent = typeof current === 'number' ? current : 0;
-      const newValue = numCurrent + amount;
-      const nsName = ns || memoryStore.getDefaultNamespace();
-      if (!memoryStore['data'].has(nsName)) memoryStore['data'].set(nsName, new Map());
-      memoryStore['data'].get(nsName)!.set(key, newValue);
-      return newValue;
-    },
-  };
+  // No MemoryStore in on_finish context — outputs and outputs_history are sufficient
   const outputs_raw: Record<string, unknown> = {};
   for (const [name, val] of Object.entries(outputsForContext))
     if (name !== 'history') outputs_raw[name] = val;
@@ -74,7 +48,6 @@ export function composeOnFinishContext(
     outputs_history: outputsHistoryForContext,
     outputs_raw,
     forEach: forEachStats,
-    memory,
     pr: {
       number: prInfo.number,
       title: prInfo.title,
@@ -100,7 +73,7 @@ export function evaluateOnFinishGoto(
     try {
       const scope = onFinishContext;
       const code = `
-        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
         const __fn = () => {\n${onFinish.goto_js}\n};
         return __fn();
       `;

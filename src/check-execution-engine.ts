@@ -467,14 +467,21 @@ export class CheckExecutionEngine {
       });
     };
 
-    // For on_finish-origin loops (e.g., fact-validation waves), only re-run the target.
-    // Dependents of a forEach parent are executed per-item by the parent's logic; running
-    // them here as aggregated checks would double-count.
+    // For on_finish-origin loops (e.g., fact-validation waves):
+    // - If routing back to the same forEach parent (target === sourceCheckName and source is forEach),
+    //   re-run ONLY the target (its dependents are executed per-item by the parent's logic).
+    // - Otherwise (routing to a non-parent target like 'issue-assistant'), run full forward chain
+    //   so that the target's dependents (e.g., apply-issue-labels) execute as expected.
     if (origin === 'on_finish') {
+      const sourceIsForEach = !!sourceCheckConfig?.forEach;
+      const routingToParent = sourceIsForEach && target === sourceCheckName;
       const scopeForRun: ScopePath = foreachScope && foreachScope.length > 0 ? foreachScope : [];
-      await runTargetOnce(scopeForRun, /*guard*/ false);
-      this.routingEventOverride = prevEventOverride;
-      return;
+      if (routingToParent) {
+        await runTargetOnce(scopeForRun, /*guard*/ false);
+        this.routingEventOverride = prevEventOverride;
+        return;
+      }
+      // else: fall through to normal forward-run (target + dependents)
     }
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
@@ -1422,12 +1429,9 @@ export class CheckExecutionEngine {
           items: forEachItems,
         };
 
-        // Get memory store for context (used for diagnostics below)
-        const memoryStore = MemoryStore.getInstance(this.config?.memory);
-
         // Build context for on_finish evaluation (extracted helper)
         const onFinishContext = ofComposeCtx(
-          this.config?.memory,
+          undefined,
           checkName,
           checkConfig,
           outputsForContext,
@@ -1438,12 +1442,10 @@ export class CheckExecutionEngine {
 
         // Diagnostics: log attempt, dependents, items, and current budget usage
         try {
-          const ns = 'fact-validation';
-          const attemptNow = Number(memoryStore.get('fact_validation_attempt', ns) || 0);
           const usedBudget = this.onFinishLoopCounts.get(checkName) || 0;
           const maxBudget = config?.routing?.max_loops ?? 10;
           logger.info(
-            `🧭 on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} attempt=${attemptNow} budget=${usedBudget}/${maxBudget}`
+            `🧭 on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} budget=${usedBudget}/${maxBudget}`
           );
           const vfHist = (outputsHistoryForContext['validate-fact'] as unknown[]) || [];
           if (vfHist.length) {
@@ -1529,15 +1531,7 @@ export class CheckExecutionEngine {
               return [];
             }
           };
-          try {
-            if (process.env.VISOR_DEBUG === 'true' || debug) {
-              const memDbg = MemoryStore.getInstance(this.config?.memory);
-              const keys = memDbg.list('fact-validation');
-              logger.info(
-                `on_finish.run_js context (keys in fact-validation) = [${keys.join(', ')}]`
-              );
-            }
-          } catch {}
+          // No MemoryStore in on_finish; dynamic run_js sees only outputs/outputs_history
           const dynamicRun = await evalRunJs(onFinish.run_js);
           const dynList = Array.from(new Set(dynamicRun.filter(Boolean)));
           if (dynList.length > 0) {
@@ -1584,24 +1578,14 @@ export class CheckExecutionEngine {
         }
 
         // After on_finish.run completes, recompute an authoritative 'all_valid' flag from
-        // the latest validate-fact history and persist it to memory. This ensures goto_js
-        // sees a consistent value even if a prior aggregate step ran out of order.
-        // Recompute all_valid from the latest validate-fact history for deterministic routing,
-        // independent of execution environment.
+        // the latest validate-fact history using outputs/history only (no MemoryStore).
         try {
           const snap = this.getOutputHistorySnapshot();
           const verdictLocal = ofAllValid(snap, forEachItems.length);
           if (typeof verdictLocal === 'boolean') {
-            await MemoryStore.getInstance(this.config?.memory).set(
-              'all_valid',
-              verdictLocal,
-              'fact-validation'
+            logger.info(
+              `🧮 on_finish: recomputed all_valid=${verdictLocal} from history for "${checkName}"`
             );
-            try {
-              logger.info(
-                `🧮 on_finish: recomputed all_valid=${verdictLocal} from history for "${checkName}"`
-              );
-            } catch {}
           }
         } catch {}
         // Evaluate on_finish.goto_js for routing decision
@@ -1623,16 +1607,6 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
-          // Special safety: check memory flag and last aggregator output
-
-          try {
-            const memDbg = MemoryStore.getInstance(this.config?.memory);
-            const dbgVal = memDbg.get('all_valid', 'fact-validation');
-            try {
-              logger.info(`  🧪 on_finish.goto: mem all_valid currently=${String(dbgVal)}`);
-            } catch {}
-          } catch {}
-
           try {
             const mem = MemoryStore.getInstance(this.config?.memory);
             const allValidMem = mem.get('all_valid', 'fact-validation');
