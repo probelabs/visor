@@ -766,7 +766,11 @@ export class CheckExecutionEngine {
     // Find the check configuration
     const checkConfig = config?.checks?.[checkId];
     if (!checkConfig) {
-      throw new Error(`on_finish referenced unknown check '${checkId}'`);
+      try {
+        const msg = `[on_finish] referenced unknown check '${checkId}', ignoring`;
+        (config?.output?.pr_comment ? console.error : console.log)(msg);
+      } catch {}
+      return { issues: [] };
     }
 
     // Helper to get all dependencies recursively from config
@@ -7488,26 +7492,35 @@ export class CheckExecutionEngine {
           continue;
         }
 
+        const hasOn = Object.prototype.hasOwnProperty.call(checkConfig, 'on');
         const eventTriggers = checkConfig.on || [];
+
+        if (!hasOn) {
+          // 'on' is not specified at all → run on any event
+          filteredChecks.push(checkName);
+          if (debug) logFn?.(`🔧 Debug: Check '${checkName}' has no 'on' field, including`);
+          continue;
+        }
+
+        // 'on' is specified: honor it strictly. An empty array means "never auto-run".
         if (eventTriggers.length === 0) {
-          // No triggers specified, include it
-          filteredChecks.push(checkName);
-          if (debug) {
-            logFn?.(`🔧 Debug: Check '${checkName}' has no event triggers, including`);
-          }
-        } else if (eventTriggers.includes(currentEvent)) {
-          // Check matches current event
-          filteredChecks.push(checkName);
-          if (debug) {
-            logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
-          }
-        } else {
-          // Check doesn't match current event
-          if (debug) {
+          if (debug)
             logFn?.(
-              `🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`
+              `🔧 Debug: Check '${checkName}' has empty 'on: []' (manual-only), skipping for event '${currentEvent}'`
             );
-          }
+          continue;
+        }
+
+        if (eventTriggers.includes(currentEvent)) {
+          filteredChecks.push(checkName);
+          if (debug)
+            logFn?.(`🔧 Debug: Check '${checkName}' matches event '${currentEvent}', including`);
+        } else if (debug) {
+          logFn?.(
+            `🔧 Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(
+              eventTriggers
+            )}), skipping`
+          );
         }
       }
       return filteredChecks;

@@ -606,7 +606,6 @@ export async function main(): Promise<void> {
 
     // Include dependencies of requested checks
     const checksWithDependencies = new Set(checksToRun);
-    const availableChecks = Object.keys(config.checks || {});
     const addDependencies = (checkName: string) => {
       const checkConfig = config.checks?.[checkName];
       if (checkConfig?.depends_on) {
