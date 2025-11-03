@@ -214,8 +214,8 @@ steps:
       {{ outputs['agent-verify-tests'] | json }}
 
       Generated files (path + first 80 lines):
-      {% assign set = outputs['agent-refine'].files | default: outputs['agent-draft'].files %}
-      {% for f in set %}
+      {% assign files_list = outputs['agent-refine'].files | default: outputs['agent-draft'].files | default: [] %}
+      {% for f in files_list %}
       --- {{ f.path }} ---
       {{ f.content | split: "\n" | slice: 0, 80 | join: "\n" }}
       {% endfor %}

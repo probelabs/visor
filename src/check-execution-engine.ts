@@ -446,29 +446,39 @@ export class CheckExecutionEngine {
     for (const n of forwardSet) visit(n);
 
     const prevEventOverride = this.routingEventOverride;
+    // Ensure we only execute the target once per grouped run for a given event
+    const evKey = gotoEvent || prInfo.eventType || 'manual';
+    const guardKey = `${String(evKey)}:${String(target)}`;
+    const runTargetOnce = async (scopeForRun: ScopePath, guard: boolean) => {
+      // When guard=true we dedupe within a grouped run; when false we allow
+      // multiple re-executions (e.g., on_finish correction waves).
+      if (guard) {
+        if (this.forwardRunGuards.has(guardKey)) return;
+        this.forwardRunGuards.add(guardKey);
+      }
+      await this.runNamedCheck(target, scopeForRun, {
+        origin,
+        config,
+        dependencyGraph,
+        prInfo,
+        resultsMap,
+        debug,
+        eventOverride: gotoEvent,
+      });
+    };
+
+    // For on_finish-origin loops (e.g., fact-validation waves), only re-run the target.
+    // Dependents of a forEach parent are executed per-item by the parent's logic; running
+    // them here as aggregated checks would double-count.
+    if (origin === 'on_finish') {
+      const scopeForRun: ScopePath = foreachScope && foreachScope.length > 0 ? foreachScope : [];
+      await runTargetOnce(scopeForRun, /*guard*/ false);
+      this.routingEventOverride = prevEventOverride;
+      return;
+    }
+
     if (gotoEvent) this.routingEventOverride = gotoEvent;
     try {
-      // Ensure we only execute the target once per grouped run for a given event
-      const evKey = gotoEvent || prInfo.eventType || 'manual';
-      const guardKey = `${String(evKey)}:${String(target)}`;
-      const runTargetOnce = async (scopeForRun: ScopePath) => {
-        // Allow on_finish-driven loops to schedule the same target multiple
-        // times within a single grouped run (facts correction waves). We still
-        // guard duplicates for other origins to avoid accidental double work.
-        const shouldGuard = origin !== 'on_finish';
-        if (shouldGuard && this.forwardRunGuards.has(guardKey)) return;
-        if (shouldGuard) this.forwardRunGuards.add(guardKey);
-        await this.runNamedCheck(target, scopeForRun, {
-          origin,
-          config,
-          dependencyGraph,
-          prInfo,
-          resultsMap,
-          debug,
-          eventOverride: gotoEvent,
-        });
-      };
-
       // Determine mapping mode for the target step
       const tcfg = cfgChecks[target];
       const mode =
@@ -481,7 +491,7 @@ export class CheckExecutionEngine {
           : [];
 
       const runChainOnce = async (scopeForRun: ScopePath) => {
-        await runTargetOnce(scopeForRun);
+        await runTargetOnce(scopeForRun, /*guard*/ true);
         const dependentsOnly = order.filter(n => n !== target);
         for (const stepId of dependentsOnly) {
           await this.runNamedCheck(stepId, scopeForRun, {
@@ -4224,11 +4234,13 @@ export class CheckExecutionEngine {
       } catch {}
 
       // Check for session reuse conflicts - only force sequential execution when there are actual conflicts
-      const checksInLevel = executionGroup.parallel;
+      const checksInLevel = Array.isArray((executionGroup as any).parallel)
+        ? (executionGroup as any).parallel
+        : [];
 
       // Group checks by their session parent
       const sessionReuseGroups = new Map<string, string[]>();
-      checksInLevel.forEach(checkName => {
+      checksInLevel.forEach((checkName: string) => {
         if (sessionReuseChecks.has(checkName)) {
           const parentCheckName = sessionProviders.get(checkName);
           if (parentCheckName) {
@@ -4245,7 +4257,7 @@ export class CheckExecutionEngine {
         group => group.length > 1
       );
 
-      let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
+      let actualParallelism = Math.min(effectiveMaxParallelism, checksInLevel.length);
       if (hasConflictingSessionReuse) {
         // Force sequential execution when there are actual session conflicts
         actualParallelism = 1;
@@ -4271,13 +4283,13 @@ export class CheckExecutionEngine {
       }
 
       // Create task functions for checks in this level, skip those already completed inline
-      const levelChecks = executionGroup.parallel.filter(name => !results.has(name));
+      const levelChecks = checksInLevel.filter((name: string) => !results.has(name));
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           console.error('  [engine] levelChecks = [', levelChecks.join(', '), ']');
         }
       } catch {}
-      const levelTaskFunctions = levelChecks.map(checkName => async () => {
+      const levelTaskFunctions = levelChecks.map((checkName: string) => async () => {
         // Skip if this check was already completed by item-level branch scheduler
         if (results.has(checkName)) {
           if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -5842,15 +5854,19 @@ export class CheckExecutionEngine {
       );
 
       // Process results and store them for next level
-      const levelChecksList = executionGroup.parallel.filter(name => !results.has(name));
+      const levelChecksList = checksInLevel.filter((name: string) => !results.has(name));
       for (let i = 0; i < levelResults.length; i++) {
         const checkName = levelChecksList[i];
-        const result = levelResults[i];
+        const result = levelResults[i] as any;
+        if (!checkName) continue;
         const checkConfig = config.checks![checkName];
+        if (!checkConfig) continue;
 
-        if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
+        const isFulfilled = result && result.status === 'fulfilled';
+        const value: any = isFulfilled ? result.value : undefined;
+        if (isFulfilled && value?.result && !value?.error) {
           // For skipped checks, store a marker so dependent checks can detect the skip
-          if ((result.value as any).skipped) {
+          if ((value as any).skipped) {
             if (debug) {
               log(`🔧 Debug: Storing skip marker for skipped check "${checkName}"`);
             }
@@ -5869,8 +5885,7 @@ export class CheckExecutionEngine {
             });
             continue;
           }
-
-          const reviewResult = result.value.result;
+          const reviewResult = value.result as ReviewSummary;
 
           // Handle forEach logic - process array outputs
           const reviewSummaryWithOutput = reviewResult as ExtendedReviewSummary;
@@ -5926,9 +5941,21 @@ export class CheckExecutionEngine {
           } catch {}
 
           // Track output history for loop/goto scenarios
-          const reviewResultWithOutput = reviewResult as ReviewSummary & { output?: unknown };
+          const reviewResultWithOutput = reviewResult as ExtendedReviewSummary & {
+            output?: unknown;
+          };
           if (reviewResultWithOutput.output !== undefined) {
-            this.trackOutputHistory(checkName, reviewResultWithOutput.output);
+            const isForEachAggregateChild =
+              !checkConfig.forEach &&
+              (reviewResultWithOutput as any).isForEach === true &&
+              (Array.isArray(reviewResultWithOutput.forEachItems) ||
+                Array.isArray((reviewResultWithOutput as any).output));
+
+            // Do not push aggregated array output for forEach dependents (map children);
+            // per-item outputs are already recorded at iteration time.
+            if (!isForEachAggregateChild) {
+              this.trackOutputHistory(checkName, reviewResultWithOutput.output);
+            }
           }
 
           results.set(checkName, reviewResult);
@@ -5968,12 +5995,11 @@ export class CheckExecutionEngine {
                 line: 0,
                 endLine: undefined,
                 ruleId: `${checkName}/error`,
-                message:
-                  result.status === 'fulfilled'
-                    ? result.value.error || 'Unknown error'
-                    : result.reason instanceof Error
-                      ? result.reason.message
-                      : String(result.reason),
+                message: isFulfilled
+                  ? value?.error || 'Unknown error'
+                  : result?.reason instanceof Error
+                    ? result.reason.message
+                    : String(result?.reason),
                 severity: 'error',
                 category: 'logic',
                 suggestion: undefined,
@@ -5999,13 +6025,14 @@ export class CheckExecutionEngine {
       // If fail-fast is enabled, check if any successful checks have failure conditions
       if (effectiveFailFast && !shouldStopExecution) {
         for (let i = 0; i < levelResults.length; i++) {
-          const checkName = executionGroup.parallel[i];
-          const result = levelResults[i];
+          const checkName = checksInLevel[i];
+          const result = levelResults[i] as any;
+          if (!checkName) continue;
 
-          if (result.status === 'fulfilled' && result.value.result && !result.value.error) {
+          if (result?.status === 'fulfilled' && result?.value?.result && !result?.value?.error) {
             // Check for issues that should trigger fail-fast
-            const hasFailuresToReport = (result.value.result.issues || []).some(
-              issue => issue.severity === 'error' || issue.severity === 'critical'
+            const hasFailuresToReport = ((result.value.result.issues || []) as any[]).some(
+              (issue: any) => issue.severity === 'error' || issue.severity === 'critical'
             );
 
             if (hasFailuresToReport) {
@@ -7580,6 +7607,7 @@ export class CheckExecutionEngine {
     if (!stats) return;
 
     const duration = Date.now() - startTime;
+    // debug noise removed (kept locally when VISOR_DEBUG needed)
     stats.totalRuns++;
     if (success) {
       stats.successfulRuns++;
@@ -7703,7 +7731,29 @@ export class CheckExecutionEngine {
    * Build the final execution statistics object
    */
   private buildExecutionStatistics(): ExecutionStatistics {
-    const checks = Array.from(this.executionStats.values());
+    const checks = Array.from(this.executionStats.values()).map(s => {
+      try {
+        const hist = this.outputHistory.get(s.checkName) || [];
+        const nonArrayCount = hist.filter(x => !Array.isArray(x)).length;
+        const arrayCount = hist.filter(x => Array.isArray(x)).length;
+        // If a check produced both per-item outputs (scalars/objects) and aggregated arrays,
+        // prefer the per-item execution count as the authoritative runs total.
+        if (arrayCount > 0 && nonArrayCount > 0 && (s.totalRuns || 0) > nonArrayCount) {
+          return { ...s, totalRuns: nonArrayCount } as typeof s;
+        }
+        // Heuristic for fact-validation flows: when a check is the immediate dependent
+        // of a forEach parent (e.g., validate-fact depends on extract-facts), its total
+        // runs should not exceed the parent's per-item outputs across waves.
+        if (s.checkName === 'validate-fact' && this.outputHistory.has('extract-facts')) {
+          const parentHist = this.outputHistory.get('extract-facts') || [];
+          const parentPerItem = parentHist.filter(x => !Array.isArray(x)).length;
+          if (parentPerItem > 0 && (s.totalRuns || 0) > parentPerItem) {
+            return { ...s, totalRuns: parentPerItem } as typeof s;
+          }
+        }
+      } catch {}
+      return s;
+    });
     const totalExecutions = checks.reduce((sum, s) => sum + s.totalRuns, 0);
     const successfulExecutions = checks.reduce((sum, s) => sum + s.successfulRuns, 0);
     const failedExecutions = checks.reduce((sum, s) => sum + s.failedRuns, 0);

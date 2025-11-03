@@ -613,7 +613,13 @@ export class VisorTestRunner {
           return { name: _case.name, failed: 1 };
         }
       } catch (err) {
-        console.log(`❌ ERROR ${_case.name}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`❌ ERROR ${_case.name}: ${msg}`);
+        try {
+          if (process.env.VISOR_DEBUG === 'true' && err && (err as any).stack) {
+            console.error(`[stack] case ${_case.name}: ${(err as any).stack}`);
+          }
+        } catch {}
         caseResults.push({
           name: _case.name,
           passed: false,
@@ -837,7 +843,13 @@ export class VisorTestRunner {
       } catch (err) {
         failures += 1;
         const name = `${flowName}#${stage.name || `stage-${i + 1}`}`;
-        console.log(`❌ ERROR ${name}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`❌ ERROR ${name}: ${msg}`);
+        try {
+          if (process.env.VISOR_DEBUG === 'true' && err && (err as any).stack) {
+            console.error(`[stack] ${name}: ${(err as any).stack}`);
+          }
+        } catch {}
         stagesSummary.push({ name, errors: [err instanceof Error ? err.message : String(err)] });
         if (bail) break;
       }

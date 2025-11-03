@@ -1369,8 +1369,8 @@ ${'='.repeat(60)}
             ? (this.config.promptType.trim() as any)
             : explicitPromptType
               ? (explicitPromptType as any)
-              : schema
-                ? ('code-review' as any)
+              : schema === 'code-review'
+                ? ('code-review-template' as any)
                 : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,

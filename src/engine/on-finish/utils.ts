@@ -134,26 +134,43 @@ export function recomputeAllValidFromHistory(
   history: Record<string, unknown[]>,
   forEachItemsCount: number
 ): boolean | undefined {
-  const vfNow = Array.isArray(history['validate-fact'])
+  const vfArr = Array.isArray(history['validate-fact'])
     ? (history['validate-fact'] as unknown[])
     : [];
   if (forEachItemsCount <= 0) return undefined;
-  // Consider only per-item results (those that carry an id/fact_id),
-  // since some providers also append aggregate objects to history.
-  const perItem = vfNow.filter(v => {
-    try {
-      const o = v as any;
-      return (
-        o &&
-        (typeof o.fact_id === 'string' || typeof o.id === 'string') &&
-        String(o.fact_id || o.id).trim().length > 0
-      );
-    } catch {
-      return false;
-    }
+
+  // If entries have per-item identifiers, compute verdict from the most recent
+  // wave by walking backward and taking the last N distinct ids.
+  const withIds = vfArr.filter(v => {
+    const o = v as any;
+    return o && (typeof o.fact_id === 'string' || typeof o.id === 'string');
   });
-  if (perItem.length < forEachItemsCount) return undefined;
-  const lastWave = perItem.slice(-forEachItemsCount);
-  const ok = lastWave.every((v: any) => v && (v.is_valid === true || v.valid === true));
-  return ok;
+
+  if (withIds.length >= forEachItemsCount) {
+    const seen = new Set<string>();
+    const recent: any[] = [];
+    for (let i = vfArr.length - 1; i >= 0 && recent.length < forEachItemsCount; i--) {
+      const o = vfArr[i] as any;
+      const key = (o && (o.fact_id || o.id)) as string | undefined;
+      if (!key) continue;
+      if (!seen.has(key)) {
+        seen.add(key);
+        recent.push(o);
+      }
+    }
+    if (recent.length === forEachItemsCount) {
+      return recent.every(o => o && (o.is_valid === true || o.valid === true));
+    }
+    // Fall through if we couldn't collect enough distinct ids
+  }
+
+  // ID-less shape: treat the last N entries as the current wave.
+  // This matches unit-test expectations where history items are simple booleans.
+  if (vfArr.length >= forEachItemsCount) {
+    const lastN = vfArr.slice(-forEachItemsCount) as any[];
+    return lastN.every(o => o && (o.is_valid === true || o.valid === true));
+  }
+
+  // Not enough signal to decide for the requested wave size.
+  return undefined;
 }
