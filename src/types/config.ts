@@ -258,6 +258,8 @@ export interface AIProviderConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
+  /** Enable Edit and Create tools for file modification (disabled by default for security) */
+  allowEdit?: boolean;
 }
 
 /**
