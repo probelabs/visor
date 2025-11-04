@@ -534,14 +534,27 @@ export class CheckExecutionEngine {
       // to naturally support anchor-style chains (e.g., refine → write → validate → test).
       // We intentionally do not evaluate goto_js here to keep this deterministic
       // in routing, but we do honor static goto + goto_event.
+      // Follow static goto chains with configurable hop budget and cycle detection
+      const maxHops = config?.routing?.max_loops ?? 10;
       let hopCount = 0;
-      let nextTarget: string | undefined = (
+      const visited = new Set<string>();
+      let current: string | undefined = (
         cfgChecks[target]?.on_success as OnSuccessConfig | undefined
       )?.goto;
-      while (nextTarget && hopCount < 5) {
-        const nextOnSuccess = (cfgChecks[target]?.on_success as OnSuccessConfig | undefined) || {};
+      while (current && hopCount < maxHops) {
+        if (visited.has(current)) {
+          try {
+            logger.warn(
+              `⚠️ forward-run: detected goto cycle at '${current}' after ${hopCount} hop(s); aborting chain`
+            );
+          } catch {}
+
+          break;
+        }
+        visited.add(current);
+        const nextOnSuccess = (cfgChecks[current]?.on_success as OnSuccessConfig | undefined) || {};
         const nextEvent = nextOnSuccess.goto_event || gotoEvent;
-        await this.scheduleForwardRun(nextTarget, {
+        await this.scheduleForwardRun(current, {
           origin: 'on_success',
           gotoEvent: nextEvent,
           config,
@@ -556,7 +569,14 @@ export class CheckExecutionEngine {
         });
         hopCount++;
         // advance chain if there is a further goto from the just-executed step
-        nextTarget = (cfgChecks[nextTarget]?.on_success as OnSuccessConfig | undefined)?.goto;
+        current = (cfgChecks[current]?.on_success as OnSuccessConfig | undefined)?.goto;
+      }
+      if (hopCount >= maxHops && current) {
+        try {
+          logger.warn(
+            `⚠️ forward-run: hop budget exceeded (max_loops=${maxHops}); last unresolved goto='${current}'`
+          );
+        } catch {}
       }
     } finally {
       this.routingEventOverride = prevEventOverride;
