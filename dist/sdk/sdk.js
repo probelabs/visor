@@ -1808,6 +1808,12 @@ ${"=".repeat(60)}
           if (this.config.enableDelegate !== void 0) {
             options.enableDelegate = this.config.enableDelegate;
           }
+          if (this.config.retry) {
+            options.retry = this.config.retry;
+          }
+          if (this.config.fallback) {
+            options.fallback = this.config.fallback;
+          }
           if (this.config.allowEdit !== void 0) {
             options.allowEdit = this.config.allowEdit;
           }
@@ -5170,6 +5176,12 @@ var init_ai_check_provider = __esm({
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
           }
+          if (config.ai.retry !== void 0) {
+            aiConfig.retry = config.ai.retry;
+          }
+          if (config.ai.fallback !== void 0) {
+            aiConfig.fallback = config.ai.fallback;
+          }
         }
         if (config.ai_model !== void 0) {
           aiConfig.model = config.ai_model;
@@ -5390,6 +5402,8 @@ var init_ai_check_provider = __esm({
           "ai.timeout",
           "ai.mcpServers",
           "ai.enableDelegate",
+          "ai.retry",
+          "ai.fallback",
           "ai.allowEdit",
           "ai_model",
           "ai_provider",
@@ -18804,6 +18818,14 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Enable the delegate tool for task distribution to subagents"
             },
+            retry: {
+              $ref: "#/definitions/AIRetryConfig",
+              description: "Retry configuration for this provider"
+            },
+            fallback: {
+              $ref: "#/definitions/AIFallbackConfig",
+              description: "Fallback configuration for provider failures"
+            },
             allowEdit: {
               type: "boolean",
               description: "Enable Edit and Create tools for file modification (disabled by default for security)"
@@ -18843,6 +18865,109 @@ var init_config_schema = __esm({
           required: ["command"],
           additionalProperties: false,
           description: "MCP Server configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIRetryConfig: {
+          type: "object",
+          properties: {
+            maxRetries: {
+              type: "number",
+              description: "Maximum retry attempts (0-50)"
+            },
+            initialDelay: {
+              type: "number",
+              description: "Initial delay in milliseconds (0-60000)"
+            },
+            maxDelay: {
+              type: "number",
+              description: "Maximum delay cap in milliseconds (0-300000)"
+            },
+            backoffFactor: {
+              type: "number",
+              description: "Exponential backoff multiplier (1-10)"
+            },
+            retryableErrors: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Custom error patterns to retry on"
+            }
+          },
+          additionalProperties: false,
+          description: "Retry configuration for AI provider calls",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIFallbackConfig: {
+          type: "object",
+          properties: {
+            strategy: {
+              type: "string",
+              enum: ["same-model", "same-provider", "any", "custom"],
+              description: "Fallback strategy: 'same-model', 'same-provider', 'any', or 'custom'"
+            },
+            providers: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/AIFallbackProviderConfig"
+              },
+              description: "Array of fallback provider configurations"
+            },
+            maxTotalAttempts: {
+              type: "number",
+              description: "Maximum total attempts across all providers"
+            },
+            auto: {
+              type: "boolean",
+              description: "Enable automatic fallback using available environment variables"
+            }
+          },
+          additionalProperties: false,
+          description: "Fallback configuration for AI providers",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIFallbackProviderConfig: {
+          type: "object",
+          properties: {
+            provider: {
+              type: "string",
+              enum: ["google", "anthropic", "openai", "bedrock"],
+              description: "AI provider to use"
+            },
+            model: {
+              type: "string",
+              description: "Model name to use"
+            },
+            apiKey: {
+              type: "string",
+              description: "API key for this provider"
+            },
+            maxRetries: {
+              type: "number",
+              description: "Per-provider retry override"
+            },
+            region: {
+              type: "string",
+              description: "AWS region (for Bedrock)"
+            },
+            accessKeyId: {
+              type: "string",
+              description: "AWS access key ID (for Bedrock)"
+            },
+            secretAccessKey: {
+              type: "string",
+              description: "AWS secret access key (for Bedrock)"
+            }
+          },
+          required: ["provider", "model"],
+          additionalProperties: false,
+          description: "Fallback provider configuration",
           patternProperties: {
             "^x-": {}
           }
