@@ -1,6 +1,6 @@
 import {
   CheckExecutionEngine
-} from "./chunk-CL7LJBWZ.mjs";
+} from "./chunk-AQHCE2HE.mjs";
 import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
@@ -513,6 +513,10 @@ var init_config_schema = __esm({
             enableDelegate: {
               type: "boolean",
               description: "Enable the delegate tool for task distribution to subagents"
+            },
+            allowEdit: {
+              type: "boolean",
+              description: "Enable Edit and Create tools for file modification (disabled by default for security)"
             }
           },
           additionalProperties: false,

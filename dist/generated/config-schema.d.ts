@@ -453,6 +453,10 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Enable the delegate tool for task distribution to subagents";
                 };
+                readonly allowEdit: {
+                    readonly type: "boolean";
+                    readonly description: "Enable Edit and Create tools for file modification (disabled by default for security)";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "AI provider configuration";
