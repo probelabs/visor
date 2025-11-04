@@ -5179,7 +5179,27 @@ export class CheckExecutionEngine {
                 // the last wave across items.
                 const itemOutput = (itemResult as any).output;
                 if (itemOutput !== undefined) {
-                  this.trackOutputHistory(checkName, itemOutput);
+                  // Tag history entry with loop info from parent
+                  let parentLoopIdx = 0;
+                  try {
+                    const ph = (this.outputHistory.get(forEachParentName!) || []) as unknown[];
+                    parentLoopIdx = ph.filter(x => Array.isArray(x)).length;
+                  } catch {}
+                  let histEntry: unknown;
+                  if (itemOutput && typeof itemOutput === 'object') {
+                    histEntry = {
+                      ...(itemOutput as any),
+                      loop_idx: parentLoopIdx,
+                      last_loop: true,
+                    };
+                  } else {
+                    histEntry = {
+                      value: itemOutput,
+                      loop_idx: parentLoopIdx,
+                      last_loop: true,
+                    } as any;
+                  }
+                  this.trackOutputHistory(checkName, histEntry);
                 }
 
                 // General branch-first scheduling for this item: execute all descendants (from current node only) when ready
@@ -6153,6 +6173,18 @@ export class CheckExecutionEngine {
                   ? ((agg as any).output as unknown[])
                   : [];
               this.trackOutputHistory(checkName, arrForHist);
+              // Also push a loop marker with ids and last_loop flag
+              const ids: string[] = [];
+              for (let i = 0; i < arrForHist.length; i++) {
+                const it = arrForHist[i] as any;
+                const id = it && (it.id != null ? String(it.id) : String(i + 1));
+                ids.push(id);
+              }
+              this.trackOutputHistory(checkName, {
+                loop_idx: loopIdx,
+                last_loop: true,
+                items: ids,
+              });
             } catch {}
             // Commit aggregate at root scope
             this.commitJournal(checkName, agg, prInfo.eventType, []);
