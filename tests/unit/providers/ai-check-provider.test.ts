@@ -253,6 +253,8 @@ describe('AICheckProvider', () => {
       expect(keys).toContain('focus');
       expect(keys).toContain('ai.provider');
       expect(keys).toContain('ai.model');
+      expect(keys).toContain('ai.enableDelegate');
+      expect(keys).toContain('ai.allowEdit');
     });
   });
 

@@ -865,6 +865,7 @@ export class AICheckProvider extends CheckProvider {
       'ai.timeout',
       'ai.mcpServers',
       'ai.enableDelegate',
+      'ai.allowEdit',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',
