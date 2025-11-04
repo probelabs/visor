@@ -43,6 +43,10 @@ export interface AIReviewConfig {
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
   // Enable delegate tool for task distribution to subagents
   enableDelegate?: boolean;
+  // Retry configuration for AI provider calls
+  retry?: import('./types/config').AIRetryConfig;
+  // Fallback configuration for provider failures
+  fallback?: import('./types/config').AIFallbackConfig;
   // Enable Edit and Create tools for file modification
   allowEdit?: boolean;
 }
@@ -1386,6 +1390,16 @@ ${'='.repeat(60)}
       // Enable delegate tool if configured
       if (this.config.enableDelegate !== undefined) {
         (options as any).enableDelegate = this.config.enableDelegate;
+      }
+
+      // Pass retry configuration to ProbeAgent
+      if (this.config.retry) {
+        (options as any).retry = this.config.retry;
+      }
+
+      // Pass fallback configuration to ProbeAgent
+      if (this.config.fallback) {
+        (options as any).fallback = this.config.fallback;
       }
 
       // Enable Edit and Create tools if configured

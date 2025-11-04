@@ -564,6 +564,12 @@ export class AICheckProvider extends CheckProvider {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
       }
+      if (config.ai.retry !== undefined) {
+        aiConfig.retry = config.ai.retry as import('../types/config').AIRetryConfig;
+      }
+      if (config.ai.fallback !== undefined) {
+        aiConfig.fallback = config.ai.fallback as import('../types/config').AIFallbackConfig;
+      }
     }
 
     // Check-level AI model and provider (top-level properties)
@@ -865,6 +871,8 @@ export class AICheckProvider extends CheckProvider {
       'ai.timeout',
       'ai.mcpServers',
       'ai.enableDelegate',
+      'ai.retry',
+      'ai.fallback',
       'ai.allowEdit',
       'ai_model',
       'ai_provider',

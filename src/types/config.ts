@@ -237,6 +237,56 @@ export interface EnvConfig {
 }
 
 /**
+ * Retry configuration for AI provider calls
+ */
+export interface AIRetryConfig {
+  /** Maximum retry attempts (0-50) */
+  maxRetries?: number;
+  /** Initial delay in milliseconds (0-60000) */
+  initialDelay?: number;
+  /** Maximum delay cap in milliseconds (0-300000) */
+  maxDelay?: number;
+  /** Exponential backoff multiplier (1-10) */
+  backoffFactor?: number;
+  /** Custom error patterns to retry on */
+  retryableErrors?: string[];
+}
+
+/**
+ * Fallback provider configuration
+ */
+export interface AIFallbackProviderConfig {
+  /** AI provider to use */
+  provider: 'google' | 'anthropic' | 'openai' | 'bedrock';
+  /** Model name to use */
+  model: string;
+  /** API key for this provider */
+  apiKey?: string;
+  /** Per-provider retry override */
+  maxRetries?: number;
+  /** AWS region (for Bedrock) */
+  region?: string;
+  /** AWS access key ID (for Bedrock) */
+  accessKeyId?: string;
+  /** AWS secret access key (for Bedrock) */
+  secretAccessKey?: string;
+}
+
+/**
+ * Fallback configuration for AI providers
+ */
+export interface AIFallbackConfig {
+  /** Fallback strategy: 'same-model', 'same-provider', 'any', or 'custom' */
+  strategy?: 'same-model' | 'same-provider' | 'any' | 'custom';
+  /** Array of fallback provider configurations */
+  providers?: AIFallbackProviderConfig[];
+  /** Maximum total attempts across all providers */
+  maxTotalAttempts?: number;
+  /** Enable automatic fallback using available environment variables */
+  auto?: boolean;
+}
+
+/**
  * AI provider configuration
  */
 export interface AIProviderConfig {
@@ -258,6 +308,10 @@ export interface AIProviderConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
+  /** Retry configuration for this provider */
+  retry?: AIRetryConfig;
+  /** Fallback configuration for provider failures */
+  fallback?: AIFallbackConfig;
   /** Enable Edit and Create tools for file modification (disabled by default for security) */
   allowEdit?: boolean;
 }
