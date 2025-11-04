@@ -312,6 +312,8 @@ export interface AIProviderConfig {
   retry?: AIRetryConfig;
   /** Fallback configuration for provider failures */
   fallback?: AIFallbackConfig;
+  /** Enable Edit and Create tools for file modification (disabled by default for security) */
+  allowEdit?: boolean;
 }
 
 /**

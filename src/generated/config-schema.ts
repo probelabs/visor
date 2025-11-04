@@ -516,6 +516,11 @@ export const configSchema = {
           $ref: '#/definitions/AIFallbackConfig',
           description: 'Fallback configuration for provider failures',
         },
+        allowEdit: {
+          type: 'boolean',
+          description:
+            'Enable Edit and Create tools for file modification (disabled by default for security)',
+        },
       },
       additionalProperties: false,
       description: 'AI provider configuration',

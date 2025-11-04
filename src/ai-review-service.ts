@@ -47,6 +47,8 @@ export interface AIReviewConfig {
   retry?: import('./types/config').AIRetryConfig;
   // Fallback configuration for provider failures
   fallback?: import('./types/config').AIFallbackConfig;
+  // Enable Edit and Create tools for file modification
+  allowEdit?: boolean;
 }
 
 export interface AIDebugInfo {
@@ -1398,6 +1400,11 @@ ${'='.repeat(60)}
       // Pass fallback configuration to ProbeAgent
       if (this.config.fallback) {
         (options as any).fallback = this.config.fallback;
+      }
+
+      // Enable Edit and Create tools if configured
+      if (this.config.allowEdit !== undefined) {
+        (options as any).allowEdit = this.config.allowEdit;
       }
 
       // Add provider-specific options if configured
