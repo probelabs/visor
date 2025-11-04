@@ -557,6 +557,9 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.enableDelegate !== undefined) {
         aiConfig.enableDelegate = config.ai.enableDelegate as boolean;
       }
+      if (config.ai.allowEdit !== undefined) {
+        aiConfig.allowEdit = config.ai.allowEdit as boolean;
+      }
       if (config.ai.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;

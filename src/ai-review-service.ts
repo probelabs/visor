@@ -43,6 +43,8 @@ export interface AIReviewConfig {
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
   // Enable delegate tool for task distribution to subagents
   enableDelegate?: boolean;
+  // Enable Edit and Create tools for file modification
+  allowEdit?: boolean;
 }
 
 export interface AIDebugInfo {
@@ -1384,6 +1386,11 @@ ${'='.repeat(60)}
       // Enable delegate tool if configured
       if (this.config.enableDelegate !== undefined) {
         (options as any).enableDelegate = this.config.enableDelegate;
+      }
+
+      // Enable Edit and Create tools if configured
+      if (this.config.allowEdit !== undefined) {
+        (options as any).allowEdit = this.config.allowEdit;
       }
 
       // Add provider-specific options if configured
