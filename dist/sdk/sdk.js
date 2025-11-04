@@ -1808,6 +1808,9 @@ ${"=".repeat(60)}
           if (this.config.enableDelegate !== void 0) {
             options.enableDelegate = this.config.enableDelegate;
           }
+          if (this.config.allowEdit !== void 0) {
+            options.allowEdit = this.config.allowEdit;
+          }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
             if (providerOverride) {
@@ -5161,6 +5164,9 @@ var init_ai_check_provider = __esm({
           if (config.ai.enableDelegate !== void 0) {
             aiConfig.enableDelegate = config.ai.enableDelegate;
           }
+          if (config.ai.allowEdit !== void 0) {
+            aiConfig.allowEdit = config.ai.allowEdit;
+          }
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
           }
@@ -5384,6 +5390,7 @@ var init_ai_check_provider = __esm({
           "ai.timeout",
           "ai.mcpServers",
           "ai.enableDelegate",
+          "ai.allowEdit",
           "ai_model",
           "ai_provider",
           "ai_mcp_servers",
@@ -18796,6 +18803,10 @@ var init_config_schema = __esm({
             enableDelegate: {
               type: "boolean",
               description: "Enable the delegate tool for task distribution to subagents"
+            },
+            allowEdit: {
+              type: "boolean",
+              description: "Enable Edit and Create tools for file modification (disabled by default for security)"
             }
           },
           additionalProperties: false,
