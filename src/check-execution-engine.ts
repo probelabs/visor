@@ -1775,6 +1775,60 @@ export class CheckExecutionEngine {
 
             logger.info(`  ✓ Routed to: ${gotoTarget}`);
             logger.info(`  Event override: ${onFinish.goto_event || '(none)'}`);
+
+            // If we routed back to the forEach parent, proactively forward-run
+            // its immediate dependents so the next wave executes in one pass.
+            // This mirrors the grouped planner behavior and prevents a second
+            // pass from missing per-item validations in environments where only
+            // the parent would have been scheduled.
+            try {
+              if (gotoTarget === checkName && forEachItems.length > 0) {
+                const childIds: string[] = [];
+                try {
+                  for (const [id, deps] of dependencyGraph.nodes.entries()) {
+                    if (Array.isArray(deps) && deps.includes(checkName)) childIds.push(id);
+                  }
+                } catch {}
+                for (const cid of childIds) {
+                  const cCfg = config.checks?.[cid];
+                  if (!cCfg) continue;
+                  const cMode = cCfg.fanout === 'map' ? 'map' : cCfg.reduce ? 'reduce' : cCfg.fanout || 'default';
+                  if (cMode === 'map') {
+                    for (let i = 0; i < forEachItems.length; i++) {
+                      const itemScope: ScopePath = [{ check: checkName, index: i }];
+                      await this.scheduleForwardRun(cid, {
+                        origin: 'on_finish',
+                        gotoEvent: onFinish.goto_event,
+                        config,
+                        dependencyGraph,
+                        prInfo,
+                        resultsMap: results,
+                        debug,
+                        foreachScope: itemScope,
+                        sourceCheckName: checkName,
+                        sourceCheckConfig: checkConfig,
+                      });
+                    }
+                  } else {
+                    await this.scheduleForwardRun(cid, {
+                      origin: 'on_finish',
+                      gotoEvent: onFinish.goto_event,
+                      config,
+                      dependencyGraph,
+                      prInfo,
+                      resultsMap: results,
+                      debug,
+                      foreachScope: [],
+                      sourceCheckName: checkName,
+                      sourceCheckConfig: checkConfig,
+                    });
+                  }
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              logger.debug(`  ⚠ on_finish: dependent forward-run error: ${msg}`);
+            }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             logger.error(

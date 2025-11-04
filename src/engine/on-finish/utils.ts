@@ -24,6 +24,28 @@ export function buildProjectionFrom(
   return { outputsForContext, outputsHistoryForContext };
 }
 
+export interface OnFinishContext {
+  step: { id: string; tags: string[]; group?: string };
+  attempt: number;
+  loop: number;
+  outputs: Record<string, unknown>;
+  outputs_history: Record<string, unknown[]>;
+  outputs_raw: Record<string, unknown>;
+  forEach: unknown;
+  memory: {
+    get: (key: string, ns?: string) => unknown;
+    has: (key: string, ns?: string) => boolean;
+    getAll: (ns?: string) => Record<string, unknown>;
+    set: (key: string, value: unknown, ns?: string) => void;
+    clear: (ns?: string) => void;
+    increment: (key: string, amount?: number, ns?: string) => number;
+  };
+  pr: { number: number; title?: string; author?: string; branch?: string; base?: string };
+  files?: unknown;
+  env: Record<string, string | undefined>;
+  event: { name: string };
+}
+
 export function composeOnFinishContext(
   _memoryConfig: VisorConfig['memory'] | undefined,
   checkName: string,
@@ -32,7 +54,7 @@ export function composeOnFinishContext(
   outputsHistoryForContext: Record<string, unknown[]>,
   forEachStats: any,
   prInfo: PRInfo
-) {
+): OnFinishContext {
   // No MemoryStore in on_finish context — outputs and outputs_history are sufficient
   const outputs_raw: Record<string, unknown> = {};
   for (const [name, val] of Object.entries(outputsForContext))
