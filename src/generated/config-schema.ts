@@ -508,7 +508,7 @@ export const configSchema = {
           type: 'boolean',
           description: 'Enable the delegate tool for task distribution to subagents',
         },
-        allow_edit: {
+        allowEdit: {
           type: 'boolean',
           description:
             'Enable Edit and Create tools for file modification (disabled by default for security)',

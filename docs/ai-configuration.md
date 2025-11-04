@@ -161,7 +161,7 @@ output:
 
 ### Advanced AI Configuration
 
-#### File Editing (`allow_edit`)
+#### File Editing (`allowEdit`)
 
 Enable Edit and Create tools to allow AI agents to modify files directly. This feature is disabled by default for security and requires explicit opt-in.
 
@@ -173,14 +173,14 @@ steps:
     ai:
       provider: anthropic
       model: claude-3-opus
-      allow_edit: true  # Enable Edit and Create tools
+      allowEdit: true  # Enable Edit and Create tools
 
   read-only-review:
     type: ai
     prompt: "Review code for security issues"
     ai:
       provider: google
-      allow_edit: false  # Disable editing (default)
+      allowEdit: false  # Disable editing (default)
 ```
 
 **When to enable editing:**

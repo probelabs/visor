@@ -259,7 +259,7 @@ export interface AIProviderConfig {
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
   /** Enable Edit and Create tools for file modification (disabled by default for security) */
-  allow_edit?: boolean;
+  allowEdit?: boolean;
 }
 
 /**
