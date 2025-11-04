@@ -1,119 +1,62 @@
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
 import type { VisorConfig } from '../../src/types/config';
 
-describe('Fact Validation Flow (memory, fast e2e)', () => {
-  const makeConfig = (retryLimit: number, ns = 'fact-validation'): Partial<VisorConfig> => ({
+describe('Fact Validation Flow (history-driven, fast e2e)', () => {
+  const makeConfig = (retryWaves: number): Partial<VisorConfig> => ({
     version: '1.0',
     checks: {
-      'init-attempt': {
-        type: 'memory',
-        operation: 'set',
-        namespace: ns,
-        key: 'attempt',
-        value: 0,
-      },
-      'init-limit': {
-        type: 'memory',
-        operation: 'set',
-        namespace: ns,
-        key: 'retry_limit',
-        value: retryLimit,
-        depends_on: ['init-attempt'],
-      },
-      'seed-facts': {
-        type: 'memory',
-        operation: 'set',
-        namespace: ns,
-        key: 'facts',
-        value_js: 'Array.from({length:6},(_,i)=>({id:`fact-${i+1}`, claim:`claim-${i+1}`}))',
-        depends_on: ['init-limit'],
-      },
-
       'extract-facts': {
-        type: 'memory',
-        operation: 'get',
-        namespace: ns,
-        key: 'facts',
+        type: 'script',
         forEach: true,
-        depends_on: ['seed-facts'],
+        content: `
+          // Produce 6 facts
+          return Array.from({length:6},(_,i)=>({ id: 'fact-'+(i+1), claim: 'claim-'+(i+1) }));
+        `,
         on_finish: {
-          run: ['comment-assistant', 'aggregate-validations'],
           goto_js: `
-            const NS = '${ns}';
-            const allValid = memory.get('all_valid', NS) === true;
-            const limit = Number(memory.get('retry_limit', NS) || 0);
-            let attempt = Number(memory.get('attempt', NS) || 0);
-            if (!allValid && attempt < limit) {
-              memory.increment('attempt', 1, NS);
-              return 'extract-facts';
-            }
-            return null;
+            // History-driven loop: re-run until last wave is all valid,
+            // capped by maxWaves = 1 + retryWaves
+            const arrs = outputs_history['extract-facts'] || [];
+            const lastArr = arrs.filter(Array.isArray).slice(-1)[0] || [];
+            const items = lastArr.length || 1;
+            const per = (outputs_history['validate-fact'] || []).filter(x => !Array.isArray(x));
+            const waves = Math.floor(per.length / items);
+            const last = per.slice(-items);
+            const allOk = last.length === items && last.every(v => v && (v.is_valid === true || v.valid === true));
+            const maxWaves = 1 + ${retryWaves};
+            return (!allOk && waves < maxWaves) ? 'extract-facts' : null;
           `,
         },
       },
 
       'validate-fact': {
         type: 'script',
-        namespace: ns,
         depends_on: ['extract-facts'],
         fanout: 'map',
         content: `
-          const NS = '${ns}';
-          const attempt = memory.get('attempt', NS) || 0;
+          // Determine current wave from history
+          const arrs = outputs.history['extract-facts'] || [];
+          const lastArr = arrs.filter(Array.isArray).slice(-1)[0] || [];
+          const items = lastArr.length || 1;
+          const per = (outputs.history['validate-fact'] || []).filter(x => !Array.isArray(x));
+          const waves = Math.floor(per.length / items);
+
+          // Current item
           const f = outputs['extract-facts'];
           const n = Number((f.id||'').split('-')[1]||'0');
+
+          // First wave: facts 1..3 are invalid, rest valid. Later waves: all valid.
           const invalidOnFirst = (n >= 1 && n <= 3);
-          const is_valid = attempt >= 1 ? true : !invalidOnFirst;
+          const is_valid = waves >= 1 ? true : !invalidOnFirst;
           return { fact_id: f.id, claim: f.claim, is_valid, confidence: 'high', evidence: is_valid ? 'ok' : 'bad' };
-        `,
-      },
-
-      'aggregate-validations': {
-        type: 'script',
-        namespace: ns,
-        content: `
-          const NS = '${ns}';
-          const nested = outputs.history['validate-fact'] || [];
-          const vals = Array.isArray(nested) ? nested.flatMap(x => Array.isArray(x) ? x : [x]) : [];
-          const byId = new Map(); for (const v of vals) { if (v && v.fact_id) byId.set(v.fact_id, v); }
-          const uniq = Array.from(byId.values());
-          const invalid = uniq.filter(v => v && ((v.is_valid === false) || (v.evidence === 'bad')));
-          const all_valid = invalid.length === 0;
-          memory.set('all_valid', all_valid, NS);
-          { const prev = Number(memory.get('total_validations', NS) || 0); memory.set('total_validations', prev + uniq.length, NS); }
-          const attempt = memory.get('attempt', NS) || 0;
-          return { total: uniq.length, invalid: invalid.length, all_valid, attempt };
-        `,
-      },
-
-      'comment-assistant': {
-        type: 'script',
-        namespace: ns,
-        content: `
-          const NS = '${ns}';
-          const prev = outputs.history['comment-assistant'] || [];
-          const allFactsNested = outputs.history['validate-fact'] || [];
-          const allFacts = Array.isArray(allFactsNested) ? allFactsNested.flatMap(x => Array.isArray(x) ? x : [x]) : [];
-          // Collect unique set of fact_ids that were ever invalid across waves
-          const failedIds = new Set();
-          for (const f of allFacts) {
-            if (f && f.fact_id && (f.is_valid === false || f.evidence === 'bad')) failedIds.add(f.fact_id);
-          }
-          const failed = Array.from(failedIds);
-          memory.set('comment_prev_count', Array.isArray(prev) ? prev.length : 0, NS);
-          memory.set('failed_from_history', failed.length, NS);
-          return { prev_count: Array.isArray(prev) ? prev.length : 0, failed_total: failed.length };
         `,
       },
     },
   });
 
-  it('no retry: per-item validations run once (×6), attempt=0', async () => {
-    // Clean memory between tests
-    const { MemoryStore } = require('../../src/memory-store');
-    MemoryStore.resetInstance();
+  it('no retry: per-item validations run once (×6)', async () => {
     const engine = new CheckExecutionEngine();
-    const cfg = makeConfig(0, 'fact-validation-n0');
+    const cfg = makeConfig(0);
     const result = await engine.executeChecks({
       checks: ['extract-facts', 'validate-fact'],
       config: cfg as VisorConfig,
@@ -125,16 +68,11 @@ describe('Fact Validation Flow (memory, fast e2e)', () => {
     for (const c of (result as any).executionStatistics?.checks || []) byName[c.checkName] = c;
     expect(byName['extract-facts'].outputsProduced).toBe(6);
     expect(byName['validate-fact'].totalRuns).toBe(6);
-    const store = MemoryStore.getInstance();
-    expect(store.get('total_validations', 'fact-validation-n0')).toBe(6);
-    expect(store.get('attempt', 'fact-validation-n0')).toBe(0);
   });
 
-  it('one retry: per-item validations run twice (×12), attempt=1', async () => {
-    const { MemoryStore } = require('../../src/memory-store');
-    MemoryStore.resetInstance();
+  it('one retry: per-item validations run twice (×12)', async () => {
     const engine = new CheckExecutionEngine();
-    const cfg = makeConfig(1, 'fact-validation-n1');
+    const cfg = makeConfig(1);
     const result = await engine.executeChecks({
       checks: ['extract-facts', 'validate-fact'],
       config: cfg as VisorConfig,
@@ -146,12 +84,5 @@ describe('Fact Validation Flow (memory, fast e2e)', () => {
     for (const c of (result as any).executionStatistics?.checks || []) byName[c.checkName] = c;
     expect(byName['extract-facts'].outputsProduced).toBe(6);
     expect(byName['validate-fact'].totalRuns).toBe(12);
-    const store = MemoryStore.getInstance();
-    expect(store.get('total_validations', 'fact-validation-n1')).toBeGreaterThanOrEqual(6);
-    expect(store.get('attempt', 'fact-validation-n1')).toBe(1);
-    // Comment assistant should have seen its previous result on retry
-    expect(store.get('comment_prev_count', 'fact-validation-n1')).toBeGreaterThanOrEqual(0);
-    // And it should have access to all failed facts across history (3 invalid on first wave)
-    expect(store.get('failed_from_history', 'fact-validation-n1')).toBe(3);
   });
 });

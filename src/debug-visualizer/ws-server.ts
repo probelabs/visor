@@ -50,25 +50,58 @@ export class DebugVisualizerServer {
    * Start the HTTP server
    */
   async start(port: number = 3456): Promise<void> {
-    this.port = port;
+    // Try the requested port first; if it's busy, fall back to an ephemeral port.
+    const maxAttempts = 10;
+    let attempt = 0;
+    let lastError: unknown = null;
 
-    // Create HTTP server to serve UI and API endpoints
-    this.httpServer = http.createServer((req, res) => {
-      this.handleHttpRequest(req, res);
-    });
+    while (attempt < maxAttempts) {
+      const tryPort = attempt === 0 ? port : 0; // 0 → random free port
+      this.port = tryPort || this.port;
 
-    // Start HTTP server
-    await new Promise<void>((resolve, reject) => {
-      this.httpServer!.listen(port, () => {
-        this.isRunning = true;
-        console.log(`[debug-server] Debug Visualizer running at http://localhost:${port}`);
-        resolve();
+      // Create a fresh HTTP server for each attempt
+      this.httpServer = http.createServer((req, res) => {
+        this.handleHttpRequest(req, res);
       });
 
-      this.httpServer!.on('error', error => {
-        reject(error);
+      const success = await new Promise<boolean>(resolve => {
+        const onListening = () => {
+          try {
+            const addr = this.httpServer!.address();
+            if (addr && typeof addr !== 'string') this.port = addr.port;
+          } catch {}
+          this.isRunning = true;
+          console.log(`[debug-server] Debug Visualizer running at http://localhost:${this.port}`);
+          resolve(true);
+        };
+        const onError = (error: any) => {
+          lastError = error;
+          // Retry only on EADDRINUSE; otherwise stop trying
+          if (error && (error.code === 'EADDRINUSE' || error.code === 'EACCES')) {
+            console.warn(
+              `❌ Error: ${error.code} on port ${tryPort}. Retrying with a free port...`
+            );
+            try {
+              this.httpServer?.removeListener('listening', onListening);
+              this.httpServer?.removeListener('error', onError);
+              this.httpServer?.close();
+            } catch {}
+            resolve(false);
+            return;
+          }
+          resolve(false);
+        };
+        this.httpServer!.once('listening', onListening);
+        this.httpServer!.once('error', onError);
+        this.httpServer!.listen(tryPort);
       });
-    });
+
+      if (success) return;
+      attempt++;
+    }
+
+    // All attempts failed
+    throw lastError instanceof Error ? lastError : new Error('Failed to start debug server');
   }
 
   /**

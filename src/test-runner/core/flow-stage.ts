@@ -197,7 +197,7 @@ export class FlowStage {
       };
 
       const wrapper = new TestExecutionWrapper(this.engine);
-      const { res } = await wrapper.execute(
+      const { res, outHistory } = await wrapper.execute(
         prInfo,
         checksToRun,
         this.cfg,
@@ -214,11 +214,12 @@ export class FlowStage {
         const start = promptBase[k] || 0;
         stagePrompts[k] = (arr as string[]).slice(start);
       }
-      const outSnap = this.engine.getOutputHistorySnapshot();
+      // Use the snapshot captured immediately after the grouped run.
+      // The engine resets outputHistory at stage start, so deltas vs. histBase
+      // are not meaningful; stageHist is exactly the run snapshot.
       const stageHist: Record<string, unknown[]> = {};
-      for (const [k, arr] of Object.entries(outSnap)) {
-        const start = histBase[k] || 0;
-        stageHist[k] = (arr as unknown[]).slice(start);
+      for (const [k, arr] of Object.entries(outHistory || {})) {
+        stageHist[k] = Array.isArray(arr) ? (arr as unknown[]) : [];
       }
       try {
         if (process.env.VISOR_DEBUG === 'true') {

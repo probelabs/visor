@@ -3,6 +3,7 @@ import type { PRInfo } from '../../pr-analyzer';
 import type { ReviewSummary } from '../../reviewer';
 import type { VisorConfig, CheckConfig, OnFinishConfig } from '../../types/config';
 import { buildSandboxEnv } from '../../utils/env-exposure';
+import { MemoryStore } from '../../memory-store';
 
 export function buildProjectionFrom(
   results: Map<string, ReviewSummary>,
@@ -40,6 +41,37 @@ export function composeOnFinishContext(
     string,
     unknown
   >;
+  // Memory helpers backed by MemoryStore, but exposed synchronously for
+  // sandboxed goto_js/on_success.run_js compatibility.
+  const memoryStore = MemoryStore.getInstance();
+  const memoryHelpers = {
+    get: (key: string, ns?: string) => memoryStore.get(key, ns),
+    has: (key: string, ns?: string) => memoryStore.has(key, ns),
+    getAll: (ns?: string) => memoryStore.getAll(ns),
+    set: (key: string, value: unknown, ns?: string) => {
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      const data: Map<string, Map<string, unknown>> = (memoryStore as any)['data'];
+      if (!data.has(nsName)) data.set(nsName, new Map());
+      data.get(nsName)!.set(key, value);
+    },
+    clear: (ns?: string) => {
+      const data: Map<string, Map<string, unknown>> = (memoryStore as any)['data'];
+      if (ns) data.delete(ns);
+      else data.clear();
+    },
+    increment: (key: string, amount = 1, ns?: string) => {
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      const data: Map<string, Map<string, unknown>> = (memoryStore as any)['data'];
+      if (!data.has(nsName)) data.set(nsName, new Map());
+      const nsMap = data.get(nsName)!;
+      const current = nsMap.get(key);
+      const numCurrent = typeof current === 'number' ? current : 0;
+      const newValue = numCurrent + amount;
+      nsMap.set(key, newValue);
+      return newValue;
+    },
+  };
+
   return {
     step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
     attempt: 1,
@@ -48,6 +80,7 @@ export function composeOnFinishContext(
     outputs_history: outputsHistoryForContext,
     outputs_raw,
     forEach: forEachStats,
+    memory: memoryHelpers,
     pr: {
       number: prInfo.number,
       title: prInfo.title,
@@ -111,6 +144,12 @@ export function recomputeAllValidFromHistory(
     ? (history['validate-fact'] as unknown[])
     : [];
   if (forEachItemsCount <= 0) return undefined;
+  // If we have fewer per-item results than the wave size, the current wave
+  // cannot be considered all-valid yet. Be pessimistic and return false so
+  // on_finish can trigger another correction wave.
+  if (vfArr.filter(v => !Array.isArray(v)).length < forEachItemsCount) {
+    return false;
+  }
 
   // If entries have per-item identifiers, compute verdict from the most recent
   // wave by walking backward and taking the last N distinct ids.
@@ -145,5 +184,5 @@ export function recomputeAllValidFromHistory(
   }
 
   // Not enough signal to decide for the requested wave size.
-  return undefined;
+  return false;
 }

@@ -178,6 +178,16 @@ export class HumanInputCheckProvider extends CheckProvider {
     const timeout = config.timeout ? config.timeout * 1000 : undefined; // Convert to ms
     const defaultValue = config.default as string | undefined;
 
+    // In test/CI modes, never block for input. Use default or empty string.
+    const testMode = String(process.env.VISOR_TEST_MODE || '').toLowerCase() === 'true';
+    const ciMode =
+      String(process.env.CI || '').toLowerCase() === 'true' ||
+      String(process.env.GITHUB_ACTIONS || '').toLowerCase() === 'true';
+    if (testMode || ciMode) {
+      const val = (config.default as string | undefined) || '';
+      return val;
+    }
+
     // Get cliMessage from context (new way) or static property (backward compat)
     const cliMessage = context?.cliMessage ?? HumanInputCheckProvider.cliMessage;
 

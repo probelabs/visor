@@ -192,6 +192,8 @@ export class CheckExecutionEngine {
   // Dedup forward-run targets within a single grouped run (stage/event).
   // Keyed by `${event}:${target}`.
   private forwardRunGuards: Set<string> = new Set();
+  // Guard dependents scheduled via forward-run to avoid races with level tasks
+  private forwardDependentsScheduled: Set<string> = new Set();
   // Track per-grouped-run scheduling of specific steps we want to allow only once.
   // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
   private oncePerRunScheduleGuards: Set<string> = new Set();
@@ -254,7 +256,14 @@ export class CheckExecutionEngine {
       this.forEachWaveCounts.clear();
     } catch {}
     try {
+      // Fully reset stage-scoped state so flows don't leak across stages.
       this['executionStats'].clear();
+      this.outputHistory.clear();
+      this.postOnFinishGuards.clear();
+      this.forwardDependentsScheduled.clear();
+      this.routingEventOverride = undefined;
+      // Start a fresh journal for snapshot-based dependency views
+      this.journal = new (require('./snapshot-store').ExecutionJournal)();
     } catch {}
   }
 
@@ -467,22 +476,10 @@ export class CheckExecutionEngine {
       });
     };
 
-    // For on_finish-origin loops (e.g., fact-validation waves):
-    // - If routing back to the same forEach parent (target === sourceCheckName and source is forEach),
-    //   re-run ONLY the target (its dependents are executed per-item by the parent's logic).
-    // - Otherwise (routing to a non-parent target like 'issue-assistant'), run full forward chain
-    //   so that the target's dependents (e.g., apply-issue-labels) execute as expected.
-    if (origin === 'on_finish') {
-      const sourceIsForEach = !!sourceCheckConfig?.forEach;
-      const routingToParent = sourceIsForEach && target === sourceCheckName;
-      const scopeForRun: ScopePath = foreachScope && foreachScope.length > 0 ? foreachScope : [];
-      if (routingToParent) {
-        await runTargetOnce(scopeForRun, /*guard*/ false);
-        this.routingEventOverride = prevEventOverride;
-        return;
-      }
-      // else: fall through to normal forward-run (target + dependents)
-    }
+    // Decide whether to dedupe target in this grouped run.
+    // For on_finish correction waves we allow re-execution of the target,
+    // so do not guard. For other origins, dedupe within the same grouped run.
+    const guardTargetOnce = origin !== 'on_finish';
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
     try {
@@ -498,9 +495,18 @@ export class CheckExecutionEngine {
           : [];
 
       const runChainOnce = async (scopeForRun: ScopePath) => {
-        await runTargetOnce(scopeForRun, /*guard*/ true);
+        await runTargetOnce(scopeForRun, /*guard*/ guardTargetOnce);
+        // If the target is a forEach parent, its dependents are executed per-item
+        // inside executeCheckInline. Avoid scheduling them again here to prevent
+        // an extra aggregated run (e.g., validate-fact ×1 in addition to per-item runs).
+        const tcfgNow = cfgChecks[target];
+        const targetIsForEachParent = !!tcfgNow?.forEach;
+        if (targetIsForEachParent) return;
         const dependentsOnly = order.filter(n => n !== target);
         for (const stepId of dependentsOnly) {
+          try {
+            this.forwardDependentsScheduled.add(stepId);
+          } catch {}
           await this.runNamedCheck(stepId, scopeForRun, {
             origin,
             config,
@@ -780,18 +786,56 @@ export class CheckExecutionEngine {
       return { issues: [] };
     }
 
-    // Helper to get all dependencies recursively from config
+    // Respect event triggers when executing dependencies inline.
+    // If the check is not configured to run for the current event, skip executing it here.
+    try {
+      const triggers = Array.isArray(checkConfig.on) ? (checkConfig.on as string[]) : [];
+      if (triggers.length > 0) {
+        const evt = eventOverride || event || this.getCurrentEventType(prInfo);
+        const allowed = triggers.includes(evt as any);
+        if (!allowed) {
+          // Special case: manual-only checks are not auto-executed inline
+          const manualOnly = triggers.length === 1 && triggers[0] === 'manual';
+          if (manualOnly || !allowed) {
+            try {
+              const msg = `🔧 Debug: Skipping inline execution of '${checkId}' for event '${evt}' (triggers=${JSON.stringify(
+                triggers
+              )})`;
+              (config?.output?.pr_comment ? console.error : console.log)(msg);
+            } catch {}
+            return { issues: [] };
+          }
+        }
+      }
+    } catch {}
+
+    // Helper to get all dependencies recursively from config, expanding OR-groups ("a|b")
     const getAllDepsFromConfig = (name: string): string[] => {
       const visited = new Set<string>();
       const acc: string[] = [];
+      const expand = (t: unknown): string[] => {
+        const s = String(t ?? '').trim();
+        if (!s) return [];
+        if (s.includes('|'))
+          return s
+            .split('|')
+            .map(x => x.trim())
+            .filter(Boolean);
+        return [s];
+      };
       const dfs = (n: string) => {
         if (visited.has(n)) return;
         visited.add(n);
         const cfg = config?.checks?.[n];
-        const deps = cfg?.depends_on || [];
-        for (const d of deps) {
-          acc.push(d);
-          dfs(d);
+        const depsRaw = cfg?.depends_on || [];
+        for (const token of depsRaw) {
+          const expanded = expand(token);
+          for (const d of expanded) {
+            // Only accumulate known checks; ignore unknown OR branches
+            if (!config?.checks?.[d]) continue;
+            acc.push(d);
+            dfs(d);
+          }
         }
       };
       dfs(name);
@@ -802,11 +846,23 @@ export class CheckExecutionEngine {
     const allTargetDeps = getAllDepsFromConfig(checkId);
     if (allTargetDeps.length > 0) {
       // Build subgraph mapping for ordered execution
-      const subSet = new Set<string>([...allTargetDeps]);
+      const subSet = new Set<string>(
+        [...allTargetDeps].filter(id => Boolean(config?.checks?.[id]))
+      );
       const subDeps: Record<string, string[]> = {};
       for (const id of subSet) {
         const cfg = config?.checks?.[id];
-        subDeps[id] = (cfg?.depends_on || []).filter(d => subSet.has(d));
+        const raw = cfg?.depends_on || [];
+        const expanded: string[] = [];
+        for (const token of raw) {
+          const parts = String(token ?? '')
+            .split('|')
+            .map(s => s.trim())
+            .filter(Boolean);
+          if (parts.length === 0) continue;
+          for (const p of parts) if (subSet.has(p)) expanded.push(p);
+        }
+        subDeps[id] = expanded;
       }
       const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
       for (const group of subGraph.executionOrder) {
@@ -1453,8 +1509,6 @@ export class CheckExecutionEngine {
           }
         } catch {}
 
-        let lastRunOutput: unknown = undefined;
-
         // Execute on_finish.run (static) first, then evaluate run_js with updated context
         {
           const maxLoops = config?.routing?.max_loops ?? 10;
@@ -1492,15 +1546,7 @@ export class CheckExecutionEngine {
             return resChild as ReviewSummary;
           };
           try {
-            const o = await ofRunChildren(
-              runList,
-              runCheck,
-              config!,
-              onFinishContext,
-              debug || false,
-              log
-            );
-            lastRunOutput = o.lastRunOutput;
+            await ofRunChildren(runList, runCheck, config!, onFinishContext, debug || false, log);
             if (runList.length > 0) logger.info(`✓ on_finish.run: completed for "${checkName}"`);
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1569,9 +1615,6 @@ export class CheckExecutionEngine {
               try {
                 results.set(runCheckId, childRes as ReviewSummary);
               } catch {}
-              try {
-                lastRunOutput = (childRes as any)?.output;
-              } catch {}
               logger.info(`  ✓ Completed on_finish(run_js) check: ${runCheckId}`);
             }
           }
@@ -1579,9 +1622,10 @@ export class CheckExecutionEngine {
 
         // After on_finish.run completes, recompute an authoritative 'all_valid' flag from
         // the latest validate-fact history using outputs/history only (no MemoryStore).
+        let verdictLocal: boolean | undefined = undefined;
         try {
           const snap = this.getOutputHistorySnapshot();
-          const verdictLocal = ofAllValid(snap, forEachItems.length);
+          verdictLocal = ofAllValid(snap, forEachItems.length);
           if (typeof verdictLocal === 'boolean') {
             logger.info(
               `🧮 on_finish: recomputed all_valid=${verdictLocal} from history for "${checkName}"`
@@ -1601,33 +1645,25 @@ export class CheckExecutionEngine {
           log
         ).gotoTarget;
 
+        // No engine fallback. If configuration's goto_js chose null, we do nothing here.
+
         // If goto_js returns null, rely on configuration only (no hardcoded
         // names in engine). Determinism for fact loops is achieved by making
         // the configuration's goto_js evaluate the current wave only.
 
         // Execute routing if we have a target
         if (gotoTarget) {
+          // If we’re routing back to the forEach parent but the latest wave
+          // verdict (computed from outputs_history) is all valid, skip routing.
           try {
-            const mem = MemoryStore.getInstance(this.config?.memory);
-            const allValidMem = mem.get('all_valid', 'fact-validation');
-            const lro =
-              lastRunOutput && typeof lastRunOutput === 'object'
-                ? (lastRunOutput as Record<string, unknown>)
-                : undefined;
-            const allValidOut = lro
-              ? lro['all_valid'] === true || (lro as Record<string, unknown>)['allValid'] === true
-              : false;
-
-            try {
-              logger.info(
-                `  🔒 on_finish.goto guard: gotoTarget=${String(gotoTarget)} allValidMem=${String(allValidMem)} allValidOut=${String(allValidOut)}`
-              );
-            } catch {}
-            if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
-              logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
-              gotoTarget = null as any;
-            }
+            logger.info(
+              `  🔒 on_finish.goto guard: gotoTarget=${String(gotoTarget)} verdictLocal=${String(verdictLocal)}`
+            );
           } catch {}
+          if (gotoTarget === checkName && verdictLocal === true) {
+            logger.info(`✓ on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
+            gotoTarget = null as any;
+          }
 
           // Extra deterministic guard: if the last wave of validate-fact is all valid,
           try {
@@ -3418,14 +3454,8 @@ export class CheckExecutionEngine {
     try {
       this.resetPerRunState();
     } catch {}
-    // Also clear transient verdict memory that should be scoped to a single stage
-    // (e.g., fact-validation verdict). Persisted values across stages can short-circuit
-    // goto_js decisions unexpectedly (e.g., skipping the second issue-assistant pass).
-    try {
-      const mem = MemoryStore.getInstance(this.config?.memory);
-      // Clear only the known transient namespace; avoid wiping unrelated state.
-      await mem.clear('fact-validation');
-    } catch {}
+    // Do not mutate MemoryStore inside the engine; stage scoping is achieved
+    // via output history and per-run guards only.
     // Use the existing dependency-aware execution logic
     const reviewSummary = await this.executeDependencyAwareChecks(
       prInfo,
@@ -4187,6 +4217,8 @@ export class CheckExecutionEngine {
 
     // Execute checks level by level
     const results = new Map<string, ReviewSummary>();
+    // Reset per-run forward scheduling guards
+    this.forwardDependentsScheduled.clear();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
     // Note: We'll get the provider dynamically per check, not a single one for all
     const sessionIds = new Map<string, string>(); // checkName -> sessionId
@@ -4260,8 +4292,10 @@ export class CheckExecutionEngine {
         );
       }
 
-      // Create task functions for checks in this level, skip those already completed inline
-      const levelChecks = checksInLevel.filter((name: string) => !results.has(name));
+      // Create task functions for checks in this level. Do not pre-filter by
+      // results.has(name) because forEach parents may satisfy dependents inline
+      // during their execution. Each task will re-check and skip at run time.
+      const levelChecks = checksInLevel;
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           console.error('  [engine] levelChecks = [', levelChecks.join(', '), ']');
@@ -4282,7 +4316,42 @@ export class CheckExecutionEngine {
           };
         }
 
-        // (no early gating; rely on per-item scheduler after parents run)
+        // Intra-level dependency barrier: if any direct dependencies of this check
+        // are also scheduled in this level, wait until they finish and populate
+        // the results map (this ensures forEach parents run before their dependents).
+        try {
+          const depsInLevel = (dependencies[checkName] || []).filter((d: string) =>
+            checksInLevel.includes(d)
+          );
+          const hasForEachParent = (checkConfig.depends_on || []).some(
+            (d: string) => (config.checks?.[d] as any)?.forEach === true
+          );
+          if (depsInLevel.length > 0) {
+            const deadline = Date.now() + 10_000; // 10s safety
+            // Wait for parents in this level to finish
+            while (depsInLevel.some((d: string) => !results.has(d))) {
+              await this.sleep(2);
+              if (Date.now() > deadline) break;
+            }
+            // If parent produced this check inline (per-item), results will have it
+            if (hasForEachParent) {
+              const deadline2 = Date.now() + 10_000;
+              while (!results.has(checkName) && Date.now() <= deadline2) {
+                await this.sleep(2);
+              }
+            }
+            // If this step was scheduled via forward-run, wait briefly for it to complete to avoid duplicate execution
+            if (this.forwardDependentsScheduled.has(checkName)) {
+              const deadline3 = Date.now() + 10_000;
+              while (!results.has(checkName) && Date.now() <= deadline3) await this.sleep(2);
+            }
+            if (results.has(checkName)) {
+              if (debug)
+                log(`🔧 Debug: Skipping ${checkName} (satisfied inline by forEach parent)`);
+              return { checkName, error: null, result: results.get(checkName)! };
+            }
+          }
+        } catch {}
 
         const checkStartTime = Date.now();
         completedChecksCount++;
@@ -4771,20 +4840,37 @@ export class CheckExecutionEngine {
                   );
                   for (const [k, v] of baseDeps.entries()) snapshotDeps.set(k, v);
 
-                  const childItemRes = await this.executeWithRouting(
-                    childName,
-                    childCfg,
-                    childProv,
-                    childProviderConfig,
-                    prInfo,
-                    snapshotDeps,
-                    sessionInfo,
-                    config,
-                    dependencyGraph,
-                    debug,
-                    results,
-                    { index: itemIndex, total: forEachItems.length, parent: parentName }
-                  );
+                  let childItemRes: ReviewSummary;
+                  try {
+                    childItemRes = await this.executeWithRouting(
+                      childName,
+                      childCfg,
+                      childProv,
+                      childProviderConfig,
+                      prInfo,
+                      snapshotDeps,
+                      sessionInfo,
+                      config,
+                      dependencyGraph,
+                      debug,
+                      results,
+                      { index: itemIndex, total: forEachItems.length, parent: parentName }
+                    );
+                  } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    childItemRes = {
+                      issues: [
+                        {
+                          file: '',
+                          line: 0,
+                          ruleId: `${childName}/forEach/iteration_error`,
+                          message: msg,
+                          severity: 'error',
+                          category: 'logic',
+                        },
+                      ],
+                    } as ReviewSummary;
+                  }
 
                   // Per-item fail_if
                   if (config && (config.fail_if || childCfg.fail_if)) {
@@ -4920,24 +5006,41 @@ export class CheckExecutionEngine {
                 const iterationStart = this.recordIterationStart(checkName);
 
                 // Execute with retry/routing semantics per item
-                const itemResult = await this.executeWithRouting(
-                  checkName,
-                  checkConfig,
-                  provider,
-                  providerConfig,
-                  prInfo,
-                  snapshotDeps,
-                  sessionInfo,
-                  config,
-                  dependencyGraph,
-                  debug,
-                  results,
-                  /*foreachContext*/ {
-                    index: itemIndex,
-                    total: forEachItems.length,
-                    parent: forEachParentName,
-                  }
-                );
+                let itemResult: ReviewSummary;
+                try {
+                  itemResult = await this.executeWithRouting(
+                    checkName,
+                    checkConfig,
+                    provider,
+                    providerConfig,
+                    prInfo,
+                    snapshotDeps,
+                    sessionInfo,
+                    config,
+                    dependencyGraph,
+                    debug,
+                    results,
+                    /*foreachContext*/ {
+                      index: itemIndex,
+                      total: forEachItems.length,
+                      parent: forEachParentName,
+                    }
+                  );
+                } catch (error) {
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+                  itemResult = {
+                    issues: [
+                      {
+                        file: '',
+                        line: 0,
+                        ruleId: `${checkName}/forEach/iteration_error`,
+                        message: errorMessage,
+                        severity: 'error',
+                        category: 'logic',
+                      },
+                    ],
+                  } as ReviewSummary;
+                }
                 // no-op
 
                 // Evaluate fail_if per item so a single failing branch does not stop others
@@ -5124,20 +5227,37 @@ export class CheckExecutionEngine {
                     );
                     for (const [k, v] of perItemDepMap.entries()) execDepMap.set(k, v);
 
-                    const nodeItemRes = await this.executeWithRouting(
-                      node,
-                      nodeCfg,
-                      nodeProv,
-                      nodeProviderConfig,
-                      prInfo,
-                      execDepMap,
-                      sessionInfo,
-                      config,
-                      dependencyGraph,
-                      debug,
-                      results,
-                      { index: itemIndex, total: forEachItems.length, parent: forEachParentName }
-                    );
+                    let nodeItemRes: ReviewSummary;
+                    try {
+                      nodeItemRes = await this.executeWithRouting(
+                        node,
+                        nodeCfg,
+                        nodeProv,
+                        nodeProviderConfig,
+                        prInfo,
+                        execDepMap,
+                        sessionInfo,
+                        config,
+                        dependencyGraph,
+                        debug,
+                        results,
+                        { index: itemIndex, total: forEachItems.length, parent: forEachParentName }
+                      );
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : String(error);
+                      nodeItemRes = {
+                        issues: [
+                          {
+                            file: '',
+                            line: 0,
+                            ruleId: `${node}/forEach/iteration_error`,
+                            message,
+                            severity: 'error',
+                            category: 'logic',
+                          },
+                        ],
+                      } as ReviewSummary;
+                    }
 
                     if (config && (config.fail_if || nodeCfg.fail_if)) {
                       const fRes = await this.evaluateFailureConditions(
@@ -5929,9 +6049,11 @@ export class CheckExecutionEngine {
               (Array.isArray(reviewResultWithOutput.forEachItems) ||
                 Array.isArray((reviewResultWithOutput as any).output));
 
-            // Do not push aggregated array output for forEach dependents (map children);
-            // per-item outputs are already recorded at iteration time.
-            if (!isForEachAggregateChild) {
+            // Do not push aggregated array output for:
+            //  - forEach dependents (map children): per-item outputs are recorded elsewhere
+            //  - forEach parents themselves: the aggregate array is pushed once in the
+            //    dedicated forEach commit block below. Skipping here avoids double count.
+            if (!isForEachAggregateChild && !checkConfig.forEach) {
               this.trackOutputHistory(checkName, reviewResultWithOutput.output);
             }
           }
@@ -5943,6 +6065,16 @@ export class CheckExecutionEngine {
             checkConfig?.forEach &&
             (Array.isArray(agg.forEachItems) || Array.isArray((agg as any).output))
           ) {
+            // Track aggregate array in history so on_finish.goto_js can compute
+            // per-wave item counts from outputs_history['extract-facts'].
+            try {
+              const arrForHist: unknown[] = Array.isArray(agg.forEachItems)
+                ? (agg.forEachItems as unknown[])
+                : Array.isArray((agg as any).output)
+                  ? ((agg as any).output as unknown[])
+                  : [];
+              this.trackOutputHistory(checkName, arrForHist);
+            } catch {}
             // Commit aggregate at root scope
             this.commitJournal(checkName, agg, prInfo.eventType, []);
             const items: unknown[] = Array.isArray(agg.forEachItems)
@@ -7722,21 +7854,11 @@ export class CheckExecutionEngine {
       try {
         const hist = this.outputHistory.get(s.checkName) || [];
         const nonArrayCount = hist.filter(x => !Array.isArray(x)).length;
-        const arrayCount = hist.filter(x => Array.isArray(x)).length;
-        // If a check produced both per-item outputs (scalars/objects) and aggregated arrays,
-        // prefer the per-item execution count as the authoritative runs total.
-        if (arrayCount > 0 && nonArrayCount > 0 && (s.totalRuns || 0) > nonArrayCount) {
+        // Do not downgrade attempts to "outputs produced".
+        // totalRuns represents attempts (success + failure). History may miss failures.
+        // Use the higher of the two to avoid undercounting.
+        if (nonArrayCount > (s.totalRuns || 0)) {
           return { ...s, totalRuns: nonArrayCount } as typeof s;
-        }
-        // Heuristic for fact-validation flows: when a check is the immediate dependent
-        // of a forEach parent (e.g., validate-fact depends on extract-facts), its total
-        // runs should not exceed the parent's per-item outputs across waves.
-        if (s.checkName === 'validate-fact' && this.outputHistory.has('extract-facts')) {
-          const parentHist = this.outputHistory.get('extract-facts') || [];
-          const parentPerItem = parentHist.filter(x => !Array.isArray(x)).length;
-          if (parentPerItem > 0 && (s.totalRuns || 0) > parentPerItem) {
-            return { ...s, totalRuns: parentPerItem } as typeof s;
-          }
         }
       } catch {}
       return s;

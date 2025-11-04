@@ -491,12 +491,12 @@ export async function main(): Promise<void> {
 
     // Start debug server if requested (AFTER config is loaded)
     if (options.debugServer) {
-      const port = options.debugPort || 3456;
+      const requestedPort = options.debugPort || 3456;
 
-      console.log(`🔍 Starting debug visualizer on port ${port}...`);
+      console.log(`🔍 Starting debug visualizer on port ${requestedPort}...`);
 
       debugServer = new DebugVisualizerServer();
-      await debugServer.start(port);
+      await debugServer.start(requestedPort);
 
       // Set config on server BEFORE opening browser
       debugServer.setConfig(config);
@@ -511,12 +511,13 @@ export async function main(): Promise<void> {
         quiet: true, // Suppress console output when debug server is active
       });
 
-      console.log(`✅ Debug visualizer running at http://localhost:${port}`);
+      const boundPort = debugServer.getPort();
+      console.log(`✅ Debug visualizer running at http://localhost:${boundPort}`);
 
       // Open browser unless VISOR_NOBROWSER is set (useful for CI/tests)
       if (process.env.VISOR_NOBROWSER !== 'true') {
         console.log(`   Opening browser...`);
-        await open(`http://localhost:${port}`);
+        await open(`http://localhost:${boundPort}`);
       }
 
       console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
