@@ -453,6 +453,18 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Enable the delegate tool for task distribution to subagents";
                 };
+                readonly retry: {
+                    readonly $ref: "#/definitions/AIRetryConfig";
+                    readonly description: "Retry configuration for this provider";
+                };
+                readonly fallback: {
+                    readonly $ref: "#/definitions/AIFallbackConfig";
+                    readonly description: "Fallback configuration for provider failures";
+                };
+                readonly allowEdit: {
+                    readonly type: "boolean";
+                    readonly description: "Enable Edit and Create tools for file modification (disabled by default for security)";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "AI provider configuration";
@@ -488,6 +500,109 @@ export declare const configSchema: {
             readonly required: readonly ["command"];
             readonly additionalProperties: false;
             readonly description: "MCP Server configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AIRetryConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly maxRetries: {
+                    readonly type: "number";
+                    readonly description: "Maximum retry attempts (0-50)";
+                };
+                readonly initialDelay: {
+                    readonly type: "number";
+                    readonly description: "Initial delay in milliseconds (0-60000)";
+                };
+                readonly maxDelay: {
+                    readonly type: "number";
+                    readonly description: "Maximum delay cap in milliseconds (0-300000)";
+                };
+                readonly backoffFactor: {
+                    readonly type: "number";
+                    readonly description: "Exponential backoff multiplier (1-10)";
+                };
+                readonly retryableErrors: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Custom error patterns to retry on";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Retry configuration for AI provider calls";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AIFallbackConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly strategy: {
+                    readonly type: "string";
+                    readonly enum: readonly ["same-model", "same-provider", "any", "custom"];
+                    readonly description: "Fallback strategy: 'same-model', 'same-provider', 'any', or 'custom'";
+                };
+                readonly providers: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/AIFallbackProviderConfig";
+                    };
+                    readonly description: "Array of fallback provider configurations";
+                };
+                readonly maxTotalAttempts: {
+                    readonly type: "number";
+                    readonly description: "Maximum total attempts across all providers";
+                };
+                readonly auto: {
+                    readonly type: "boolean";
+                    readonly description: "Enable automatic fallback using available environment variables";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Fallback configuration for AI providers";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AIFallbackProviderConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly provider: {
+                    readonly type: "string";
+                    readonly enum: readonly ["google", "anthropic", "openai", "bedrock"];
+                    readonly description: "AI provider to use";
+                };
+                readonly model: {
+                    readonly type: "string";
+                    readonly description: "Model name to use";
+                };
+                readonly apiKey: {
+                    readonly type: "string";
+                    readonly description: "API key for this provider";
+                };
+                readonly maxRetries: {
+                    readonly type: "number";
+                    readonly description: "Per-provider retry override";
+                };
+                readonly region: {
+                    readonly type: "string";
+                    readonly description: "AWS region (for Bedrock)";
+                };
+                readonly accessKeyId: {
+                    readonly type: "string";
+                    readonly description: "AWS access key ID (for Bedrock)";
+                };
+                readonly secretAccessKey: {
+                    readonly type: "string";
+                    readonly description: "AWS secret access key (for Bedrock)";
+                };
+            };
+            readonly required: readonly ["provider", "model"];
+            readonly additionalProperties: false;
+            readonly description: "Fallback provider configuration";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
