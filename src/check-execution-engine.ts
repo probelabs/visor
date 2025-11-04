@@ -5211,8 +5211,7 @@ export class CheckExecutionEngine {
                     } as any;
                   }
                   this.trackOutputHistory(checkName, histEntry);
-                }
-                else {
+                } else {
                   // Ensure completeness: synthesize a last_loop record for this item
                   // so routing can scan only the child history without consulting the parent.
                   let parentLoopIdx = 0;
@@ -6207,7 +6206,9 @@ export class CheckExecutionEngine {
                 if (!Array.isArray(arr)) continue;
                 for (const e of arr as unknown[]) {
                   if (e && typeof e === 'object' && (e as any).last_loop === true) {
-                    try { (e as any).last_loop = false; } catch {}
+                    try {
+                      (e as any).last_loop = false;
+                    } catch {}
                   }
                 }
               }
