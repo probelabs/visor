@@ -204,6 +204,45 @@ describe('AICheckProvider', () => {
         timeout: 60000,
       });
     });
+
+    it('should pass enableDelegate and allowEdit flags to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'security review',
+        ai: {
+          provider: 'anthropic',
+          model: 'claude-3-opus',
+          enableDelegate: true,
+          allowEdit: true,
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'anthropic',
+        model: 'claude-3-opus',
+        enableDelegate: true,
+        allowEdit: true,
+      });
+    });
   });
 
   describe('getSupportedConfigKeys', () => {
@@ -214,6 +253,8 @@ describe('AICheckProvider', () => {
       expect(keys).toContain('focus');
       expect(keys).toContain('ai.provider');
       expect(keys).toContain('ai.model');
+      expect(keys).toContain('ai.enableDelegate');
+      expect(keys).toContain('ai.allowEdit');
     });
   });
 

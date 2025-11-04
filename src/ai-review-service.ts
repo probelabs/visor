@@ -48,6 +48,12 @@ export interface AIReviewConfig {
   promptType?: string;
   // ProbeAgent baseline/system prompt to prepend
   customPrompt?: string;
+  // Retry configuration for AI provider calls
+  retry?: import('./types/config').AIRetryConfig;
+  // Fallback configuration for provider failures
+  fallback?: import('./types/config').AIFallbackConfig;
+  // Enable Edit and Create tools for file modification
+  allowEdit?: boolean;
 }
 
 export interface AIDebugInfo {
@@ -1399,6 +1405,21 @@ ${'='.repeat(60)}
       // Enable delegate tool if configured
       if (this.config.enableDelegate !== undefined) {
         (options as any).enableDelegate = this.config.enableDelegate;
+      }
+
+      // Pass retry configuration to ProbeAgent
+      if (this.config.retry) {
+        (options as any).retry = this.config.retry;
+      }
+
+      // Pass fallback configuration to ProbeAgent
+      if (this.config.fallback) {
+        (options as any).fallback = this.config.fallback;
+      }
+
+      // Enable Edit and Create tools if configured
+      if (this.config.allowEdit !== undefined) {
+        (options as any).allowEdit = this.config.allowEdit;
       }
 
       // Add provider-specific options if configured

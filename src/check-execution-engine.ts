@@ -1792,7 +1792,12 @@ export class CheckExecutionEngine {
                 for (const cid of childIds) {
                   const cCfg = config.checks?.[cid];
                   if (!cCfg) continue;
-                  const cMode = cCfg.fanout === 'map' ? 'map' : cCfg.reduce ? 'reduce' : cCfg.fanout || 'default';
+                  const cMode =
+                    cCfg.fanout === 'map'
+                      ? 'map'
+                      : cCfg.reduce
+                        ? 'reduce'
+                        : cCfg.fanout || 'default';
                   if (cMode === 'map') {
                     for (let i = 0; i < forEachItems.length; i++) {
                       const itemScope: ScopePath = [{ check: checkName, index: i }];
