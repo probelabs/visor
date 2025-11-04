@@ -888,6 +888,8 @@ export class VisorTestRunner {
         .map(s => (s as any)?.checkName)
         .filter(name => typeof name === 'string' && name.trim().length > 0 && name !== 'undefined');
       for (const name of executed) {
+        // Only consider configured checks for warnings
+        if (!((cfg.checks || {}) as Record<string, unknown>)[name]) continue;
         const chk = (cfg.checks || {})[name] || {};
         const t = chk.type || 'ai';
         // Suppress warnings for AI steps explicitly running under the mock provider

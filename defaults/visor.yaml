@@ -625,27 +625,10 @@ steps:
     # This replaces the older run_js-only approach which didn’t forward-run the chain.
     on_finish:
       goto_js: |
-        // Loop again if any current-loop fact is invalid or missing validation.
-        // We rely on loop tags in outputs_history (loop_idx, last_loop).
-        var H = outputs_history || {};
-        var EF = Array.isArray(H['extract-facts']) ? H['extract-facts'] : [];
-        // Prefer explicit last_loop marker; fallback to last array
-        var marker = EF.slice().reverse().find(function (x) { return x && typeof x === 'object' && x.last_loop === true && typeof x.loop_idx === 'number'; });
-        var lastArray = EF.slice().reverse().find(Array.isArray) || [];
-        var ids = marker && Array.isArray(marker.items) ? marker.items.map(String) : lastArray.map(function (f,i) { return (f && f.id) ? String(f.id) : String(i+1); });
-        if (ids.length === 0) return null;
-        var VF = Array.isArray(H['validate-fact']) ? H['validate-fact'] : [];
-        var current = VF.filter(function (v) { return v && v.last_loop === true; });
-        var byId = {}; var seen = {};
-        for (var i = current.length - 1; i >= 0; i--) {
-          var v = current[i];
-          var id = String((v && (v.fact_id || v.id)) || '');
-          if (!id || seen[id]) continue; seen[id] = true; byId[id] = v;
-        }
-        var missing = ids.some(function (id) { return byId[id] == null; });
-        var bad = ids.some(function (id) { var r = byId[id]; return !r || r.is_valid !== true || r.confidence !== 'high'; });
-        if (missing || bad) return ((event && event.name) === 'issue_opened') ? 'issue-assistant' : 'comment-assistant';
-        return null;
+        return outputs_history['validate-fact']
+          .some(v => v.last_loop && (v.is_valid !== true || v.confidence !== 'high'))
+          ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant')
+          : null;
 
   # Validate each extracted fact
   validate-fact:

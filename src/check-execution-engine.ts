@@ -5185,21 +5185,52 @@ export class CheckExecutionEngine {
                     const ph = (this.outputHistory.get(forEachParentName!) || []) as unknown[];
                     parentLoopIdx = ph.filter(x => Array.isArray(x)).length;
                   } catch {}
-                  let histEntry: unknown;
+                  let histEntry: any;
+                  const itemId = (() => {
+                    try {
+                      return String((itemOutput as any)?.id ?? itemIndex + 1);
+                    } catch {
+                      return String(itemIndex + 1);
+                    }
+                  })();
                   if (itemOutput && typeof itemOutput === 'object') {
                     histEntry = {
                       ...(itemOutput as any),
+                      id: itemId,
+                      parent: forEachParentName,
                       loop_idx: parentLoopIdx,
                       last_loop: true,
                     };
                   } else {
                     histEntry = {
                       value: itemOutput,
+                      id: itemId,
+                      parent: forEachParentName,
                       loop_idx: parentLoopIdx,
                       last_loop: true,
                     } as any;
                   }
                   this.trackOutputHistory(checkName, histEntry);
+                }
+                else {
+                  // Ensure completeness: synthesize a last_loop record for this item
+                  // so routing can scan only the child history without consulting the parent.
+                  let parentLoopIdx = 0;
+                  try {
+                    const ph = (this.outputHistory.get(forEachParentName!) || []) as unknown[];
+                    parentLoopIdx = ph.filter(x => Array.isArray(x)).length;
+                  } catch {}
+                  const itemId = String(itemIndex + 1);
+                  const synth: any = {
+                    id: itemId,
+                    parent: forEachParentName,
+                    loop_idx: parentLoopIdx,
+                    last_loop: true,
+                    is_valid: false,
+                    confidence: 'low',
+                    reason: 'missing',
+                  };
+                  this.trackOutputHistory(checkName, synth);
                 }
 
                 // General branch-first scheduling for this item: execute all descendants (from current node only) when ready
@@ -6164,6 +6195,23 @@ export class CheckExecutionEngine {
             checkConfig?.forEach &&
             (Array.isArray(agg.forEachItems) || Array.isArray((agg as any).output))
           ) {
+            // Compute next loop index for this forEach parent and clear previous last_loop flags
+            let loopIdx = 1;
+            try {
+              const hist = (this.outputHistory.get(checkName) || []) as unknown[];
+              const arraysSoFar = hist.filter(x => Array.isArray(x)).length;
+              loopIdx = arraysSoFar + 1;
+            } catch {}
+            try {
+              for (const [, arr] of this.outputHistory.entries()) {
+                if (!Array.isArray(arr)) continue;
+                for (const e of arr as unknown[]) {
+                  if (e && typeof e === 'object' && (e as any).last_loop === true) {
+                    try { (e as any).last_loop = false; } catch {}
+                  }
+                }
+              }
+            } catch {}
             // Track aggregate array in history so on_finish.goto_js can compute
             // per-wave item counts from outputs_history['extract-facts'].
             try {
