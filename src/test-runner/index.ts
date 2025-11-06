@@ -176,6 +176,12 @@ export class VisorTestRunner {
           prompts[k].push(p);
         },
         mockForStep: (step: string) => mockMgr.get(step),
+        // Ensure human-input never blocks tests: prefer case mock, then default value
+        onHumanInput: async (req: { checkId: string; default?: string }) => {
+          const m = mockMgr.get(req.checkId);
+          if (m !== undefined && m !== null) return String(m);
+          return (req.default ?? '').toString();
+        },
       },
     } as any);
 
@@ -486,14 +492,25 @@ export class VisorTestRunner {
 
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
     const cfg = JSON.parse(JSON.stringify(config));
+    const allowCtxEnv =
+      String(process.env.VISOR_TEST_ALLOW_CODE_CONTEXT || '').toLowerCase() === 'true';
+    const forceNoCtxEnv =
+      String(process.env.VISOR_TEST_FORCE_NO_CODE_CONTEXT || '').toLowerCase() === 'true';
     for (const name of Object.keys(cfg.checks || {})) {
       const chk = cfg.checks[name] || {};
       if ((chk.type || 'ai') === 'ai') {
         const prev = (chk.ai || {}) as Record<string, unknown>;
+        // Respect existing per-check setting by default.
+        // Only tweak when explicitly requested by env flags.
+        const skipCtx = forceNoCtxEnv
+          ? true
+          : allowCtxEnv
+            ? false
+            : (prev.skip_code_context as boolean | undefined);
         chk.ai = {
           ...prev,
           provider: aiProviderDefault,
-          skip_code_context: true,
+          ...(skipCtx === undefined ? {} : { skip_code_context: skipCtx }),
           disable_tools: true,
           timeout: Math.min(15000, (prev.timeout as number) || 15000),
         } as any;

@@ -625,7 +625,8 @@ steps:
     # This replaces the older run_js-only approach which didn’t forward-run the chain.
     on_finish:
       goto_js: |
-        return outputs_history['validate-fact']
+        // Minimal, current-loop routing with safe fallback when validate-fact had no outputs
+        return (outputs_history['validate-fact'] || [])
           .some(v => v.last_loop && (v.is_valid !== true || v.confidence !== 'high'))
           ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant')
           : null;

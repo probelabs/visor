@@ -171,6 +171,14 @@ export class HumanInputCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     context?: ExecutionContext
   ): Promise<string> {
+    // Test runner mock support: if a mock is provided for this step, use it
+    try {
+      const mockVal = context?.hooks?.mockForStep?.(checkName);
+      if (mockVal !== undefined && mockVal !== null) {
+        const s = String(mockVal);
+        return s;
+      }
+    } catch {}
     const prompt = config.prompt || 'Please provide input:';
     const placeholder = (config.placeholder as string | undefined) || 'Enter your response...';
     const allowEmpty = (config.allow_empty as boolean | undefined) ?? false;

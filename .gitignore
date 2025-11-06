@@ -6,6 +6,8 @@ yarn-debug.log*
 yarn-error.log*
 
 .tmp*
+.*out
+.*json
 
 # Build outputs
 dist/

@@ -183,7 +183,10 @@ export class AIReviewService {
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+    // Respect provider-level skip_code_context by skipping PR context wrapper when requested
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
+      skipPRContext: (this.config as any)?.skip_code_context === true,
+    });
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);

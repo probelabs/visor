@@ -707,7 +707,10 @@ export class AICheckProvider extends CheckProvider {
         prInfo,
         finalPrompt,
         config.schema,
-        { checkName: (config as any).checkName }
+        {
+          checkName: (config as any).checkName,
+          skipPRContext: (config.ai as any)?.skip_code_context === true,
+        }
       );
       sessionInfo?.hooks?.onPromptCaptured?.({
         step: String(stepName),

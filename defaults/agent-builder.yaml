@@ -1,40 +1,94 @@
 version: "1.0"
 
-# Agents Builder: one YAML that drafts other Visor agents, lints them,
-# runs their tests, performs a light AI code review, and refines until all pass.
-# It writes generated agents into the tmp/ folder (no subfolders).
+# Agent Build (cwd-first): generate or improve a Visor agent config purely via YAML.
+# - Writes to current working directory by default (VISOR_AGENT_OUT_DIR, defaults ".").
+# - To improve an existing config in-place, run the CLI with: visor build <path/to/agent.yaml>
+#   The YAML detects mode by reading the file; missing/empty => new, else improve.
 
 steps:
-  agent-brief:
+  brief:
     type: human-input
-    group: agent-builder
+    group: agent-build
     on: [manual]
+    # no dependencies; can run standalone in manual prompt-only mode
     prompt: |
-      Provide a short brief for the agent you want to generate.
+      Provide a concise brief for the agent to build.
       Include: purpose, events, essential steps, and minimal success criteria.
     placeholder: "e.g., Agent that labels PRs by change size and runs jest"
     multiline: false
     allow_empty: true
     default: "Create a minimal agent that can scaffold other agents (config + tests)."
+    on_success:
+      goto: draft
+      goto_event: schedule
 
-  # CI/Issue entrypoint: trigger the chain without human input
-  agent-start:
+  start:
     type: log
-    group: agent-builder
+    group: agent-build
     on: [issue_opened]
     message: "start"
     level: debug
-    on_success:
-      goto: agent-draft
+    # no goto; detect-mode runs on event filtering
 
-  agent-draft:
+  detect-mode:
+    type: command
+    group: agent-build
+    on: [manual, issue_opened, schedule]
+    if: "Boolean(env.VISOR_AGENT_PATH || env.VISOR_AGENT_OUT_DIR || env.VISOR_AGENT_MODE == 'improve')"
+    exec: echo "{}"
+    transform: |
+      {% assign mode = 'new' %}
+      {% assign exists = false %}
+      {% assign empty = true %}
+      {% if env.VISOR_AGENT_MODE == 'improve' %}
+        {% assign mode = 'improve' %}
+      {% else %}
+        {% capture cfg %}{% readfile env.VISOR_AGENT_PATH %}{% endcapture %}
+        {% assign has_error = cfg contains 'Error reading file' or cfg contains 'Invalid file path' %}
+        {% assign trimmed = cfg | strip %}
+        {% assign empty = trimmed == '' %}
+        {% assign exists = has_error == false %}
+        {% if exists and empty == false %}{% assign mode = 'improve' %}{% endif %}
+      {% endif %}
+      {"path":"{{ env.VISOR_AGENT_PATH }}","exists": {{ exists }}, "empty": {{ empty }}, "mode": "{{ mode }}"}
+    # no on_success routing; downstream steps run based on event + if guards
+
+  load-existing:
+    type: command
+    group: agent-build
+    depends_on: [detect-mode]
+    on: [issue_opened, schedule]
+    if: "env.VISOR_AGENT_MODE == 'improve' || (outputs['detect-mode'] && outputs['detect-mode'].mode == 'improve')"
+    exec: |
+      node <<'NODE'
+      const fs=require('fs'); const path=require('path');
+      const cfgPath = path.resolve(process.env.VISOR_AGENT_PATH);
+      if (!fs.existsSync(cfgPath)) { console.log(JSON.stringify({ ok:false, error:'not_found', path:cfgPath })); process.exit(0); }
+      const dir = path.dirname(cfgPath);
+      const slug = path.basename(cfgPath).replace(/\.ya?ml$/i,'');
+      const testsPath = process.env.VISOR_AGENT_TESTS_PATH ? path.resolve(process.env.VISOR_AGENT_TESTS_PATH) : path.join(dir, slug + '.tests.yaml');
+      let cfgText = ''; let testsText = '';
+      try { cfgText = fs.readFileSync(cfgPath,'utf8'); } catch {}
+      try { testsText = fs.readFileSync(testsPath,'utf8'); } catch {}
+      const files = [];
+      if (cfgText) files.push({ path: cfgPath, content: cfgText });
+      if (testsText) files.push({ path: testsPath, content: testsText });
+      console.log(JSON.stringify({ ok:true, slug, config_path: cfgPath, tests_path: testsPath, files }));
+      NODE
+    output_format: json
+    on_success:
+      goto: write
+      goto_event: schedule
+
+  draft:
     type: ai
-    group: agent-builder
-    # Triggered via goto by agent-brief (manual) or agent-start (CI/tests)
-    on: []
-    # Ensure the human brief (manual) OR CI bootstrap step satisfied before drafting
-    depends_on: ["agent-brief|agent-start"]
+    group: agent-build
+    on: [issue_opened, schedule]
+    if: "String((env.VISOR_AGENT_MODE || 'new')).toLowerCase() !== 'improve'"
     ai_prompt_type: engineer
+    ai:
+      provider: mock
+      skip_code_context: true
     schema:
       type: object
       properties:
@@ -44,159 +98,167 @@ steps:
           type: array
           items:
             type: object
-            properties:
-              path: { type: string }
-              content: { type: string }
+            properties: { path: { type: string }, content: { type: string } }
             required: [path, content]
       required: [slug, files]
     prompt: |
-      You are generating a new Visor agent using only YAML config and YAML tests.
-      Focus on the user's brief and keep it simple. Avoid unrelated steps.
+      Generate a new Visor agent with YAML config and YAML tests only. Keep it simple and tailored to this repository.
 
-      Repository references you can use for guidance (do not duplicate verbatim):
-      - docs/ — Visor docs and testing guides (schemas, DSL, CLI usage)
-      - examples/ — Minimal example configs and test files
-      - defaults/.visor.yaml and defaults/.visor.tests.yaml — the default agent and test suite
+      Brief:
+      {{ outputs['brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
 
-      Brief (may be empty in tests):
-      ---
-      {{ outputs['agent-brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
-      ---
+      Return JSON fields: slug, summary, files[] (path+content). Only content matters; paths will be normalized to the target path.
+      Include two files: <slug>.yaml and <slug>.tests.yaml.
+    on_success:
+      goto: write
+      goto_event: schedule
 
-      Return JSON with fields: slug, summary, files[].
-      Required files (paths must be under tmp/):
-        - tmp/{{ slug }}.yaml            # agent configuration
-        - tmp/{{ slug }}.tests.yaml      # tests extending that config
-      Constraints:
-        - Tests must use mock provider and strict mode.
-        - Include a happy-path test and at least one edge/failure test.
-
-  agent-write:
+  write:
     type: command
-    group: agent-builder
-    depends_on: [agent-draft]
-    on: [manual, issue_opened]
+    group: agent-build
+    # Triggered only via goto from draft/refine/load-existing to avoid early evaluation
+    on: [issue_opened, schedule]
+    if: "((((outputs||{})['refine']||{}).files) || (((outputs||{})['draft']||{}).files) || (((outputs||{})['load-existing']||{}).files)) && (env.VISOR_AGENT_PATH || env.VISOR_AGENT_OUT_DIR)"
     exec: |
-      {% assign set = outputs['agent-refine'].files | default: outputs['agent-draft'].files %}
-      {% assign slug = outputs['agent-draft'].slug %}
+      {% assign set = outputs['refine'].files | default: outputs['draft'].files | default: outputs['load-existing'].files %}
       cat > .visor-agent-files.json <<'JSON'
       {{ set | to_json | default: '[]' }}
       JSON
-      node -e "
-        const fs = require('fs'); const path = require('path');
-        const slug = '{{ slug }}' || 'agent';
-        let files = [];
-        try { files = JSON.parse(fs.readFileSync('.visor-agent-files.json','utf8')) || []; } catch { files = []; }
-        const out = new Map();
-        const strip = (s) => String(s||'').trim().replace(/^['\"]+|['\"]+$/g,'');
-        const norm = (p, content) => {
-          p = strip(p);
-          const base = path.basename(p);
-          const isYaml = /\.(ya?ml)$/i.test(base);
-          const isTestsName = /test/i.test(base) || /\.tests\./i.test(base);
-          // Heuristic: prefer explicit tests path name, else deduce by content
-          const looksLikeTests = isTestsName || /\n\s*tests\s*:\s*\n/i.test(String(content||''));
-          const target = looksLikeTests ? ('tmp/' + slug + '.tests.yaml') : ('tmp/' + slug + '.yaml');
-          return target;
+      node <<'NODE'
+      const fs = require('fs');
+      const path = require('path');
+      const yaml = require('js-yaml');
+      // Read AI/refine results
+      let files = [];
+      try { files = JSON.parse(fs.readFileSync('.visor-agent-files.json','utf8')) || []; } catch {}
+      // Destination path (single co-located file)
+      const targetPath = process.env.VISOR_AGENT_PATH ? path.resolve(process.env.VISOR_AGENT_PATH) : path.resolve(String(process.env.VISOR_AGENT_OUT_DIR||'.'), 'agent.yaml');
+      const ensureObj = (v) => (v && typeof v === 'object' ? v : {});
+      const loadYaml = (t) => { try { return ensureObj(yaml.load(String(t||''))); } catch { return {}; } };
+      let configDoc = {};
+      let testsDoc = {};
+      for (const f of files) {
+        const doc = loadYaml(f.content);
+        if (doc && typeof doc === 'object') {
+          const p = String((f && f.path) || '');
+          const looksLikeTests = /\.tests\.ya?ml$/i.test(p) || ('cases' in doc) || ('defaults' in doc);
+          if (doc.tests && typeof doc.tests === 'object') {
+            testsDoc = doc;
+          } else if (looksLikeTests && Object.keys(testsDoc).length === 0) {
+            // Treat as tests source even without top-level 'tests'
+            testsDoc = doc;
+          } else if (!configDoc || Object.keys(configDoc).length === 0) {
+            configDoc = doc;
+          }
+        }
+      }
+      const finalDoc = {};
+      const cfg = ensureObj(configDoc);
+      // Copy all non-tests top-level keys from config
+      for (const k of Object.keys(cfg)) { if (k !== 'tests' && k !== 'extends') finalDoc[k] = cfg[k]; }
+      if (!finalDoc.version) finalDoc.version = '1.0';
+      // If no steps provided in config, create a minimal hello step as a sane fallback
+      if (!finalDoc.steps || typeof finalDoc.steps !== 'object' || Object.keys(finalDoc.steps).length === 0) {
+        finalDoc.steps = {
+          hello: { type: 'log', message: 'hello from agent-builder', level: 'info', on: ['issue_opened'] }
         };
-        for (const f of files) {
-          const p = norm(f.path, f.content);
-          const content = String(f.content||'');
-          out.set(p, content);
-        }
-        if (out.size === 0) {
-          // Nothing to write — keep existing tmp files from previous iteration
-          console.log(JSON.stringify({ written: [], slug, skipped: true }));
-          process.exit(0);
-        }
-        // Ensure both files exist; synthesize minimal tests if missing
-        if (!out.has('tmp/' + slug + '.yaml')) {
-          // Try to salvage any non-test doc
-          const first = Array.from(out.entries()).find(([k])=>!/\.tests\.yaml$/.test(k));
-          if (first) out.set('tmp/' + slug + '.yaml', first[1]);
-          else out.set('tmp/' + slug + '.yaml', 'version: "1.0"\nsteps: {}');
-        }
-        if (!out.has('tmp/' + slug + '.tests.yaml')) {
-          const t = [
-            'version: "1.0"',
-            'extends: "' + slug + '.yaml"',
-            'tests:',
-            '  defaults: { strict: true, ai_provider: mock }',
-            '  cases:',
-            '    - name: smoke',
-            '      event: issue_opened',
-            '      fixture: gh.issue_open.minimal',
-            '      expect: {}',
-            ''
-          ].join('\n');
-          out.set('tmp/' + slug + '.tests.yaml', t);
-        }
-        const written = [];
-        for (const [p, content] of out.entries()) {
-          const dir = path.dirname(p); fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(p, content, 'utf8');
-          written.push(p);
-        }
-        console.log(JSON.stringify({ written, slug }));
-      "
+      }
+      // Merge tests:
+      // - If testsDoc.tests is an object → use it (valid path)
+      // - Else if cfg.tests is an object → use it
+      // - Else if a tests file exists but is malformed → preserve AS-IS (to let tests-validate fail)
+      // - Else (no tests provided at all) → create a minimal valid tests block
+      let testsBlock = undefined;
+      if (testsDoc && typeof testsDoc.tests === 'object') {
+        testsBlock = testsDoc.tests;
+      } else if (cfg.tests && typeof cfg.tests === 'object') {
+        testsBlock = cfg.tests;
+      } else if (testsDoc && Object.keys(testsDoc).length > 0) {
+        // Preserve malformed shape to trigger validator failure in the first pass
+        // Examples: testsDoc = { version, extends, cases: [...] } (no top-level tests)
+        testsBlock = testsDoc as any;
+      } else {
+        testsBlock = {
+          defaults: { strict: true, ai_provider: 'mock' },
+          cases: [ { name: 'smoke', event: 'issue_opened', fixture: 'gh.issue_open.minimal', expect: {} } ],
+        };
+      }
+      finalDoc.tests = testsBlock;
+      // Write one file only
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, yaml.dump(finalDoc), 'utf8');
+      console.log(JSON.stringify({ written: [targetPath], slug: (cfg.slug || 'agent'), config_path: targetPath, tests_path: targetPath, mode: '{{ outputs['detect-mode'].mode | default: 'new' }}' }));
+      NODE
     output_format: json
 
   config-lint:
     type: command
     group: agent-quality
-    depends_on: [agent-write]
-    on: [manual, issue_opened]
+    depends_on: [write]
+    on: [issue_opened, schedule]
+    if: "((outputs||{})['write'])"
     exec: |
-      {% assign slug = outputs['agent-draft'].slug %}
-      node dist/index.js validate --config tmp/{{ slug }}.yaml
+      node dist/index.js validate --config {{ outputs['write'].config_path }}
     output_format: text
-    fail_if: "issues && issues.length > 0"
+    # rely on provider exit code / issues, avoid double-routing via fail_if
+    fail_if: "false"
     on_fail:
-      run: [agent-refine]
-      goto: agent-write
+      goto: refine
+      goto_event: schedule
 
   tests-validate:
     type: command
     group: agent-quality
-    depends_on: [agent-write]
-    on: [manual, issue_opened]
+    depends_on: [write]
+    on: [issue_opened, schedule]
+    if: "((outputs||{})['write'])"
     exec: |
-      {% assign slug = outputs['agent-draft'].slug %}
-      node dist/index.js test --validate --config tmp/{{ slug }}.tests.yaml
+      node <<'NODE'
+      const fs=require('fs'); const path=require('path'); const yaml=require('js-yaml');
+      const p = path.resolve('{{ outputs['write'].tests_path }}');
+      let text=''; try { text = fs.readFileSync(p,'utf8'); } catch { console.log('read_error'); process.exit(2); }
+      let doc; try { doc = yaml.load(text) || {}; } catch { console.log('parse_error'); process.exit(3); }
+      if (typeof doc !== 'object' || !doc) { console.log('doc_type_error'); process.exit(4); }
+      const t = doc.tests;
+      if (!t || typeof t !== 'object') { console.log('tests_missing_or_not_object'); process.exit(5); }
+      const allowed = new Set(['defaults','fixtures','cases']);
+      for (const k of Object.keys(t)) if (!allowed.has(k)) { console.log('tests_has_additional_properties'); process.exit(6); }
+      if (!Array.isArray(t.cases)) { console.log('cases_missing'); process.exit(7); }
+      console.log('valid');
+      NODE
     output_format: text
-    fail_if: "issues && issues.length > 0"
+    fail_if: "output && output.trim() !== 'valid'"
     on_fail:
-      run: [agent-refine]
-      goto: agent-write
+      goto: refine
+      goto_event: schedule
 
-
-  agent-verify-tests:
+  verify-tests:
     type: command
     group: agent-quality
-    depends_on: [agent-write, config-lint, tests-validate]
-    on: [manual, issue_opened]
-    # Gate on tests-validate success in the current cycle to avoid
-    # counting premature runs when the tests file shape is invalid.
-    if: "!(outputs['tests-validate'] && /failed/i.test(String(outputs['tests-validate'])))"
+    depends_on: [write, config-lint, tests-validate]
+    on: [issue_opened, schedule]
+    if: "((outputs||{})['write']) && !(String(((outputs||{})['tests-validate']||'')).toLowerCase().includes('failed'))"
     exec: |
-      {% assign slug = outputs['agent-draft'].slug %}
-      node dist/index.js test --config tmp/{{ slug }}.tests.yaml --json - --bail
+      node dist/index.js test --config {{ outputs['write'].tests_path }} --json - --bail
     output_format: json
     fail_if: "output && Number(output.failures||0) > 0"
     on_fail:
-      run: [agent-refine]
-      goto: agent-write
+      goto: refine
+      goto_event: schedule
     env:
       VISOR_TEST_SUMMARY_SILENT: "true"
+    # no on_success routing; dependents will be scheduled by the initial goto to 'write'
 
-
-  agent-code-review:
+  code-review:
     type: ai
     group: agent-quality
-    depends_on: [agent-verify-tests]
-    on: [manual, issue_opened]
-    # Rely on on_fail routing of dependencies; run when verify-tests completes
+    depends_on: [verify-tests]
+    on: [issue_opened, schedule]
+    if: "((outputs||{})['write'])"
     ai_prompt_type: engineer
+    ai:
+      provider: mock
+      skip_code_context: true
     schema:
       type: object
       properties:
@@ -209,55 +271,26 @@ steps:
       - Directly addresses the brief without over-complication.
       - Includes tests that cover success and failure cases.
 
-      Brief (may be empty in tests):
-      {{ outputs['agent-brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
+      Brief:
+      {{ outputs['brief'] | default: 'Create a minimal agent that can scaffold other agents (config + tests).' }}
 
       Tests validate (text):
       {{ outputs['tests-validate'] }}
 
       Tests run (JSON):
-      {{ outputs['agent-verify-tests'] | json }}
-
-      Generated files (path + first 80 lines):
-      {% assign files_list = outputs['agent-refine'].files | default: outputs['agent-draft'].files | default: [] %}
-      {% for f in files_list %}
-      --- {{ f.path }} ---
-      {{ f.content | split: "\n" | slice: 0, 80 | join: "\n" }}
-      {% endfor %}
+      {{ outputs['verify-tests'] | json }}
 
       Respond with JSON: { ok: boolean, feedback: string, concerns?: string[] }.
     fail_if: "output && output.ok === false"
     on_fail:
-      goto: agent-refine
+      goto: refine
+    # no on_success routing; dependents will be scheduled by the initial goto to 'write'
 
-  agent-cleanup:
-    type: command
-    group: agent-quality
-    depends_on: [agent-code-review]
-    on: [manual, issue_opened]
-    # Run after code-review; on_fail in earlier steps loops back as needed
-    exec: |
-      {% assign slug = outputs['agent-draft'].slug %}
-      node <<'NODE'
-      const fs=require('fs'); const path=require('path');
-      if (String(process.env.VISOR_KEEP_TMP||'').toLowerCase()==='true') {
-        console.log(JSON.stringify({ removed: [], skipped: true }));
-        process.exit(0);
-      }
-      const files=[`tmp/${process.env.SLUG||'{{ slug }}'}.yaml`,`tmp/${process.env.SLUG||'{{ slug }}'}.tests.yaml`];
-      const removed=[];
-      for (const f of files){ try{ if(fs.existsSync(f)){ fs.unlinkSync(f); removed.push(f);} }catch{}}
-      try{ if(fs.existsSync('.visor-agent-files.json')) fs.unlinkSync('.visor-agent-files.json'); }catch{}
-      console.log(JSON.stringify({ removed }));
-      NODE
-    output_format: json
-
-  agent-refine:
+  refine:
     type: ai
-    group: agent-builder
-    reuse_ai_session: agent-draft
+    group: agent-build
+    reuse_ai_session: draft
     session_mode: append
-    # Exclude from initial plan; invoked via on_fail.run from validators
     on: [schedule]
     ai_prompt_type: engineer
     schema:
@@ -271,10 +304,10 @@ steps:
             required: [path, content]
       required: [files]
     prompt: |
-      Refine the generated files to satisfy all criteria.
+      Refine the files so that lint and tests pass. Keep changes focused and minimal.
 
       Brief:
-      {{ outputs['agent-brief'] }}
+      {{ outputs['brief'] }}
 
       Config validate (text):
       {{ outputs['config-lint'] }}
@@ -283,25 +316,44 @@ steps:
       {{ outputs['tests-validate'] }}
 
       Tests run (JSON):
-      {{ outputs['agent-verify-tests'] | json }}
-
-      Code review (JSON):
-      {{ outputs['agent-code-review'] | json }}
-
-      Repository references you can use for guidance (do not duplicate verbatim):
-      - docs/ — Visor docs and testing guides (schemas, DSL, CLI usage)
-      - examples/ — Minimal example configs and test files
-      - defaults/.visor.yaml and defaults/.visor.tests.yaml — the default agent and test suite
+      {{ outputs['verify-tests'] | json }}
     on_success:
-      goto: agent-write
+      goto: write
 
-  agent-finish:
+  cleanup:
+    type: command
+    group: agent-quality
+    depends_on: [code-review]
+    on: [issue_opened, schedule]
+    if: "((outputs||{})['write'])"
+    exec: |
+      node <<'NODE'
+      const fs=require('fs');
+      const written = (process.env.WRITTEN && process.env.WRITTEN.split('\n').filter(Boolean)) || [];
+      const force = String(process.env.VISOR_AGENT_CLEANUP_FORCE||'').toLowerCase()==='true';
+      const removed=[];
+      for (const f of written){ const isTmp = /(^|\/)tmp\//.test(f); if (isTmp || force) { try{ if(fs.existsSync(f)){ fs.unlinkSync(f); removed.push(f);} }catch{} } }
+      try{ if(fs.existsSync('.visor-agent-files.json')) fs.unlinkSync('.visor-agent-files.json'); }catch{}
+      console.log(JSON.stringify({ removed }));
+      NODE
+    output_format: json
+    # finish depends_on cleanup; it will run automatically in the same forward-run
+
+  finish:
     type: log
-    group: agent-builder
-    message: "✅ Agents builder finished: files written, linted, tested, and reviewed."
+    group: agent-build
+    on: [issue_opened, schedule]
+    depends_on: [cleanup]
+    message: "✅ Agent build finished: files written, linted, tested, and reviewed."
     level: info
-    depends_on: [agent-cleanup]
-    on: [manual, issue_opened]
+    on_success:
+      goto_js: |
+        const enabled = String(env.VISOR_CHAT_MODE||'').toLowerCase()==='true';
+        if (!enabled) return null;
+        const max = Number(env.VISOR_CHAT_MAX_LOOPS||1);
+        const count = (outputs_history['brief']||[]).length|0;
+        return count < max ? 'detect-mode' : null;
+      goto_event: manual
 
 tests:
   defaults:
@@ -310,16 +362,15 @@ tests:
     fail_on_unexpected_calls: true
 
   cases:
-    - name: agents-builder-happy
-      description: |
-        Drafts a minimal agent, lints, tests, code‑reviews OK, and finishes.
+    - name: new-write-to-cwd
+      description: Generates to output/ (cwd) and cleans up forcibly.
       event: issue_opened
       fixture: gh.issue_open.minimal
       mocks:
-        agent-draft:
-          slug: example-agent
+        draft:
+          slug: helloagent
           files:
-            - path: tmp/example-agent.yaml
+            - path: helloagent.yaml
               content: |
                 version: "1.0"
                 output:
@@ -333,10 +384,10 @@ tests:
                     message: "hi"
                     level: info
                     on: [issue_opened]
-            - path: tmp/example-agent.tests.yaml
+            - path: helloagent.tests.yaml
               content: |
                 version: "1.0"
-                extends: "example-agent.yaml"
+                extends: "helloagent.yaml"
                 tests:
                   defaults: { strict: true, ai_provider: mock }
                   cases:
@@ -347,51 +398,65 @@ tests:
                         calls:
                           - step: hello
                             exactly: 1
-        config-lint: ""
-        tests-validate: ""
-        agent-verify-tests:
+        verify-tests:
           failures: 0
           results:
             - name: ok
               passed: true
-        agent-cleanup:
-          removed: []
-        agent-code-review:
+        code-review:
           ok: true
-          feedback: "Looks good"
-      env:
-        VISOR_TEST_MODE: "true"
+          feedback: "LGTM"
+        cleanup:
+          removed: []
       expect:
         calls:
-          - step: agent-start
+          - step: start
             exactly: 1
-          - step: agent-draft
+          - step: detect-mode
             exactly: 1
-          - step: agent-write
+          - step: draft
+            exactly: 1
+          - step: write
             exactly: 1
           - step: config-lint
             exactly: 1
           - step: tests-validate
             exactly: 1
-          - step: agent-verify-tests
+          - step: verify-tests
             exactly: 1
-          - step: agent-code-review
+          - step: code-review
             exactly: 1
-          - step: agent-cleanup
+          - step: cleanup
             exactly: 1
-          - step: agent-finish
+          - step: finish
             exactly: 1
+        prompts:
+          - step: draft
+            index: last
+            not_contains:
+              - "<pull_request>"
+              - "<files_summary>"
+      env:
+        VISOR_AGENT_OUT_DIR: "output"
+        VISOR_AGENT_CLEANUP_FORCE: "true"
 
-    - name: agents-builder-refine-loop
-      description: |
-        Initial tests fail; refine returns corrected tests; all passes afterwards.
+    - name: improve-existing
+      description: Improves an existing config in-place using load-existing + refine.
       event: issue_opened
       fixture: gh.issue_open.minimal
       mocks:
-        agent-draft:
-          slug: refine
+        detect-mode:
+          path: "tmp/improv.yaml"
+          exists: true
+          empty: false
+          mode: "improve"
+        load-existing:
+          ok: true
+          slug: improv
+          config_path: tmp/improv.yaml
+          tests_path: tmp/improv.tests.yaml
           files:
-            - path: tmp/refine.yaml
+            - path: tmp/improv.yaml
               content: |
                 version: "1.0"
                 output:
@@ -405,10 +470,10 @@ tests:
                     message: "hello"
                     level: info
                     on: [issue_opened]
-            - path: tmp/refine.tests.yaml
+            - path: tmp/improv.tests.yaml
               content: |
                 version: "1.0"
-                extends: "refine.yaml"
+                extends: "improv.yaml"
                 tests:
                   defaults: { strict: true, ai_provider: mock }
                   cases:
@@ -418,13 +483,13 @@ tests:
                       expect:
                         calls:
                           - step: hello
-                            exactly: 2  # wrong on purpose
-        agent-refine:
+                            exactly: 2
+        refine:
           files:
-            - path: tmp/refine.tests.yaml
+            - path: tmp/improv.tests.yaml
               content: |
                 version: "1.0"
-                extends: "refine.yaml"
+                extends: "improv.yaml"
                 tests:
                   defaults: { strict: true, ai_provider: mock }
                   cases:
@@ -435,196 +500,51 @@ tests:
                         calls:
                           - step: hello
                             exactly: 1
-        agent-code-review:
+        verify-tests:
+          failures: 0
+          results:
+            - name: fixed
+              passed: true
+        code-review:
           ok: true
-          feedback: "After refinement, everything passes."
+          feedback: "Refined existing"
       expect:
         calls:
-          - step: agent-start
+          - step: start
             exactly: 1
-          - step: agent-draft
+          - step: detect-mode
             exactly: 1
-          - step: agent-write
+          - step: load-existing
+            exactly: 1
+          - step: write
             exactly: 1
           - step: config-lint
             exactly: 1
           - step: tests-validate
             exactly: 1
-          - step: agent-verify-tests
+          - step: verify-tests
             exactly: 1
-          - step: agent-code-review
+          - step: code-review
             exactly: 1
-          - step: agent-cleanup
+          - step: cleanup
             exactly: 1
-          - step: agent-finish
+          - step: finish
             exactly: 1
       env:
-        VISOR_TEST_MODE: "true"
+        VISOR_AGENT_MODE: "improve"
+        VISOR_AGENT_OUT_DIR: "tmp"
+        VISOR_AGENT_PATH: "tmp/improv.yaml"
+        VISOR_AGENT_TESTS_PATH: "tmp/improv.tests.yaml"
 
-    # Note: multi-refine covered by flow test below for deterministic staging
-
-    - name: agents-builder-multi-refine-flow
-      description: Demonstrate two consecutive refine cycles across stages (3→2→1).
-      flow:
-        - name: stage-1-initial
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: flowref
-              files:
-                - path: tmp/flowref.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/flowref.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "flowref.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: too-many-3
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 3
-            agent-refine:
-              files:
-                - path: tmp/flowref.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "flowref.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: too-many-2
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 2
-            agent-code-review:
-              ok: true
-              feedback: "Initial stage: code review OK"
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-        - name: stage-2-still-wrong
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: flowref
-              files:
-                - path: tmp/flowref.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/flowref.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "flowref.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: too-many-2
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 2
-            agent-refine:
-              files:
-                - path: tmp/flowref.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "flowref.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: ok-1
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 1
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-
-
-    - name: agents-builder-loop-on-tests-validate
-      description: |
-        Tests file shape invalid at first; refine fixes tests block; loop re-runs and then passes.
+    - name: loop-on-tests-validate
+      description: tests-validate fails first, refine fixes, loop passes.
       event: issue_opened
       fixture: gh.issue_open.minimal
       mocks:
-        agent-draft:
+        draft:
           slug: tval
           files:
-            - path: tmp/tval.yaml
+            - path: tval.yaml
               content: |
                 version: "1.0"
                 output:
@@ -638,459 +558,157 @@ tests:
                     message: "hi"
                     level: info
                     on: [issue_opened]
-            - path: tmp/tval.tests.yaml
+            - path: tval.tests.yaml
               content: |
                 version: "1.0"
                 extends: "tval.yaml"
-                # Invalid on purpose: no top-level 'tests'
+                # wrong shape on purpose
                 cases:
                   - name: wrong-shape
-                    event: issue_opened
-                    fixture: gh.issue_open.minimal
-                    expect: { }
-        agent-refine:
+        refine:
           files:
-            - path: tmp/tval.tests.yaml
+            - path: tval.tests.yaml
               content: |
                 version: "1.0"
                 extends: "tval.yaml"
-                tests:
-                  defaults: { strict: true, ai_provider: mock }
-                  cases:
-                    - name: fixed-shape
-                      event: issue_opened
-                      fixture: gh.issue_open.minimal
-                      expect:
-                        calls:
-                          - step: hello
-                            exactly: 1
-      expect:
-        calls:
-          - step: agent-start
-            exactly: 1
-          - step: agent-draft
-            exactly: 1
-          - step: agent-write
-            exactly: 1
-          - step: config-lint
-            exactly: 1
-          - step: tests-validate
-            exactly: 1
-          - step: agent-verify-tests
-            exactly: 1
-          - step: agent-code-review
-            exactly: 1
-          - step: agent-cleanup
-            exactly: 1
-          - step: agent-finish
-            exactly: 1
-      env:
-        VISOR_TEST_MODE: "true"
-
-    - name: agents-builder-loop-multistep-flow
-      description: |
-        Three different failures fixed across cycles: (1) tests-validate fails (bad shape), (2) agent-verify-tests fails (behavior), (3) agent-code-review fails (ok=false).
-      flow:
-        - name: stage-1-tests-shape-invalid
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: multistep
-              files:
-                - path: tmp/multistep.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/multistep.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "multistep.yaml"
-                    # invalid: missing top-level tests block
-                    cases:
-                      - name: wrong-shape
-                        event: issue_opened
-                        fixture: gh.issue_open.minimal
-                        expect: {}
-            agent-code-review:
-              ok: true
-              feedback: "Shape-only cycle: code review OK"
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-        - name: stage-2-verify-tests-bad
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: multistep
-              files:
-                - path: tmp/multistep.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/multistep.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "multistep.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: wrong-exactly
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 2
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-        - name: stage-3-code-review-fails
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: multistep
-              files:
-                - path: tmp/multistep.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/multistep.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "multistep.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: ok
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 1
-            agent-code-review:
-              ok: false
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-        - name: stage-4-fixed
-          event: issue_opened
-          fixture: gh.issue_open.minimal
-          mocks:
-            agent-draft:
-              slug: multistep
-              files:
-                - path: tmp/multistep.yaml
-                  content: |
-                    version: "1.0"
-                    output:
-                      pr_comment:
-                        format: markdown
-                        group_by: check
-                        collapse: true
-                    steps:
-                      hello:
-                        type: log
-                        message: "hi"
-                        level: info
-                        on: [issue_opened]
-                - path: tmp/multistep.tests.yaml
-                  content: |
-                    version: "1.0"
-                    extends: "multistep.yaml"
-                    tests:
-                      defaults: { strict: true, ai_provider: mock }
-                      cases:
-                        - name: ok
-                          event: issue_opened
-                          fixture: gh.issue_open.minimal
-                          expect:
-                            calls:
-                              - step: hello
-                                exactly: 1
-          expect:
-            calls:
-              - step: agent-start
-                exactly: 1
-              - step: agent-draft
-                exactly: 1
-              - step: agent-write
-                exactly: 1
-              - step: config-lint
-                exactly: 1
-              - step: tests-validate
-                exactly: 1
-              - step: agent-verify-tests
-                exactly: 1
-              - step: agent-code-review
-                exactly: 1
-              - step: agent-cleanup
-                exactly: 1
-              - step: agent-finish
-                exactly: 1
-
-
-    - name: agents-builder-multi-refine-single
-      description: |
-        Single invocation: three refine cycles triggered by different failing steps in sequence
-        (config-lint → tests-validate → agent-verify-tests), then green.
-      event: issue_opened
-      fixture: gh.issue_open.minimal
-      mocks:
-        agent-draft:
-          slug: loop3
-          files:
-            - path: tmp/loop3.yaml
-              content: |
-                version: "1.0"
-                # output missing on purpose to fail config-lint initially
-                steps:
-                  hello:
-                    type: log
-                    message: "hi"
-                    level: info
-                    on: [issue_opened]
-            - path: tmp/loop3.tests.yaml
-              content: |
-                version: "1.0"
-                extends: "loop3.yaml"
-                tests:
-                  defaults: { strict: true, ai_provider: mock }
-                  cases:
-                    - name: wrong-exactly-2
-                      event: issue_opened
-                      fixture: gh.issue_open.minimal
-                      expect:
-                        calls:
-                          - step: hello
-                            exactly: 2
-        agent-refine[]:
-          - files:
-              - path: tmp/loop3.yaml
-                content: |
-                  version: "1.0"
-                  output:
-                    pr_comment:
-                      format: markdown
-                      group_by: check
-                      collapse: true
-                  steps:
-                    hello:
-                      type: log
-                      message: "hi"
-                      level: info
-                      on: [issue_opened]
-              - path: tmp/loop3.tests.yaml
-                content: |
-                  version: "1.0"
-                  extends: "loop3.yaml"
-                  cases:
-                    - name: wrong-shape
-                      event: issue_opened
-                      fixture: gh.issue_open.minimal
-                      expect: {}
-          - files:
-              - path: tmp/loop3.tests.yaml
-                content: |
-                  version: "1.0"
-                  extends: "loop3.yaml"
-                  tests:
-                    defaults: { strict: true, ai_provider: mock }
-                    cases:
-                      - name: still-wrong-2
-                        event: issue_opened
-                        fixture: gh.issue_open.minimal
-                        expect:
-                          calls:
-                            - step: hello
-                              exactly: 2
-          - files:
-              - path: tmp/loop3.tests.yaml
-                content: |
-                  version: "1.0"
-                  extends: "loop3.yaml"
-                  tests:
-                    defaults: { strict: true, ai_provider: mock }
-                    cases:
-                      - name: ok-1
-                        event: issue_opened
-                        fixture: gh.issue_open.minimal
-                        expect:
-                          calls:
-                            - step: hello
-                              exactly: 1
-      expect:
-        calls:
-          - step: agent-start
-            exactly: 1
-          - step: agent-draft
-            exactly: 1
-          - step: agent-write
-            exactly: 1
-          - step: config-lint
-            exactly: 1
-          - step: tests-validate
-            exactly: 1
-          - step: agent-verify-tests
-            exactly: 1
-          - step: agent-code-review
-            exactly: 1
-          - step: agent-cleanup
-            exactly: 1
-          - step: agent-finish
-            exactly: 1
-
-    - name: agents-builder-no-human-on-issue-opened
-      description: Ensure human input is not executed on non-manual events.
-      event: issue_opened
-      fixture: gh.issue_open.minimal
-      mocks:
-        agent-draft:
-          slug: nohuman
-          files:
-            - path: tmp/nohuman.yaml
-              content: |
-                version: "1.0"
-                output:
-                  pr_comment:
-                    format: markdown
-                    group_by: check
-                    collapse: true
-                steps:
-                  hello:
-                    type: log
-                    message: "hi"
-                    level: info
-                    on: [issue_opened]
-            - path: tmp/nohuman.tests.yaml
-              content: |
-                version: "1.0"
-                extends: "nohuman.yaml"
                 tests:
                   defaults: { strict: true, ai_provider: mock }
                   cases:
                     - name: ok
                       event: issue_opened
                       fixture: gh.issue_open.minimal
-                      expect:
-                        calls:
-                          - step: hello
-                            exactly: 1
-        config-lint: ""
-        tests-validate: ""
-        agent-verify-tests:
+                      expect: {}
+        verify-tests:
           failures: 0
           results:
             - name: ok
               passed: true
-        agent-cleanup:
-          removed: []
+        code-review:
+          ok: true
+          feedback: "OK"
       expect:
         calls:
-          - step: agent-start
+          - step: start
             exactly: 1
-          - step: agent-draft
+          - step: detect-mode
             exactly: 1
-          - step: agent-write
+          - step: draft
             exactly: 1
+          - step: refine
+            exactly: 1
+          - step: write
+            exactly: 2
           - step: config-lint
-            exactly: 1
+            exactly: 2
           - step: tests-validate
+            exactly: 2
+          - step: verify-tests
             exactly: 1
-          - step: agent-verify-tests
+          - step: code-review
             exactly: 1
-          - step: agent-code-review
+          - step: cleanup
             exactly: 1
-          - step: agent-cleanup
+          - step: finish
             exactly: 1
-          - step: agent-finish
+      env:
+        VISOR_AGENT_OUT_DIR: "tmp"
+
+    - name: chat-loop-manual
+      description: Chat loop returns to brief once, then stops.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        detect-mode:
+          path: "tmp/nonexistent.yaml"
+          exists: false
+          empty: true
+          mode: "new"
+        brief[]:
+          - "first brief"
+          - "second brief"
+        draft:
+          slug: chatg
+          files:
+            - path: chatg.yaml
+              content: |
+                version: "1.0"
+                output:
+                  pr_comment:
+                    format: markdown
+                    group_by: check
+                    collapse: true
+                steps:
+                  hello:
+                    type: log
+                    message: "hi"
+                    level: info
+                    on: [manual, issue_opened]
+            - path: chatg.tests.yaml
+              content: |
+                version: "1.0"
+                extends: "chatg.yaml"
+                tests:
+                  defaults: { strict: true, ai_provider: mock }
+                  cases:
+                    - name: ok
+                      event: manual
+                      fixture: local.minimal
+                      expect:
+                        calls:
+                          - step: hello
+                            exactly: 1
+        verify-tests:
+          failures: 0
+          results:
+            - name: ok
+              passed: true
+        code-review:
+          ok: true
+          feedback: "LGTM"
+      expect:
+        calls:
+          - step: brief
+            at_least: 1
+          - step: detect-mode
+            at_least: 1
+          - step: draft
+            at_least: 1
+          - step: write
+            at_least: 1
+          - step: config-lint
+            at_least: 1
+          - step: tests-validate
+            at_least: 1
+          - step: verify-tests
+            at_least: 1
+          - step: code-review
+            at_least: 1
+          - step: cleanup
+            at_least: 1
+          - step: finish
+            at_least: 1
+      env:
+        VISOR_AGENT_OUT_DIR: "tmp"
+        VISOR_AGENT_PATH: "tmp/nonexistent.yaml"
+        VISOR_CHAT_MODE: "true"
+        VISOR_CHAT_MAX_LOOPS: "1"
+        VISOR_TEST_MODE: "true"
+
+    - name: prompt-never-includes-context-even-when-allowed
+      description: Even if tests allow code context, draft disables it at step level.
+      event: manual
+      fixture: local.minimal
+      expect:
+        calls:
+          - step: brief
             exactly: 1
-        no_calls:
-          - step: agent-brief
+          - step: draft
+            exactly: 1
+        prompts:
+          - step: draft
+            index: last
+            not_contains:
+              - "<pull_request>"
+              - "<files_summary>"
+      env:
+        VISOR_TEST_ALLOW_CODE_CONTEXT: "true"

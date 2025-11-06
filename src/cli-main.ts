@@ -361,11 +361,27 @@ export async function main(): Promise<void> {
     }
     // Check for build subcommand: run the official agent-builder config
     if (filteredArgv.length > 2 && filteredArgv[2] === 'build') {
-      // Transform into a standard run with --config defaults/agent-builder.yaml
+      // Transform into a standard run with our official builder config (agent-builder.yaml).
+      // Require a positional target: `build <path/to/agent.yaml>`
       const base = filteredArgv.slice(0, 2);
-      const rest = filteredArgv.slice(3); // preserve flags like --message
-      const cfgPath = path.resolve(process.cwd(), 'defaults', 'agent-builder.yaml');
-      filteredArgv = [...base, '--config', cfgPath, '--event', 'manual', ...rest];
+      let rest = filteredArgv.slice(3); // preserve flags like --message
+      const preferred = path.resolve(process.cwd(), 'defaults', 'agent-builder.yaml');
+      const fallback = path.resolve(process.cwd(), 'defaults', 'agent-build.yaml');
+      const chosen = fs.existsSync(preferred) ? preferred : fallback;
+
+      if (rest.length === 0 || String(rest[0]).startsWith('-')) {
+        console.error('Usage: visor build <path/to/agent.yaml> [--message "brief" ...]');
+        process.exitCode = 1;
+        return;
+      }
+
+      const targetPath = path.resolve(process.cwd(), String(rest[0]));
+      process.env.VISOR_AGENT_PATH = targetPath; // builder decides mode via Liquid readfile
+      rest = rest.slice(1);
+
+      // Do not force code context globally; respect per-step ai.skip_code_context.
+      // Builder YAML controls whether to include repo context.
+      filteredArgv = [...base, '--config', chosen, '--event', 'manual', ...rest];
     }
     // Construct CLI and ConfigManager only after subcommand handling
     const cli = new CLI();
