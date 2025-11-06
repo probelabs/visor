@@ -489,16 +489,16 @@ steps:
     op: labels.add
     value_js: |
       try {
-        const labels = Array.isArray(outputs['issue-assistant']?.labels)
-          ? outputs['issue-assistant'].labels
-          : [];
+        var ai = outputs && outputs['issue-assistant'] ? outputs['issue-assistant'] : {};
+        var labels = Array.isArray(ai && ai.labels) ? ai.labels : [];
         // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
         return labels
-          .map(v => String(v ?? ''))
-          .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
+          .map(function(v) { return String(v == null ? '' : v); })
+          .map(function(s) { return s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim(); })
           .filter(Boolean);
-      } catch (error) {
-        log('Error processing issue labels:', error);
+      } catch (e) {
+        // Avoid shadowing/resolution quirks with identifier name "error" in sandboxed environments
+        log('Error processing issue labels:', e);
         return [];
       }
 

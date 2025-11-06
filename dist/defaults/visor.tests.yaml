@@ -102,6 +102,31 @@ tests:
             contains:
               - "Bug: crashes on search edge case"
 
+    - name: issue-triage-labels
+      description: |
+        Minimal issue triage path to validate label application from issue-assistant output.
+        This specifically exercises the apply-issue-labels value_js to catch sandbox errors.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      mocks:
+        issue-assistant:
+          text: |
+            Thanks for the report — we will triage shortly.
+          intent: issue_triage
+          labels: [bug, priority/medium]
+      expect:
+        calls:
+          - step: issue-assistant
+            exactly: 1
+          - step: apply-issue-labels
+            exactly: 1
+          - provider: github
+            op: labels.add
+            at_least: 1
+            args:
+              contains:
+                - bug
+
     - name: pr-review-e2e-flow
       description: |
         End-to-end PR lifecycle covering multiple external events:
