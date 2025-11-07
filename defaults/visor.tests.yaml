@@ -127,6 +127,40 @@ tests:
               contains:
                 - bug
 
+    - name: references-format-issue-assistant
+      description: |
+        The issue assistant prompt must instruct to output References as a clickable markdown list
+        (not a fenced `refs` block). It should mention blob/HEAD for issue context and blob/<HEAD_SHA> for PRs.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      strict: false
+      expect:
+        prompts:
+          - step: issue-assistant
+            contains:
+              - "References:"
+              - "clickable markdown list"
+              - "- [path/to/file.ext:START-END]"
+              - "blob/HEAD"
+              - "blob/<HEAD_SHA>"
+
+    - name: references-format-comment-assistant
+      description: |
+        The comment assistant prompt must instruct to output References as a clickable markdown list
+        and not use a fenced refs block. It should include examples of blob links.
+      event: issue_comment
+      fixture: gh.issue_comment.visor_help
+      strict: false
+      expect:
+        prompts:
+          - step: comment-assistant
+            contains:
+              - "References:"
+              - "clickable markdown list"
+              - "- [path/to/file.ext:START-END]"
+              - "blob/<HEAD_OR_COMMIT>"
+              - "References: none"
+
     - name: pr-review-e2e-flow
       description: |
         End-to-end PR lifecycle covering multiple external events:
