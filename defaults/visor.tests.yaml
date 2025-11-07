@@ -127,7 +127,6 @@ tests:
               contains:
                 - bug
 
-
     - name: pr-review-e2e-flow
       description: |
         End-to-end PR lifecycle covering multiple external events:
