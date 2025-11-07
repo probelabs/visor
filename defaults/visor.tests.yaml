@@ -139,10 +139,7 @@ tests:
           - step: issue-assistant
             contains:
               - "References:"
-              - "clickable markdown list"
               - "- [path/to/file.ext:START-END]"
-              - "blob/HEAD"
-              - "blob/<HEAD_SHA>"
 
     - name: references-format-comment-assistant
       description: |
@@ -156,9 +153,7 @@ tests:
           - step: comment-assistant
             contains:
               - "References:"
-              - "clickable markdown list"
               - "- [path/to/file.ext:START-END]"
-              - "blob/<HEAD_OR_COMMIT>"
               - "References: none"
 
     - name: pr-review-e2e-flow

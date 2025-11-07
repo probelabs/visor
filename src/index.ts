@@ -793,91 +793,10 @@ async function handleIssueEvent(
       }
 
       // Directly use check content without adding extra headers
-      // Helper: rewrite legacy ```refs fenced blocks into a markdown list with GitHub links
-      function rewriteReferencesToLinks(
-        raw: string,
-        opts: { owner: string; repo: string; prContext: boolean; headSha?: string }
-      ): string {
-        try {
-          const re = /(References:\s*)(```refs\n)([\s\S]*?)(\n```)/i;
-          const m = raw.match(re);
-          if (!m) return raw;
-          const before = raw.slice(0, m.index!);
-          const after = raw.slice((m.index || 0) + m[0].length);
-          const header = m[1] || 'References:\n';
-          const lines = (m[3] || '')
-            .split(/\r?\n/)
-            .map(s => s.trim())
-            .filter(s => s.length > 0 && s.toLowerCase() !== 'none');
-          if (lines.length === 0) {
-            return before + header + 'none' + after;
-          }
-          const sha =
-            opts.prContext && opts.headSha && opts.headSha !== 'unknown' ? opts.headSha : 'HEAD';
-          const bullets = lines.map(line => {
-            // parse: path[:start[-end]|#Symbol][ - note]
-            let pathPart = line;
-            let note = '';
-            const dashIdx = line.indexOf(' - ');
-            if (dashIdx >= 0) {
-              pathPart = line.slice(0, dashIdx).trim();
-              note = line.slice(dashIdx + 3).trim();
-            }
-            let path = pathPart;
-            let linesStr = '';
-            let symbol = '';
-            const hashIdx = pathPart.indexOf('#');
-            if (hashIdx >= 0) {
-              path = pathPart.slice(0, hashIdx);
-              symbol = pathPart.slice(hashIdx + 1);
-            } else {
-              const colonIdx = pathPart.indexOf(':');
-              if (colonIdx >= 0) {
-                path = pathPart.slice(0, colonIdx);
-                linesStr = pathPart.slice(colonIdx + 1);
-              }
-            }
-            const anchor = (function () {
-              if (linesStr) {
-                const m = linesStr.match(/^(\d+)(?:-(\d+))?$/);
-                if (m) {
-                  const start = m[1];
-                  const end = m[2];
-                  return `#L${start}${end ? `-L${end}` : ''}`;
-                }
-              }
-              // No reliable symbol anchors in blob; omit
-              return '';
-            })();
-            const url = `https://github.com/${opts.owner}/${opts.repo}/blob/${sha}/${path}${anchor}`;
-            const label = `${path}${linesStr ? `:${linesStr}` : symbol ? `#${symbol}` : ''}`;
-            return `- [${label}](${url})${note ? ` – ${note}` : ''}`;
-          });
-          return before + header + bullets.join('\n') + after;
-        } catch {
-          return raw;
-        }
-      }
-
       for (const checks of Object.values(resultsToUse)) {
         for (const check of checks) {
           if (check.content && check.content.trim()) {
-            let rendered = check.content;
-            // Rewrite legacy refs to links with correct context
-            const prCtx = Boolean((issue as any)?.pull_request);
-            let headSha: string | undefined = undefined;
-            if (prCtx) {
-              try {
-                headSha = await resolveHeadShaFromEvent(octokit, owner, repo, context);
-              } catch {}
-            }
-            rendered = rewriteReferencesToLinks(rendered, {
-              owner,
-              repo,
-              prContext: prCtx,
-              headSha,
-            });
-            commentBody += `${rendered}\n\n`;
+            commentBody += `${check.content}\n\n`;
           }
         }
       }
