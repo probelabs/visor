@@ -8,7 +8,8 @@ steps:
   ask:
     type: human-input
     group: task-refinement
-    on: [manual]
+    # No explicit event trigger; run in CLI by default but guard via if
+    if: "event.event_name == 'manual'"
     prompt: |
       {% if outputs['refine'] and outputs['refine'].refined == false and (outputs['refine'].ask_user == true or outputs['refine'].ask_user == 'true') %}
       Clarification needed: {{ outputs['refine'].text }}
@@ -28,7 +29,6 @@ steps:
     type: ai
     group: task-refinement
     depends_on: [ask]
-    on: [manual]
     ai_persona: "requirements analyst"
     ai:
       skip_code_context: true
@@ -80,7 +80,6 @@ steps:
     type: log
     group: task-refinement
     depends_on: [refine]
-    on: [manual]
     tags: [one_shot]
     if: "outputs['refine'] && outputs['refine'].refined === true"
     # Log just the final refined text; avoid extra context/metadata
