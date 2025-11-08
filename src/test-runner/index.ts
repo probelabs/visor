@@ -421,6 +421,7 @@ export class VisorTestRunner {
     }
 
     const defaultsAny: any = suite.tests.defaults || {};
+    (this as any).suiteDefaults = defaultsAny;
     const defaultStrict = defaultsAny?.strict !== false;
     const aiProviderDefault = defaultsAny?.ai_provider || 'mock';
     const ghRec = defaultsAny?.github_recorder as
@@ -463,7 +464,6 @@ export class VisorTestRunner {
         chk.ai = {
           ...prev,
           provider: aiProviderDefault,
-          skip_code_context: true,
           disable_tools: true,
           timeout: Math.min(15000, (prev.timeout as number) || 15000),
         } as any;
@@ -517,9 +517,28 @@ export class VisorTestRunner {
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
         return { name: _case.name, failed };
       }
+      // Per-case AI override: include code context when requested
+      const suiteDefaults: any = (this as any).suiteDefaults || {};
+      const includeCodeContext =
+        (typeof (_case as any).ai_include_code_context === 'boolean'
+          ? (_case as any).ai_include_code_context
+          : false) || suiteDefaults.ai_include_code_context === true;
+      const cfgLocal = JSON.parse(JSON.stringify(cfg));
+      for (const name of Object.keys(cfgLocal.checks || {})) {
+        const chk = cfgLocal.checks[name] || {};
+        if ((chk.type || 'ai') === 'ai') {
+          const prev = (chk.ai || {}) as Record<string, unknown>;
+          chk.ai = {
+            ...prev,
+            skip_code_context: includeCodeContext ? false : true,
+          } as any;
+          cfgLocal.checks[name] = chk;
+        }
+      }
+
       const setup = this.setupTestCase(
         _case,
-        cfg,
+        cfgLocal,
         defaultStrict,
         defaultPromptCap,
         ghRec,
@@ -537,7 +556,7 @@ export class VisorTestRunner {
             octokit: setup.recorder,
           };
         } catch {}
-        const exec = await this.executeTestCase(setup, cfg);
+        const exec = await this.executeTestCase(setup, cfgLocal);
         const res = exec.res;
         if (process.env.VISOR_DEBUG === 'true') {
           try {
@@ -566,7 +585,7 @@ export class VisorTestRunner {
             typeof (_case as any).mocks === 'object' && (_case as any).mocks
               ? ((_case as any).mocks as Record<string, unknown>)
               : {};
-          this.warnUnmockedProviders(res.statistics, cfg, mocksUsed);
+          this.warnUnmockedProviders(res.statistics, cfgLocal, mocksUsed);
         } catch {}
         this.printCoverage(_case.name, res.statistics, setup.expect);
         if (caseFailures.length === 0) {
