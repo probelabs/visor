@@ -72,19 +72,18 @@ steps:
       run: [finish]
 
   finish:
-    type: command
+    type: log
     group: task-refinement
     depends_on: [refine]
     on: [manual]
     tags: [one_shot]
     if: "outputs['refine'] && outputs['refine'].refined === true"
-    exec: |
-      # Print the refined task as plain text output of this step
-      node <<'NODE'
-      const o = {{ outputs['refine'] | json }};
-      process.stdout.write(String(o.text||''));
-      NODE
-    output_format: text
+    # Log just the final refined text; avoid extra context/metadata
+    message: "{{ outputs['refine'].text }}"
+    level: info
+    include_pr_context: false
+    include_dependencies: false
+    include_metadata: false
 
 tests:
   defaults:
