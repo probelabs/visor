@@ -421,7 +421,7 @@ export class VisorTestRunner {
     }
 
     const defaultsAny: any = suite.tests.defaults || {};
-    ;(this as any).suiteDefaults = defaultsAny;
+    (this as any).suiteDefaults = defaultsAny;
     const defaultStrict = defaultsAny?.strict !== false;
     const aiProviderDefault = defaultsAny?.ai_provider || 'mock';
     const ghRec = defaultsAny?.github_recorder as

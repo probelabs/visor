@@ -12,9 +12,7 @@ describe('References example link liquid rendering', () => {
         // No pull_request in issue context
       },
     });
-    expect(out).toBe(
-      'https://github.com/owner/repo/blob/HEAD/path/to/file.ext#LSTART-LEND'
-    );
+    expect(out).toBe('https://github.com/owner/repo/blob/HEAD/path/to/file.ext#LSTART-LEND');
   });
 
   test('renders PR head sha when provided', async () => {
@@ -30,4 +28,3 @@ describe('References example link liquid rendering', () => {
     );
   });
 });
-
