@@ -60,6 +60,20 @@ tests:
           - step: overview
             contains:
               - "feat: add user search"
+
+    - name: references-example-link-issue
+      description: Ensure issue-assistant prompt renders example with HEAD fallback and includes References section.
+      event: issue_opened
+      fixture: gh.issue_open.minimal
+      strict: false
+      expect:
+        prompts:
+          - step: issue-assistant
+            contains:
+              - "References:"
+              - "blob/HEAD"
+              - "path/to/file.ext#LSTART-LEND"
+
               - "diff --git a/src/search.ts"
 
     - name: issue-triage
