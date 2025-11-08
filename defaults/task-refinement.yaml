@@ -9,7 +9,6 @@ steps:
     type: human-input
     group: task-refinement
     # No explicit event trigger; run in CLI by default but guard via if
-    if: "event.event_name == 'manual'"
     prompt: |
       {% if outputs['refine'] and outputs['refine'].refined == false and (outputs['refine'].ask_user == true or outputs['refine'].ask_user == 'true') %}
       Clarification needed: {{ outputs['refine'].text }}

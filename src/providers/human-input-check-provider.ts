@@ -97,11 +97,48 @@ export class HumanInputCheckProvider extends CheckProvider {
 
   /** Build a template context for Liquid rendering */
   private buildTemplateContext(
-    _prInfo: PRInfo,
+    prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    _context?: ExecutionContext
   ): Record<string, unknown> {
     const ctx: Record<string, unknown> = {};
+    // pr context
+    try {
+      ctx.pr = {
+        number: prInfo.number,
+        title: prInfo.title,
+        body: prInfo.body,
+        author: prInfo.author,
+        base: prInfo.base,
+        head: prInfo.head,
+        files: (prInfo.files || []).map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })),
+      };
+    } catch {}
+    // event + env
+    try {
+      const safeEnv = (() => {
+        try {
+          const { buildSandboxEnv } = require('../utils/env-exposure');
+          return buildSandboxEnv(process.env);
+        } catch {
+          return {} as Record<string, string>;
+        }
+      })();
+      (ctx as any).event = { event_name: (prInfo as any)?.eventType || 'manual' };
+      (ctx as any).env = safeEnv;
+    } catch {}
+    // utils helpers
+    (ctx as any).utils = {
+      now: new Date().toISOString(),
+      today: new Date().toISOString().split('T')[0],
+    };
     // outputs: expose raw outputs from dependency results
     const outputs: Record<string, unknown> = {};
     const outputsRaw: Record<string, unknown> = {};
@@ -329,7 +366,8 @@ export class HumanInputCheckProvider extends CheckProvider {
         const tctx = this.buildTemplateContext(
           _prInfo,
           _dependencyResults,
-          (config as any).__outputHistory as Map<string, unknown[]> | undefined
+          (config as any).__outputHistory as Map<string, unknown[]> | undefined,
+          context
         );
         if (typeof config.prompt === 'string') {
           config = { ...config, prompt: await this.liquid.parseAndRender(config.prompt, tctx) };

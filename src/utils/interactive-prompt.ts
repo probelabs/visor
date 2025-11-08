@@ -84,8 +84,12 @@ export async function interactivePrompt(options: PromptOptions): Promise<string>
         return finish(trimmed || defaultValue || '');
       });
       rl.on('SIGINT', () => {
+        try {
+          // Print a clean newline and exit immediately with 130 (SIGINT)
+          process.stdout.write('\n');
+        } catch {}
         cleanup();
-        reject(new Error('Cancelled by user'));
+        process.exit(130);
       });
     } else {
       rl.question('> ', answer => {
@@ -97,8 +101,11 @@ export async function interactivePrompt(options: PromptOptions): Promise<string>
         return finish(trimmed || defaultValue || '');
       });
       rl.on('SIGINT', () => {
+        try {
+          process.stdout.write('\n');
+        } catch {}
         cleanup();
-        reject(new Error('Cancelled by user'));
+        process.exit(130);
       });
     }
   });
@@ -112,6 +119,14 @@ export async function simplePrompt(prompt: string): Promise<string> {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
+    });
+
+    rl.on('SIGINT', () => {
+      try {
+        process.stdout.write('\n');
+      } catch {}
+      rl.close();
+      process.exit(130);
     });
 
     rl.question(`${prompt}\n> `, answer => {
