@@ -366,20 +366,11 @@ steps:
         - `intent`: must be "issue_triage" for this flow.
         - `labels` (optional): array of labels that would help organization for this new issue.
 
-        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+        Add a short “References” section at the end of the markdown `text` as a simple, clickable markdown list (no fenced code blocks). Keep it minimal. If you didn’t consult code, write `References: none`.
 
+        Example:
         References:
-        ```refs
-        path/to/file.ext[:start[-end]|#SymbolName] - very short note
-        ```
-
-        Rules for References:
-        - Only include files/lines/symbols you actually used. Keep it minimal and relevant.
-        - If you didn’t consult code, write:
-          References:
-          ```refs
-          none
-          ```
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
 
         Use this triage rubric (adopted from our main prompt):
         1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
@@ -445,22 +436,11 @@ steps:
         - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
         - `labels`: omit for comments (do not include).
 
-        {% raw %}
-        Add a short “References” section at the end of the markdown `text` that lists any repository files/lines you relied on for the answer. Use this exact machine‑parsable format:
+        Add a short “References” section at the end of the markdown `text` as a clickable markdown list (no fenced blocks). If none used, write `References: none`.
 
+        Example:
         References:
-        ```refs
-        path/to/file.ext[:start[-end]] - very short note
-        ```
-
-        Rules for References:
-        - Only include files/lines you actually used. Keep it minimal and relevant.
-        - If you didn’t consult code, write:
-          References:
-          ```refs
-          none
-          ```
-        {% endraw %}
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
 
         Rules:
         - Never suggest rerun/disable unless asked explicitly.
