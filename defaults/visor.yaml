@@ -370,7 +370,7 @@ steps:
 
         Example:
         References:
-        - [path/to/file.ext:START-END](https://github.com/OWNER/REPO/blob/BRANCH_OR_COMMIT/path/to/file.ext#LSTART-LEND) – very short note
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
 
         Use this triage rubric (adopted from our main prompt):
         1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
@@ -436,13 +436,11 @@ steps:
         - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
         - `labels`: omit for comments (do not include).
 
-        {% raw %}
         Add a short “References” section at the end of the markdown `text` as a clickable markdown list (no fenced blocks). If none used, write `References: none`.
 
         Example:
         References:
-        - [path/to/file.ext:START-END](https://github.com/OWNER/REPO/blob/BRANCH_OR_COMMIT/path/to/file.ext#LSTART-LEND) – very short note
-        {% endraw %}
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
 
         Rules:
         - Never suggest rerun/disable unless asked explicitly.
