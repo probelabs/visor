@@ -3,6 +3,8 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { HumanInputRequest } from '../types/config';
 import { interactivePrompt, simplePrompt } from '../utils/interactive-prompt';
+import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 import { tryReadStdin } from '../utils/stdin-reader';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -27,6 +29,7 @@ import * as path from 'path';
  * ```
  */
 export class HumanInputCheckProvider extends CheckProvider {
+  private liquid?: Liquid;
   /**
    * @deprecated Use ExecutionContext.cliMessage instead
    * Kept for backward compatibility
@@ -90,6 +93,37 @@ export class HumanInputCheckProvider extends CheckProvider {
     }
 
     return true;
+  }
+
+  /** Build a template context for Liquid rendering */
+  private buildTemplateContext(
+    _prInfo: PRInfo,
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>
+  ): Record<string, unknown> {
+    const ctx: Record<string, unknown> = {};
+    // outputs: expose raw outputs from dependency results
+    const outputs: Record<string, unknown> = {};
+    const outputsRaw: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [name, res] of dependencyResults.entries()) {
+        const summary = res as ReviewSummary & { output?: unknown };
+        if (typeof name === 'string' && name.endsWith('-raw')) {
+          outputsRaw[name.slice(0, -4)] = summary.output !== undefined ? summary.output : summary;
+        } else {
+          outputs[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+    }
+    ctx.outputs = outputs;
+    (ctx as any).outputs_raw = outputsRaw;
+    // outputs_history: expose full history if available
+    const hist: Record<string, unknown[]> = {};
+    if (outputHistory) {
+      for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
+    }
+    (ctx as any).outputs_history = hist;
+    return ctx;
   }
 
   /**
@@ -179,7 +213,7 @@ export class HumanInputCheckProvider extends CheckProvider {
         return s;
       }
     } catch {}
-    const prompt = config.prompt || 'Please provide input:';
+    const prompt = (config.prompt as string) || 'Please provide input:';
     const placeholder = (config.placeholder as string | undefined) || 'Enter your response...';
     const allowEmpty = (config.allow_empty as boolean | undefined) ?? false;
     const multiline = (config.multiline as boolean | undefined) ?? false;
@@ -288,6 +322,27 @@ export class HumanInputCheckProvider extends CheckProvider {
     const checkName = config.checkName || 'human-input';
 
     try {
+      // Render Liquid templates in prompt/placeholder if any
+      try {
+        this.liquid =
+          this.liquid || createExtendedLiquid({ strictVariables: false, strictFilters: false });
+        const tctx = this.buildTemplateContext(
+          _prInfo,
+          _dependencyResults,
+          (config as any).__outputHistory as Map<string, unknown[]> | undefined
+        );
+        if (typeof config.prompt === 'string') {
+          config = { ...config, prompt: await this.liquid.parseAndRender(config.prompt, tctx) };
+        }
+        if (typeof config.placeholder === 'string') {
+          (config as any).placeholder = await this.liquid.parseAndRender(
+            config.placeholder as string,
+            tctx
+          );
+        }
+      } catch {
+        // best-effort rendering; fall back to raw strings on errors
+      }
       // Get user input (pass context for non-static state)
       const userInput = await this.getUserInput(checkName, config, context);
 

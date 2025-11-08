@@ -10,9 +10,14 @@ steps:
     group: task-refinement
     on: [manual]
     prompt: |
+      {% if outputs['refine'] and outputs['refine'].refined == false and (outputs['refine'].ask_user == true or outputs['refine'].ask_user == 'true') %}
+      Clarification needed: {{ outputs['refine'].text }}
+      Type your answer and press Enter.
+      {% else %}
       Provide the task you want to accomplish. Be specific about constraints
       (inputs, outputs, environment, success criteria).
-    placeholder: "e.g., Generate a minimal CI workflow for this repo"
+      {% endif %}
+    placeholder: "e.g., Answer the question above or paste your task"
     multiline: false
     allow_empty: false
     # Route to refine on success
