@@ -1,0 +1,139 @@
+version: "1.0"
+
+# Simple agent: task-refinement
+# - Collects user input, refines it with AI (skip code context), and loops until refined.
+# - Returns final refined text via the `finish` step output.
+
+steps:
+  ask:
+    type: human-input
+    group: task-refinement
+    on: [manual]
+    prompt: |
+      Provide the task you want to accomplish. Be specific about constraints
+      (inputs, outputs, environment, success criteria).
+    placeholder: "e.g., Generate a minimal CI workflow for this repo"
+    multiline: true
+    allow_empty: false
+    # Route to refine on success
+    on_success:
+      goto: refine
+
+  refine:
+    type: ai
+    group: task-refinement
+    depends_on: [ask]
+    on: [manual]
+    ai_persona: "requirements analyst"
+    ai:
+      skip_code_context: true
+    # Schema ensures the agent either finalizes or asks to clarify
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        refined: { type: boolean, description: "true if the task is fully specified and accepted" }
+        text: { type: string, description: "final refined task or question to user" }
+        ask_user: { type: boolean, description: "if true, we must ask user again" }
+      required: [refined, text]
+    prompt: |
+      You are a helpful, precise task refinement assistant. Role: requirements-analyst.
+      - Take the latest user input and refine it into a crisp, executable task with clear
+        success criteria, constraints, and minimal assumptions.
+      - If information is missing, set refined=false and ask_user=true and write a single,
+        specific clarification question in `text` (no extra prose).
+      - If everything is sufficient, set refined=true and provide the final refined wording in `text`.
+      - Be succinct and unambiguous. Avoid implementation details unless the user asked for them.
+
+      Latest user input:
+      {{ outputs['ask'] }}
+
+      Conversation history (most-recent last):
+      {% if outputs_history['ask'] and outputs_history['ask'].size > 0 %}
+      - User messages so far:
+      {% for u in outputs_history['ask'] %}
+        • {{ u }}
+      {% endfor %}
+      {% endif %}
+      {% if outputs_history['refine'] and outputs_history['refine'].size > 0 %}
+      - Assistant drafts so far:
+      {% for r in outputs_history['refine'] %}
+        • {{ r.text | default: r | json }}
+      {% endfor %}
+      {% endif %}
+
+      Respond ONLY with JSON matching the schema: { refined: boolean, text: string, ask_user?: boolean }.
+    # Loop control using fail_if + on_fail (no goto_js)
+    fail_if: "output && output.refined !== true"
+    on_fail:
+      goto: ask
+    # Use on_success.run to schedule finish exactly once (engine one_shot guard)
+    on_success:
+      run: [finish]
+
+  finish:
+    type: command
+    group: task-refinement
+    depends_on: [refine]
+    on: [manual]
+    tags: [one_shot]
+    if: "outputs['refine'] && outputs['refine'].refined === true"
+    exec: |
+      # Print the refined task as plain text output of this step
+      node <<'NODE'
+      const o = {{ outputs['refine'] | json }};
+      process.stdout.write(String(o.text||''));
+      NODE
+    output_format: text
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+  cases:
+    - name: one-pass-refinement
+      description: Single turn; AI is happy and returns refined text.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        ask: "Build a small Node CLI that prints \"hello\""
+        refine:
+          refined: true
+          text: "Create a Node.js CLI (using Node >=18) that prints 'hello' when run; include usage example and exit code 0."
+      expect:
+        calls:
+          - step: ask
+            exactly: 1
+          - step: refine
+            exactly: 1
+          - step: finish
+            exactly: 1
+
+    - name: multi-turn-refinement-loop
+      description: Two clarifying turns followed by a final refinement; manual-only chat.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        ask[]:
+          - "Create a CI job"
+          - "GitHub Actions; run on push to main"
+          - "Use Node 18 and npm ci + npm test"
+        refine[]:
+          - { refined: false, ask_user: true, text: "Which CI platform and trigger conditions?" }
+          - { refined: false, ask_user: true, text: "What Node version and commands should run?" }
+          - { refined: true, text: "Set up GitHub Actions workflow: on push to main, use Node 18.x, cache npm, run npm ci && npm test." }
+      expect:
+        calls:
+          - step: ask
+            exactly: 3
+          - step: refine
+            exactly: 3
+          - step: finish
+            at_least: 1
+        prompts:
+          - step: refine
+            index: last
+            contains:
+              - "Which CI platform and trigger conditions?"
+              - "Use Node 18 and npm ci + npm test"
+              - "What Node version and commands should run?"

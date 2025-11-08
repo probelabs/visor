@@ -465,6 +465,10 @@ export class CheckExecutionEngine {
         if (this.forwardRunGuards.has(guardKey)) return;
         this.forwardRunGuards.add(guardKey);
       }
+      // Mark target as forward-scheduled so grouped runner can wait/skip
+      try {
+        this.forwardDependentsScheduled.add(target);
+      } catch {}
       await this.runNamedCheck(target, scopeForRun, {
         origin,
         config,
@@ -477,9 +481,13 @@ export class CheckExecutionEngine {
     };
 
     // Decide whether to dedupe target in this grouped run.
-    // For on_finish correction waves we allow re-execution of the target,
-    // so do not guard. For other origins, dedupe within the same grouped run.
-    const guardTargetOnce = origin !== 'on_finish';
+    // For on_finish correction waves we allow re-execution of the target.
+    // Additionally, respect a 'repeatable' tag on the target step which
+    // explicitly opts the step into re-execution within the same event/wave
+    // (useful for chat-style loops driven by fail_if + on_fail/on_success).
+    // Allow re-running the target within the same grouped run when routing originates from on_fail.
+    // This enables explicit correction loops without any special tags.
+    const guardTargetOnce = origin !== 'on_finish' && origin !== 'on_fail';
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
     try {
@@ -502,8 +510,22 @@ export class CheckExecutionEngine {
         const tcfgNow = cfgChecks[target];
         const targetIsForEachParent = !!tcfgNow?.forEach;
         if (targetIsForEachParent) return;
-        const dependentsOnly = order.filter(n => n !== target);
+        // Choose dependents to run: for on_fail origin, only run direct dependents of target
+        // to avoid cascading into transitive dependents (e.g., finish) when looping for fixes.
+        const dependentsOnly =
+          origin === 'on_fail'
+            ? order.filter(n => n !== target && (cfgChecks[n]?.depends_on || []).includes(target))
+            : order.filter(n => n !== target);
         for (const stepId of dependentsOnly) {
+          // Skip scheduling dependent if any of its direct deps in this subset had fatal issues
+          try {
+            const depsForStep = (cfgChecks[stepId]?.depends_on || []).filter(inSet);
+            const hasDepFatal = depsForStep.some(d => {
+              const r = resultsMap.get(d);
+              return r && Array.isArray(r.issues) && this.hasFatal(r.issues);
+            });
+            if (hasDepFatal) continue;
+          } catch {}
           try {
             this.forwardDependentsScheduled.add(stepId);
           } catch {}
@@ -530,14 +552,34 @@ export class CheckExecutionEngine {
         await runChainOnce([]);
       }
 
+      // For on_fail-originated forward runs, do not follow static goto chains; the intent is to
+      // bounce to a correction step (e.g., ask) without cascading.
+      if (origin === 'on_fail') return;
+
       // Follow explicit on_success.goto edges from the target, if present,
       // to naturally support anchor-style chains (e.g., refine → write → validate → test).
+      // Only follow when the target succeeded (no fatal issues post fail_if evaluation).
       // We intentionally do not evaluate goto_js here to keep this deterministic
       // in routing, but we do honor static goto + goto_event.
       // Follow static goto chains with configurable hop budget and cycle detection
       const maxHops = config?.routing?.max_loops ?? 10;
       let hopCount = 0;
       const visited = new Set<string>();
+      // Success check: if target produced fatal issues, skip static goto chaining
+      try {
+        const dbg = (msg: string) =>
+          (config?.output?.pr_comment ? console.error : console.log)(msg);
+        const tRes = resultsMap.get(target);
+        const hadFatal = tRes && Array.isArray(tRes.issues) && this.hasFatal(tRes.issues);
+        if (hadFatal) {
+          if (debug)
+            dbg(
+              `🔧 Debug: forward-run: skipping on_success.goto chain for '${target}' due to fatal issues`
+            );
+          return; // do not follow chain from a failed target
+        }
+      } catch {}
+
       let current: string | undefined = (
         cfgChecks[target]?.on_success as OnSuccessConfig | undefined
       )?.goto;
@@ -1339,7 +1381,7 @@ export class CheckExecutionEngine {
     if (!this.executionStats.has(target)) this.initializeCheckStats(target);
     const startTs = this.recordIterationStart(target);
     try {
-      const res = await this.executeCheckInline(
+      let res = await this.executeCheckInline(
         target,
         eventOverride || prInfo.eventType || 'manual',
         {
@@ -1356,6 +1398,83 @@ export class CheckExecutionEngine {
           origin: opts.origin || 'inline',
         }
       );
+      // Evaluate fail_if for inline-executed checks (parity with grouped path)
+      if (config && (config.fail_if || (config.checks as any)?.[target]?.fail_if)) {
+        try {
+          const failureResults = await this.evaluateFailureConditions(
+            target,
+            res,
+            config,
+            prInfo,
+            resultsMap
+          );
+          if (failureResults.length > 0) {
+            const failureIssues = failureResults
+              .filter(f => f.failed)
+              .map(f => ({
+                file: 'system',
+                line: 0,
+                ruleId: f.conditionName,
+                message: f.message || `Failure condition met: ${f.expression}`,
+                severity: (f.severity || 'error') as 'info' | 'warning' | 'error' | 'critical',
+                category: 'logic' as const,
+              }));
+            if (failureIssues.length > 0) {
+              res = {
+                ...(res || { issues: [] }),
+                issues: [...(res.issues || []), ...failureIssues],
+              } as ReviewSummary;
+              // Post-fail_if routing: honor on_fail.goto for inline path
+              const checkCfg = (config.checks as any)?.[target] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              const ofCfg: OnFailConfig | undefined = checkCfg?.on_fail
+                ? { ...(config?.routing?.defaults?.on_fail || {}), ...checkCfg.on_fail }
+                : undefined;
+              const hadTriggered = failureResults.some(r => r.failed === true);
+              if (hadTriggered && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
+                let pfTarget: string | null = null;
+                if (ofCfg.goto_js) {
+                  try {
+                    const sandbox = this.getRoutingSandbox();
+                    const scopeObj = {
+                      step: { id: target, tags: checkCfg?.tags || [], group: checkCfg?.group },
+                      outputs: Object.fromEntries(resultsMap.entries()),
+                      output: (res as any)?.output,
+                      event: { name: prInfo.eventType || 'manual' },
+                    };
+                    const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
+                    const r = compileAndRun<string | null>(
+                      sandbox,
+                      code,
+                      { scope: scopeObj },
+                      { injectLog: false, wrapFunction: true }
+                    );
+                    pfTarget = typeof r === 'string' && r ? r : null;
+                  } catch {}
+                }
+                if (!pfTarget && ofCfg.goto) pfTarget = ofCfg.goto;
+                if (pfTarget) {
+                  try {
+                    logger.info(
+                      `↪ on_fail.goto(post-fail_if/inline): jumping to '${pfTarget}' from '${target}'`
+                    );
+                  } catch {}
+                  await this.scheduleForwardRun(pfTarget, {
+                    origin: 'on_fail',
+                    gotoEvent: ofCfg.goto_event,
+                    config,
+                    dependencyGraph,
+                    prInfo,
+                    resultsMap,
+                    debug,
+                  });
+                }
+              }
+            }
+          }
+        } catch {}
+      }
       const issues = (res.issues || []).map(i => ({ ...i }));
       const success = !this.hasFatal(issues);
       const out: unknown = (res as { output?: unknown }).output;
@@ -2585,8 +2704,8 @@ export class CheckExecutionEngine {
     config: import('./types/config').VisorConfig | undefined,
     tagFilter: import('./types/config').TagFilter | undefined
   ): string[] {
-    // When no tag filter is specified, include all checks regardless of tags.
-    // Tag filters should only narrow execution when explicitly provided via config.tag_filter or CLI.
+    // When no tag filter is specified, include only untagged checks by default.
+    // Tagged checks are opt-in unless tag_filter is provided.
     return checks.filter(checkName => {
       const checkConfig = config?.checks?.[checkName];
       if (!checkConfig) {
@@ -2597,7 +2716,6 @@ export class CheckExecutionEngine {
       const checkTags = checkConfig.tags || [];
 
       // If no tag filter is specified, include only untagged checks.
-      // Tagged checks require an explicit include filter.
       if (!tagFilter || (!tagFilter.include && !tagFilter.exclude)) {
         return checkTags.length === 0;
       }
@@ -2789,6 +2907,13 @@ export class CheckExecutionEngine {
 
       // Build execution statistics
       const executionStatistics = this.buildExecutionStatistics();
+
+      // Expose a test-visible snapshot of outputs history in the reviewSummary.
+      // Safe: plain data copy; ignored by CLI formatters. Useful for deterministic tests.
+      try {
+        const histSnap = this.getOutputHistorySnapshot();
+        (reviewSummary as any).history = histSnap;
+      } catch {}
 
       return {
         repositoryInfo,
@@ -4395,6 +4520,17 @@ export class CheckExecutionEngine {
           };
         }
 
+        // Global one_shot tag: if this check already ran in this grouped run, skip
+        try {
+          const tags = (checkConfig.tags || []) as string[];
+          const isOneShot = Array.isArray(tags) && tags.includes('one_shot');
+          const ran = (this.executionStats.get(checkName)?.totalRuns || 0) > 0;
+          if (isOneShot && ran) {
+            if (debug) log(`⏭  Skipped (one_shot already executed): ${checkName}`);
+            return { checkName, error: null, result: results.get(checkName)! };
+          }
+        } catch {}
+
         // Intra-level dependency barrier: if any direct dependencies of this check
         // are also scheduled in this level, wait until they finish and populate
         // the results map (this ensures forEach parents run before their dependents).
@@ -5886,17 +6022,15 @@ export class CheckExecutionEngine {
                   }));
                 finalResult.issues = [...(finalResult.issues || []), ...failureIssues];
 
-                // Post-evaluation routing: if fail_if produced fatal issues and on_fail.goto is configured,
-                // honor goto routing here as a soft-failure. This ensures checks that signal failure via
-                // fail_if (without provider errors) can still drive refine loops.
+                // Post-evaluation routing: if fail_if produced any triggered condition and on_fail.goto is
+                // configured, honor goto routing here as a soft-failure. This ensures checks that signal
+                // failure via fail_if (without provider errors) can still drive refine loops.
                 try {
-                  const hasFatal = failureIssues.some(
-                    i => i.severity === 'error' || i.severity === 'critical'
-                  );
+                  const hadTriggered = failureResults.some(r => r.failed === true);
                   const ofCfg: OnFailConfig | undefined = checkConfig.on_fail
                     ? { ...(config?.routing?.defaults?.on_fail || {}), ...checkConfig.on_fail }
                     : undefined;
-                  if (hasFatal && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
+                  if (hadTriggered && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
                     let target: string | null = null;
                     if (ofCfg.goto_js) {
                       // Build minimal scope for goto_js similar to executeWithRouting
