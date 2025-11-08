@@ -13,7 +13,7 @@ steps:
       Provide the task you want to accomplish. Be specific about constraints
       (inputs, outputs, environment, success criteria).
     placeholder: "e.g., Generate a minimal CI workflow for this repo"
-    multiline: true
+    multiline: false
     allow_empty: false
     # Route to refine on success
     on_success:
