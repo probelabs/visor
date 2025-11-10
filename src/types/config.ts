@@ -302,7 +302,9 @@ export interface AIProviderConfig {
   debug?: boolean;
   /** Probe promptType to use (e.g., engineer, code-review, architect) */
   prompt_type?: string;
-  /** Probe customPrompt (baseline/system prompt) */
+  /** System prompt (baseline preamble). Replaces legacy custom_prompt. */
+  system_prompt?: string;
+  /** Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt */
   custom_prompt?: string;
   /** Skip adding code context (diffs, files, PR info) to the prompt */
   skip_code_context?: boolean;
@@ -409,7 +411,9 @@ export interface CheckConfig {
   ai_persona?: string;
   /** Probe promptType for this check (underscore style) */
   ai_prompt_type?: string;
-  /** Probe customPrompt for this check (underscore style) */
+  /** System prompt for this check (underscore style) */
+  ai_system_prompt?: string;
+  /** Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt */
   ai_custom_prompt?: string;
   /** MCP servers for this AI check - overrides global setting */
   ai_mcp_servers?: Record<string, McpServerConfig>;

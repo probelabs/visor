@@ -25,9 +25,15 @@ steps:
     group: task-refinement
     # Run only after 'ask' — dependency drives ordering
     depends_on: [ask]
-    ai_persona: "requirements analyst"
     ai:
       skip_code_context: true
+      system_prompt: |
+        You are a helpful, precise task refinement assistant (role: requirements-analyst).
+        - Refine the user's task into a clear, executable description with minimal assumptions.
+        - If information is missing, set refined=false and ask_user=true and put a single, specific
+          clarification question in the "text" field.
+        - If everything is sufficient, set refined=true and put the final refined wording in "text".
+        - Be succinct and unambiguous.
     # Schema ensures the agent either finalizes or asks to clarify
     schema:
       type: object
@@ -37,15 +43,6 @@ steps:
         text: { type: string, description: "final refined task or question to user" }
       required: [refined, text]
     prompt: |
-      <system>
-      You are a helpful, precise task refinement assistant (role: requirements-analyst).
-      - Refine the user's task into a clear, executable description with minimal assumptions.
-      - If information is missing, set refined=false and ask_user=true and put a single, specific
-        clarification question in the "text" field.
-      - If everything is sufficient, set refined=true and put the final refined wording in "text".
-      - Be succinct and unambiguous.
-      </system>
-
       <history>
         {% assign umsgs = outputs_history.ask | default: [] %}
         {% assign amsgs = outputs_history.refine | default: [] %}

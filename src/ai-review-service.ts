@@ -46,7 +46,9 @@ export interface AIReviewConfig {
   enableDelegate?: boolean;
   // ProbeAgent persona/prompt family (e.g., 'engineer', 'code-review', 'architect')
   promptType?: string;
-  // ProbeAgent baseline/system prompt to prepend
+  // System prompt to prepend (baseline/preamble). Replaces legacy customPrompt
+  systemPrompt?: string;
+  // Backward-compat: legacy key still accepted internally
   customPrompt?: string;
   // Retry configuration for AI provider calls
   retry?: import('./types/config').AIRetryConfig;
@@ -1383,7 +1385,8 @@ ${'='.repeat(60)}
                 : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
-        customPrompt: this.config.customPrompt,
+        // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
+        customPrompt: this.config.systemPrompt || this.config.customPrompt,
       };
 
       // Enable tracing in debug mode for better diagnostics

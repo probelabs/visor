@@ -702,7 +702,7 @@ export class AICheckProvider extends CheckProvider {
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
-    // Optional persona (vendor extension): ai.x-persona or x-persona.
+    // Optional persona (vendor extension): ai.ai_persona or ai_persona.
     // This is a light-weight preamble, not a rewriting of the user's prompt.
     const aiAny = (config.ai || {}) as any;
     // Persona (underscore only)
@@ -750,8 +750,11 @@ export class AICheckProvider extends CheckProvider {
     try {
       const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '').toString().trim();
       if (pt) (aiConfig as any).promptType = pt;
-      const cp = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '').toString().trim();
-      if (cp) (aiConfig as any).customPrompt = cp;
+      // Prefer new system_prompt; fall back to legacy custom_prompt for backward compatibility
+      const sys = (aiAny?.system_prompt || (config as any).ai_system_prompt || '').toString().trim();
+      const legacy = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '').toString().trim();
+      if (sys) (aiConfig as any).systemPrompt = sys;
+      else if (legacy) (aiConfig as any).systemPrompt = legacy;
     } catch {}
     const service = new AIReviewService(aiConfig);
 
@@ -913,6 +916,7 @@ export class AICheckProvider extends CheckProvider {
       'ai_persona',
       'ai_prompt_type',
       'ai_custom_prompt',
+      'ai_system_prompt',
       // new provider resilience and tools toggles
       'ai.retry',
       'ai.fallback',
