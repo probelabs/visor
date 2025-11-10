@@ -32,6 +32,7 @@ const schema: any = {
             strict: { type: 'boolean' },
             ai_provider: { type: 'string' },
             fail_on_unexpected_calls: { type: 'boolean' },
+            ai_include_code_context: { type: 'boolean' },
             tags: {
               oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
             },
@@ -85,6 +86,7 @@ const schema: any = {
         description: { type: 'string' },
         skip: { type: 'boolean' },
         strict: { type: 'boolean' },
+        ai_include_code_context: { type: 'boolean' },
         tags: {
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
