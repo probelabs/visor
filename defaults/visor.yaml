@@ -64,6 +64,8 @@ steps:
     group: overview
     schema: overview
     prompt: |
+        PR Title: {{ pr.title }}
+
         You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
 
         ## Files Changed Analysis
@@ -403,6 +405,9 @@ steps:
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
+        Latest comment (verbatim):
+        {{ event.comment.body | default: "" }}
+
         {%- liquid
           # Correction context from the last validation wave (filtered)
           assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
@@ -605,11 +610,11 @@ steps:
     # This replaces the older run_js-only approach which didn’t forward-run the chain.
     on_finish:
       goto_js: |
-        // Minimal, current-loop routing with safe fallback when validate-fact had no outputs
-        return (outputs_history['validate-fact'] || [])
-          .some(v => v.last_loop && (v.is_valid !== true || v.confidence !== 'high'))
-          ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant')
-          : null;
+        // Route back for a correction pass when any recent fact validation failed.
+        // Be permissive here: some runners omit the `last_loop` marker; rely on is_valid when present.
+        const hist = (outputs_history['validate-fact'] || []);
+        const hasInvalid = hist.some(v => v && (v.is_valid === false || v.valid === false));
+        return hasInvalid ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant') : null;
 
   # Validate each extracted fact
   validate-fact:
