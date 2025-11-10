@@ -127,7 +127,7 @@ Per-step actions:
 - Retry: re-run the same step up to `retry.max`; backoff adds fixed or exponential delay with deterministic jitter.
 - Run: on failure (or success), run listed steps first; if successful, the failed step is re-attempted once (failure path).
 - Goto (ancestor-only): jump back to a previously executed dependency, then continue forward. On success, Visor re-runs the current step once after the jump.
-- Loop safety: `routing.max_loops` counts all routing transitions (runs, gotos, retries). Exceeding it aborts the current scope with a clear error.
+- Loop safety: `routing.max_loops` counts all routing transitions (runs, gotos, retries). Exceeding it aborts the current scope with a clear error. For a hard cap on repeated executions of the same step, see [Execution Limits](./limits.md).
 - forEach: each item is isolated with its own loop/attempt counters; `*_js` receives `{ foreach: { index, total, parent } }`.
 
 ### Fan‑out vs. Reduce (Phase 5)

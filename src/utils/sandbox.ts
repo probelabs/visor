@@ -185,9 +185,21 @@ export function compileAndRun<T = unknown>(
   const header = inject
     ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`
     : '';
+  // When wrapping, execute user code inside an IIFE and return its value.
+  // This reliably captures the value of the last expression or any explicit
+  // return statements inside the script, without requiring the caller to
+  // manually `return` at top level.
+  // Wrapper heuristic:
+  // - If the snippet contains an explicit `return`, semicolons or newlines (likely a block),
+  //   run it inside an IIFE so `return` works:  (() => { code })()
+  // - Otherwise treat it as a pure expression and return its value directly.
+  const src = String(userCode);
+  const looksLikeBlock = /\breturn\b/.test(src) || /;/.test(src) || /\n/.test(src);
   const body = opts.wrapFunction
-    ? `const __fn = () => {\n${userCode}\n};\nreturn __fn();\n`
-    : `${userCode}`;
+    ? looksLikeBlock
+      ? `return (() => {\n${src}\n})();\n`
+      : `return (\n${src}\n);\n`
+    : `${src}`;
   const code = `${header}${body}`;
   let exec: ReturnType<typeof sandbox.compile>;
   try {

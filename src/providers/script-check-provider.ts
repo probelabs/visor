@@ -85,7 +85,7 @@ export class ScriptCheckProvider extends CheckProvider {
         { ...ctx },
         {
           injectLog: true,
-          wrapFunction: false,
+          wrapFunction: true,
           logPrefix: '[script]',
         }
       );

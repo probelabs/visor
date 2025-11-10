@@ -91,6 +91,10 @@ export const configSchema = {
           $ref: '#/definitions/RoutingDefaults',
           description: 'Optional routing defaults for retry/goto/run policies',
         },
+        limits: {
+          $ref: '#/definitions/LimitsConfig',
+          description: 'Global execution limits',
+        },
       },
       required: ['output', 'version'],
       patternProperties: {
@@ -295,6 +299,11 @@ export const configSchema = {
           description:
             'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])',
         },
+        continue_on_failure: {
+          type: 'boolean',
+          description:
+            "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.",
+        },
         forEach: {
           type: 'boolean',
           description: 'Process output as array and run dependent checks for each item',
@@ -322,6 +331,11 @@ export const configSchema = {
           $ref: '#/definitions/OnFinishConfig',
           description:
             'Finish routing configuration for forEach checks (runs after ALL iterations complete)',
+        },
+        max_runs: {
+          type: 'number',
+          description:
+            'Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.',
         },
         message: {
           type: 'string',
@@ -1309,6 +1323,21 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Global routing defaults',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    LimitsConfig: {
+      type: 'object',
+      properties: {
+        max_runs_per_check: {
+          type: 'number',
+          description:
+            'Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.',
+        },
+      },
+      additionalProperties: false,
+      description: 'Global engine limits',
       patternProperties: {
         '^x-': {},
       },

@@ -10,23 +10,21 @@ steps:
     group: task-refinement
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
-      {% if outputs['refine'] and outputs['refine'].refined == false and (outputs['refine'].ask_user == true or outputs['refine'].ask_user == 'true') %}
-      Clarification needed: {{ outputs['refine'].text }}
-      Type your answer and press Enter.
+      {% if outputs["refine"] and outputs["refine"].refined == false %}
+      {{ outputs.refine.text }}
       {% else %}
       Provide the task you want to accomplish. Be specific about constraints
       (inputs, outputs, environment, success criteria).
       {% endif %}
-    placeholder: "e.g., Answer the question above or paste your task"
     multiline: false
     allow_empty: false
-    # Route to refine on success
     on_success:
       goto: refine
 
   refine:
     type: ai
     group: task-refinement
+    # Run only after 'ask' (scheduled via ask.on_success.run), never as a root step
     depends_on: [ask]
     ai_persona: "requirements analyst"
     ai:
@@ -38,50 +36,44 @@ steps:
       properties:
         refined: { type: boolean, description: "true if the task is fully specified and accepted" }
         text: { type: string, description: "final refined task or question to user" }
-        ask_user: { type: boolean, description: "if true, we must ask user again" }
       required: [refined, text]
     prompt: |
-      You are a helpful, precise task refinement assistant. Role: requirements-analyst.
-      - Take the latest user input and refine it into a crisp, executable task with clear
-        success criteria, constraints, and minimal assumptions.
-      - If information is missing, set refined=false and ask_user=true and write a single,
-        specific clarification question in `text` (no extra prose).
-      - If everything is sufficient, set refined=true and provide the final refined wording in `text`.
-      - Be succinct and unambiguous. Avoid implementation details unless the user asked for them.
+      <system>
+      You are a helpful, precise task refinement assistant (role: requirements-analyst).
+      - Refine the user's task into a clear, executable description with minimal assumptions.
+      - If information is missing, set refined=false and ask_user=true and put a single, specific
+        clarification question in the "text" field.
+      - If everything is sufficient, set refined=true and put the final refined wording in "text".
+      - Be succinct and unambiguous.
+      </system>
 
-      Latest user input:
-      {{ outputs['ask'] }}
+      <history>
+        {% assign umsgs = outputs_history.ask | default: [] %}
+        {% assign amsgs = outputs_history.refine | default: [] %}
+        {% assign merged = umsgs | concat: amsgs | sort: 'ts' %}
+        {% for m in merged %}
+          {# Treat any refine output (has 'refined' key) as assistant; ask outputs as user #}
+          {% if m.refined != nil %}
+            <assistant>{{ m.text }}</assistant>
+          {% else %}
+            <user>{{ m.text }}</user>
+          {% endif %}
+        {% endfor %}
+      </history>
 
-      Conversation history (most-recent last):
-      {% if outputs_history['ask'] and outputs_history['ask'].size > 0 %}
-      - User messages so far:
-      {% for u in outputs_history['ask'] %}
-        • {{ u }}
-      {% endfor %}
-      {% endif %}
-      {% if outputs_history['refine'] and outputs_history['refine'].size > 0 %}
-      - Assistant drafts so far:
-      {% for r in outputs_history['refine'] %}
-        • {{ r.text | default: r | json }}
-      {% endfor %}
-      {% endif %}
+      <input>
+        {{ outputs['ask'].text }}
+      </input>
 
-      Respond ONLY with JSON matching the schema: { refined: boolean, text: string, ask_user?: boolean }.
     # Loop control using fail_if + on_fail (no goto_js)
-    fail_if: "output && output.refined !== true"
+    fail_if: "output['refined'] !== true"
     on_fail:
       goto: ask
-    # Use on_success.run to schedule finish exactly once (engine one_shot guard)
-    on_success:
-      run: [finish]
 
   finish:
     type: log
     group: task-refinement
     depends_on: [refine]
-    tags: [one_shot]
-    if: "outputs['refine'] && outputs['refine'].refined === true"
-    # Log just the final refined text; avoid extra context/metadata
     message: "{{ outputs['refine'].text }}"
     level: info
     include_pr_context: false
@@ -131,7 +123,7 @@ tests:
           - step: refine
             exactly: 3
           - step: finish
-            at_least: 1
+            exactly: 1
         prompts:
           - step: refine
             index: last
@@ -139,3 +131,5 @@ tests:
               - "Which CI platform and trigger conditions?"
               - "Use Node 18 and npm ci + npm test"
               - "What Node version and commands should run?"
+          # Keep prompt assertions resilient to minor formatting changes by using 'contains'
+          # instead of a single large regex.

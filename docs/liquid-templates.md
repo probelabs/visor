@@ -198,6 +198,20 @@ echo '{{ pr | json }}' | jq .
 {{ files | map: "filename" }}   # Array of filenames
 ```
 
+### Merge and Sort Arrays by Field
+
+Use `merge_sort_by` to merge two arrays and sort by a numeric field (e.g., `ts`).
+
+```liquid
+{% assign merged = arrA | merge_sort_by: arrB, 'ts' %}
+{% for item in merged %}
+  {{ item.ts }} — {{ item.text | default: item | json }}
+{% endfor %}
+
+# Descending order
+{% assign merged_desc = arrA | merge_sort_by: arrB, 'ts', 'desc' %}
+```
+
 ## Examples
 
 ### Debugging Outputs

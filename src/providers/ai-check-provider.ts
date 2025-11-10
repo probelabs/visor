@@ -470,25 +470,40 @@ export class AICheckProvider extends CheckProvider {
     try {
       return await this.liquidEngine.parseAndRender(promptContent, templateContext);
     } catch (error) {
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          const lines = promptContent.split(/\r?\n/);
-          const preview = lines
-            .slice(0, 20)
-            .map((l, i) => `${(i + 1).toString().padStart(3, ' ')}| ${l}`)
-            .join('\n');
-          try {
-            process.stderr.write(
-              '[prompt-error] First 20 lines of prompt before Liquid render:\n' + preview + '\n'
-            );
-          } catch {}
+      // Always show a helpful snippet with a caret, similar to YAML errors
+      const err: any = error || {};
+      const lines = String(promptContent || '').split(/\r?\n/);
+      const lineNum: number = Number(err.line || err?.token?.line || err?.location?.line || 0);
+      const colNum: number = Number(err.col || err?.token?.col || err?.location?.col || 0);
+      let snippet = '';
+      if (lineNum > 0) {
+        const start = Math.max(1, lineNum - 3);
+        const end = Math.max(lineNum + 2, lineNum);
+        const width = String(end).length;
+        for (let i = start; i <= Math.min(end, lines.length); i++) {
+          const ln = `${String(i).padStart(width, ' ')} | ${lines[i - 1] ?? ''}`;
+          snippet += (ln + '\n');
+          if (i === lineNum) {
+            const caretPad = ' '.repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
+            snippet += caretPad + '^\n';
+          }
         }
+      } else {
+        // Fallback preview of the first 20 lines
+        const preview = lines
+          .slice(0, 20)
+          .map((l, i) => `${(i + 1).toString().padStart(3, ' ')} | ${l}`)
+          .join('\n');
+        snippet = preview + '\n';
+      }
+      const msg = `Failed to render prompt template: ${
+        error instanceof Error ? error.message : 'Unknown error'
+      }`;
+      // Print a clear, user-friendly error with context
+      try {
+        console.error('\n[prompt-error] ' + msg + '\n' + snippet);
       } catch {}
-      throw new Error(
-        `Failed to render prompt template: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
-      );
+      throw new Error(msg);
     }
   }
 

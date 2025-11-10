@@ -370,16 +370,53 @@ export class HumanInputCheckProvider extends CheckProvider {
           context
         );
         if (typeof config.prompt === 'string') {
-          config = { ...config, prompt: await this.liquid.parseAndRender(config.prompt, tctx) };
+          let rendered = await this.liquid.parseAndRender(config.prompt, tctx);
+          // If Liquid markers remain (e.g., due to nested/guarded templates), try a second pass
+          if (/\{\{|\{%/.test(rendered)) {
+            try {
+              rendered = await this.liquid.parseAndRender(rendered, tctx);
+            } catch {}
+          }
+          config = { ...config, prompt: rendered };
         }
         if (typeof config.placeholder === 'string') {
-          (config as any).placeholder = await this.liquid.parseAndRender(
-            config.placeholder as string,
-            tctx
-          );
+          let ph = await this.liquid.parseAndRender(config.placeholder as string, tctx);
+          if (/\{\{|\{%/.test(ph)) {
+            try {
+              ph = await this.liquid.parseAndRender(ph, tctx);
+            } catch {}
+          }
+          (config as any).placeholder = ph;
         }
-      } catch {
-        // best-effort rendering; fall back to raw strings on errors
+      } catch (e) {
+        // Always show Liquid errors with a helpful snippet and caret
+        const err: any = e || {};
+        const raw = String((config as any)?.prompt || '');
+        const lines = raw.split(/\r?\n/);
+        const lineNum: number = Number(err.line || err?.token?.line || err?.location?.line || 0);
+        const colNum: number = Number(err.col || err?.token?.col || err?.location?.col || 0);
+        let snippet = '';
+        if (lineNum > 0) {
+          const start = Math.max(1, lineNum - 3);
+          const end = Math.max(lineNum + 2, lineNum);
+          const width = String(end).length;
+          for (let i = start; i <= Math.min(end, lines.length); i++) {
+            const ln = `${String(i).padStart(width, ' ')} | ${lines[i - 1] ?? ''}`;
+            snippet += ln + '\n';
+            if (i === lineNum) {
+              const caretPad = ' '.repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
+              snippet += caretPad + '^\n';
+            }
+          }
+        }
+        try {
+          console.error(
+            `⚠️  human-input: Liquid render failed: ${
+              e instanceof Error ? e.message : String(e)
+            }\n${snippet}`
+          );
+        } catch {}
+        // Continue with raw strings as a fallback
       }
       // Get user input (pass context for non-static state)
       const userInput = await this.getUserInput(checkName, config, context);
@@ -387,11 +424,11 @@ export class HumanInputCheckProvider extends CheckProvider {
       // Sanitize input to prevent injection attacks in dependent checks
       const sanitizedInput = this.sanitizeInput(userInput);
 
-      // Return the input as the check output (stored in output field for dependent checks)
+      // Return structured output with timestamp for consistent history/merging
       return {
         issues: [],
-        output: sanitizedInput,
-      } as ReviewSummary & { output: string };
+        output: { text: sanitizedInput, ts: Date.now() },
+      } as ReviewSummary & { output: { text: string; ts: number } };
     } catch (error) {
       // If there's an error getting input, return an error issue
       return {

@@ -439,6 +439,12 @@ export interface CheckConfig {
   failure_conditions?: FailureConditions;
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
+  /**
+   * Allow dependents to run even if this step fails.
+   * Defaults to false (dependents are gated when this step fails).
+   * Similar to GitHub Actions' continue-on-error.
+   */
+  continue_on_failure?: boolean;
   /** Process output as array and run dependent checks for each item */
   forEach?: boolean;
   /**
@@ -457,6 +463,11 @@ export interface CheckConfig {
   on_success?: OnSuccessConfig;
   /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
   on_finish?: OnFinishConfig;
+  /**
+   * Hard cap on how many times this check may execute within a single engine run.
+   * Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.
+   */
+  max_runs?: number;
   /**
    * Log provider specific options (optional, only used when type === 'log').
    * Declared here to ensure JSON Schema allows these keys and Ajv does not warn.
@@ -609,6 +620,18 @@ export interface RoutingDefaults {
   defaults?: {
     on_fail?: OnFailConfig;
   };
+}
+
+/**
+ * Global engine limits
+ */
+export interface LimitsConfig {
+  /**
+   * Maximum number of executions per check within a single engine run.
+   * Applies to each distinct scope independently for forEach item executions.
+   * Set to 0 or negative to disable. Default: 50.
+   */
+  max_runs_per_check?: number;
 }
 
 /**
@@ -843,6 +866,8 @@ export interface VisorConfig {
   tag_filter?: TagFilter;
   /** Optional routing defaults for retry/goto/run policies */
   routing?: RoutingDefaults;
+  /** Global execution limits */
+  limits?: LimitsConfig;
 }
 
 /**

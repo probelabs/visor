@@ -46,7 +46,7 @@ checks:
 
 ### Using Input in Dependent Checks
 
-The user's input is available to dependent checks via the `outputs` variable:
+The user's input is available to dependent checks via the `outputs` variable. By default (no schema), human-input returns an object `{ text: string, ts: number }` where `ts` is the timestamp (milliseconds since epoch):
 
 ```yaml
 checks:
@@ -58,8 +58,11 @@ checks:
     type: command
     depends_on: [get-version]
     exec: |
-      git tag v{{ outputs['get-version'] }}
-      git push origin v{{ outputs['get-version'] }}
+      # Prefer .text to read the string payload
+      git tag v{{ outputs['get-version'].text | default: outputs['get-version'] }}
+      git push origin v{{ outputs['get-version'].text | default: outputs['get-version'] }}
+
+> See also: [Default Output Schema](./default-output-schema.md)
 ```
 
 ## Input Methods
