@@ -270,31 +270,7 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     }
   });
 
-  // merge_sort_by: merge two arrays and sort by a field (ascending by default)
-  // Usage: arr1 | merge_sort_by: arr2, 'ts' [, 'desc']
-  liquid.registerFilter(
-    'merge_sort_by',
-    (a: unknown, b: unknown, field: unknown, order?: unknown): unknown[] => {
-      const arrA = Array.isArray(a) ? (a as unknown[]) : [];
-      const arrB = Array.isArray(b) ? (b as unknown[]) : [];
-      const key = typeof field === 'string' ? field : String(field || '');
-      const desc = String(order || '').toLowerCase() === 'desc';
-      const merged: unknown[] = [...arrA, ...arrB];
-      if (!key) return merged;
-      try {
-        const safe = merged.slice().sort((x: any, y: any) => {
-          const vx = x && typeof x === 'object' ? (x as any)[key] : undefined;
-          const vy = y && typeof y === 'object' ? (y as any)[key] : undefined;
-          const ax = typeof vx === 'number' ? vx : typeof vx === 'string' ? Number(vx) : -Infinity;
-          const ay = typeof vy === 'number' ? vy : typeof vy === 'string' ? Number(vy) : -Infinity;
-          return desc ? ay - ax : ax - ay;
-        });
-        return safe;
-      } catch {
-        return merged;
-      }
-    }
-  );
+  // Removed: merge_sort_by filter (unused)
 }
 
 /**

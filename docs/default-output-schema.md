@@ -26,5 +26,3 @@ Practical tips
 
 Related
 - See `docs/human-input-provider.md` for default output shape of human input.
-- See `docs/liquid-templates.md` for the `merge_sort_by` filter to merge/sort histories by `ts`.
-
