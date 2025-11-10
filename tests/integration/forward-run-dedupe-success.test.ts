@@ -11,7 +11,7 @@ describe('forward-run dedupe after success (multi-turn)', () => {
         ask: {
           type: 'script',
           content: `({ ok: true })`,
-          on: ['manual']
+          on: ['manual'],
         },
         refine: {
           type: 'script',

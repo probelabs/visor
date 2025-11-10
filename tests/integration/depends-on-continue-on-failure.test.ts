@@ -15,7 +15,7 @@ describe('depends_on gating with continue_on_failure', () => {
         },
         dep: {
           type: 'command',
-          exec: "node -e \"console.log(JSON.stringify({\\\"ok\\\":true}))\"",
+          exec: 'node -e "console.log(JSON.stringify({\\"ok\\":true}))"',
           depends_on: ['failer'],
           on: ['manual'],
         },
@@ -47,7 +47,7 @@ describe('depends_on gating with continue_on_failure', () => {
         },
         dep: {
           type: 'command',
-          exec: "node -e \"console.log(JSON.stringify({\\\"ok\\\":true}))\"",
+          exec: 'node -e "console.log(JSON.stringify({\\"ok\\":true}))"',
           depends_on: ['failer'],
           on: ['manual'],
         },

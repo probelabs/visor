@@ -482,7 +482,7 @@ export class AICheckProvider extends CheckProvider {
         const width = String(end).length;
         for (let i = start; i <= Math.min(end, lines.length); i++) {
           const ln = `${String(i).padStart(width, ' ')} | ${lines[i - 1] ?? ''}`;
-          snippet += (ln + '\n');
+          snippet += ln + '\n';
           if (i === lineNum) {
             const caretPad = ' '.repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
             snippet += caretPad + '^\n';
