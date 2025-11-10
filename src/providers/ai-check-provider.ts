@@ -681,8 +681,10 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
 
     // Process prompt with Liquid templates and file loading
-    // Skip event context (PR diffs, files, etc.) if requested
-    const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
+    // Do NOT strip event context on skip_code_context — that flag only controls
+    // whether we embed PR diffs/large code context later in AIReviewService.
+    // Keep repository/comment metadata available for prompts and tests.
+    const eventContext = config.eventContext || {};
     // Thread stageHistoryBase via eventContext for prompt rendering so
     // Liquid templates can get outputs_history_stage (computed from baseline).
     const ctxWithStage = {
