@@ -8,6 +8,8 @@ steps:
   ask:
     type: human-input
     group: task-refinement
+    tags: [one_shot]
+    on: [manual]
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
       {% if outputs["refine"] and outputs["refine"].refined == false %}
@@ -26,6 +28,7 @@ steps:
     group: task-refinement
     # Run only after 'ask' (scheduled via ask.on_success.run), never as a root step
     depends_on: [ask]
+    on: [manual]
     ai_persona: "requirements analyst"
     ai:
       skip_code_context: true
