@@ -653,6 +653,42 @@ export async function main(): Promise<void> {
     // Update checksToRun to include dependencies
     checksToRun = Array.from(checksWithDependencies);
 
+    // Prune internal dependencies from the root set so we only start from DAG sinks.
+    // This prevents re-running dependency steps (e.g., human-input collectors) as
+    // independent roots across waves. The engine will expand dependencies anyway.
+    const getAllDeps = (name: string, seen = new Set<string>()): Set<string> => {
+      if (seen.has(name)) return new Set();
+      seen.add(name);
+      const out = new Set<string>();
+      const cfg = config.checks?.[name];
+      const depTokens: any[] = cfg?.depends_on
+        ? Array.isArray(cfg.depends_on)
+          ? cfg.depends_on
+          : [cfg.depends_on]
+        : [];
+      const expand = (tok: any): string[] =>
+        typeof tok === 'string' && tok.includes('|')
+          ? tok
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean)
+          : tok != null
+            ? [String(tok)]
+            : [];
+      for (const raw of depTokens.flatMap(expand)) {
+        if (!availableChecks.includes(raw)) continue;
+        out.add(raw);
+        for (const d of getAllDeps(raw, seen)) out.add(d);
+      }
+      return out;
+    };
+
+    const rootsPruned = checksToRun.filter(chk => {
+      // Keep chk only if no other selected root depends on it (directly or transitively)
+      return !checksToRun.some(other => other !== chk && getAllDeps(other).has(chk));
+    });
+    if (rootsPruned.length > 0) checksToRun = rootsPruned;
+
     // Use stderr for status messages when outputting formatted results to stdout
     // Suppress all status messages when outputting JSON to avoid breaking parsers
     const logFn = (msg: string) => logger.info(msg);
