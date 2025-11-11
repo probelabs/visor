@@ -10,7 +10,6 @@ steps:
     group: task-refinement
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
-      {{ outputs_history | to_json }}
       {% assign last_refine = outputs_history.refine | last %}
       {% if last_refine and last_refine.refined == false %}
       {{ last_refine.text }}
@@ -142,12 +141,12 @@ tests:
           # Keep prompt assertions resilient to minor formatting changes by using 'contains'
           # instead of a single large regex.
         outputs:
-          # Ensure last refine record carries a timestamp and expected text appears
+          # Ensure the final successful refinement carries a timestamp and expected text
           - step: refine
-            index: last
+            where: { path: refined, equals: true }
             path: ts
             matches: "^\\d{10,}$"
           - step: refine
-            index: last
+            where: { path: refined, equals: true }
             path: text
             matches: "(?is).*GitHub Actions.*Node 18.*npm ci.*npm test.*"
