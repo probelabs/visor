@@ -550,6 +550,21 @@ export class CheckExecutionEngine {
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
 
+    // In test/grouped mode, suppress inline execution for on_success-originated
+    // routing to avoid double-running targets (once inline and again in the
+    // grouped wave). Allow the grouped runner to pick it up naturally.
+    try {
+      const inTest = Boolean(
+        (this as any).executionContext && (this as any).executionContext.mode?.test
+      );
+      if (origin === 'on_success' && inTest) {
+        try {
+          this.forwardDependentsScheduled.add(target);
+        } catch {}
+        return;
+      }
+    } catch {}
+
     // Do not execute target inline for on_fail-originated routing.
     // We only mark that a correction wave is needed; the grouped runner
     // will pick up the target in the next wave. This prevents duplicate
