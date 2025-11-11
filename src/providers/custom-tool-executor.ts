@@ -78,12 +78,14 @@ export class CustomToolExecutor {
 
     if (!valid) {
       // Format validation errors for better readability
-      const errors = validate.errors?.map(err => {
-        if (err.instancePath) {
-          return `${err.instancePath}: ${err.message}`;
-        }
-        return err.message;
-      }).join(', ');
+      const errors = validate.errors
+        ?.map(err => {
+          if (err.instancePath) {
+            return `${err.instancePath}: ${err.message}`;
+          }
+          return err.message;
+        })
+        .join(', ');
 
       throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
     }

@@ -80,7 +80,12 @@ export class CommandExecutor {
           timeout: options.timeout || 30000,
         },
         (error, stdout, stderr) => {
-          if (error && error.killed && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+          // Check if the process was killed due to timeout
+          if (
+            error &&
+            error.killed &&
+            ((error as NodeJS.ErrnoException).code === 'ETIMEDOUT' || error.signal === 'SIGTERM')
+          ) {
             reject(new Error(`Command timed out after ${options.timeout || 30000}ms`));
           } else {
             resolve({
@@ -109,9 +114,12 @@ export class CommandExecutor {
       stderr?: string;
       killed?: boolean;
       code?: string | number;
+      signal?: string;
     };
 
-    if (execError.killed && execError.code === 'ETIMEDOUT') {
+    // Check if the process was killed due to timeout
+    // Node.js sets killed: true and signal: 'SIGTERM' when timeout expires
+    if (execError.killed && (execError.code === 'ETIMEDOUT' || execError.signal === 'SIGTERM')) {
       throw new Error(`Command timed out after ${timeout}ms`);
     }
 

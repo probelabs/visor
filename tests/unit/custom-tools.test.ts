@@ -72,7 +72,7 @@ describe('CustomToolExecutor', () => {
 
       // Missing required field should throw
       await expect(executor.execute('validate-tool', { age: 25 }, {})).rejects.toThrow(
-        'Missing required property: name'
+        "Input validation failed for tool 'validate-tool': must have required property 'name'"
       );
 
       // With required field should work
@@ -113,7 +113,7 @@ describe('CustomToolExecutor', () => {
             active: { type: 'boolean' },
             tags: {
               type: 'array',
-              items: { type: 'string' }
+              items: { type: 'string' },
             },
           },
           required: ['name', 'age'],
@@ -123,9 +123,9 @@ describe('CustomToolExecutor', () => {
       executor.registerTool(tool);
 
       // Invalid: age is string instead of number
-      await expect(
-        executor.execute('typed-tool', { name: 'John', age: '25' }, {})
-      ).rejects.toThrow('Input validation failed');
+      await expect(executor.execute('typed-tool', { name: 'John', age: '25' }, {})).rejects.toThrow(
+        'Input validation failed'
+      );
 
       // Invalid: active is string instead of boolean
       await expect(
@@ -139,7 +139,11 @@ describe('CustomToolExecutor', () => {
 
       // Valid: all types are correct
       await expect(
-        executor.execute('typed-tool', { name: 'John', age: 25, active: true, tags: ['a', 'b'] }, {})
+        executor.execute(
+          'typed-tool',
+          { name: 'John', age: 25, active: true, tags: ['a', 'b'] },
+          {}
+        )
       ).resolves.toBeDefined();
     });
   });
@@ -231,10 +235,10 @@ describe('CustomToolExecutor', () => {
 
       executor.registerTool(tool);
 
-      // The command should complete but with non-zero exit code due to timeout
-      const result = await executor.execute('slow-tool', {}, {});
-      // On timeout, exec kills the process which may result in empty output
-      expect(result).toBeDefined();
+      // The command should throw a timeout error
+      await expect(executor.execute('slow-tool', {}, {})).rejects.toThrow(
+        'Command timed out after 100ms'
+      );
     });
 
     it('should throw error for non-existent tool', async () => {
