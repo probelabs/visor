@@ -219,9 +219,13 @@ export const configSchema = {
           type: 'string',
           description: 'Probe promptType for this check (underscore style)',
         },
+        ai_system_prompt: {
+          type: 'string',
+          description: 'System prompt for this check (underscore style)',
+        },
         ai_custom_prompt: {
           type: 'string',
-          description: 'Probe customPrompt for this check (underscore style)',
+          description: 'Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt',
         },
         ai_mcp_servers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
@@ -522,9 +526,14 @@ export const configSchema = {
           type: 'string',
           description: 'Probe promptType to use (e.g., engineer, code-review, architect)',
         },
+        system_prompt: {
+          type: 'string',
+          description: 'System prompt (baseline preamble). Replaces legacy custom_prompt.',
+        },
         custom_prompt: {
           type: 'string',
-          description: 'Probe customPrompt (baseline/system prompt)',
+          description:
+            'Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt',
         },
         skip_code_context: {
           type: 'boolean',

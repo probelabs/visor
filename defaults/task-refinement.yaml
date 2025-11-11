@@ -10,8 +10,20 @@ steps:
     group: task-refinement
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
-      {% if outputs["refine"] and outputs["refine"].refined == false %}
-      {{ outputs.refine.text }}
+      {% assign refine_hist = outputs_history | get: 'refine' %}
+      {% if refine_hist %}
+      {% assign hist_size = refine_hist | size %}
+      {% else %}
+      {% assign hist_size = 0 %}
+      {% endif %}
+      {% if hist_size > 0 %}
+      {% assign last_refine = refine_hist | last %}
+      {% if last_refine and last_refine.refined == false %}
+      {{ last_refine.text }}
+      {% else %}
+      Provide the task you want to accomplish. Be specific about constraints
+      (inputs, outputs, environment, success criteria).
+      {% endif %}
       {% else %}
       Provide the task you want to accomplish. Be specific about constraints
       (inputs, outputs, environment, success criteria).
@@ -27,6 +39,7 @@ steps:
     depends_on: [ask]
     ai:
       skip_code_context: true
+      disableTools: true
       system_prompt: |
         You are a helpful, precise task refinement assistant (role: requirements-analyst).
         - Refine the user's task into a clear, executable description with minimal assumptions.
