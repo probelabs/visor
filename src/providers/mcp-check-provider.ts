@@ -321,23 +321,32 @@ export class McpCheckProvider extends CheckProvider {
     if (transport === 'custom') {
       // Execute custom YAML-defined tool
       if (!this.customToolExecutor) {
-        throw new Error('No custom tools available. Define tools in the "tools" section of your configuration.');
+        throw new Error(
+          'No custom tools available. Define tools in the "tools" section of your configuration.'
+        );
       }
 
       const tool = this.customToolExecutor.getTool(config.method);
       if (!tool) {
-        throw new Error(`Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor.getTools().map(t => t.name).join(', ')}`);
+        throw new Error(
+          `Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor
+            .getTools()
+            .map(t => t.name)
+            .join(', ')}`
+        );
       }
 
       // Build context for custom tool execution
       const context = {
-        pr: prInfo ? {
-          number: prInfo.number,
-          title: prInfo.title,
-          author: prInfo.author,
-          branch: prInfo.head,
-          base: prInfo.base,
-        } : undefined,
+        pr: prInfo
+          ? {
+              number: prInfo.number,
+              title: prInfo.title,
+              author: prInfo.author,
+              branch: prInfo.head,
+              base: prInfo.base,
+            }
+          : undefined,
         files: prInfo?.files,
         outputs: this.buildOutputContext(dependencyResults),
         env: this.getSafeEnvironmentVariables(),

@@ -30,6 +30,10 @@ export const configSchema = {
           description:
             'Extends from other configurations - can be file path, HTTP(S) URL, or "default"',
         },
+        tools: {
+          $ref: '#/definitions/Record%3Cstring%2CCustomToolDefinition%3E',
+          description: 'Custom tool definitions that can be used in MCP blocks',
+        },
         steps: {
           $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
           description: 'Step configurations (recommended)',
@@ -100,6 +104,100 @@ export const configSchema = {
     'Record<string,unknown>': {
       type: 'object',
       additionalProperties: {},
+    },
+    'Record<string,CustomToolDefinition>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/CustomToolDefinition',
+      },
+    },
+    CustomToolDefinition: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Tool name - used to reference the tool in MCP blocks',
+        },
+        description: {
+          type: 'string',
+          description: 'Description of what the tool does',
+        },
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              const: 'object',
+            },
+            properties: {
+              $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+            },
+            required: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+            additionalProperties: {
+              type: 'boolean',
+            },
+          },
+          required: ['type'],
+          additionalProperties: false,
+          description: 'Input schema for the tool (JSON Schema format)',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        exec: {
+          type: 'string',
+          description: 'Command to execute - supports Liquid template',
+        },
+        stdin: {
+          type: 'string',
+          description: 'Optional stdin input - supports Liquid template',
+        },
+        transform: {
+          type: 'string',
+          description: 'Transform the raw output - supports Liquid template',
+        },
+        transform_js: {
+          type: 'string',
+          description: 'Transform the output using JavaScript - alternative to transform',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Working directory for command execution',
+        },
+        env: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'Environment variables for the command',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in milliseconds',
+        },
+        parseJson: {
+          type: 'boolean',
+          description: 'Whether to parse output as JSON automatically',
+        },
+        outputSchema: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Expected output schema for validation',
+        },
+      },
+      required: ['name', 'exec'],
+      additionalProperties: false,
+      description: 'Custom tool definition for use in MCP blocks',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,string>': {
+      type: 'object',
+      additionalProperties: {
+        type: 'string',
+      },
     },
     'Record<string,CheckConfig>': {
       type: 'object',
@@ -447,12 +545,6 @@ export const configSchema = {
         'human-input',
       ],
       description: 'Valid check types in configuration',
-    },
-    'Record<string,string>': {
-      type: 'object',
-      additionalProperties: {
-        type: 'string',
-      },
     },
     EventTrigger: {
       type: 'string',

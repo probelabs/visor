@@ -1,5 +1,6 @@
 import { CustomToolDefinition } from '../types/config';
-import { spawn } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
@@ -80,7 +81,7 @@ export class CustomToolExecutor {
 
     // Check property types (basic validation)
     if (schema.properties) {
-      for (const [key, value] of Object.entries(input)) {
+      for (const [key] of Object.entries(input)) {
         if (!schema.additionalProperties && !(key in schema.properties)) {
           throw new Error(`Unknown property: ${key}`);
         }
@@ -95,8 +96,14 @@ export class CustomToolExecutor {
     toolName: string,
     args: Record<string, unknown>,
     context?: {
-      pr?: any;
-      files?: any[];
+      pr?: {
+        number: number;
+        title: string;
+        author: string;
+        branch: string;
+        base: string;
+      };
+      files?: unknown[];
       outputs?: Record<string, unknown>;
       env?: Record<string, string>;
     }
@@ -126,21 +133,18 @@ export class CustomToolExecutor {
     }
 
     // Execute the command
-    const result = await this.executeCommand(
-      command,
-      {
-        stdin,
-        cwd: tool.cwd,
-        env: { ...process.env, ...tool.env, ...context?.env },
-        timeout: tool.timeout || 30000,
-      }
-    );
+    const result = await this.executeCommand(command, {
+      stdin,
+      cwd: tool.cwd,
+      env: { ...process.env, ...tool.env, ...context?.env } as Record<string, string>,
+      timeout: tool.timeout || 30000,
+    });
 
     // Parse JSON if requested
-    let output = result.stdout;
+    let output: unknown = result.stdout;
     if (tool.parseJson) {
       try {
-        output = JSON.parse(output);
+        output = JSON.parse(result.stdout);
       } catch (e) {
         logger.warn(`Failed to parse tool output as JSON: ${e}`);
       }
@@ -155,21 +159,27 @@ export class CustomToolExecutor {
         stderr: result.stderr,
         exitCode: result.exitCode,
       };
-      output = await this.liquid.parseAndRender(tool.transform, transformContext);
+      const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+      // Try to parse as JSON if it looks like JSON
+      if (typeof transformed === 'string' && transformed.trim().startsWith('{')) {
+        try {
+          output = JSON.parse(transformed);
+        } catch {
+          output = transformed;
+        }
+      } else {
+        output = transformed;
+      }
     }
 
     // Apply JavaScript transform if specified
     if (tool.transform_js) {
-      output = await this.applyJavaScriptTransform(
-        tool.transform_js,
-        output,
-        {
-          ...templateContext,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode,
-        }
-      );
+      output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+        ...templateContext,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      });
     }
 
     return output;
@@ -187,64 +197,68 @@ export class CustomToolExecutor {
       timeout?: number;
     }
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return new Promise((resolve, reject) => {
-      const [cmd, ...args] = command.split(/\s+/);
+    const execAsync = promisify(exec);
 
-      const childProcess = spawn(cmd, args, {
-        cwd: options.cwd,
-        env: options.env as NodeJS.ProcessEnv,
-        shell: true,
-      });
+    // If stdin is provided, we need to handle it differently
+    if (options.stdin) {
+      return new Promise((resolve, reject) => {
+        const childProcess = exec(
+          command,
+          {
+            cwd: options.cwd,
+            env: options.env as NodeJS.ProcessEnv,
+            timeout: options.timeout || 30000,
+          },
+          (error, stdout, stderr) => {
+            if (error && error.killed && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+              reject(new Error(`Command timed out after ${options.timeout || 30000}ms`));
+            } else {
+              resolve({
+                stdout: stdout || '',
+                stderr: stderr || '',
+                exitCode: error ? error.code || 1 : 0,
+              });
+            }
+          }
+        );
 
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-
-      // Set timeout
-      const timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        childProcess.kill('SIGTERM');
-      }, options.timeout || 30000);
-
-      // Handle stdout
-      childProcess.stdout?.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      // Handle stderr
-      childProcess.stderr?.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      // Write stdin if provided
-      if (options.stdin) {
-        childProcess.stdin?.write(options.stdin);
-        childProcess.stdin?.end();
-      }
-
-      // Handle process exit
-      childProcess.on('exit', (code, signal) => {
-        clearTimeout(timeoutHandle);
-
-        if (timedOut) {
-          reject(new Error(`Command timed out after ${options.timeout}ms`));
-        } else if (signal) {
-          reject(new Error(`Command terminated by signal: ${signal}`));
-        } else {
-          resolve({
-            stdout,
-            stderr,
-            exitCode: code || 0,
-          });
+        // Write stdin and close
+        if (options.stdin) {
+          childProcess.stdin?.write(options.stdin);
+          childProcess.stdin?.end();
         }
       });
+    }
 
-      // Handle process error
-      childProcess.on('error', (err) => {
-        clearTimeout(timeoutHandle);
-        reject(err);
+    // For commands without stdin, use the simpler promisified version
+    try {
+      const result = await execAsync(command, {
+        cwd: options.cwd,
+        env: options.env as NodeJS.ProcessEnv,
+        timeout: options.timeout || 30000,
       });
-    });
+
+      return {
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        exitCode: 0,
+      };
+    } catch (error) {
+      const execError = error as NodeJS.ErrnoException & {
+        stdout?: string;
+        stderr?: string;
+        killed?: boolean;
+      };
+      if (execError.killed && execError.code === 'ETIMEDOUT') {
+        throw new Error(`Command timed out after ${options.timeout || 30000}ms`);
+      }
+
+      return {
+        stdout: execError.stdout || '',
+        stderr: execError.stderr || '',
+        exitCode: execError.code ? parseInt(execError.code as string, 10) : 1,
+      };
+    }
   }
 
   /**
@@ -272,7 +286,7 @@ export class CustomToolExecutor {
     `;
 
     try {
-      return await compileAndRun(this.sandbox, code, 5000);
+      return await compileAndRun(this.sandbox, code, { timeout: 5000 });
     } catch (error) {
       logger.error(`JavaScript transform error: ${error}`);
       throw error;
