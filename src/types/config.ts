@@ -302,8 +302,6 @@ export interface AIProviderConfig {
   debug?: boolean;
   /** Skip adding code context (diffs, files, PR info) to the prompt */
   skip_code_context?: boolean;
-  /** Disable MCP tools - AI will only have access to the prompt text */
-  disable_tools?: boolean;
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */

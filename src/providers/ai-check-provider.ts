@@ -622,11 +622,11 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Pass MCP server config directly to AI service (unless tools are disabled)
-    if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
+    if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
       // no noisy diagnostics here
-    } else if (config.ai?.disable_tools) {
+    } else if (config.ai?.disableTools) {
       // silently skip MCP when tools disabled
     }
 
