@@ -1202,7 +1202,9 @@ export class CheckExecutionEngine {
           histVal = { text: String(outVal), ts: Date.now() };
         }
         this.trackOutputHistory(checkId, histVal);
-        try { (enriched as any).__histTracked = true; } catch {}
+        try {
+          (enriched as any).__histTracked = true;
+        } catch {}
       } catch {
         // best effort history tracking
         try {
