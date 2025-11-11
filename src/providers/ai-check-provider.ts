@@ -757,8 +757,12 @@ export class AICheckProvider extends CheckProvider {
       const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '').toString().trim();
       if (pt) (aiConfig as any).promptType = pt;
       // Prefer new system_prompt; fall back to legacy custom_prompt for backward compatibility
-      const sys = (aiAny?.system_prompt || (config as any).ai_system_prompt || '').toString().trim();
-      const legacy = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '').toString().trim();
+      const sys = (aiAny?.system_prompt || (config as any).ai_system_prompt || '')
+        .toString()
+        .trim();
+      const legacy = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '')
+        .toString()
+        .trim();
       if (sys) (aiConfig as any).systemPrompt = sys;
       else if (legacy) (aiConfig as any).systemPrompt = legacy;
     } catch {}

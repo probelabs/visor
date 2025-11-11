@@ -262,7 +262,8 @@ export class CheckExecutionEngine {
     try {
       // Fully reset stage-scoped state so flows don't leak across stages.
       this['executionStats'].clear();
-      this.outputHistory.clear();
+      // Do NOT clear outputHistory here; multi-turn flows (e.g., ask→refine→ask)
+      // rely on outputs_history across waves within a single run.
       this.postOnFinishGuards.clear();
       this.forwardDependentsScheduled.clear();
       this.runCounters.clear();
@@ -3959,11 +3960,7 @@ export class CheckExecutionEngine {
       group = checkName;
     }
 
-    // Track output in history (parity with grouped path)
-    try {
-      const out = (result as any)?.output;
-      if (out !== undefined) this.trackOutputHistory(checkName, out);
-    } catch {}
+    // History is recorded centrally in executeCheckInline; avoid double-recording here.
 
     const checkResult: CheckResult = {
       checkName,
@@ -5013,6 +5010,7 @@ export class CheckExecutionEngine {
           } catch {}
 
           const checkStartTime = Date.now();
+          // (dedupe handled by tagging result object when pre-stored before routing)
           completedChecksCount++;
           logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
 
@@ -6427,16 +6425,7 @@ export class CheckExecutionEngine {
                 ]);
               } catch {}
 
-              // Ensure output history captures this run for non-forEach checks
-              // Test-mode fallback: always record one history entry per non-forEach run
-              try {
-                const inTest = Boolean(
-                  (this as any).executionContext && (this as any).executionContext.mode?.test
-                );
-                if (inTest && !checkConfig.forEach && (finalResult as any)?.output !== undefined) {
-                  this.trackOutputHistory(checkName, (finalResult as any).output);
-                }
-              } catch {}
+              // (history handled centrally in executeCheckInline)
 
               // Evaluate fail_if for normal (non-forEach) execution
               if (config && (config.fail_if || checkConfig.fail_if)) {
@@ -6457,6 +6446,18 @@ export class CheckExecutionEngine {
                   prInfo,
                   results
                 );
+                // Make this result visible to subsequent inline routing before we possibly goto.
+                try {
+                  results.set(checkName, finalResult as ReviewSummary);
+                  this.commitJournal(
+                    checkName,
+                    finalResult as ExtendedReviewSummary,
+                    prInfo.eventType
+                  );
+                  try {
+                    (finalResult as any).__storedVisible = true;
+                  } catch {}
+                } catch {}
                 if (failureResults.length > 0) {
                   // Guard against runaway loops in multi-turn refinement flows where
                   // providers do not persist history as expected: after 3 runs, treat
@@ -6588,6 +6589,8 @@ export class CheckExecutionEngine {
                 finalResult.issues || [],
                 (finalResult as any).output
               );
+
+              // (history handled centrally in executeCheckInline)
 
               if (checkConfig.forEach) {
                 try {
@@ -6900,11 +6903,22 @@ export class CheckExecutionEngine {
                 } catch {}
               }
             } else {
-              this.commitJournal(
-                checkName,
-                reviewResult as ExtendedReviewSummary,
-                prInfo.eventType
-              );
+              try {
+                const __already = (reviewResult as any).__storedVisible === true;
+                if (!__already) {
+                  this.commitJournal(
+                    checkName,
+                    reviewResult as ExtendedReviewSummary,
+                    prInfo.eventType
+                  );
+                }
+              } catch {
+                this.commitJournal(
+                  checkName,
+                  reviewResult as ExtendedReviewSummary,
+                  prInfo.eventType
+                );
+              }
             }
           } else {
             // Store error result for dependency tracking

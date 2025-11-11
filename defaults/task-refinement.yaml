@@ -10,20 +10,10 @@ steps:
     group: task-refinement
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
-      {% assign refine_hist = outputs_history | get: 'refine' %}
-      {% if refine_hist %}
-      {% assign hist_size = refine_hist | size %}
-      {% else %}
-      {% assign hist_size = 0 %}
-      {% endif %}
-      {% if hist_size > 0 %}
-      {% assign last_refine = refine_hist | last %}
+      {{ outputs_history | to_json }}
+      {% assign last_refine = outputs_history.refine | last %}
       {% if last_refine and last_refine.refined == false %}
       {{ last_refine.text }}
-      {% else %}
-      Provide the task you want to accomplish. Be specific about constraints
-      (inputs, outputs, environment, success criteria).
-      {% endif %}
       {% else %}
       Provide the task you want to accomplish. Be specific about constraints
       (inputs, outputs, environment, success criteria).
