@@ -314,6 +314,10 @@ export interface AIProviderConfig {
   fallback?: AIFallbackConfig;
   /** Enable Edit and Create tools for file modification (disabled by default for security) */
   allowEdit?: boolean;
+  /** Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array) */
+  allowedTools?: string[];
+  /** Disable all tools for raw AI mode (alternative to allowedTools: []) */
+  disableTools?: boolean;
 }
 
 /**

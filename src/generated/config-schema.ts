@@ -521,6 +521,18 @@ export const configSchema = {
           description:
             'Enable Edit and Create tools for file modification (disabled by default for security)',
         },
+        allowedTools: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description:
+            'Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)',
+        },
+        disableTools: {
+          type: 'boolean',
+          description: 'Disable all tools for raw AI mode (alternative to allowedTools: [])',
+        },
       },
       additionalProperties: false,
       description: 'AI provider configuration',

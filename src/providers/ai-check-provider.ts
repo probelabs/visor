@@ -560,6 +560,12 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.allowEdit !== undefined) {
         aiConfig.allowEdit = config.ai.allowEdit as boolean;
       }
+      if (config.ai.allowedTools !== undefined) {
+        aiConfig.allowedTools = config.ai.allowedTools as string[];
+      }
+      if (config.ai.disableTools !== undefined) {
+        aiConfig.disableTools = config.ai.disableTools as boolean;
+      }
       if (config.ai.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
@@ -874,6 +880,8 @@ export class AICheckProvider extends CheckProvider {
       'ai.retry',
       'ai.fallback',
       'ai.allowEdit',
+      'ai.allowedTools',
+      'ai.disableTools',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',

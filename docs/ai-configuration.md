@@ -196,6 +196,79 @@ steps:
 
 **Security Note:** Edit tools respect existing `allowedFolders` configuration and perform exact string matching to prevent unintended modifications. Always review changes before merging.
 
+#### Tool Filtering (`allowedTools`, `disableTools`)
+
+Control which tools the AI agent can access during execution. This feature supports three filtering modes for fine-grained control over agent capabilities.
+
+**Filtering Modes:**
+
+1. **Allow All Tools (default)**: No filtering applied, agent has access to all available tools
+2. **Whitelist Mode**: Specify exact tools the agent can use (e.g., `['Read', 'Grep']`)
+3. **Exclusion Mode**: Block specific tools using `!` prefix (e.g., `['!Edit', '!Write']`)
+4. **Raw AI Mode**: Disable all tools for pure conversational interactions
+
+```yaml
+steps:
+  # Whitelist specific tools only
+  restricted-analysis:
+    type: ai
+    prompt: "Analyze the codebase structure"
+    ai:
+      provider: anthropic
+      allowedTools: ['Read', 'Grep', 'Glob']  # Only these tools allowed
+
+  # Exclude specific tools
+  safe-review:
+    type: ai
+    prompt: "Review code without making changes"
+    ai:
+      provider: google
+      allowedTools: ['!Edit', '!Write', '!Delete']  # Block modification tools
+
+  # Raw AI mode - no tools
+  conversational:
+    type: ai
+    prompt: "Explain the architecture"
+    ai:
+      provider: openai
+      disableTools: true  # Pure conversation, no tool access
+
+  # Alternative raw AI mode
+  conversational-alt:
+    type: ai
+    prompt: "Explain the architecture"
+    ai:
+      provider: anthropic
+      allowedTools: []  # Empty array also disables all tools
+```
+
+**MCP Tool Filtering:**
+
+Filter external Model Context Protocol tools using the `mcp__` prefix pattern:
+
+```yaml
+steps:
+  mcp-filtered:
+    type: ai
+    prompt: "Search the codebase"
+    ai:
+      provider: anthropic
+      allowedTools: ['mcp__code-search__*']  # Allow all code-search MCP tools
+      mcpServers:
+        code-search:
+          command: "npx"
+          args: ["-y", "@modelcontextprotocol/server-code-search"]
+```
+
+**When to use tool filtering:**
+- Restrict agent capabilities for security-sensitive tasks
+- Prevent unintended file modifications
+- Create specialized agents with limited toolsets
+- Testing and debugging specific tool interactions
+- Compliance requirements that limit agent autonomy
+
+**Security Note:** Tool filtering is enforced at runtime through system message filtering. Always combine with other security measures like `allowedFolders` for defense in depth.
+
 #### Task Delegation (`enableDelegate`)
 
 Enable the delegate tool to allow AI agents to break down complex tasks and distribute them to specialized subagents for parallel processing. This feature is available when using Probe as the AI provider (Google Gemini, Anthropic Claude, OpenAI GPT, AWS Bedrock).
