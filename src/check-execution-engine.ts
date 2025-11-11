@@ -549,6 +549,17 @@ export class CheckExecutionEngine {
     } catch {}
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
+
+    // Do not execute target inline for on_fail-originated routing.
+    // We only mark that a correction wave is needed; the grouped runner
+    // will pick up the target in the next wave. This prevents duplicate
+    // executions (and duplicate history) for chat-style loops like ask→refine.
+    if (origin === 'on_fail') {
+      try {
+        this.forwardDependentsScheduled.add(target);
+      } catch {}
+      return;
+    }
     try {
       // Determine mapping mode for the target step
       const tcfg = cfgChecks[target];
@@ -616,7 +627,7 @@ export class CheckExecutionEngine {
         // Let the grouped runner pick them up in the next level/wave instead.
         // This prevents “finish” from being satisfied inline (and skipped later),
         // which made Coverage show `finish: 0` even though it actually ran inline.
-        const dependentsOnly = origin === 'on_fail' ? [] : order.filter(n => n !== target);
+        const dependentsOnly = order.filter(n => n !== target);
         for (const stepId of dependentsOnly) {
           // Skip scheduling dependent if any of its direct deps in this subset had fatal issues
           try {
@@ -662,9 +673,7 @@ export class CheckExecutionEngine {
         await runChainOnce([]);
       }
 
-      // For on_fail-originated forward runs, do not follow static goto chains; the intent is to
-      // bounce to a correction step (e.g., ask) without cascading.
-      if (origin === 'on_fail') return;
+      // For on_fail-originated forward runs we already early-returned above.
 
       // In test/grouped mode, rely on the DAG and per-level execution; avoid
       // following static on_success.goto chains to prevent duplicate executions
@@ -6428,16 +6437,13 @@ export class CheckExecutionEngine {
               try {
                 const outVal = (finalResult as any)?.output;
                 if (outVal !== undefined) {
-                  const hasSchema = !!checkConfig.schema;
                   let histVal: any = outVal;
-                  if (!hasSchema) {
-                    if (Array.isArray(outVal)) histVal = outVal;
-                    else if (outVal !== null && typeof outVal === 'object') {
-                      histVal = { ...(outVal as any) };
-                      if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
-                    } else {
-                      histVal = { text: String(outVal), ts: Date.now() };
-                    }
+                  if (Array.isArray(outVal)) histVal = outVal;
+                  else if (outVal !== null && typeof outVal === 'object') {
+                    histVal = { ...(outVal as any) };
+                    if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
+                  } else {
+                    histVal = { text: String(outVal), ts: Date.now() };
                   }
                   this.trackOutputHistory(checkName, histVal);
                   try {

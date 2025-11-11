@@ -117,7 +117,7 @@ tests:
       expect:
         calls:
           - step: ask
-            at_least: 3
+            exactly: 3
           - step: refine
             exactly: 3
           - step: finish
@@ -125,7 +125,7 @@ tests:
         prompts:
           # Ask prompt should surface the last refine clarification
           - step: ask
-            index: 2
+            index: 1
             contains:
               - "Which CI platform and trigger conditions?"
           - step: ask
