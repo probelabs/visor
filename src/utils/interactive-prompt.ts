@@ -36,8 +36,30 @@ export async function interactivePrompt(options: PromptOptions): Promise<string>
     let timeoutId: NodeJS.Timeout | undefined;
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
-      rl.removeAllListeners();
-      rl.close();
+      try {
+        rl.removeAllListeners();
+      } catch {}
+      try {
+        rl.close();
+      } catch {}
+      // Hardening: make sure no stray listeners remain on stdin between loops
+      try {
+        const input: any = (rl as any).input || process.stdin;
+        if (input && typeof input.removeAllListeners === 'function') {
+          input.removeAllListeners('data');
+          input.removeAllListeners('keypress');
+          input.removeAllListeners('readable');
+          input.removeAllListeners('close');
+        }
+      } catch {}
+      try {
+        if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+          (process.stdin as any).setRawMode(false);
+        }
+      } catch {}
+      try {
+        process.stdin.pause();
+      } catch {}
     };
     const finish = (value: string) => {
       cleanup();
