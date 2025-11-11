@@ -98,7 +98,49 @@ describe('CustomToolExecutor', () => {
 
       await expect(
         executor.execute('strict-tool', { name: 'John', extra: 'field' }, {})
-      ).rejects.toThrow('Unknown property: extra');
+      ).rejects.toThrow('Input validation failed');
+    });
+
+    it('should validate data types according to JSON Schema', async () => {
+      const tool: CustomToolDefinition = {
+        name: 'typed-tool',
+        exec: 'echo "test"',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            age: { type: 'number' },
+            active: { type: 'boolean' },
+            tags: {
+              type: 'array',
+              items: { type: 'string' }
+            },
+          },
+          required: ['name', 'age'],
+        },
+      };
+
+      executor.registerTool(tool);
+
+      // Invalid: age is string instead of number
+      await expect(
+        executor.execute('typed-tool', { name: 'John', age: '25' }, {})
+      ).rejects.toThrow('Input validation failed');
+
+      // Invalid: active is string instead of boolean
+      await expect(
+        executor.execute('typed-tool', { name: 'John', age: 25, active: 'yes' }, {})
+      ).rejects.toThrow('Input validation failed');
+
+      // Invalid: tags contains numbers instead of strings
+      await expect(
+        executor.execute('typed-tool', { name: 'John', age: 25, tags: [1, 2, 3] }, {})
+      ).rejects.toThrow('Input validation failed');
+
+      // Valid: all types are correct
+      await expect(
+        executor.execute('typed-tool', { name: 'John', age: 25, active: true, tags: ['a', 'b'] }, {})
+      ).resolves.toBeDefined();
     });
   });
 

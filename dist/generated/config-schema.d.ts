@@ -24,6 +24,10 @@ export declare const configSchema: {
                     }];
                     readonly description: "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\"";
                 };
+                readonly tools: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E";
+                    readonly description: "Custom tool definitions that can be used in MCP blocks";
+                };
                 readonly steps: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
                     readonly description: "Step configurations (recommended)";
@@ -93,6 +97,100 @@ export declare const configSchema: {
         readonly 'Record<string,unknown>': {
             readonly type: "object";
             readonly additionalProperties: {};
+        };
+        readonly 'Record<string,CustomToolDefinition>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/CustomToolDefinition";
+            };
+        };
+        readonly CustomToolDefinition: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                    readonly description: "Tool name - used to reference the tool in MCP blocks";
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Description of what the tool does";
+                };
+                readonly inputSchema: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly const: "object";
+                        };
+                        readonly properties: {
+                            readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                        };
+                        readonly required: {
+                            readonly type: "array";
+                            readonly items: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly additionalProperties: {
+                            readonly type: "boolean";
+                        };
+                    };
+                    readonly required: readonly ["type"];
+                    readonly additionalProperties: false;
+                    readonly description: "Input schema for the tool (JSON Schema format)";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly exec: {
+                    readonly type: "string";
+                    readonly description: "Command to execute - supports Liquid template";
+                };
+                readonly stdin: {
+                    readonly type: "string";
+                    readonly description: "Optional stdin input - supports Liquid template";
+                };
+                readonly transform: {
+                    readonly type: "string";
+                    readonly description: "Transform the raw output - supports Liquid template";
+                };
+                readonly transform_js: {
+                    readonly type: "string";
+                    readonly description: "Transform the output using JavaScript - alternative to transform";
+                };
+                readonly cwd: {
+                    readonly type: "string";
+                    readonly description: "Working directory for command execution";
+                };
+                readonly env: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Environment variables for the command";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Timeout in milliseconds";
+                };
+                readonly parseJson: {
+                    readonly type: "boolean";
+                    readonly description: "Whether to parse output as JSON automatically";
+                };
+                readonly outputSchema: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Expected output schema for validation";
+                };
+            };
+            readonly required: readonly ["name", "exec"];
+            readonly additionalProperties: false;
+            readonly description: "Custom tool definition for use in MCP blocks";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,string>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly type: "string";
+            };
         };
         readonly 'Record<string,CheckConfig>': {
             readonly type: "object";
@@ -401,12 +499,6 @@ export declare const configSchema: {
             readonly type: "string";
             readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
             readonly description: "Valid check types in configuration";
-        };
-        readonly 'Record<string,string>': {
-            readonly type: "object";
-            readonly additionalProperties: {
-                readonly type: "string";
-            };
         };
         readonly EventTrigger: {
             readonly type: "string";

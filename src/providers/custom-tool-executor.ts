@@ -5,6 +5,7 @@ import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
 import { commandExecutor } from '../utils/command-executor';
+import Ajv from 'ajv';
 
 /**
  * Executes custom tools defined in YAML configuration
@@ -14,6 +15,7 @@ export class CustomToolExecutor {
   private liquid: Liquid;
   private sandbox?: Sandbox;
   private tools: Map<string, CustomToolDefinition>;
+  private ajv: Ajv;
 
   constructor(tools?: Record<string, CustomToolDefinition>) {
     this.liquid = createExtendedLiquid({
@@ -22,6 +24,7 @@ export class CustomToolExecutor {
       strictVariables: false,
     });
     this.tools = new Map(Object.entries(tools || {}));
+    this.ajv = new Ajv({ allErrors: true, verbose: true });
   }
 
   /**
@@ -60,31 +63,29 @@ export class CustomToolExecutor {
   }
 
   /**
-   * Validate tool input against schema
+   * Validate tool input against schema using ajv
    */
   private validateInput(tool: CustomToolDefinition, input: Record<string, unknown>): void {
     if (!tool.inputSchema) {
       return;
     }
 
-    const schema = tool.inputSchema;
+    // Compile and cache the schema validator for this tool
+    const validate = this.ajv.compile(tool.inputSchema);
 
-    // Check required properties
-    if (schema.required) {
-      for (const prop of schema.required) {
-        if (!(prop in input)) {
-          throw new Error(`Missing required property: ${prop}`);
-        }
-      }
-    }
+    // Validate the input
+    const valid = validate(input);
 
-    // Check property types (basic validation)
-    if (schema.properties) {
-      for (const [key] of Object.entries(input)) {
-        if (!schema.additionalProperties && !(key in schema.properties)) {
-          throw new Error(`Unknown property: ${key}`);
+    if (!valid) {
+      // Format validation errors for better readability
+      const errors = validate.errors?.map(err => {
+        if (err.instancePath) {
+          return `${err.instancePath}: ${err.message}`;
         }
-      }
+        return err.message;
+      }).join(', ');
+
+      throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
     }
   }
 
