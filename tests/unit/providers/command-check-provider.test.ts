@@ -3,17 +3,39 @@ import { CommandCheckProvider } from '../../../src/providers/command-check-provi
 import { CheckProviderConfig } from '../../../src/providers/check-provider.interface';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
+import {
+  CommandExecutionResult,
+  CommandExecutionOptions,
+} from '../../../src/utils/command-executor';
 
-// Mock the command executor
-const mockExecuteute = jest.fn();
-const mockBuildEnvironment = jest.fn().mockReturnValue({});
+// Mock the command executor with factory pattern
+jest.mock('../../../src/utils/command-executor', () => {
+  const mockExecute =
+    jest.fn<
+      (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+    >();
+  const mockBuildEnvironment = jest.fn().mockReturnValue({});
 
-jest.mock('../../../src/utils/command-executor', () => ({
-  commandExecutor: {
-    execute: mockExecuteute,
-    buildEnvironment: mockBuildEnvironment,
-  },
-}));
+  return {
+    commandExecutor: {
+      execute: mockExecute,
+      buildEnvironment: mockBuildEnvironment,
+    },
+    // Export mocks for test access
+    __mockExecute: mockExecute,
+    __mockBuildEnvironment: mockBuildEnvironment,
+  };
+});
+
+// Import the mocked module to get the mock functions
+const mockModule = jest.requireMock('../../../src/utils/command-executor') as {
+  __mockExecute: jest.MockedFunction<
+    (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+  >;
+  __mockBuildEnvironment: jest.MockedFunction<() => Record<string, string>>;
+};
+const mockExecute = mockModule.__mockExecute;
+// mockBuildEnvironment is defined but not used in tests
 
 describe('CommandCheckProvider', () => {
   let provider: CommandCheckProvider;
@@ -119,7 +141,7 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "hello world"',
       };
 
-      mockExecuteute.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'hello world\n',
         stderr: '',
         exitCode: 0,
@@ -134,7 +156,6 @@ describe('CommandCheckProvider', () => {
       expect(mockExecute).toHaveBeenCalledWith('echo "hello world"', {
         env: expect.any(Object),
         timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
       });
     });
 
@@ -313,7 +334,6 @@ describe('CommandCheckProvider', () => {
           TEST_VAR: 'test_value',
         }),
         timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
       });
     });
 
@@ -341,7 +361,11 @@ describe('CommandCheckProvider', () => {
 
       await provider.execute(mockPRInfo, config);
 
-      const envArg = mockExecute.mock.calls[0][1].env;
+      expect(mockExecute.mock.calls).toHaveLength(1);
+      const callArgs = mockExecute.mock.calls[0];
+      expect(callArgs).toBeDefined();
+      expect(callArgs[1]).toBeDefined();
+      const envArg = callArgs[1]!.env;
       expect(envArg).toHaveProperty('CI_BUILD_NUMBER', '123');
       expect(envArg).toHaveProperty('GITHUB_REPOSITORY', 'test/repo');
       expect(envArg).toHaveProperty('NODE_VERSION', '18.0.0');
@@ -365,6 +389,7 @@ describe('CommandCheckProvider', () => {
       mockExecute.mockResolvedValue({
         stdout: '{"data": [1, 2, 3]}\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -579,7 +604,6 @@ describe('CommandCheckProvider', () => {
       expect(mockExecute).toHaveBeenCalledWith('sleep 1000', {
         env: expect.any(Object),
         timeout: 60000, // 60 second timeout
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
     });
   });

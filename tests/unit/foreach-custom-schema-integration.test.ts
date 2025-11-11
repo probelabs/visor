@@ -3,17 +3,36 @@ import { CommandCheckProvider } from '../../src/providers/command-check-provider
 import { CheckProviderConfig } from '../../src/providers/check-provider.interface';
 import { PRInfo } from '../../src/pr-analyzer';
 import { ReviewSummary } from '../../src/reviewer';
+import { CommandExecutionResult, CommandExecutionOptions } from '../../src/utils/command-executor';
 
-// Mock command executor
-const mockExecute = jest.fn();
-const mockBuildEnvironment = jest.fn().mockReturnValue({});
+// First, create the mock functions with the factory pattern
+jest.mock('../../src/utils/command-executor', () => {
+  const mockExecute =
+    jest.fn<
+      (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+    >();
+  const mockBuildEnvironment = jest.fn().mockReturnValue({});
 
-jest.mock('../../src/utils/command-executor', () => ({
-  commandExecutor: {
-    execute: mockExecute,
-    buildEnvironment: mockBuildEnvironment,
-  },
-}));
+  return {
+    commandExecutor: {
+      execute: mockExecute,
+      buildEnvironment: mockBuildEnvironment,
+    },
+    // Export mocks for test access
+    __mockExecute: mockExecute,
+    __mockBuildEnvironment: mockBuildEnvironment,
+  };
+});
+
+// Import the mocked module to get the mock functions
+const mockModule = jest.requireMock('../../src/utils/command-executor') as {
+  __mockExecute: jest.MockedFunction<
+    (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+  >;
+  __mockBuildEnvironment: jest.MockedFunction<() => Record<string, string>>;
+};
+const mockExecute = mockModule.__mockExecute;
+// mockBuildEnvironment is defined but not used in tests
 
 /**
  * Test: forEach with Custom Schema Integration
