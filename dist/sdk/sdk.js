@@ -1817,6 +1817,12 @@ ${"=".repeat(60)}
           if (this.config.allowEdit !== void 0) {
             options.allowEdit = this.config.allowEdit;
           }
+          if (this.config.allowedTools !== void 0) {
+            options.allowedTools = this.config.allowedTools;
+          }
+          if (this.config.disableTools !== void 0) {
+            options.disableTools = this.config.disableTools;
+          }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
             if (providerOverride) {
@@ -5173,6 +5179,12 @@ var init_ai_check_provider = __esm({
           if (config.ai.allowEdit !== void 0) {
             aiConfig.allowEdit = config.ai.allowEdit;
           }
+          if (config.ai.allowedTools !== void 0) {
+            aiConfig.allowedTools = config.ai.allowedTools;
+          }
+          if (config.ai.disableTools !== void 0) {
+            aiConfig.disableTools = config.ai.disableTools;
+          }
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
           }
@@ -5206,9 +5218,9 @@ var init_ai_check_provider = __esm({
         if (config.ai?.mcpServers) {
           Object.assign(mcpServers, config.ai.mcpServers);
         }
-        if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
+        if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
           aiConfig.mcpServers = mcpServers;
-        } else if (config.ai?.disable_tools) {
+        } else if (config.ai?.disableTools) {
         }
         const templateContext = {
           pr: {
@@ -5405,6 +5417,8 @@ var init_ai_check_provider = __esm({
           "ai.retry",
           "ai.fallback",
           "ai.allowEdit",
+          "ai.allowedTools",
+          "ai.disableTools",
           "ai_model",
           "ai_provider",
           "ai_mcp_servers",
@@ -18806,10 +18820,6 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
             },
-            disable_tools: {
-              type: "boolean",
-              description: "Disable MCP tools - AI will only have access to the prompt text"
-            },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers configuration"
@@ -18829,6 +18839,17 @@ var init_config_schema = __esm({
             allowEdit: {
               type: "boolean",
               description: "Enable Edit and Create tools for file modification (disabled by default for security)"
+            },
+            allowedTools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)"
+            },
+            disableTools: {
+              type: "boolean",
+              description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
             }
           },
           additionalProperties: false,

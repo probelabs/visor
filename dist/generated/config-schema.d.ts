@@ -441,10 +441,6 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
                 };
-                readonly disable_tools: {
-                    readonly type: "boolean";
-                    readonly description: "Disable MCP tools - AI will only have access to the prompt text";
-                };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers configuration";
@@ -464,6 +460,17 @@ export declare const configSchema: {
                 readonly allowEdit: {
                     readonly type: "boolean";
                     readonly description: "Enable Edit and Create tools for file modification (disabled by default for security)";
+                };
+                readonly allowedTools: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)";
+                };
+                readonly disableTools: {
+                    readonly type: "boolean";
+                    readonly description: "Disable all tools for raw AI mode (alternative to allowedTools: [])";
                 };
             };
             readonly additionalProperties: false;
