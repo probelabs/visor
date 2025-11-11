@@ -243,6 +243,80 @@ describe('AICheckProvider', () => {
         allowEdit: true,
       });
     });
+
+    it('should pass allowedTools and disableTools flags to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'analyze code structure',
+        ai: {
+          provider: 'anthropic',
+          model: 'claude-3-opus',
+          allowedTools: ['Read', 'Grep', 'Glob'],
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'anthropic',
+        model: 'claude-3-opus',
+        allowedTools: ['Read', 'Grep', 'Glob'],
+      });
+    });
+
+    it('should pass disableTools flag to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'explain architecture',
+        ai: {
+          provider: 'openai',
+          model: 'gpt-4',
+          disableTools: true,
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'openai',
+        model: 'gpt-4',
+        disableTools: true,
+      });
+    });
   });
 
   describe('getSupportedConfigKeys', () => {
@@ -255,6 +329,8 @@ describe('AICheckProvider', () => {
       expect(keys).toContain('ai.model');
       expect(keys).toContain('ai.enableDelegate');
       expect(keys).toContain('ai.allowEdit');
+      expect(keys).toContain('ai.allowedTools');
+      expect(keys).toContain('ai.disableTools');
     });
   });
 

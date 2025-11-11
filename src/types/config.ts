@@ -302,8 +302,6 @@ export interface AIProviderConfig {
   debug?: boolean;
   /** Skip adding code context (diffs, files, PR info) to the prompt */
   skip_code_context?: boolean;
-  /** Disable MCP tools - AI will only have access to the prompt text */
-  disable_tools?: boolean;
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */
@@ -314,6 +312,10 @@ export interface AIProviderConfig {
   fallback?: AIFallbackConfig;
   /** Enable Edit and Create tools for file modification (disabled by default for security) */
   allowEdit?: boolean;
+  /** Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array) */
+  allowedTools?: string[];
+  /** Disable all tools for raw AI mode (alternative to allowedTools: []) */
+  disableTools?: boolean;
 }
 
 /**
