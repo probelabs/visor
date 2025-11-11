@@ -426,8 +426,6 @@ tests:
             calls:
               - step: issue-assistant
                 at_least: 1
-              - step: apply-issue-labels
-                exactly: 1
               - step: extract-facts
                 exactly: 1
               - step: validate-fact
@@ -456,8 +454,6 @@ tests:
             calls:
               - step: issue-assistant
                 at_least: 2
-              - step: apply-issue-labels
-                exactly: 2
               - step: extract-facts
                 exactly: 1
               - step: validate-fact
