@@ -1,11 +1,10 @@
 import { CustomToolDefinition } from '../types/config';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
+import { commandExecutor } from '../utils/command-executor';
 
 /**
  * Executes custom tools defined in YAML configuration
@@ -132,11 +131,12 @@ export class CustomToolExecutor {
       stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
     }
 
-    // Execute the command
-    const result = await this.executeCommand(command, {
+    // Execute the command using shared executor
+    const env = commandExecutor.buildEnvironment(process.env, tool.env, context?.env);
+    const result = await commandExecutor.execute(command, {
       stdin,
       cwd: tool.cwd,
-      env: { ...process.env, ...tool.env, ...context?.env } as Record<string, string>,
+      env,
       timeout: tool.timeout || 30000,
     });
 
@@ -183,82 +183,6 @@ export class CustomToolExecutor {
     }
 
     return output;
-  }
-
-  /**
-   * Execute a shell command
-   */
-  private async executeCommand(
-    command: string,
-    options: {
-      stdin?: string;
-      cwd?: string;
-      env?: Record<string, string>;
-      timeout?: number;
-    }
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const execAsync = promisify(exec);
-
-    // If stdin is provided, we need to handle it differently
-    if (options.stdin) {
-      return new Promise((resolve, reject) => {
-        const childProcess = exec(
-          command,
-          {
-            cwd: options.cwd,
-            env: options.env as NodeJS.ProcessEnv,
-            timeout: options.timeout || 30000,
-          },
-          (error, stdout, stderr) => {
-            if (error && error.killed && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-              reject(new Error(`Command timed out after ${options.timeout || 30000}ms`));
-            } else {
-              resolve({
-                stdout: stdout || '',
-                stderr: stderr || '',
-                exitCode: error ? error.code || 1 : 0,
-              });
-            }
-          }
-        );
-
-        // Write stdin and close
-        if (options.stdin) {
-          childProcess.stdin?.write(options.stdin);
-          childProcess.stdin?.end();
-        }
-      });
-    }
-
-    // For commands without stdin, use the simpler promisified version
-    try {
-      const result = await execAsync(command, {
-        cwd: options.cwd,
-        env: options.env as NodeJS.ProcessEnv,
-        timeout: options.timeout || 30000,
-      });
-
-      return {
-        stdout: result.stdout || '',
-        stderr: result.stderr || '',
-        exitCode: 0,
-      };
-    } catch (error) {
-      const execError = error as NodeJS.ErrnoException & {
-        stdout?: string;
-        stderr?: string;
-        killed?: boolean;
-      };
-      if (execError.killed && execError.code === 'ETIMEDOUT') {
-        throw new Error(`Command timed out after ${options.timeout || 30000}ms`);
-      }
-
-      return {
-        stdout: execError.stdout || '',
-        stderr: execError.stderr || '',
-        exitCode: execError.code ? parseInt(execError.code as string, 10) : 1,
-      };
-    }
   }
 
   /**

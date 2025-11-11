@@ -4,16 +4,15 @@ import { CheckProviderConfig } from '../../src/providers/check-provider.interfac
 import { PRInfo } from '../../src/pr-analyzer';
 import { ReviewSummary } from '../../src/reviewer';
 
-// Mock child_process
-const mockExec = jest.fn() as jest.MockedFunction<any>;
-const mockPromisify = jest.fn().mockReturnValue(mockExec);
+// Mock command executor
+const mockExecute = jest.fn();
+const mockBuildEnvironment = jest.fn().mockReturnValue({});
 
-jest.mock('child_process', () => ({
-  exec: jest.fn(),
-}));
-
-jest.mock('util', () => ({
-  promisify: mockPromisify,
+jest.mock('../../src/utils/command-executor', () => ({
+  commandExecutor: {
+    execute: mockExecute,
+    buildEnvironment: mockBuildEnvironment,
+  },
 }));
 
 /**
@@ -69,9 +68,10 @@ describe('forEach with Custom Schema Integration', () => {
       ],
     } as ReviewSummary & { output: unknown });
 
-    mockExec.mockResolvedValue({
+    mockExecute.mockResolvedValue({
       stdout: 'test\n',
       stderr: '',
+      exitCode: 0,
     });
 
     const result = await provider.execute(mockPRInfo, config, dependencyResults);
