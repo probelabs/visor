@@ -544,7 +544,7 @@ steps:
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
       skip_code_context: true
-      disable_tools: true
+      disableTools: true
     prompt: |
       Your task is to EXTRACT factual claims from the assistant's response below.
 
