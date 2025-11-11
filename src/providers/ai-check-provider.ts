@@ -575,6 +575,12 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.allowEdit !== undefined) {
         aiConfig.allowEdit = config.ai.allowEdit as boolean;
       }
+      if (config.ai.allowedTools !== undefined) {
+        aiConfig.allowedTools = config.ai.allowedTools as string[];
+      }
+      if (config.ai.disableTools !== undefined) {
+        aiConfig.disableTools = config.ai.disableTools as boolean;
+      }
       if (config.ai.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
@@ -631,11 +637,11 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Pass MCP server config directly to AI service (unless tools are disabled)
-    if (Object.keys(mcpServers).length > 0 && !config.ai?.disable_tools) {
+    if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (aiConfig as any).mcpServers = mcpServers;
       // no noisy diagnostics here
-    } else if (config.ai?.disable_tools) {
+    } else if (config.ai?.disableTools) {
       // silently skip MCP when tools disabled
     }
 
@@ -921,6 +927,8 @@ export class AICheckProvider extends CheckProvider {
       'ai.retry',
       'ai.fallback',
       'ai.allowEdit',
+      'ai.allowedTools',
+      'ai.disableTools',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',

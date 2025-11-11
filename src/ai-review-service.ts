@@ -56,6 +56,10 @@ export interface AIReviewConfig {
   fallback?: import('./types/config').AIFallbackConfig;
   // Enable Edit and Create tools for file modification
   allowEdit?: boolean;
+  // Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)
+  allowedTools?: string[];
+  // Disable all tools for raw AI mode (alternative to allowedTools: [])
+  disableTools?: boolean;
 }
 
 export interface AIDebugInfo {
@@ -1426,6 +1430,14 @@ ${'='.repeat(60)}
       // Enable Edit and Create tools if configured
       if (this.config.allowEdit !== undefined) {
         (options as any).allowEdit = this.config.allowEdit;
+      }
+
+      // Pass tool filtering options to ProbeAgent
+      if (this.config.allowedTools !== undefined) {
+        (options as any).allowedTools = this.config.allowedTools;
+      }
+      if (this.config.disableTools !== undefined) {
+        (options as any).disableTools = this.config.disableTools;
       }
 
       // Add provider-specific options if configured
