@@ -23,6 +23,21 @@ export interface PromptOptions {
  */
 export async function interactivePrompt(options: PromptOptions): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Ensure stdin is in a sane state for a fresh interactive session
+    try {
+      if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+        // We use line-based input; disable raw mode just in case
+        (process.stdin as any).setRawMode(false);
+      }
+      // Always resume stdin before creating the interface
+      process.stdin.resume();
+    } catch {}
+
+    // Ensure encoding is set for predictable behavior
+    try {
+      process.stdin.setEncoding('utf8');
+    } catch {}
+
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -43,15 +58,9 @@ export async function interactivePrompt(options: PromptOptions): Promise<string>
         rl.close();
       } catch {}
       // Hardening: make sure no stray listeners remain on stdin between loops
-      try {
-        const input: any = (rl as any).input || process.stdin;
-        if (input && typeof input.removeAllListeners === 'function') {
-          input.removeAllListeners('data');
-          input.removeAllListeners('keypress');
-          input.removeAllListeners('readable');
-          input.removeAllListeners('close');
-        }
-      } catch {}
+      // Do not blanket-remove listeners from process.stdin; a fresh readline
+      // instance will manage its own listeners. Over-removing here can leave
+      // the next interface in a bad state (no keypress events).
       try {
         if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
           (process.stdin as any).setRawMode(false);
