@@ -12,6 +12,7 @@ import { MemoryCheckProvider } from './memory-check-provider';
 import { McpCheckProvider } from './mcp-check-provider';
 import { HumanInputCheckProvider } from './human-input-check-provider';
 import { ScriptCheckProvider } from './script-check-provider';
+import { CustomToolDefinition } from '../types/config';
 
 /**
  * Registry for managing check providers
@@ -19,6 +20,7 @@ import { ScriptCheckProvider } from './script-check-provider';
 export class CheckProviderRegistry {
   private providers: Map<string, CheckProvider> = new Map();
   private static instance: CheckProviderRegistry;
+  private customTools?: Record<string, CustomToolDefinition>;
 
   private constructor() {
     // Register default providers
@@ -65,7 +67,12 @@ export class CheckProviderRegistry {
 
     // Try to register McpCheckProvider - it may fail if dependencies are missing
     try {
-      this.register(new McpCheckProvider());
+      const mcpProvider = new McpCheckProvider();
+      // Set custom tools if available
+      if (this.customTools) {
+        mcpProvider.setCustomTools(this.customTools);
+      }
+      this.register(mcpProvider);
     } catch (error) {
       console.error(
         `Warning: Failed to register McpCheckProvider: ${
@@ -141,6 +148,19 @@ export class CheckProviderRegistry {
    */
   getAllProviders(): CheckProvider[] {
     return Array.from(this.providers.values());
+  }
+
+  /**
+   * Set custom tools that can be used by the MCP provider
+   */
+  setCustomTools(tools: Record<string, CustomToolDefinition>): void {
+    this.customTools = tools;
+
+    // Update MCP provider if already registered
+    const mcpProvider = this.providers.get('mcp') as McpCheckProvider | undefined;
+    if (mcpProvider) {
+      mcpProvider.setCustomTools(tools);
+    }
   }
 
   /**

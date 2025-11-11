@@ -40,6 +40,11 @@ export class ConfigMerger {
       result.checks = this.mergeChecks(parent.checks || {}, child.checks);
     }
 
+    // Merge custom tools
+    if (child.tools) {
+      result.tools = this.mergeObjects(parent.tools || {}, child.tools);
+    }
+
     // Note: extends should not be in the final merged config
     // It's only used during the loading process
 

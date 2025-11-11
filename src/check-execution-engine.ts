@@ -2462,6 +2462,12 @@ export class CheckExecutionEngine {
         logger.debug('Memory store initialized');
       }
 
+      // Set custom tools if configured
+      if (options.config?.tools) {
+        this.providerRegistry.setCustomTools(options.config.tools);
+        logger.debug(`Registered ${Object.keys(options.config.tools).length} custom tools`);
+      }
+
       // Reset per-run on_finish loop counters
       this.onFinishLoopCounts.clear();
       // Reset per-run forEach wave counters

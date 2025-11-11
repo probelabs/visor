@@ -11,13 +11,15 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { EnvironmentResolver } from '../utils/env-resolver';
+import { CustomToolExecutor } from './custom-tool-executor';
+import { CustomToolDefinition } from '../types/config';
 
 /**
  * MCP Check Provider Configuration
  */
 export interface McpCheckConfig extends CheckProviderConfig {
-  /** Transport type: stdio (default), sse (legacy), or http (streamable HTTP) */
-  transport?: 'stdio' | 'sse' | 'http';
+  /** Transport type: stdio (default), sse (legacy), http (streamable HTTP), or custom (YAML-defined tools) */
+  transport?: 'stdio' | 'sse' | 'http' | 'custom';
   /** Command to execute (for stdio transport) */
   command?: string;
   /** Command arguments (for stdio transport) */
@@ -48,11 +50,12 @@ export interface McpCheckConfig extends CheckProviderConfig {
 
 /**
  * Check provider that calls MCP tools directly
- * Supports stdio, SSE (legacy), and Streamable HTTP transports
+ * Supports stdio, SSE (legacy), Streamable HTTP transports, and custom YAML-defined tools
  */
 export class McpCheckProvider extends CheckProvider {
   private liquid: Liquid;
   private sandbox?: Sandbox;
+  private customToolExecutor?: CustomToolExecutor;
 
   constructor() {
     super();
@@ -61,6 +64,17 @@ export class McpCheckProvider extends CheckProvider {
       strictFilters: false,
       strictVariables: false,
     });
+  }
+
+  /**
+   * Set custom tools for this provider
+   */
+  setCustomTools(tools: Record<string, CustomToolDefinition>): void {
+    if (!this.customToolExecutor) {
+      this.customToolExecutor = new CustomToolExecutor(tools);
+    } else {
+      this.customToolExecutor.registerTools(tools);
+    }
   }
 
   /**
@@ -184,7 +198,7 @@ export class McpCheckProvider extends CheckProvider {
       }
 
       // Create MCP client and execute method
-      const result = await this.executeMcpMethod(cfg, methodArgs);
+      const result = await this.executeMcpMethod(cfg, methodArgs, prInfo, dependencyResults);
 
       // Apply transforms if specified
       let finalOutput = result;
@@ -297,12 +311,40 @@ export class McpCheckProvider extends CheckProvider {
    */
   private async executeMcpMethod(
     config: McpCheckConfig,
-    methodArgs: Record<string, unknown>
+    methodArgs: Record<string, unknown>,
+    prInfo?: PRInfo,
+    dependencyResults?: Map<string, ReviewSummary>
   ): Promise<unknown> {
     const transport = config.transport || 'stdio';
     const timeout = (config.timeout || 60) * 1000; // Convert to milliseconds
 
-    if (transport === 'stdio') {
+    if (transport === 'custom') {
+      // Execute custom YAML-defined tool
+      if (!this.customToolExecutor) {
+        throw new Error('No custom tools available. Define tools in the "tools" section of your configuration.');
+      }
+
+      const tool = this.customToolExecutor.getTool(config.method);
+      if (!tool) {
+        throw new Error(`Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor.getTools().map(t => t.name).join(', ')}`);
+      }
+
+      // Build context for custom tool execution
+      const context = {
+        pr: prInfo ? {
+          number: prInfo.number,
+          title: prInfo.title,
+          author: prInfo.author,
+          branch: prInfo.head,
+          base: prInfo.base,
+        } : undefined,
+        files: prInfo?.files,
+        outputs: this.buildOutputContext(dependencyResults),
+        env: this.getSafeEnvironmentVariables(),
+      };
+
+      return await this.customToolExecutor.execute(config.method, methodArgs, context);
+    } else if (transport === 'stdio') {
       return await this.executeStdioMethod(config, methodArgs, timeout);
     } else if (transport === 'sse') {
       return await this.executeSseMethod(config, methodArgs, timeout);
