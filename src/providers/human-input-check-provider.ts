@@ -377,6 +377,15 @@ export class HumanInputCheckProvider extends CheckProvider {
               rendered = await this.liquid.parseAndRender(rendered, tctx);
             } catch {}
           }
+          // Expose the final rendered prompt to the test runner (like AI provider does)
+          try {
+            const stepName = (config as any).checkName || 'unknown';
+            context?.hooks?.onPromptCaptured?.({
+              step: String(stepName),
+              provider: 'human-input',
+              prompt: rendered,
+            });
+          } catch {}
           config = { ...config, prompt: rendered };
         }
         if (typeof config.placeholder === 'string') {

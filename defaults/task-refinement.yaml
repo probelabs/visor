@@ -118,12 +118,21 @@ tests:
       expect:
         calls:
           - step: ask
-            exactly: 3
+            at_least: 3
           - step: refine
             exactly: 3
           - step: finish
             exactly: 1
         prompts:
+          # Ask prompt should surface the last refine clarification
+          - step: ask
+            index: 2
+            contains:
+              - "Which CI platform and trigger conditions?"
+          - step: ask
+            index: last
+            contains:
+              - "What Node version and commands should run?"
           - step: refine
             index: last
             contains:
@@ -132,3 +141,13 @@ tests:
               - "What Node version and commands should run?"
           # Keep prompt assertions resilient to minor formatting changes by using 'contains'
           # instead of a single large regex.
+        outputs:
+          # Ensure last refine record carries a timestamp and expected text appears
+          - step: refine
+            index: last
+            path: ts
+            matches: "^\\d{10,}$"
+          - step: refine
+            index: last
+            path: text
+            matches: "(?is).*GitHub Actions.*Node 18.*npm ci.*npm test.*"

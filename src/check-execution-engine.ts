@@ -1182,20 +1182,18 @@ export class CheckExecutionEngine {
     const enrichedWithOutput = enriched as ReviewSummary & { output?: unknown };
     if (enrichedWithOutput.output !== undefined) {
       try {
-        const hasSchema = !!checkConfig.schema;
         const outVal: any = enrichedWithOutput.output as any;
         let histVal: any = outVal;
-        if (!hasSchema) {
-          if (Array.isArray(outVal)) {
-            histVal = outVal;
-          } else if (outVal !== null && typeof outVal === 'object') {
-            histVal = { ...outVal };
-            if (histVal.ts === undefined) histVal.ts = Date.now();
-          } else {
-            histVal = { text: String(outVal), ts: Date.now() };
-          }
+        if (Array.isArray(outVal)) {
+          histVal = outVal;
+        } else if (outVal !== null && typeof outVal === 'object') {
+          histVal = { ...outVal };
+          if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
+        } else {
+          histVal = { text: String(outVal), ts: Date.now() };
         }
         this.trackOutputHistory(checkId, histVal);
+        try { (enriched as any).__histTracked = true; } catch {}
       } catch {
         // best effort history tracking
         try {
@@ -6425,7 +6423,28 @@ export class CheckExecutionEngine {
                 ]);
               } catch {}
 
-              // (history handled centrally in executeCheckInline)
+              // Ensure outputs_history is updated BEFORE we decide routing so templates
+              // (e.g., human-input prompts) can see the latest refinement immediately.
+              try {
+                const outVal = (finalResult as any)?.output;
+                if (outVal !== undefined) {
+                  const hasSchema = !!checkConfig.schema;
+                  let histVal: any = outVal;
+                  if (!hasSchema) {
+                    if (Array.isArray(outVal)) histVal = outVal;
+                    else if (outVal !== null && typeof outVal === 'object') {
+                      histVal = { ...(outVal as any) };
+                      if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
+                    } else {
+                      histVal = { text: String(outVal), ts: Date.now() };
+                    }
+                  }
+                  this.trackOutputHistory(checkName, histVal);
+                  try {
+                    (finalResult as any).__histTracked = true;
+                  } catch {}
+                }
+              } catch {}
 
               // Evaluate fail_if for normal (non-forEach) execution
               if (config && (config.fail_if || checkConfig.fail_if)) {
@@ -6809,20 +6828,20 @@ export class CheckExecutionEngine {
               );
               if (!__inTest && !isForEachAggregateChild && !checkConfig.forEach) {
                 try {
-                  const hasSchema = !!checkConfig.schema;
-                  const outVal: any = reviewResultWithOutput.output as any;
-                  let histVal: any = outVal;
-                  if (!hasSchema) {
+                  const already = (reviewResultWithOutput as any).__histTracked === true;
+                  if (!already) {
+                    const outVal: any = reviewResultWithOutput.output as any;
+                    let histVal: any = outVal;
                     if (Array.isArray(outVal)) {
                       histVal = outVal;
                     } else if (outVal !== null && typeof outVal === 'object') {
                       histVal = { ...outVal };
-                      if (histVal.ts === undefined) histVal.ts = Date.now();
+                      if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
                     } else {
                       histVal = { text: String(outVal), ts: Date.now() };
                     }
+                    this.trackOutputHistory(checkName, histVal);
                   }
-                  this.trackOutputHistory(checkName, histVal);
                 } catch {
                   try {
                     this.trackOutputHistory(checkName, reviewResultWithOutput.output);
