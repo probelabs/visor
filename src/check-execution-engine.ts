@@ -6560,13 +6560,24 @@ export class CheckExecutionEngine {
                 } catch {}
                 if (failureResults.length > 0) {
                   // Guard against runaway loops in multi-turn refinement flows where
-                  // providers do not persist history as expected: after 3 runs, treat
-                  // refinement as successful regardless of fail_if to allow finish to execute.
+                  // providers do not persist history as expected: after a configurable
+                  // number of runs, treat refinement as successful regardless of fail_if
+                  // to allow finish to execute. Defaults to 3 if not configured.
                   try {
                     const runs = (this.executionStats.get(checkName)?.totalRuns || 0) + 1; // include current
-                    if (runs >= 3) {
+                    const perCheckMax = (checkConfig as any)?.limits?.max_runs;
+                    const globalMax = (config as any)?.routing?.limits?.max_runs_per_check;
+                    const maxRuns =
+                      (typeof perCheckMax === 'number' && perCheckMax > 0
+                        ? perCheckMax
+                        : typeof globalMax === 'number' && globalMax > 0
+                          ? globalMax
+                          : 3) | 0;
+                    if (runs >= maxRuns) {
                       if (debug)
-                        log(`🔧 Debug: overriding fail_if for '${checkName}' after ${runs} runs`);
+                        log(
+                          `🔧 Debug: overriding fail_if for '${checkName}' after ${runs} runs (max=${maxRuns})`
+                        );
                       failureResults = [] as any;
                     }
                   } catch {}
@@ -6629,9 +6640,17 @@ export class CheckExecutionEngine {
                         // Safety guard: prevent unbounded refine loops in CI-style flows
                         try {
                           const runs = this.executionStats.get(checkName)?.totalRuns || 0;
-                          if (runs + 1 >= 3) {
+                          const perCheckMax = (checkConfig as any)?.limits?.max_runs;
+                          const globalMax = (config as any)?.routing?.limits?.max_runs_per_check;
+                          const maxRuns =
+                            (typeof perCheckMax === 'number' && perCheckMax > 0
+                              ? perCheckMax
+                              : typeof globalMax === 'number' && globalMax > 0
+                                ? globalMax
+                                : 3) | 0;
+                          if (runs + 1 >= maxRuns) {
                             require('./logger').logger.info(
-                              `⏭ on_fail.goto(post-fail_if): suppress after ${runs} runs for '${checkName}'`
+                              `⏭ on_fail.goto(post-fail_if): suppress after ${runs} runs for '${checkName}' (max=${maxRuns})`
                             );
                             target = null as any;
                           }
