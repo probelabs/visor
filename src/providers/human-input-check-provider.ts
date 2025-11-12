@@ -175,6 +175,37 @@ export class HumanInputCheckProvider extends CheckProvider {
    * Removes potentially dangerous characters while preserving useful input
    */
   private sanitizeInput(input: string): string {
+    // Heuristic: collapse accidental per-character duplication ("stutter") often caused by
+    // TTY echo races. We only apply this when most adjacent ASCII chars are doubled.
+    const collapseStutter = (s: string): string => {
+      if (!s || s.length < 4) return s;
+      let dupPairs = 0;
+      let pairs = 0;
+      for (let i = 0; i + 1 < s.length; i++) {
+        const a = s[i];
+        const b = s[i + 1];
+        if (/^[\x20-\x7E]$/.test(a) && /^[\x20-\x7E]$/.test(b)) {
+          pairs++;
+          if (a === b) dupPairs++;
+        }
+      }
+      const ratio = pairs > 0 ? dupPairs / pairs : 0;
+      if (ratio < 0.5) return s; // keep as-is unless roughly half of pairs are doubled
+      let out = '';
+      for (let i = 0; i < s.length; i++) {
+        const a = s[i];
+        const b = i + 1 < s.length ? s[i + 1] : '';
+        if (b && a === b) {
+          out += a;
+          i++; // skip the duplicate
+        } else {
+          out += a;
+        }
+      }
+      return out;
+    };
+
+    input = collapseStutter(input);
     // Remove null bytes (C-string injection)
     let sanitized = input.replace(/\0/g, '');
 

@@ -36,6 +36,7 @@ steps:
           clarification question in the "text" field.
         - If everything is sufficient, set refined=true and put the final refined wording in "text".
         - Be succinct and unambiguous.
+        - You can't mark plan as refined, untill you can formal user agreemet
     # Schema ensures the agent either finalizes or asks to clarify
     schema:
       type: object
@@ -50,7 +51,6 @@ steps:
         {% assign amsgs = outputs_history.refine | default: [] %}
         {% assign merged = umsgs | concat: amsgs | sort: 'ts' %}
         {% for m in merged %}
-          {# Treat any refine output (has 'refined' key) as assistant; ask outputs as user #}
           {% if m.refined != nil %}
             <assistant>{{ m.text }}</assistant>
           {% else %}

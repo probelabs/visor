@@ -3933,6 +3933,17 @@ export class CheckExecutionEngine {
     const __iterStart = this.recordIterationStart(checkName);
     const __provStart = Date.now();
     const result = await provider.execute(prInfo, providerConfig, undefined, this.executionContext);
+    // Normalize provider issues: ensure each issue carries the producing check name
+    try {
+      if (Array.isArray((result as any)?.issues)) {
+        (result as any).issues = (result as any).issues.map((iss: any) => {
+          if (iss && typeof iss === 'object' && !iss.checkName) {
+            return { ...iss, checkName };
+          }
+          return iss;
+        });
+      }
+    } catch {}
     this.recordProviderDuration(checkName, Date.now() - __provStart);
 
     // Validate forEach output (skip if there are already errors from transform_js or other sources)
@@ -4220,11 +4231,10 @@ export class CheckExecutionEngine {
         ];
       }
 
-      // Determine the group: if group_by is 'check', use the check name; otherwise use configured group || 'default'
-      let group = checkConfig.group || 'default';
-      if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
-        group = checkName;
-      }
+      // Determine the group strictly from the step/check configuration.
+      // Simpler rule: if a check declares `group`, use it; otherwise use 'default'.
+      // We intentionally ignore any global `output.pr_comment.group_by` setting.
+      const group = checkConfig.group || 'default';
 
       const checkResult: CheckResult = {
         checkName,

@@ -686,5 +686,6 @@ steps:
 output:
   pr_comment:
     format: markdown
-    group_by: check
+    # Grouping is determined solely by each check's `group` field.
+    # The renderer ignores any global group_by; keep comments compact.
     collapse: true
