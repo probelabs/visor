@@ -3991,7 +3991,7 @@ export class CheckExecutionEngine {
 
     // Determine the group generically: if a check declares `group`, use it; otherwise default to the check name
     // This avoids any hardcoded mapping and keeps grouping stable for JSON/PR consumers.
-    let group = checkConfig.group || checkName;
+    const group = checkConfig.group || checkName;
 
     // History is recorded centrally in executeCheckInline; avoid double-recording here.
 
