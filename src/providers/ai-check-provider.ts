@@ -566,6 +566,12 @@ export class AICheckProvider extends CheckProvider {
       if (config.ai.disableTools !== undefined) {
         aiConfig.disableTools = config.ai.disableTools as boolean;
       }
+      if (config.ai.allowBash !== undefined) {
+        aiConfig.allowBash = config.ai.allowBash as boolean;
+      }
+      if (config.ai.bashConfig !== undefined) {
+        aiConfig.bashConfig = config.ai.bashConfig as import('../types/config').BashConfig;
+      }
       if (config.ai.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
@@ -882,6 +888,8 @@ export class AICheckProvider extends CheckProvider {
       'ai.allowEdit',
       'ai.allowedTools',
       'ai.disableTools',
+      'ai.allowBash',
+      'ai.bashConfig',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',

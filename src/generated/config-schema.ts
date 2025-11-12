@@ -621,6 +621,14 @@ export const configSchema = {
           type: 'boolean',
           description: 'Disable all tools for raw AI mode (alternative to allowedTools: [])',
         },
+        allowBash: {
+          type: 'boolean',
+          description: 'Enable bash command execution (shorthand for bashConfig.enabled)',
+        },
+        bashConfig: {
+          $ref: '#/definitions/BashConfig',
+          description: 'Advanced bash command execution configuration',
+        },
       },
       additionalProperties: false,
       description: 'AI provider configuration',
@@ -759,6 +767,50 @@ export const configSchema = {
       required: ['provider', 'model'],
       additionalProperties: false,
       description: 'Fallback provider configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    BashConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable bash command execution (disabled by default for security)',
+        },
+        allow: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: "Array of permitted command patterns (e.g., ['ls', 'git status'])",
+        },
+        deny: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])",
+        },
+        noDefaultAllow: {
+          type: 'boolean',
+          description: 'Disable default safe command list',
+        },
+        noDefaultDeny: {
+          type: 'boolean',
+          description: 'Disable default dangerous command blocklist',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Execution timeout in milliseconds',
+        },
+        workingDirectory: {
+          type: 'string',
+          description: 'Default working directory for command execution',
+        },
+      },
+      additionalProperties: false,
+      description: 'Bash command execution configuration for ProbeAgent',
       patternProperties: {
         '^x-': {},
       },

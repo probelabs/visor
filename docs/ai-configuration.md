@@ -310,6 +310,115 @@ steps:
 
 **Note:** Task delegation increases execution time and token usage, but can provide more thorough analysis for complex tasks.
 
+#### Bash Command Execution (`allowBash` / `bashConfig`)
+
+Enable secure bash command execution for AI agents to run read-only commands and analyze system state. This feature is disabled by default for security and requires explicit opt-in.
+
+**Simple Configuration:**
+
+Use `allowBash: true` for basic bash command execution with default safe commands:
+
+```yaml
+steps:
+  # Simple: Enable bash with default safe commands
+  git-status-analysis:
+    type: ai
+    prompt: "Analyze the project structure and git status"
+    ai:
+      provider: anthropic
+      model: claude-3-opus
+      allowBash: true  # Simple one-line enable
+```
+
+**Advanced Configuration:**
+
+Use `bashConfig` for fine-grained control over bash command execution:
+
+```yaml
+steps:
+  # Advanced: Custom allow/deny lists
+  custom-bash-config:
+    type: ai
+    prompt: "Run custom analysis commands"
+    ai:
+      provider: google
+      allowBash: true  # Enable bash execution
+      bashConfig:
+        allow: ['npm test', 'npm run lint']  # Additional allowed commands
+        deny: ['npm install']  # Additional blocked commands
+        timeout: 30000  # 30 second timeout per command
+        workingDirectory: './src'  # Default working directory
+
+  # Advanced: Disable default filters (expert mode)
+  advanced-bash:
+    type: ai
+    prompt: "Run advanced system commands"
+    ai:
+      provider: anthropic
+      allowBash: true
+      bashConfig:
+        noDefaultAllow: true  # Disable default safe command list
+        noDefaultDeny: false  # Keep default dangerous command blocklist
+        allow: ['specific-command-1', 'specific-command-2']
+```
+
+**Configuration Options:**
+
+- **`allowBash`** (boolean): Simple toggle to enable bash command execution. Default: `false`
+- **`allow`** (string[]): Additional permitted command patterns (e.g., `['ls', 'git status']`)
+- **`deny`** (string[]): Additional blocked command patterns (e.g., `['rm -rf', 'sudo']`)
+- **`noDefaultAllow`** (boolean): Disable default safe command list (~235 commands). Default: `false`
+- **`noDefaultDeny`** (boolean): Disable default dangerous command blocklist (~191 patterns). Default: `false`
+- **`timeout`** (number): Execution timeout in milliseconds. Default: varies by ProbeAgent
+- **`workingDirectory`** (string): Base directory for command execution
+
+**Default Security:**
+
+ProbeAgent includes comprehensive security by default:
+- **Safe Commands** (~235): Read-only operations like `ls`, `cat`, `git status`, `npm list`, `grep`
+- **Blocked Commands** (~191): Dangerous operations like `rm -rf`, `sudo`, `npm install`, `curl`, system modifications
+
+**When to enable bash commands:**
+- System state analysis (git status, file listings, environment info)
+- Running read-only diagnostic commands
+- Executing test suites or linters
+- Analyzing build outputs or logs
+
+**When to keep bash disabled (default):**
+- Security-sensitive environments
+- Untrusted AI prompts or inputs
+- Code review without system access needs
+- Compliance requirements that prohibit command execution
+
+**Security Best Practices:**
+1. Always use the default allow/deny lists unless you have specific requirements
+2. Set reasonable timeouts to prevent long-running commands
+3. Use `workingDirectory` to restrict command execution scope
+4. Audit command patterns in your allow list regularly
+5. Test configuration in a safe environment first
+6. Review AI-generated commands before enabling in production
+
+**Example: Git Status Analysis**
+
+```yaml
+steps:
+  git-status-review:
+    type: ai
+    prompt: |
+      Analyze the current git status and provide insights:
+      - Check for uncommitted changes
+      - Review branch state
+      - Identify any potential issues
+    ai:
+      provider: anthropic
+      allowBash: true  # Simple enable
+      bashConfig:
+        allow: ['git log --oneline']  # Add custom git command
+        workingDirectory: '.'
+```
+
+**Security Note:** Bash command execution respects existing security boundaries and permissions. Commands run with the same privileges as the Visor process. Always review and test bash configurations before deploying to production environments.
+
 ### Fallback Behavior
 
 If no key is configured, Visor falls back to fast, heuristic checks (simple patterns, basic style/perf). For best results, set a provider.
