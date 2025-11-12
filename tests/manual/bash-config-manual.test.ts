@@ -24,6 +24,8 @@ describe('Bash Configuration Manual Tests', () => {
     title: 'Test PR',
     body: 'Test PR body',
     author: 'test-user',
+    base: 'main',
+    head: 'feature',
     files: [
       {
         filename: 'test.ts',
@@ -34,12 +36,8 @@ describe('Bash Configuration Manual Tests', () => {
         patch: '+console.log("test");',
       },
     ],
-    baseBranch: 'main',
-    headBranch: 'feature',
-    changedFiles: 1,
-    additions: 10,
-    deletions: 5,
-    commits: 1,
+    totalAdditions: 10,
+    totalDeletions: 5,
   };
 
   beforeAll(() => {
@@ -50,14 +48,20 @@ describe('Bash Configuration Manual Tests', () => {
 
   (runManualTests ? describe : describe.skip)('With API Key', () => {
     it('should execute bash commands when allowBash is true', async () => {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        console.warn('⚠️  ANTHROPIC_API_KEY not set, skipping test');
+      const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+      const hasGoogleKey = !!process.env.GOOGLE_API_KEY;
+
+      if (!hasAnthropicKey && !hasGoogleKey) {
+        console.warn('⚠️  No API key set (ANTHROPIC_API_KEY or GOOGLE_API_KEY), skipping test');
         return;
       }
 
+      const provider = hasAnthropicKey ? 'anthropic' : 'google';
+      const model = hasAnthropicKey ? 'claude-3-5-sonnet-20241022' : 'gemini-2.0-flash-exp';
+
       const service = new AIReviewService({
-        provider: 'anthropic',
-        model: 'claude-3-5-sonnet-20241022',
+        provider: provider as any,
+        model,
         allowBash: true,
         debug: true,
       });
@@ -81,14 +85,20 @@ Return a JSON response with your findings.
     }, 60000); // 60 second timeout
 
     it('should pass bashConfig options to ProbeAgent', async () => {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        console.warn('⚠️  ANTHROPIC_API_KEY not set, skipping test');
+      const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+      const hasGoogleKey = !!process.env.GOOGLE_API_KEY;
+
+      if (!hasAnthropicKey && !hasGoogleKey) {
+        console.warn('⚠️  No API key set, skipping test');
         return;
       }
 
+      const provider = hasAnthropicKey ? 'anthropic' : 'google';
+      const model = hasAnthropicKey ? 'claude-3-5-sonnet-20241022' : 'gemini-2.0-flash-exp';
+
       const service = new AIReviewService({
-        provider: 'anthropic',
-        model: 'claude-3-5-sonnet-20241022',
+        provider: provider as any,
+        model,
         allowBash: true,
         bashConfig: {
           allow: ['echo', 'pwd', 'ls'],
@@ -116,14 +126,20 @@ Summarize what commands worked and return JSON.
     }, 60000);
 
     it('should respect custom working directory', async () => {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        console.warn('⚠️  ANTHROPIC_API_KEY not set, skipping test');
+      const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+      const hasGoogleKey = !!process.env.GOOGLE_API_KEY;
+
+      if (!hasAnthropicKey && !hasGoogleKey) {
+        console.warn('⚠️  No API key set, skipping test');
         return;
       }
 
+      const provider = hasAnthropicKey ? 'anthropic' : 'google';
+      const model = hasAnthropicKey ? 'claude-3-5-sonnet-20241022' : 'gemini-2.0-flash-exp';
+
       const service = new AIReviewService({
-        provider: 'anthropic',
-        model: 'claude-3-5-sonnet-20241022',
+        provider: provider as any,
+        model,
         allowBash: true,
         bashConfig: {
           workingDirectory: '/tmp',
@@ -146,14 +162,20 @@ Return JSON with the pwd output.
     }, 60000);
 
     it('should work without bash when allowBash is not set', async () => {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        console.warn('⚠️  ANTHROPIC_API_KEY not set, skipping test');
+      const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+      const hasGoogleKey = !!process.env.GOOGLE_API_KEY;
+
+      if (!hasAnthropicKey && !hasGoogleKey) {
+        console.warn('⚠️  No API key set, skipping test');
         return;
       }
 
+      const provider = hasAnthropicKey ? 'anthropic' : 'google';
+      const model = hasAnthropicKey ? 'claude-3-5-sonnet-20241022' : 'gemini-2.0-flash-exp';
+
       const service = new AIReviewService({
-        provider: 'anthropic',
-        model: 'claude-3-5-sonnet-20241022',
+        provider: provider as any,
+        model,
         // allowBash not set - should default to false
         debug: true,
       });
