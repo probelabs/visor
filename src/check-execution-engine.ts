@@ -3989,11 +3989,9 @@ export class CheckExecutionEngine {
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
 
-    // Determine the group: if group_by is 'check', use the check name; otherwise use configured group || 'default'
-    let group = checkConfig.group || 'default';
-    if (config?.output?.pr_comment?.group_by === 'check' && !checkConfig.group) {
-      group = checkName;
-    }
+    // Determine the group generically: if a check declares `group`, use it; otherwise default to the check name
+    // This avoids any hardcoded mapping and keeps grouping stable for JSON/PR consumers.
+    let group = checkConfig.group || checkName;
 
     // History is recorded centrally in executeCheckInline; avoid double-recording here.
 
@@ -4231,10 +4229,8 @@ export class CheckExecutionEngine {
         ];
       }
 
-      // Determine the group strictly from the step/check configuration.
-      // Simpler rule: if a check declares `group`, use it; otherwise use 'default'.
-      // We intentionally ignore any global `output.pr_comment.group_by` setting.
-      const group = checkConfig.group || 'default';
+      // Determine group for grouped results: use explicit group or fall back to the check name
+      const group = checkConfig.group || checkName;
 
       const checkResult: CheckResult = {
         checkName,
