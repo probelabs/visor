@@ -4157,6 +4157,7 @@ export class CheckExecutionEngine {
     config?: import('./types/config').VisorConfig,
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
+    const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === 'true';
     const groupedResults: GroupedCheckResults = {};
     const agg = reviewSummary as ReviewSummary & {
       __contents?: Record<string, string | undefined>;
@@ -4231,6 +4232,16 @@ export class CheckExecutionEngine {
 
       // Determine group for grouped results: use explicit group or fall back to the check name
       const group = checkConfig.group || checkName;
+
+      if (GH_DBG) {
+        try {
+          console.error(
+            `[gh-debug] grouped result: check='${checkName}' issues=${issuesForCheck.length} hasContent=${
+              content.trim() ? 'yes' : 'no'
+            } group='${group}'`
+          );
+        } catch {}
+      }
 
       const checkResult: CheckResult = {
         checkName,
@@ -4444,6 +4455,8 @@ export class CheckExecutionEngine {
     let templateContent: string = '';
     let enrichAssistantContext = false;
 
+    const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === 'true';
+
     if (checkConfig.template) {
       // Custom template
       if (checkConfig.template.content) {
@@ -4456,6 +4469,15 @@ export class CheckExecutionEngine {
         throw new Error('Custom template must specify either "file" or "content"');
       }
     } else if (schemaName === 'plain') {
+      if (GH_DBG) {
+        try {
+          console.error(
+            `[gh-debug] render plain content for check='${checkName}' issues=${
+              (reviewSummary.issues || []).length
+            }`
+          );
+        } catch {}
+      }
       // Plain schema - return raw content directly
       return reviewSummary.issues?.[0]?.message || '';
     } else {
@@ -4489,6 +4511,13 @@ export class CheckExecutionEngine {
           `Template file not found for schema '${sanitizedSchema}'. Tried: ${distPath} and ${cwdPath}.`
         );
       }
+      if (GH_DBG) {
+        try {
+          console.error(
+            `[gh-debug] template resolved for check='${checkName}' schema='${sanitizedSchema}' path='${foundTemplate}'`
+          );
+        } catch {}
+      }
       // Only enrich built-in issue-assistant with event/permission context
       if (sanitizedSchema === 'issue-assistant') {
         enrichAssistantContext = true;
@@ -4500,6 +4529,23 @@ export class CheckExecutionEngine {
     const filteredIssues = (reviewSummary.issues || []).filter(
       issue => !(issue.file === 'system' && issue.line === 0)
     );
+    if (GH_DBG) {
+      try {
+        const sample = filteredIssues.slice(0, 2).map(i => ({
+          file: i.file,
+          line: i.line,
+          severity: i.severity,
+          ruleId: i.ruleId,
+          checkName: (i as any).checkName,
+          category: (i as any).category,
+        }));
+        console.error(
+          `[gh-debug] render data for check='${checkName}' issues=${filteredIssues.length} content=${
+            (reviewSummary as any).content ? 'yes' : 'no'
+          } sample=${JSON.stringify(sample)}`
+        );
+      } catch {}
+    }
 
     const templateData: Record<string, unknown> = {
       issues: filteredIssues,
@@ -8390,6 +8436,7 @@ export class CheckExecutionEngine {
     options: CheckExecutionOptions,
     prInfo: import('./pr-analyzer').PRInfo
   ): Promise<void> {
+    const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === 'true';
     if (
       !this.githubCheckService ||
       !this.checkRunMap ||
@@ -8412,6 +8459,19 @@ export class CheckExecutionEngine {
       if (issue.checkName && issuesByCheck.has(issue.checkName)) {
         issuesByCheck.get(issue.checkName)!.push(issue);
       }
+    }
+    if (GH_DBG) {
+      try {
+        const counts = Array.from(issuesByCheck.entries()).map(([k, v]) => ({ check: k, issues: v.length }));
+        const sample = (reviewSummary.issues || []).slice(0, 3).map(i => ({
+          file: i.file,
+          line: i.line,
+          severity: i.severity,
+          ruleId: i.ruleId,
+          checkName: (i as any).checkName,
+        }));
+        console.error(`[gh-debug] GH checks grouping: ${JSON.stringify(counts)} sample=${JSON.stringify(sample)}`);
+      } catch {}
     }
 
     console.log(`🏁 Completing ${this.checkRunMap.size} GitHub check runs...`);
@@ -8443,7 +8503,15 @@ export class CheckExecutionEngine {
           options.githubChecks.prNumber, // prNumber
           options.githubChecks.headSha // currentCommitSha
         );
-
+        if (GH_DBG) {
+          try {
+            console.error(
+              `[gh-debug] Completed GH check='${checkName}' with ${checkIssues.length} issues; failureIf=${
+                (failureResults || []).filter(f => f.failed).length
+              }`
+            );
+          } catch {}
+        }
         console.log(`✅ Completed ${checkName} check with ${checkIssues.length} issues`);
       } catch (error) {
         console.error(`❌ Failed to complete ${checkName} check: ${error}`);
