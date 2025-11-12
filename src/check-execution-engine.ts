@@ -6578,11 +6578,11 @@ export class CheckExecutionEngine {
                         log(
                           `🔧 Debug: overriding fail_if for '${checkName}' after ${runs} runs (max=${maxRuns})`
                         );
-                      failureResults = [] as any;
+                      const empty: import('./types/config').FailureConditionResult[] = [];
+                      failureResults = empty;
                     }
                   } catch {}
-                  const fr = failureResults as any[];
-                  const failureIssues = fr
+                  const failureIssues = failureResults
                     .filter(f => f.failed)
                     .map(f => ({
                       file: 'system',
@@ -7518,8 +7518,8 @@ export class CheckExecutionEngine {
           issue => !issue.ruleId?.endsWith('/__skipped')
         );
         // Safety: ensure aggregated issues retain producing check association
-        nonInternalIssues = nonInternalIssues.map(i =>
-          (i as any).checkName ? i : ({ ...(i as any), checkName } as any)
+        nonInternalIssues = nonInternalIssues.map((i: ReviewIssue) =>
+          i.checkName ? i : { ...i, checkName }
         );
         aggregatedIssues.push(...nonInternalIssues);
 
@@ -7544,8 +7544,8 @@ export class CheckExecutionEngine {
       let dynNonInternal = (result.issues || []).filter(
         issue => !issue.ruleId?.endsWith('/__skipped')
       );
-      dynNonInternal = dynNonInternal.map(i =>
-        (i as any).checkName ? i : ({ ...(i as any), checkName } as any)
+      dynNonInternal = dynNonInternal.map((i: ReviewIssue) =>
+        i.checkName ? i : { ...i, checkName }
       );
       aggregatedIssues.push(...dynNonInternal);
 
