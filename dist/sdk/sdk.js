@@ -7339,7 +7339,7 @@ var init_command_executor = __esm({
               timeout: options.timeout || 3e4
             },
             (error, stdout, stderr) => {
-              if (error && error.killed && error.code === "ETIMEDOUT") {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
                 resolve7({
@@ -7361,7 +7361,7 @@ var init_command_executor = __esm({
        */
       handleExecutionError(error, timeout) {
         const execError = error;
-        if (execError.killed && execError.code === "ETIMEDOUT") {
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
           throw new Error(`Command timed out after ${timeout}ms`);
         }
         let exitCode = 1;
@@ -9483,7 +9483,7 @@ var init_mcp_check_provider = __esm({
         return "mcp";
       }
       getDescription() {
-        return "Call MCP tools directly using stdio, SSE, or Streamable HTTP transport";
+        return "Call MCP tools directly using stdio, SSE, HTTP, or custom YAML-defined tools";
       }
       async validateConfig(config) {
         if (!config || typeof config !== "object") {
@@ -9521,8 +9521,12 @@ var init_mcp_check_provider = __esm({
             logger.error(`Invalid URL format for MCP ${transport} transport: ${cfg.url}`);
             return false;
           }
+        } else if (transport === "custom") {
+          logger.debug(`MCP custom transport will validate tool '${cfg.method}' at execution time`);
         } else {
-          logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', or 'http'`);
+          logger.error(
+            `Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', 'http', or 'custom'`
+          );
           return false;
         }
         return true;
