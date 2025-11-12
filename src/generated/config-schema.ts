@@ -774,10 +774,6 @@ export const configSchema = {
     BashConfig: {
       type: 'object',
       properties: {
-        enabled: {
-          type: 'boolean',
-          description: 'Enable bash command execution (disabled by default for security)',
-        },
         allow: {
           type: 'array',
           items: {
@@ -794,11 +790,11 @@ export const configSchema = {
         },
         noDefaultAllow: {
           type: 'boolean',
-          description: 'Disable default safe command list',
+          description: 'Disable default safe command list (use with caution)',
         },
         noDefaultDeny: {
           type: 'boolean',
-          description: 'Disable default dangerous command blocklist',
+          description: 'Disable default dangerous command blocklist (use with extreme caution)',
         },
         timeout: {
           type: 'number',
@@ -810,7 +806,8 @@ export const configSchema = {
         },
       },
       additionalProperties: false,
-      description: 'Bash command execution configuration for ProbeAgent',
+      description:
+        "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
       patternProperties: {
         '^x-': {},
       },
