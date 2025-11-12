@@ -1823,6 +1823,12 @@ ${"=".repeat(60)}
           if (this.config.disableTools !== void 0) {
             options.disableTools = this.config.disableTools;
           }
+          if (this.config.allowBash !== void 0) {
+            options.allowBash = this.config.allowBash;
+          }
+          if (this.config.bashConfig !== void 0) {
+            options.bashConfig = this.config.bashConfig;
+          }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
             if (providerOverride) {
@@ -5185,6 +5191,12 @@ var init_ai_check_provider = __esm({
           if (config.ai.disableTools !== void 0) {
             aiConfig.disableTools = config.ai.disableTools;
           }
+          if (config.ai.allowBash !== void 0) {
+            aiConfig.allowBash = config.ai.allowBash;
+          }
+          if (config.ai.bashConfig !== void 0) {
+            aiConfig.bashConfig = config.ai.bashConfig;
+          }
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
           }
@@ -5419,6 +5431,8 @@ var init_ai_check_provider = __esm({
           "ai.allowEdit",
           "ai.allowedTools",
           "ai.disableTools",
+          "ai.allowBash",
+          "ai.bashConfig",
           "ai_model",
           "ai_provider",
           "ai_mcp_servers",
@@ -19322,6 +19336,14 @@ var init_config_schema = __esm({
             disableTools: {
               type: "boolean",
               description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
+            },
+            allowBash: {
+              type: "boolean",
+              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
+            },
+            bashConfig: {
+              $ref: "#/definitions/BashConfig",
+              description: "Advanced bash command execution configuration"
             }
           },
           additionalProperties: false,
@@ -19461,6 +19483,46 @@ var init_config_schema = __esm({
           required: ["provider", "model"],
           additionalProperties: false,
           description: "Fallback provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BashConfig: {
+          type: "object",
+          properties: {
+            allow: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
+            },
+            noDefaultAllow: {
+              type: "boolean",
+              description: "Disable default safe command list (use with caution)"
+            },
+            noDefaultDeny: {
+              type: "boolean",
+              description: "Disable default dangerous command blocklist (use with extreme caution)"
+            },
+            timeout: {
+              type: "number",
+              description: "Execution timeout in milliseconds"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Default working directory for command execution"
+            }
+          },
+          additionalProperties: false,
+          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
           patternProperties: {
             "^x-": {}
           }

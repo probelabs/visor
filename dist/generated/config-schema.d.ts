@@ -564,6 +564,14 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Disable all tools for raw AI mode (alternative to allowedTools: [])";
                 };
+                readonly allowBash: {
+                    readonly type: "boolean";
+                    readonly description: "Enable bash command execution (shorthand for bashConfig.enabled)";
+                };
+                readonly bashConfig: {
+                    readonly $ref: "#/definitions/BashConfig";
+                    readonly description: "Advanced bash command execution configuration";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "AI provider configuration";
@@ -702,6 +710,46 @@ export declare const configSchema: {
             readonly required: readonly ["provider", "model"];
             readonly additionalProperties: false;
             readonly description: "Fallback provider configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly BashConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly allow: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Array of permitted command patterns (e.g., ['ls', 'git status'])";
+                };
+                readonly deny: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])";
+                };
+                readonly noDefaultAllow: {
+                    readonly type: "boolean";
+                    readonly description: "Disable default safe command list (use with caution)";
+                };
+                readonly noDefaultDeny: {
+                    readonly type: "boolean";
+                    readonly description: "Disable default dangerous command blocklist (use with extreme caution)";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Execution timeout in milliseconds";
+                };
+                readonly workingDirectory: {
+                    readonly type: "string";
+                    readonly description: "Default working directory for command execution";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

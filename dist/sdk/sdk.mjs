@@ -1,6 +1,6 @@
 import {
   CheckExecutionEngine
-} from "./chunk-GVQQOSLM.mjs";
+} from "./chunk-YFM7P67Q.mjs";
 import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
@@ -624,6 +624,14 @@ var init_config_schema = __esm({
             disableTools: {
               type: "boolean",
               description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
+            },
+            allowBash: {
+              type: "boolean",
+              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
+            },
+            bashConfig: {
+              $ref: "#/definitions/BashConfig",
+              description: "Advanced bash command execution configuration"
             }
           },
           additionalProperties: false,
@@ -763,6 +771,46 @@ var init_config_schema = __esm({
           required: ["provider", "model"],
           additionalProperties: false,
           description: "Fallback provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BashConfig: {
+          type: "object",
+          properties: {
+            allow: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
+            },
+            noDefaultAllow: {
+              type: "boolean",
+              description: "Disable default safe command list (use with caution)"
+            },
+            noDefaultDeny: {
+              type: "boolean",
+              description: "Disable default dangerous command blocklist (use with extreme caution)"
+            },
+            timeout: {
+              type: "number",
+              description: "Execution timeout in milliseconds"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Default working directory for command execution"
+            }
+          },
+          additionalProperties: false,
+          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
           patternProperties: {
             "^x-": {}
           }
