@@ -149,7 +149,9 @@ export class McpCheckProvider extends CheckProvider {
       // This will be validated at execution time when the tool is looked up
       logger.debug(`MCP custom transport will validate tool '${cfg.method}' at execution time`);
     } else {
-      logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', 'http', or 'custom'`);
+      logger.error(
+        `Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', 'http', or 'custom'`
+      );
       return false;
     }
 
