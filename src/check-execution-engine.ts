@@ -4191,7 +4191,7 @@ export class CheckExecutionEngine {
       const checkConfig = config?.checks?.[checkName];
       if (!checkConfig) continue;
 
-      // Extract issues for this check
+      // Extract issues for this check: rely strictly on explicit issue.checkName
       const checkIssues = (reviewSummary.issues || []).filter(
         issue => issue.checkName === checkName
       );
@@ -8411,7 +8411,7 @@ export class CheckExecutionEngine {
       issuesByCheck.set(checkName, []);
     }
 
-    // Group issues by their check name
+    // Group issues by their producing check (explicit checkName only)
     for (const issue of reviewSummary.issues || []) {
       if (issue.checkName && issuesByCheck.has(issue.checkName)) {
         issuesByCheck.get(issue.checkName)!.push(issue);
