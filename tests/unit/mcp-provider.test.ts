@@ -17,7 +17,8 @@ describe('MCP Check Provider', () => {
       const description = provider.getDescription();
       expect(description).toContain('stdio');
       expect(description).toContain('SSE');
-      expect(description).toContain('Streamable HTTP');
+      expect(description).toContain('HTTP');
+      expect(description).toContain('custom');
     });
 
     it('should be available', async () => {
@@ -149,6 +150,44 @@ describe('MCP Check Provider', () => {
           transport: 'http',
           url: 'https://mcp-server.example.com/mcp',
           method: 'search_code',
+        };
+
+        const result = await provider.validateConfig(config);
+        expect(result).toBe(true);
+      });
+    });
+
+    describe('custom transport', () => {
+      it('should accept custom transport with method', async () => {
+        const config = {
+          type: 'mcp',
+          transport: 'custom',
+          method: 'my-custom-tool',
+        };
+
+        const result = await provider.validateConfig(config);
+        expect(result).toBe(true);
+      });
+
+      it('should reject custom transport without method', async () => {
+        const config = {
+          type: 'mcp',
+          transport: 'custom',
+        };
+
+        const result = await provider.validateConfig(config);
+        expect(result).toBe(false);
+      });
+
+      it('should accept custom transport with methodArgs', async () => {
+        const config = {
+          type: 'mcp',
+          transport: 'custom',
+          method: 'my-custom-tool',
+          methodArgs: {
+            param1: 'value1',
+            param2: 123,
+          },
         };
 
         const result = await provider.validateConfig(config);

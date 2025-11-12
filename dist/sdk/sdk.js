@@ -6410,16 +6410,16 @@ ${userCode}
 return __fn();
 ` : `${userCode}`;
   const code = `${header}${body}`;
-  let exec;
+  let exec2;
   try {
-    exec = sandbox.compile(code);
+    exec2 = sandbox.compile(code);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`sandbox_compile_error: ${msg}`);
   }
   let out;
   try {
-    out = exec(scope);
+    out = exec2(scope);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`sandbox_execution_error: ${msg}`);
@@ -7284,6 +7284,132 @@ var init_claude_code_check_provider = __esm({
   }
 });
 
+// src/utils/command-executor.ts
+var import_child_process, import_util, CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    import_util = require("util");
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve7, reject) => {
+          const childProcess = (0, import_child_process.exec)(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && error.code === "ETIMEDOUT") {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve7({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && execError.code === "ETIMEDOUT") {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
+  }
+});
+
 // src/utils/env-exposure.ts
 var env_exposure_exports = {};
 __export(env_exposure_exports, {
@@ -7353,6 +7479,7 @@ var init_command_check_provider = __esm({
     init_sandbox();
     init_liquid_extensions();
     init_logger();
+    init_command_executor();
     init_author_permissions();
     init_lazy_otel();
     init_state_capture();
@@ -7518,9 +7645,6 @@ var init_command_check_provider = __esm({
               }
             }
           }
-          const { exec } = await import("child_process");
-          const { promisify } = await import("util");
-          const execAsync = promisify(exec);
           const timeoutSeconds = config.timeout || 60;
           const timeoutMs = timeoutSeconds * 1e3;
           const normalizeNodeEval = (cmd) => {
@@ -7536,14 +7660,29 @@ var init_command_check_provider = __esm({
             return cmd.replace(re, `${prefix}${quote}${escaped}${quote}${suffix}`);
           };
           const safeCommand = normalizeNodeEval(renderedCommand);
-          const { stdout, stderr } = await execAsync(safeCommand, {
+          const execResult = await commandExecutor.execute(safeCommand, {
             env: scriptEnv,
-            timeout: timeoutMs,
-            maxBuffer: 10 * 1024 * 1024
-            // 10MB buffer
+            timeout: timeoutMs
           });
+          const { stdout, stderr, exitCode } = execResult;
           if (stderr) {
             logger.debug(`Command stderr: ${stderr}`);
+          }
+          if (exitCode !== 0) {
+            const errorMessage = stderr || `Command exited with code ${exitCode}`;
+            logger.error(`Command failed with exit code ${exitCode}: ${errorMessage}`);
+            return {
+              issues: [
+                {
+                  file: "command",
+                  line: 0,
+                  ruleId: "command/execution_error",
+                  message: `Command execution failed: ${errorMessage}`,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
           }
           const rawOutput = stdout.trim();
           let output = rawOutput;
@@ -9116,6 +9255,184 @@ var init_memory_check_provider = __esm({
   }
 });
 
+// src/providers/custom-tool-executor.ts
+var import_ajv, CustomToolExecutor;
+var init_custom_tool_executor = __esm({
+  "src/providers/custom-tool-executor.ts"() {
+    "use strict";
+    init_liquid_extensions();
+    init_sandbox();
+    init_logger();
+    init_command_executor();
+    import_ajv = __toESM(require("ajv"));
+    CustomToolExecutor = class {
+      liquid;
+      sandbox;
+      tools;
+      ajv;
+      constructor(tools) {
+        this.liquid = createExtendedLiquid({
+          cache: false,
+          strictFilters: false,
+          strictVariables: false
+        });
+        this.tools = new Map(Object.entries(tools || {}));
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+      }
+      /**
+       * Register a custom tool
+       */
+      registerTool(tool) {
+        if (!tool.name) {
+          throw new Error("Tool must have a name");
+        }
+        this.tools.set(tool.name, tool);
+      }
+      /**
+       * Register multiple tools
+       */
+      registerTools(tools) {
+        for (const [name, tool] of Object.entries(tools)) {
+          tool.name = tool.name || name;
+          this.registerTool(tool);
+        }
+      }
+      /**
+       * Get all registered tools
+       */
+      getTools() {
+        return Array.from(this.tools.values());
+      }
+      /**
+       * Get a specific tool by name
+       */
+      getTool(name) {
+        return this.tools.get(name);
+      }
+      /**
+       * Validate tool input against schema using ajv
+       */
+      validateInput(tool, input) {
+        if (!tool.inputSchema) {
+          return;
+        }
+        const validate = this.ajv.compile(tool.inputSchema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
+        }
+      }
+      /**
+       * Execute a custom tool
+       */
+      async execute(toolName, args, context2) {
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+        this.validateInput(tool, args);
+        const templateContext = {
+          ...context2,
+          args,
+          input: args
+        };
+        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
+        let stdin;
+        if (tool.stdin) {
+          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
+        }
+        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
+        const result = await commandExecutor.execute(command, {
+          stdin,
+          cwd: tool.cwd,
+          env,
+          timeout: tool.timeout || 3e4
+        });
+        let output = result.stdout;
+        if (tool.parseJson) {
+          try {
+            output = JSON.parse(result.stdout);
+          } catch (e) {
+            logger.warn(`Failed to parse tool output as JSON: ${e}`);
+          }
+        }
+        if (tool.transform) {
+          const transformContext = {
+            ...templateContext,
+            output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          };
+          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
+            try {
+              output = JSON.parse(transformed);
+            } catch {
+              output = transformed;
+            }
+          } else {
+            output = transformed;
+          }
+        }
+        if (tool.transform_js) {
+          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+            ...templateContext,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          });
+        }
+        return output;
+      }
+      /**
+       * Apply JavaScript transform to output
+       */
+      async applyJavaScriptTransform(transformJs, output, context2) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context2)};
+      const args = context.args || {};
+      const pr = context.pr || {};
+      const files = context.files || [];
+      const outputs = context.outputs || {};
+      const env = context.env || {};
+
+      ${transformJs}
+    `;
+        try {
+          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
+        } catch (error) {
+          logger.error(`JavaScript transform error: ${error}`);
+          throw error;
+        }
+      }
+      /**
+       * Convert custom tools to MCP tool format
+       */
+      toMcpTools() {
+        return Array.from(this.tools.values()).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          handler: async (args) => {
+            return this.execute(tool.name, args);
+          }
+        }));
+      }
+    };
+  }
+});
+
 // src/providers/mcp-check-provider.ts
 var import_client, import_stdio, import_sse, import_streamableHttp, McpCheckProvider;
 var init_mcp_check_provider = __esm({
@@ -9130,9 +9447,11 @@ var init_mcp_check_provider = __esm({
     import_streamableHttp = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
     init_sandbox();
     init_env_resolver();
+    init_custom_tool_executor();
     McpCheckProvider = class extends CheckProvider {
       liquid;
       sandbox;
+      customToolExecutor;
       constructor() {
         super();
         this.liquid = createExtendedLiquid({
@@ -9140,6 +9459,16 @@ var init_mcp_check_provider = __esm({
           strictFilters: false,
           strictVariables: false
         });
+      }
+      /**
+       * Set custom tools for this provider
+       */
+      setCustomTools(tools) {
+        if (!this.customToolExecutor) {
+          this.customToolExecutor = new CustomToolExecutor(tools);
+        } else {
+          this.customToolExecutor.registerTools(tools);
+        }
       }
       /**
        * Create a secure sandbox for JavaScript execution
@@ -9235,7 +9564,7 @@ var init_mcp_check_provider = __esm({
               };
             }
           }
-          const result = await this.executeMcpMethod(cfg, methodArgs);
+          const result = await this.executeMcpMethod(cfg, methodArgs, prInfo, dependencyResults);
           let finalOutput = result;
           if (cfg.transform) {
             try {
@@ -9330,10 +9659,35 @@ var init_mcp_check_provider = __esm({
       /**
        * Execute an MCP method using the configured transport
        */
-      async executeMcpMethod(config, methodArgs) {
+      async executeMcpMethod(config, methodArgs, prInfo, dependencyResults) {
         const transport = config.transport || "stdio";
         const timeout = (config.timeout || 60) * 1e3;
-        if (transport === "stdio") {
+        if (transport === "custom") {
+          if (!this.customToolExecutor) {
+            throw new Error(
+              'No custom tools available. Define tools in the "tools" section of your configuration.'
+            );
+          }
+          const tool = this.customToolExecutor.getTool(config.method);
+          if (!tool) {
+            throw new Error(
+              `Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor.getTools().map((t) => t.name).join(", ")}`
+            );
+          }
+          const context2 = {
+            pr: prInfo ? {
+              number: prInfo.number,
+              title: prInfo.title,
+              author: prInfo.author,
+              branch: prInfo.head,
+              base: prInfo.base
+            } : void 0,
+            files: prInfo?.files,
+            outputs: this.buildOutputContext(dependencyResults),
+            env: this.getSafeEnvironmentVariables()
+          };
+          return await this.customToolExecutor.execute(config.method, methodArgs, context2);
+        } else if (transport === "stdio") {
           return await this.executeStdioMethod(config, methodArgs, timeout);
         } else if (transport === "sse") {
           return await this.executeSseMethod(config, methodArgs, timeout);
@@ -10288,6 +10642,7 @@ var init_check_provider_registry = __esm({
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
+      customTools;
       constructor() {
         this.registerDefaultProviders();
       }
@@ -10323,7 +10678,11 @@ var init_check_provider_registry = __esm({
           );
         }
         try {
-          this.register(new McpCheckProvider());
+          const mcpProvider = new McpCheckProvider();
+          if (this.customTools) {
+            mcpProvider.setCustomTools(this.customTools);
+          }
+          this.register(mcpProvider);
         } catch (error) {
           console.error(
             `Warning: Failed to register McpCheckProvider: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -10388,6 +10747,16 @@ var init_check_provider_registry = __esm({
        */
       getAllProviders() {
         return Array.from(this.providers.values());
+      }
+      /**
+       * Set custom tools that can be used by the MCP provider
+       */
+      setCustomTools(tools) {
+        this.customTools = tools;
+        const mcpProvider = this.providers.get("mcp");
+        if (mcpProvider) {
+          mcpProvider.setCustomTools(tools);
+        }
       }
       /**
        * Get providers that are currently available (have required dependencies)
@@ -11187,14 +11556,14 @@ var init_failure_condition_evaluator = __esm({
           if (!this.sandbox) {
             this.sandbox = this.createSecureSandbox();
           }
-          let exec;
+          let exec2;
           try {
-            exec = this.sandbox.compile(`return (${raw});`);
+            exec2 = this.sandbox.compile(`return (${raw});`);
           } catch {
             const normalizedExpr = normalize3(condition);
-            exec = this.sandbox.compile(`return (${normalizedExpr});`);
+            exec2 = this.sandbox.compile(`return (${normalizedExpr});`);
           }
-          const result = exec(scope).run();
+          const result = exec2(scope).run();
           try {
             (init_logger(), __toCommonJS(logger_exports)).logger.debug(`  fail_if: result=${Boolean(result)}`);
           } catch {
@@ -12055,8 +12424,8 @@ ${onFinish.goto_js}
         const __res = __fn();
         return (typeof __res === 'string' && __res) ? __res : null;
       `;
-      const exec = sandbox.compile(code);
-      const result = exec({ scope }).run();
+      const exec2 = sandbox.compile(code);
+      const result = exec2({ scope }).run();
       gotoTarget = typeof result === "string" && result ? result : null;
       if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${String(gotoTarget)}`);
     } catch {
@@ -12106,8 +12475,8 @@ ${childOnSuccess.run_js || ""}
           const __res = __fn();
           return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
         `;
-        const exec = sandbox.compile(code);
-        const dynamic = exec({ scope }).run();
+        const exec2 = sandbox.compile(code);
+        const dynamic = exec2({ scope }).run();
         const childRun = Array.from(
           new Set([...childOnSuccess.run || [], ...dynamic].filter(Boolean))
         );
@@ -12502,8 +12871,8 @@ ${onFinish.goto_js}
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
         `;
-            const exec = sandbox.compile(code);
-            const result = exec({ scope }).run();
+            const exec2 = sandbox.compile(code);
+            const result = exec2({ scope }).run();
             gotoTarget = typeof result === "string" && result ? result : null;
             if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${this.redact(gotoTarget)}`);
             logger.info(
@@ -13158,8 +13527,8 @@ ${js}
                 const __res = __fn();
                 return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
               `;
-                  const exec = sandbox.compile(code);
-                  const res = exec({ scope }).run();
+                  const exec2 = sandbox.compile(code);
+                  const res = exec2({ scope }).run();
                   return Array.isArray(res) ? res : [];
                 } catch (e) {
                   const msg = e instanceof Error ? e.message : String(e);
@@ -14108,6 +14477,10 @@ ${expr}`;
             const memoryStore = MemoryStore.getInstance(options.config.memory);
             await memoryStore.initialize();
             logger.debug("Memory store initialized");
+          }
+          if (options.config?.tools) {
+            this.providerRegistry.setCustomTools(options.config.tools);
+            logger.debug(`Registered ${Object.keys(options.config.tools).length} custom tools`);
           }
           this.onFinishLoopCounts.clear();
           this.forEachWaveCounts.clear();
@@ -18119,6 +18492,9 @@ var init_config_merger = __esm({
         if (child.checks) {
           result.checks = this.mergeChecks(parent.checks || {}, child.checks);
         }
+        if (child.tools) {
+          result.tools = this.mergeObjects(parent.tools || {}, child.tools);
+        }
         return result;
       }
       /**
@@ -18374,6 +18750,10 @@ var init_config_schema = __esm({
               ],
               description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
             },
+            tools: {
+              $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
+              description: "Custom tool definitions that can be used in MCP blocks"
+            },
             steps: {
               $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
               description: "Step configurations (recommended)"
@@ -18443,6 +18823,100 @@ var init_config_schema = __esm({
         "Record<string,unknown>": {
           type: "object",
           additionalProperties: {}
+        },
+        "Record<string,CustomToolDefinition>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/CustomToolDefinition"
+          }
+        },
+        CustomToolDefinition: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Tool name - used to reference the tool in MCP blocks"
+            },
+            description: {
+              type: "string",
+              description: "Description of what the tool does"
+            },
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "object"
+                },
+                properties: {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                },
+                required: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                additionalProperties: {
+                  type: "boolean"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Input schema for the tool (JSON Schema format)",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            exec: {
+              type: "string",
+              description: "Command to execute - supports Liquid template"
+            },
+            stdin: {
+              type: "string",
+              description: "Optional stdin input - supports Liquid template"
+            },
+            transform: {
+              type: "string",
+              description: "Transform the raw output - supports Liquid template"
+            },
+            transform_js: {
+              type: "string",
+              description: "Transform the output using JavaScript - alternative to transform"
+            },
+            cwd: {
+              type: "string",
+              description: "Working directory for command execution"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the command"
+            },
+            timeout: {
+              type: "number",
+              description: "Timeout in milliseconds"
+            },
+            parseJson: {
+              type: "boolean",
+              description: "Whether to parse output as JSON automatically"
+            },
+            outputSchema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Expected output schema for validation"
+            }
+          },
+          required: ["name", "exec"],
+          additionalProperties: false,
+          description: "Custom tool definition for use in MCP blocks",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,string>": {
+          type: "object",
+          additionalProperties: {
+            type: "string"
+          }
         },
         "Record<string,CheckConfig>": {
           type: "object",
@@ -18771,12 +19245,6 @@ var init_config_schema = __esm({
             "human-input"
           ],
           description: "Valid check types in configuration"
-        },
-        "Record<string,string>": {
-          type: "object",
-          additionalProperties: {
-            type: "string"
-          }
         },
         EventTrigger: {
           type: "string",
@@ -20001,7 +20469,7 @@ var ConfigLoader = class {
 
 // src/config.ts
 init_config_merger();
-var import_ajv = __toESM(require("ajv"));
+var import_ajv2 = __toESM(require("ajv"));
 var import_ajv_formats = __toESM(require("ajv-formats"));
 var VALID_EVENT_TRIGGERS = [
   "pr_opened",
@@ -20653,7 +21121,7 @@ var ConfigManager = class {
           const jsonPath = path15.resolve(__dirname, "generated", "config-schema.json");
           const jsonSchema = require(jsonPath);
           if (jsonSchema) {
-            const ajv = new import_ajv.default({ allErrors: true, allowUnionTypes: true, strict: false });
+            const ajv = new import_ajv2.default({ allErrors: true, allowUnionTypes: true, strict: false });
             (0, import_ajv_formats.default)(ajv);
             const validate = ajv.compile(jsonSchema);
             __ajvValidate = (data) => validate(data);
@@ -20666,7 +21134,7 @@ var ConfigManager = class {
             const mod = (init_config_schema(), __toCommonJS(config_schema_exports));
             const schema = mod?.configSchema || mod?.default || mod;
             if (schema) {
-              const ajv = new import_ajv.default({ allErrors: true, allowUnionTypes: true, strict: false });
+              const ajv = new import_ajv2.default({ allErrors: true, allowUnionTypes: true, strict: false });
               (0, import_ajv_formats.default)(ajv);
               const validate = ajv.compile(schema);
               __ajvValidate = (data) => validate(data);

@@ -6,6 +6,7 @@ import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
+import { commandExecutor } from '../utils/command-executor';
 import {
   createPermissionHelpers,
   detectLocalMode,
@@ -216,11 +217,6 @@ export class CommandCheckProvider extends CheckProvider {
         }
       }
 
-      // Execute the script using dynamic import to avoid Jest issues
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-
       // Get timeout from config (in seconds) or use default (60 seconds)
       const timeoutSeconds = (config.timeout as number) || 60;
       const timeoutMs = timeoutSeconds * 1000;
@@ -247,14 +243,34 @@ export class CommandCheckProvider extends CheckProvider {
 
       const safeCommand = normalizeNodeEval(renderedCommand);
 
-      const { stdout, stderr } = await execAsync(safeCommand, {
+      // Use shared command executor
+      const execResult = await commandExecutor.execute(safeCommand, {
         env: scriptEnv,
         timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
+
+      const { stdout, stderr, exitCode } = execResult;
 
       if (stderr) {
         logger.debug(`Command stderr: ${stderr}`);
+      }
+
+      // Check for non-zero exit code
+      if (exitCode !== 0) {
+        const errorMessage = stderr || `Command exited with code ${exitCode}`;
+        logger.error(`Command failed with exit code ${exitCode}: ${errorMessage}`);
+        return {
+          issues: [
+            {
+              file: 'command',
+              line: 0,
+              ruleId: 'command/execution_error',
+              message: `Command execution failed: ${errorMessage}`,
+              severity: 'error',
+              category: 'logic',
+            },
+          ],
+        };
       }
 
       // Keep raw output for transforms

@@ -671,6 +671,40 @@ interface VisorHooks {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;
 }
 /**
+ * Custom tool definition for use in MCP blocks
+ */
+interface CustomToolDefinition {
+    /** Tool name - used to reference the tool in MCP blocks */
+    name: string;
+    /** Description of what the tool does */
+    description?: string;
+    /** Input schema for the tool (JSON Schema format) */
+    inputSchema?: {
+        type: 'object';
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+    };
+    /** Command to execute - supports Liquid template */
+    exec: string;
+    /** Optional stdin input - supports Liquid template */
+    stdin?: string;
+    /** Transform the raw output - supports Liquid template */
+    transform?: string;
+    /** Transform the output using JavaScript - alternative to transform */
+    transform_js?: string;
+    /** Working directory for command execution */
+    cwd?: string;
+    /** Environment variables for the command */
+    env?: Record<string, string>;
+    /** Timeout in milliseconds */
+    timeout?: number;
+    /** Whether to parse output as JSON automatically */
+    parseJson?: boolean;
+    /** Expected output schema for validation */
+    outputSchema?: Record<string, unknown>;
+}
+/**
  * Main Visor configuration
  */
 interface VisorConfig {
@@ -678,6 +712,8 @@ interface VisorConfig {
     version: string;
     /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
     extends?: string | string[];
+    /** Custom tool definitions that can be used in MCP blocks */
+    tools?: Record<string, CustomToolDefinition>;
     /** Step configurations (recommended) */
     steps?: Record<string, CheckConfig>;
     /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */

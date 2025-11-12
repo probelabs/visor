@@ -3,19 +3,39 @@ import { CommandCheckProvider } from '../../../src/providers/command-check-provi
 import { CheckProviderConfig } from '../../../src/providers/check-provider.interface';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
+import {
+  CommandExecutionResult,
+  CommandExecutionOptions,
+} from '../../../src/utils/command-executor';
 
-// Mock child_process and util
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockExec = jest.fn() as jest.MockedFunction<any>;
-const mockPromisify = jest.fn().mockReturnValue(mockExec);
+// Mock the command executor with factory pattern
+jest.mock('../../../src/utils/command-executor', () => {
+  const mockExecute =
+    jest.fn<
+      (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+    >();
+  const mockBuildEnvironment = jest.fn().mockReturnValue({});
 
-jest.mock('child_process', () => ({
-  exec: jest.fn(),
-}));
+  return {
+    commandExecutor: {
+      execute: mockExecute,
+      buildEnvironment: mockBuildEnvironment,
+    },
+    // Export mocks for test access
+    __mockExecute: mockExecute,
+    __mockBuildEnvironment: mockBuildEnvironment,
+  };
+});
 
-jest.mock('util', () => ({
-  promisify: mockPromisify,
-}));
+// Import the mocked module to get the mock functions
+const mockModule = jest.requireMock('../../../src/utils/command-executor') as {
+  __mockExecute: jest.MockedFunction<
+    (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+  >;
+  __mockBuildEnvironment: jest.MockedFunction<() => Record<string, string>>;
+};
+const mockExecute = mockModule.__mockExecute;
+// mockBuildEnvironment is defined but not used in tests
 
 describe('CommandCheckProvider', () => {
   let provider: CommandCheckProvider;
@@ -121,9 +141,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "hello world"',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'hello world\n',
         stderr: '',
+        exitCode: 0,
       });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,10 +153,9 @@ describe('CommandCheckProvider', () => {
       expect(result.issues).toEqual([]);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((result as any).output).toBe('hello world');
-      expect(mockExec).toHaveBeenCalledWith('echo "hello world"', {
+      expect(mockExecute).toHaveBeenCalledWith('echo "hello world"', {
         env: expect.any(Object),
         timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
       });
     });
 
@@ -145,9 +165,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo \'{"items": ["a", "b", "c"]}\'',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: '{"items": ["a", "b", "c"]}\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -164,7 +185,7 @@ describe('CommandCheckProvider', () => {
         exec: 'nonexistent-command',
       };
 
-      mockExec.mockRejectedValue(new Error('Command not found'));
+      mockExecute.mockRejectedValue(new Error('Command not found'));
 
       const result = await provider.execute(mockPRInfo, config);
 
@@ -191,7 +212,7 @@ describe('CommandCheckProvider', () => {
         stdout: 'partial output',
       });
 
-      mockExec.mockRejectedValue(error);
+      mockExecute.mockRejectedValue(error);
 
       const result = await provider.execute(mockPRInfo, config);
 
@@ -215,9 +236,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "invalid json {"',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'invalid json {\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -237,14 +259,18 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "PR: {{ pr.title }} by {{ pr.author }}"',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'PR: Test PR by testuser\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
 
-      expect(mockExec).toHaveBeenCalledWith('echo "PR: Test PR by testuser"', expect.any(Object));
+      expect(mockExecute).toHaveBeenCalledWith(
+        'echo "PR: Test PR by testuser"',
+        expect.any(Object)
+      );
       expect((result as any).output).toBe('PR: Test PR by testuser');
     });
 
@@ -254,14 +280,15 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "Files: {{ fileCount }}"',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'Files: 2\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
 
-      expect(mockExec).toHaveBeenCalledWith('echo "Files: 2"', expect.any(Object));
+      expect(mockExecute).toHaveBeenCalledWith('echo "Files: 2"', expect.any(Object));
       expect((result as any).output).toBe('Files: 2');
     });
 
@@ -271,15 +298,16 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "static command"',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'static command\n',
         stderr: '',
+        exitCode: 0,
       });
 
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const result = await provider.execute(mockPRInfo, config);
 
-      expect(mockExec).toHaveBeenCalledWith('echo "static command"', expect.any(Object));
+      expect(mockExecute).toHaveBeenCalledWith('echo "static command"', expect.any(Object));
     });
   });
 
@@ -293,19 +321,19 @@ describe('CommandCheckProvider', () => {
         },
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'test_value\n',
         stderr: '',
+        exitCode: 0,
       });
 
       await provider.execute(mockPRInfo, config);
 
-      expect(mockExec).toHaveBeenCalledWith('echo $TEST_VAR', {
+      expect(mockExecute).toHaveBeenCalledWith('echo $TEST_VAR', {
         env: expect.objectContaining({
           TEST_VAR: 'test_value',
         }),
         timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
       });
     });
 
@@ -325,14 +353,19 @@ describe('CommandCheckProvider', () => {
         exec: 'env',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'output\n',
         stderr: '',
+        exitCode: 0,
       });
 
       await provider.execute(mockPRInfo, config);
 
-      const envArg = mockExec.mock.calls[0][1].env;
+      expect(mockExecute.mock.calls).toHaveLength(1);
+      const callArgs = mockExecute.mock.calls[0];
+      expect(callArgs).toBeDefined();
+      expect(callArgs[1]).toBeDefined();
+      const envArg = callArgs[1]!.env;
       expect(envArg).toHaveProperty('CI_BUILD_NUMBER', '123');
       expect(envArg).toHaveProperty('GITHUB_REPOSITORY', 'test/repo');
       expect(envArg).toHaveProperty('NODE_VERSION', '18.0.0');
@@ -353,9 +386,10 @@ describe('CommandCheckProvider', () => {
         transform: '{{ output.data | join: "," }}',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: '{"data": [1, 2, 3]}\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -370,9 +404,10 @@ describe('CommandCheckProvider', () => {
         transform: '{{ invalid.liquid.syntax !! }}',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'test\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -394,9 +429,10 @@ describe('CommandCheckProvider', () => {
         transform: '{"transformed": "{{ output }}"}',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'raw text\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -428,14 +464,15 @@ describe('CommandCheckProvider', () => {
         ],
       });
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'Dep count: 1\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config, dependencyResults);
 
-      expect(mockExec).toHaveBeenCalledWith('echo "Dep count: 1"', expect.any(Object));
+      expect(mockExecute).toHaveBeenCalledWith('echo "Dep count: 1"', expect.any(Object));
       expect((result as any).output).toBe('Dep count: 1');
     });
 
@@ -451,9 +488,10 @@ describe('CommandCheckProvider', () => {
         output: { customData: 'test-value' },
       } as ReviewSummary);
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'test-value\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config, dependencyResults);
@@ -480,14 +518,15 @@ describe('CommandCheckProvider', () => {
         },
       } as ReviewSummary);
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'Complexity: high, Priority: 8, Hours: 24\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config, dependencyResults);
 
-      expect(mockExec).toHaveBeenCalledWith(
+      expect(mockExecute).toHaveBeenCalledWith(
         'echo "Complexity: high, Priority: 8, Hours: 24"',
         expect.any(Object)
       );
@@ -508,9 +547,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "output" && echo "warning" >&2',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'output\n',
         stderr: 'warning\n',
+        exitCode: 0,
       });
 
       await provider.execute(mockPRInfo, config);
@@ -533,9 +573,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "output" && echo "warning" >&2',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'output\n',
         stderr: 'warning\n',
+        exitCode: 0,
       });
 
       await provider.execute(mockPRInfo, config);
@@ -552,17 +593,17 @@ describe('CommandCheckProvider', () => {
         exec: 'sleep 1000', // Long running command
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: 'output\n',
         stderr: '',
+        exitCode: 0,
       });
 
       await provider.execute(mockPRInfo, config);
 
-      expect(mockExec).toHaveBeenCalledWith('sleep 1000', {
+      expect(mockExecute).toHaveBeenCalledWith('sleep 1000', {
         env: expect.any(Object),
         timeout: 60000, // 60 second timeout
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
     });
   });
@@ -580,9 +621,10 @@ describe('CommandCheckProvider', () => {
         },
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: JSON.stringify(complexOutput) + '\n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -596,9 +638,10 @@ describe('CommandCheckProvider', () => {
         exec: 'true', // Command that produces no output
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: '',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
@@ -612,9 +655,10 @@ describe('CommandCheckProvider', () => {
         exec: 'echo "   content   "',
       };
 
-      mockExec.mockResolvedValue({
+      mockExecute.mockResolvedValue({
         stdout: '   content   \n',
         stderr: '',
+        exitCode: 0,
       });
 
       const result = await provider.execute(mockPRInfo, config);
