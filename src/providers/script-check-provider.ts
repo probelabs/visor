@@ -70,6 +70,14 @@ export class ScriptCheckProvider extends CheckProvider {
       (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined,
       { attachMemoryReadHelpers: false }
     );
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        const hist: any = (ctx as any).outputs_history || {};
+        const len = Array.isArray(hist['refine']) ? hist['refine'].length : 0;
+        // eslint-disable-next-line no-console
+        console.error(`[script] history.refine.len=${len}`);
+      }
+    } catch {}
 
     // Attach synchronous memory ops consistent with memory provider
     const { ops, needsSave } = createSyncMemoryOps(memoryStore);

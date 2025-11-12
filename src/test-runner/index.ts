@@ -932,7 +932,9 @@ export class VisorTestRunner {
         // Suppress warnings for AI steps explicitly running under the mock provider
         const aiProv = (chk.ai && (chk.ai as any).provider) || undefined;
         if (t === 'ai' && aiProv === 'mock') continue;
-        if ((t === 'ai' || t === 'command') && mocks[name] === undefined) {
+        const listKey = `${name}[]`;
+        const hasList = Array.isArray((mocks as any)[listKey]);
+        if ((t === 'ai' || t === 'command') && mocks[name] === undefined && !hasList) {
           console.warn(
             `⚠️  Unmocked ${t} step executed: ${name} (add mocks:\n  ${name}: <mock content>)`
           );

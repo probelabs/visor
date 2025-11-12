@@ -24,12 +24,12 @@ export function createSecureSandbox(): Sandbox {
     ...Sandbox.SAFE_GLOBALS,
     Math,
     JSON,
-    // Provide console with limited surface. Calls are harmless in CI logs and
-    // help with debugging value_js / transform_js expressions.
+    // Provide console with limited surface. Use trampolines so that any test
+    // spies (e.g., jest.spyOn(console, 'log')) see calls made inside the sandbox.
     console: {
-      log: console.log,
-      warn: console.warn,
-      error: console.error,
+      log: (...args: unknown[]) => { try { (console as any).log(...args); } catch {} },
+      warn: (...args: unknown[]) => { try { (console as any).warn(...args); } catch {} },
+      error: (...args: unknown[]) => { try { (console as any).error(...args); } catch {} },
     },
   } as Record<string, unknown>;
 

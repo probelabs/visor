@@ -161,9 +161,18 @@ export class CommandCheckProvider extends CheckProvider {
     // Test hook: mock output for this step (short-circuit execution)
     try {
       const stepName = (config as any).checkName || 'unknown';
-      const mock = context?.hooks?.mockForStep?.(String(stepName));
-      if (mock && typeof mock === 'object') {
-        const m = mock as { stdout?: string; stderr?: string; exit_code?: number };
+      const rawMock = context?.hooks?.mockForStep?.(String(stepName));
+      if (rawMock !== undefined) {
+        // Normalize primitive mocks into object form
+        let mock: any;
+        if (typeof rawMock === 'number') {
+          mock = { exit_code: Number(rawMock) };
+        } else if (typeof rawMock === 'string') {
+          mock = { stdout: String(rawMock) };
+        } else {
+          mock = rawMock as Record<string, unknown>;
+        }
+        const m = mock as { stdout?: string; stderr?: string; exit_code?: number; exit?: number };
         let out: unknown = m.stdout ?? '';
         try {
           if (
@@ -173,19 +182,19 @@ export class CommandCheckProvider extends CheckProvider {
             out = JSON.parse(out);
           }
         } catch {}
-        if (m.exit_code && m.exit_code !== 0) {
+        const code = typeof m.exit_code === 'number' ? m.exit_code : typeof m.exit === 'number' ? m.exit : 0;
+        if (code !== 0) {
           return {
             issues: [
               {
                 file: 'command',
                 line: 0,
                 ruleId: 'command/execution_error',
-                message: `Mocked command exited with code ${m.exit_code}`,
+                message: `Mocked command exited with code ${code}`,
                 severity: 'error',
                 category: 'logic',
               },
             ],
-            // Also expose output for assertions
             output: out,
           } as any;
         }
