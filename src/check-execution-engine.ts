@@ -7495,8 +7495,12 @@ export class CheckExecutionEngine {
 
         // Issues are already prefixed and enriched with group/schema info
         // Filter out internal __skipped markers
-        const nonInternalIssues = (result.issues || []).filter(
+        let nonInternalIssues = (result.issues || []).filter(
           issue => !issue.ruleId?.endsWith('/__skipped')
+        );
+        // Safety: ensure aggregated issues retain producing check association
+        nonInternalIssues = nonInternalIssues.map(i =>
+          (i as any).checkName ? i : ({ ...(i as any), checkName } as any)
         );
         aggregatedIssues.push(...nonInternalIssues);
 
@@ -7518,10 +7522,13 @@ export class CheckExecutionEngine {
       if (!result) continue;
 
       // Issues (already enriched)
-      const nonInternalIssues = (result.issues || []).filter(
+      let dynNonInternal = (result.issues || []).filter(
         issue => !issue.ruleId?.endsWith('/__skipped')
       );
-      aggregatedIssues.push(...nonInternalIssues);
+      dynNonInternal = dynNonInternal.map(i =>
+        (i as any).checkName ? i : ({ ...(i as any), checkName } as any)
+      );
+      aggregatedIssues.push(...dynNonInternal);
 
       const resultSummary = result as ExtendedReviewSummary & { output?: unknown };
       const resultContent = (resultSummary as { content?: string }).content;
