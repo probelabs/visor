@@ -92,7 +92,7 @@ export class McpCheckProvider extends CheckProvider {
   }
 
   getDescription(): string {
-    return 'Call MCP tools directly using stdio, SSE, or Streamable HTTP transport';
+    return 'Call MCP tools directly using stdio, SSE, HTTP, or custom YAML-defined tools';
   }
 
   async validateConfig(config: unknown): Promise<boolean> {
@@ -143,8 +143,13 @@ export class McpCheckProvider extends CheckProvider {
         logger.error(`Invalid URL format for MCP ${transport} transport: ${cfg.url}`);
         return false;
       }
+    } else if (transport === 'custom') {
+      // For custom transport, validation is delegated to CustomToolExecutor
+      // The tool must exist in the configuration's tools section
+      // This will be validated at execution time when the tool is looked up
+      logger.debug(`MCP custom transport will validate tool '${cfg.method}' at execution time`);
     } else {
-      logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', or 'http'`);
+      logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', 'http', or 'custom'`);
       return false;
     }
 
