@@ -3221,6 +3221,10 @@ export class CheckExecutionEngine {
     const timestamp = new Date().toISOString();
 
     try {
+      // Expose CLI debug to internal helpers for ad-hoc diagnostics
+      try {
+        (this as any).globalDebug = Boolean((options as any)?.debug);
+      } catch {}
       // Fresh in-memory state for every engine execution.
       // Do not wipe file-based state here; tests can clean those explicitly.
       try {
@@ -4157,7 +4161,8 @@ export class CheckExecutionEngine {
     config?: import('./types/config').VisorConfig,
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
-    const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === 'true';
+    // Use standard debug flag
+    const DBG = process.env.VISOR_DEBUG === 'true';
     const groupedResults: GroupedCheckResults = {};
     const agg = reviewSummary as ReviewSummary & {
       __contents?: Record<string, string | undefined>;
@@ -4233,7 +4238,8 @@ export class CheckExecutionEngine {
       // Determine group for grouped results: use explicit group or fall back to the check name
       const group = checkConfig.group || checkName;
 
-      if (GH_DBG) {
+      const DBG2 = process.env.VISOR_DEBUG === 'true' || (this as any).globalDebug === true;
+      if (DBG2) {
         try {
           console.error(
             `[gh-debug] grouped result: check='${checkName}' issues=${issuesForCheck.length} hasContent=${
@@ -4455,7 +4461,7 @@ export class CheckExecutionEngine {
     let templateContent: string = '';
     let enrichAssistantContext = false;
 
-    const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === 'true';
+    const DBG = process.env.VISOR_DEBUG === 'true' || (this as any).globalDebug === true;
 
     if (checkConfig.template) {
       // Custom template
@@ -4469,7 +4475,7 @@ export class CheckExecutionEngine {
         throw new Error('Custom template must specify either "file" or "content"');
       }
     } else if (schemaName === 'plain') {
-      if (GH_DBG) {
+      if (DBG) {
         try {
           console.error(
             `[gh-debug] render plain content for check='${checkName}' issues=${
@@ -4511,7 +4517,7 @@ export class CheckExecutionEngine {
           `Template file not found for schema '${sanitizedSchema}'. Tried: ${distPath} and ${cwdPath}.`
         );
       }
-      if (GH_DBG) {
+      if (DBG) {
         try {
           console.error(
             `[gh-debug] template resolved for check='${checkName}' schema='${sanitizedSchema}' path='${foundTemplate}'`
@@ -4529,7 +4535,7 @@ export class CheckExecutionEngine {
     const filteredIssues = (reviewSummary.issues || []).filter(
       issue => !(issue.file === 'system' && issue.line === 0)
     );
-    if (GH_DBG) {
+    if (DBG) {
       try {
         const sample = filteredIssues.slice(0, 2).map(i => ({
           file: i.file,
