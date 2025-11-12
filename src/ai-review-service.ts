@@ -53,6 +53,10 @@ export interface AIReviewConfig {
   allowedTools?: string[];
   // Disable all tools for raw AI mode (alternative to allowedTools: [])
   disableTools?: boolean;
+  // Enable bash command execution (shorthand for bashConfig.enabled)
+  allowBash?: boolean;
+  // Advanced bash command execution configuration
+  bashConfig?: import('./types/config').BashConfig;
 }
 
 export interface AIDebugInfo {
@@ -1417,6 +1421,15 @@ ${'='.repeat(60)}
       }
       if (this.config.disableTools !== undefined) {
         (options as any).disableTools = this.config.disableTools;
+      }
+
+      // Pass bash command execution configuration to ProbeAgent
+      // Pass allowBash and bashConfig separately (following allowEdit pattern)
+      if (this.config.allowBash !== undefined) {
+        (options as any).allowBash = this.config.allowBash;
+      }
+      if (this.config.bashConfig !== undefined) {
+        (options as any).bashConfig = this.config.bashConfig;
       }
 
       // Add provider-specific options if configured

@@ -287,6 +287,25 @@ export interface AIFallbackConfig {
 }
 
 /**
+ * Bash command execution configuration for ProbeAgent
+ * Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution
+ */
+export interface BashConfig {
+  /** Array of permitted command patterns (e.g., ['ls', 'git status']) */
+  allow?: string[];
+  /** Array of blocked command patterns (e.g., ['rm -rf', 'sudo']) */
+  deny?: string[];
+  /** Disable default safe command list (use with caution) */
+  noDefaultAllow?: boolean;
+  /** Disable default dangerous command blocklist (use with extreme caution) */
+  noDefaultDeny?: boolean;
+  /** Execution timeout in milliseconds */
+  timeout?: number;
+  /** Default working directory for command execution */
+  workingDirectory?: string;
+}
+
+/**
  * AI provider configuration
  */
 export interface AIProviderConfig {
@@ -316,6 +335,10 @@ export interface AIProviderConfig {
   allowedTools?: string[];
   /** Disable all tools for raw AI mode (alternative to allowedTools: []) */
   disableTools?: boolean;
+  /** Enable bash command execution (shorthand for bashConfig.enabled) */
+  allowBash?: boolean;
+  /** Advanced bash command execution configuration */
+  bashConfig?: BashConfig;
 }
 
 /**

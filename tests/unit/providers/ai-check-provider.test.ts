@@ -317,6 +317,88 @@ describe('AICheckProvider', () => {
         disableTools: true,
       });
     });
+
+    it('should pass allowBash to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'analyze git status',
+        ai: {
+          provider: 'anthropic',
+          model: 'claude-3-opus',
+          allowBash: true,
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'anthropic',
+        model: 'claude-3-opus',
+        allowBash: true,
+      });
+    });
+
+    it('should pass bashConfig with allowBash to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'analyze git status with custom config',
+        ai: {
+          provider: 'anthropic',
+          model: 'claude-3-opus',
+          allowBash: true,
+          bashConfig: {
+            allow: ['git status', 'ls'],
+            timeout: 30000,
+          },
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'anthropic',
+        model: 'claude-3-opus',
+        allowBash: true,
+        bashConfig: {
+          allow: ['git status', 'ls'],
+          timeout: 30000,
+        },
+      });
+    });
   });
 
   describe('getSupportedConfigKeys', () => {
@@ -331,6 +413,8 @@ describe('AICheckProvider', () => {
       expect(keys).toContain('ai.allowEdit');
       expect(keys).toContain('ai.allowedTools');
       expect(keys).toContain('ai.disableTools');
+      expect(keys).toContain('ai.allowBash');
+      expect(keys).toContain('ai.bashConfig');
     });
   });
 
