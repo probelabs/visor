@@ -1424,14 +1424,12 @@ ${'='.repeat(60)}
       }
 
       // Pass bash command execution configuration to ProbeAgent
-      // Handle both allowBash (simple boolean) and bashConfig (advanced options)
-      if (this.config.allowBash !== undefined || this.config.bashConfig !== undefined) {
-        const bashConfig = this.config.bashConfig || {};
-        // If allowBash is explicitly set, use it to set enabled
-        if (this.config.allowBash !== undefined) {
-          bashConfig.enabled = this.config.allowBash;
-        }
-        (options as any).bashConfig = bashConfig;
+      // Pass allowBash and bashConfig separately (following allowEdit pattern)
+      if (this.config.allowBash !== undefined) {
+        (options as any).allowBash = this.config.allowBash;
+      }
+      if (this.config.bashConfig !== undefined) {
+        (options as any).bashConfig = this.config.bashConfig;
       }
 
       // Add provider-specific options if configured
