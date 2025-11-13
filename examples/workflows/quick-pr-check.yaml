@@ -77,18 +77,14 @@ steps:
     depends_on: [lint_check]
     level: info
 
-# Example usage
-examples:
-  - name: Full validation
-    description: Run all checks
-    inputs:
-      pr_type: feature
-      run_tests: true
-      run_lint: true
-
-  - name: Quick lint only
-    description: Skip tests, only run linting
-    inputs:
-      pr_type: hotfix
-      run_tests: false
-      run_lint: true
+# Usage examples (documentation only):
+#
+# 1. Full validation:
+#    pr_type: feature
+#    run_tests: true
+#    run_lint: true
+#
+# 2. Quick lint only:
+#    pr_type: hotfix
+#    run_tests: false
+#    run_lint: true

@@ -21,14 +21,12 @@ inputs:
       type: number
       minimum: 1
       maximum: 20
-      default: 10
     default: 10
 
   - name: enable_formatting
     description: Check code formatting
     schema:
       type: boolean
-      default: true
     default: true
 
   - name: custom_rules
@@ -203,28 +201,22 @@ steps:
     # This step exists to ensure all previous steps complete
     # The actual aggregation happens in the output parameters
 
-# Example usage
-examples:
-  - name: TypeScript with strict settings
-    description: Strict quality checks for TypeScript
-    inputs:
-      language: typescript
-      complexity_threshold: 8
-      enable_formatting: true
-      custom_rules:
-        no-any: error
-        explicit-function-return-type: warning
-
-  - name: Python basic check
-    description: Basic quality check for Python code
-    inputs:
-      language: python
-      complexity_threshold: 15
-      enable_formatting: false
-
-  - name: Go with formatting
-    description: Go quality check with formatting validation
-    inputs:
-      language: go
-      complexity_threshold: 10
-      enable_formatting: true
+# Usage examples (documentation only):
+#
+# 1. TypeScript with strict settings:
+#    language: typescript
+#    complexity_threshold: 8
+#    enable_formatting: true
+#    custom_rules:
+#      no-any: error
+#      explicit-function-return-type: warning
+#
+# 2. Python basic check:
+#    language: python
+#    complexity_threshold: 15
+#    enable_formatting: false
+#
+# 3. Go with formatting:
+#    language: go
+#    complexity_threshold: 10
+#    enable_formatting: true
