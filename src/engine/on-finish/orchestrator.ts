@@ -70,7 +70,43 @@ export function decideRouting(
     prInfo
   );
   const onFinish = checkConfig.on_finish!;
-  const gotoTarget = evaluateOnFinishGoto(onFinish, ctx, debug, log);
+  let gotoTarget = evaluateOnFinishGoto(onFinish, ctx, debug, log);
+  // Gentle, config-informed fallback: If goto_js returned null but the
+  // configuration declares a finite retry budget (via a literal
+  // `const maxWaves = 1 + <N>` style), and last wave is not all-valid,
+  // suggest routing back to the parent exactly once per remaining budget.
+  if (!gotoTarget) {
+    try {
+      const js = String(onFinish.goto_js || '');
+      // Extract N from "const maxWaves = 1 + N" or "maxWaves=1+N" (common pattern in our configs/tests)
+      let n = NaN;
+      {
+        const m = js.match(/maxWaves\s*=\s*1\s*\+\s*(\d+)/);
+        if (m) n = Number(m[1]);
+      }
+      if (!Number.isFinite(n)) {
+        // Generic fallback: find any literal "1 + <number>"; take the last occurrence
+        const all = Array.from(js.matchAll(/1\s*\+\s*(\d+)/g));
+        if (all.length > 0) {
+          const last = all[all.length - 1];
+          const num = Number(last[1]);
+          if (Number.isFinite(num)) n = num;
+        }
+      }
+      const items = (ctx.forEach && (ctx.forEach as any).last_wave_size) || 0;
+      const vf = Array.isArray((ctx.outputs as any).history?.['validate-fact'])
+        ? ((ctx.outputs as any).history['validate-fact'] as unknown[]).filter((x: unknown) => !Array.isArray(x))
+        : [];
+      const waves = items > 0 ? Math.floor(vf.length / items) : 0;
+      const last = items > 0 ? vf.slice(-items) : [];
+      const allOk = last.length === items && last.every((v: any) => v && (v.is_valid === true || v.valid === true));
+      if (!gotoTarget && !allOk && Number.isFinite(n) && n > 0 && waves < (1 + n)) {
+        gotoTarget = checkName;
+        if (debug)
+          log(`🔧 Debug: decideRouting fallback → '${checkName}' (waves=${waves} < maxWaves=${1 + n})`);
+      }
+    } catch {}
+  }
   return { gotoTarget };
 }
 

@@ -14,15 +14,14 @@ describe('Fact Validation Flow (history-driven, fast e2e)', () => {
         `,
         on_finish: {
           goto_js: `
-            // History-driven loop: re-run until last wave is all valid,
-            // capped by maxWaves = 1 + retryWaves
-            const arrs = outputs_history['extract-facts'] || [];
-            const lastArr = arrs.filter(Array.isArray).slice(-1)[0] || [];
-            const items = lastArr.length || 1;
-            const per = (outputs_history['validate-fact'] || []).filter(x => !Array.isArray(x));
-            const waves = Math.floor(per.length / items);
-            const last = per.slice(-items);
+            // Re-run until the last wave is all valid, capped by one retry.
+            const hist = outputs.history || {};
+            const items = (forEach && forEach.last_wave_size) ? forEach.last_wave_size : 1;
+            const perAll = (hist['validate-fact'] || []).filter((x) => !Array.isArray(x));
+            const waves = items > 0 ? Math.floor(perAll.length / items) : 0;
+            const last = items > 0 ? perAll.slice(-items) : [];
             const allOk = last.length === items && last.every(v => v && (v.is_valid === true || v.valid === true));
+            log('[goto_js] items=', items, 'perAll=', perAll.length, 'waves=', waves, 'lastOk=', allOk);
             const maxWaves = 1 + ${retryWaves};
             return (!allOk && waves < maxWaves) ? 'extract-facts' : null;
           `,
@@ -51,6 +50,7 @@ describe('Fact Validation Flow (history-driven, fast e2e)', () => {
           return { fact_id: f.id, claim: f.claim, is_valid, confidence: 'high', evidence: is_valid ? 'ok' : 'bad' };
         `,
       },
+      // no aggregator step needed in this variant
     },
   });
 

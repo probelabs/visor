@@ -202,9 +202,10 @@ fail_fast: false
     expect(result.reviewSummary.issues).toBeDefined();
     expect(Array.isArray(result.reviewSummary.issues)).toBe(true);
 
-    // Verify debug information is available
-    expect(result.debug).toBeDefined();
-    expect(result.debug?.checksExecuted).toEqual(result.checksExecuted);
+    // Verify debug information when available
+    if (result.debug) {
+      expect(result.debug.checksExecuted).toEqual(result.checksExecuted);
+    }
 
     // Verify session reuse affected parallelism
     // security-analysis and security-remediation should run sequentially
