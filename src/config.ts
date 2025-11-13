@@ -114,12 +114,10 @@ export class ConfigManager {
 
         // Process extends/include
         const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+
+        // Remove extends and include fields from config
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const {
-          extends: _extendsField,
-          include: _includeField,
-          ...configWithoutExtends
-        } = parsedConfig as any;
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig as any;
 
         // Load and merge all parent configurations
         let mergedConfig: Partial<VisorConfig> = {};
