@@ -13,6 +13,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { logger } from './logger';
+import { DependencyResolver } from './dependency-resolver';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
@@ -403,43 +404,20 @@ export class WorkflowRegistry {
   }
 
   /**
-   * Detect circular dependencies in workflow steps
+   * Detect circular dependencies in workflow steps using DependencyResolver
    */
   private detectCircularDependencies(workflow: WorkflowDefinition): string[] {
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-    const path: string[] = [];
+    // Build dependency map
+    const dependencies: Record<string, string[]> = {};
+    for (const [stepId, step] of Object.entries(workflow.steps || {})) {
+      dependencies[stepId] = step.depends_on || [];
+    }
 
-    const hasCycle = (stepId: string): boolean => {
-      visited.add(stepId);
-      recursionStack.add(stepId);
-      path.push(stepId);
+    // Use DependencyResolver to check for cycles
+    const graph = DependencyResolver.buildDependencyGraph(dependencies);
 
-      const step = workflow.steps[stepId];
-      if (step?.depends_on) {
-        for (const dep of step.depends_on) {
-          if (!visited.has(dep)) {
-            if (hasCycle(dep)) {
-              return true;
-            }
-          } else if (recursionStack.has(dep)) {
-            path.push(dep);
-            return true;
-          }
-        }
-      }
-
-      path.pop();
-      recursionStack.delete(stepId);
-      return false;
-    };
-
-    for (const stepId of Object.keys(workflow.steps || {})) {
-      if (!visited.has(stepId)) {
-        if (hasCycle(stepId)) {
-          return path;
-        }
-      }
+    if (graph.hasCycles && graph.cycleNodes) {
+      return graph.cycleNodes;
     }
 
     return [];
