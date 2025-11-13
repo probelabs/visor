@@ -1,15 +1,15 @@
 import {
   CheckExecutionEngine
-} from "./chunk-7D7V22BT.mjs";
+} from "./chunk-YFM7P67Q.mjs";
 import "./chunk-OOZITMRU.mjs";
 import {
   init_logger,
   logger
-} from "./chunk-UQKEXG2F.mjs";
+} from "./chunk-NUE2THCT.mjs";
 import "./chunk-U7X54EMV.mjs";
 import {
   ConfigMerger
-} from "./chunk-U5D2LY66.mjs";
+} from "./chunk-JV5RIIRE.mjs";
 import {
   __esm,
   __export,
@@ -55,6 +55,10 @@ var init_config_schema = __esm({
                 }
               ],
               description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
+            },
+            tools: {
+              $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
+              description: "Custom tool definitions that can be used in MCP blocks"
             },
             steps: {
               $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
@@ -115,10 +119,6 @@ var init_config_schema = __esm({
             routing: {
               $ref: "#/definitions/RoutingDefaults",
               description: "Optional routing defaults for retry/goto/run policies"
-            },
-            limits: {
-              $ref: "#/definitions/LimitsConfig",
-              description: "Global execution limits"
             }
           },
           required: ["output", "version"],
@@ -129,6 +129,100 @@ var init_config_schema = __esm({
         "Record<string,unknown>": {
           type: "object",
           additionalProperties: {}
+        },
+        "Record<string,CustomToolDefinition>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/CustomToolDefinition"
+          }
+        },
+        CustomToolDefinition: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Tool name - used to reference the tool in MCP blocks"
+            },
+            description: {
+              type: "string",
+              description: "Description of what the tool does"
+            },
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "object"
+                },
+                properties: {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                },
+                required: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                additionalProperties: {
+                  type: "boolean"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Input schema for the tool (JSON Schema format)",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            exec: {
+              type: "string",
+              description: "Command to execute - supports Liquid template"
+            },
+            stdin: {
+              type: "string",
+              description: "Optional stdin input - supports Liquid template"
+            },
+            transform: {
+              type: "string",
+              description: "Transform the raw output - supports Liquid template"
+            },
+            transform_js: {
+              type: "string",
+              description: "Transform the output using JavaScript - alternative to transform"
+            },
+            cwd: {
+              type: "string",
+              description: "Working directory for command execution"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the command"
+            },
+            timeout: {
+              type: "number",
+              description: "Timeout in milliseconds"
+            },
+            parseJson: {
+              type: "boolean",
+              description: "Whether to parse output as JSON automatically"
+            },
+            outputSchema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Expected output schema for validation"
+            }
+          },
+          required: ["name", "exec"],
+          additionalProperties: false,
+          description: "Custom tool definition for use in MCP blocks",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,string>": {
+          type: "object",
+          additionalProperties: {
+            type: "string"
+          }
         },
         "Record<string,CheckConfig>": {
           type: "object",
@@ -229,22 +323,6 @@ var init_config_schema = __esm({
               type: "string",
               description: "AI provider to use for this check - overrides global setting"
             },
-            ai_persona: {
-              type: "string",
-              description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
-            },
-            ai_prompt_type: {
-              type: "string",
-              description: "Probe promptType for this check (underscore style)"
-            },
-            ai_system_prompt: {
-              type: "string",
-              description: "System prompt for this check (underscore style)"
-            },
-            ai_custom_prompt: {
-              type: "string",
-              description: "Legacy customPrompt (underscore style) \u2014 deprecated, use ai_system_prompt"
-            },
             ai_mcp_servers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
@@ -315,10 +393,6 @@ var init_config_schema = __esm({
               },
               description: 'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])'
             },
-            continue_on_failure: {
-              type: "boolean",
-              description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
-            },
             forEach: {
               type: "boolean",
               description: "Process output as array and run dependent checks for each item"
@@ -343,10 +417,6 @@ var init_config_schema = __esm({
             on_finish: {
               $ref: "#/definitions/OnFinishConfig",
               description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
-            },
-            max_runs: {
-              type: "number",
-              description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
             },
             message: {
               type: "string",
@@ -482,12 +552,6 @@ var init_config_schema = __esm({
           ],
           description: "Valid check types in configuration"
         },
-        "Record<string,string>": {
-          type: "object",
-          additionalProperties: {
-            type: "string"
-          }
-        },
         EventTrigger: {
           type: "string",
           enum: [
@@ -526,18 +590,6 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Enable debug mode"
             },
-            prompt_type: {
-              type: "string",
-              description: "Probe promptType to use (e.g., engineer, code-review, architect)"
-            },
-            system_prompt: {
-              type: "string",
-              description: "System prompt (baseline preamble). Replaces legacy custom_prompt."
-            },
-            custom_prompt: {
-              type: "string",
-              description: "Probe customPrompt (baseline/system prompt) \u2014 deprecated, use system_prompt"
-            },
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
@@ -572,6 +624,14 @@ var init_config_schema = __esm({
             disableTools: {
               type: "boolean",
               description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
+            },
+            allowBash: {
+              type: "boolean",
+              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
+            },
+            bashConfig: {
+              $ref: "#/definitions/BashConfig",
+              description: "Advanced bash command execution configuration"
             }
           },
           additionalProperties: false,
@@ -711,6 +771,46 @@ var init_config_schema = __esm({
           required: ["provider", "model"],
           additionalProperties: false,
           description: "Fallback provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BashConfig: {
+          type: "object",
+          properties: {
+            allow: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
+            },
+            noDefaultAllow: {
+              type: "boolean",
+              description: "Disable default safe command list (use with caution)"
+            },
+            noDefaultDeny: {
+              type: "boolean",
+              description: "Disable default dangerous command blocklist (use with extreme caution)"
+            },
+            timeout: {
+              type: "number",
+              description: "Execution timeout in milliseconds"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Default working directory for command execution"
+            }
+          },
+          additionalProperties: false,
+          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
           patternProperties: {
             "^x-": {}
           }
@@ -1342,20 +1442,6 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
-        },
-        LimitsConfig: {
-          type: "object",
-          properties: {
-            max_runs_per_check: {
-              type: "number",
-              description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
-            }
-          },
-          additionalProperties: false,
-          description: "Global engine limits",
-          patternProperties: {
-            "^x-": {}
-          }
         }
       }
     };
@@ -1611,7 +1697,7 @@ var ConfigLoader = class {
       const parentConfig = await this.fetchConfig(source, this.loadedConfigs.size);
       parentConfigs.push(parentConfig);
     }
-    const { ConfigMerger: ConfigMerger2 } = await import("./config-merger-TWUBWFC2.mjs");
+    const { ConfigMerger: ConfigMerger2 } = await import("./config-merger-DK4ERDVJ.mjs");
     const merger = new ConfigMerger2();
     let mergedParents = {};
     for (const parentConfig of parentConfigs) {

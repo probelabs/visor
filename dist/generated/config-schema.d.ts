@@ -24,6 +24,10 @@ export declare const configSchema: {
                     }];
                     readonly description: "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\"";
                 };
+                readonly tools: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E";
+                    readonly description: "Custom tool definitions that can be used in MCP blocks";
+                };
                 readonly steps: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
                     readonly description: "Step configurations (recommended)";
@@ -84,10 +88,6 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/RoutingDefaults";
                     readonly description: "Optional routing defaults for retry/goto/run policies";
                 };
-                readonly limits: {
-                    readonly $ref: "#/definitions/LimitsConfig";
-                    readonly description: "Global execution limits";
-                };
             };
             readonly required: readonly ["output", "version"];
             readonly patternProperties: {
@@ -97,6 +97,100 @@ export declare const configSchema: {
         readonly 'Record<string,unknown>': {
             readonly type: "object";
             readonly additionalProperties: {};
+        };
+        readonly 'Record<string,CustomToolDefinition>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/CustomToolDefinition";
+            };
+        };
+        readonly CustomToolDefinition: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                    readonly description: "Tool name - used to reference the tool in MCP blocks";
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Description of what the tool does";
+                };
+                readonly inputSchema: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly const: "object";
+                        };
+                        readonly properties: {
+                            readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                        };
+                        readonly required: {
+                            readonly type: "array";
+                            readonly items: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly additionalProperties: {
+                            readonly type: "boolean";
+                        };
+                    };
+                    readonly required: readonly ["type"];
+                    readonly additionalProperties: false;
+                    readonly description: "Input schema for the tool (JSON Schema format)";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly exec: {
+                    readonly type: "string";
+                    readonly description: "Command to execute - supports Liquid template";
+                };
+                readonly stdin: {
+                    readonly type: "string";
+                    readonly description: "Optional stdin input - supports Liquid template";
+                };
+                readonly transform: {
+                    readonly type: "string";
+                    readonly description: "Transform the raw output - supports Liquid template";
+                };
+                readonly transform_js: {
+                    readonly type: "string";
+                    readonly description: "Transform the output using JavaScript - alternative to transform";
+                };
+                readonly cwd: {
+                    readonly type: "string";
+                    readonly description: "Working directory for command execution";
+                };
+                readonly env: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Environment variables for the command";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Timeout in milliseconds";
+                };
+                readonly parseJson: {
+                    readonly type: "boolean";
+                    readonly description: "Whether to parse output as JSON automatically";
+                };
+                readonly outputSchema: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Expected output schema for validation";
+                };
+            };
+            readonly required: readonly ["name", "exec"];
+            readonly additionalProperties: false;
+            readonly description: "Custom tool definition for use in MCP blocks";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,string>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly type: "string";
+            };
         };
         readonly 'Record<string,CheckConfig>': {
             readonly type: "object";
@@ -197,22 +291,6 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "AI provider to use for this check - overrides global setting";
                 };
-                readonly ai_persona: {
-                    readonly type: "string";
-                    readonly description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'";
-                };
-                readonly ai_prompt_type: {
-                    readonly type: "string";
-                    readonly description: "Probe promptType for this check (underscore style)";
-                };
-                readonly ai_system_prompt: {
-                    readonly type: "string";
-                    readonly description: "System prompt for this check (underscore style)";
-                };
-                readonly ai_custom_prompt: {
-                    readonly type: "string";
-                    readonly description: "Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt";
-                };
                 readonly ai_mcp_servers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers for this AI check - overrides global setting";
@@ -280,10 +358,6 @@ export declare const configSchema: {
                     };
                     readonly description: "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])";
                 };
-                readonly continue_on_failure: {
-                    readonly type: "boolean";
-                    readonly description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.";
-                };
                 readonly forEach: {
                     readonly type: "boolean";
                     readonly description: "Process output as array and run dependent checks for each item";
@@ -308,10 +382,6 @@ export declare const configSchema: {
                 readonly on_finish: {
                     readonly $ref: "#/definitions/OnFinishConfig";
                     readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
-                };
-                readonly max_runs: {
-                    readonly type: "number";
-                    readonly description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.";
                 };
                 readonly message: {
                     readonly type: "string";
@@ -430,12 +500,6 @@ export declare const configSchema: {
             readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
             readonly description: "Valid check types in configuration";
         };
-        readonly 'Record<string,string>': {
-            readonly type: "object";
-            readonly additionalProperties: {
-                readonly type: "string";
-            };
-        };
         readonly EventTrigger: {
             readonly type: "string";
             readonly enum: readonly ["pr_opened", "pr_updated", "pr_closed", "issue_opened", "issue_comment", "manual", "schedule", "webhook_received"];
@@ -464,18 +528,6 @@ export declare const configSchema: {
                 readonly debug: {
                     readonly type: "boolean";
                     readonly description: "Enable debug mode";
-                };
-                readonly prompt_type: {
-                    readonly type: "string";
-                    readonly description: "Probe promptType to use (e.g., engineer, code-review, architect)";
-                };
-                readonly system_prompt: {
-                    readonly type: "string";
-                    readonly description: "System prompt (baseline preamble). Replaces legacy custom_prompt.";
-                };
-                readonly custom_prompt: {
-                    readonly type: "string";
-                    readonly description: "Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt";
                 };
                 readonly skip_code_context: {
                     readonly type: "boolean";
@@ -511,6 +563,14 @@ export declare const configSchema: {
                 readonly disableTools: {
                     readonly type: "boolean";
                     readonly description: "Disable all tools for raw AI mode (alternative to allowedTools: [])";
+                };
+                readonly allowBash: {
+                    readonly type: "boolean";
+                    readonly description: "Enable bash command execution (shorthand for bashConfig.enabled)";
+                };
+                readonly bashConfig: {
+                    readonly $ref: "#/definitions/BashConfig";
+                    readonly description: "Advanced bash command execution configuration";
                 };
             };
             readonly additionalProperties: false;
@@ -650,6 +710,46 @@ export declare const configSchema: {
             readonly required: readonly ["provider", "model"];
             readonly additionalProperties: false;
             readonly description: "Fallback provider configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly BashConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly allow: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Array of permitted command patterns (e.g., ['ls', 'git status'])";
+                };
+                readonly deny: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])";
+                };
+                readonly noDefaultAllow: {
+                    readonly type: "boolean";
+                    readonly description: "Disable default safe command list (use with caution)";
+                };
+                readonly noDefaultDeny: {
+                    readonly type: "boolean";
+                    readonly description: "Disable default dangerous command blocklist (use with extreme caution)";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Execution timeout in milliseconds";
+                };
+                readonly workingDirectory: {
+                    readonly type: "string";
+                    readonly description: "Default working directory for command execution";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -1269,20 +1369,6 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Global routing defaults";
-            readonly patternProperties: {
-                readonly '^x-': {};
-            };
-        };
-        readonly LimitsConfig: {
-            readonly type: "object";
-            readonly properties: {
-                readonly max_runs_per_check: {
-                    readonly type: "number";
-                    readonly description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.";
-                };
-            };
-            readonly additionalProperties: false;
-            readonly description: "Global engine limits";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

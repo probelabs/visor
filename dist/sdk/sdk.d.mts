@@ -196,6 +196,24 @@ interface AIFallbackConfig {
     auto?: boolean;
 }
 /**
+ * Bash command execution configuration for ProbeAgent
+ * Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution
+ */
+interface BashConfig {
+    /** Array of permitted command patterns (e.g., ['ls', 'git status']) */
+    allow?: string[];
+    /** Array of blocked command patterns (e.g., ['rm -rf', 'sudo']) */
+    deny?: string[];
+    /** Disable default safe command list (use with caution) */
+    noDefaultAllow?: boolean;
+    /** Disable default dangerous command blocklist (use with extreme caution) */
+    noDefaultDeny?: boolean;
+    /** Execution timeout in milliseconds */
+    timeout?: number;
+    /** Default working directory for command execution */
+    workingDirectory?: string;
+}
+/**
  * AI provider configuration
  */
 interface AIProviderConfig {
@@ -209,12 +227,6 @@ interface AIProviderConfig {
     timeout?: number;
     /** Enable debug mode */
     debug?: boolean;
-    /** Probe promptType to use (e.g., engineer, code-review, architect) */
-    prompt_type?: string;
-    /** System prompt (baseline preamble). Replaces legacy custom_prompt. */
-    system_prompt?: string;
-    /** Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt */
-    custom_prompt?: string;
     /** Skip adding code context (diffs, files, PR info) to the prompt */
     skip_code_context?: boolean;
     /** MCP servers configuration */
@@ -231,6 +243,10 @@ interface AIProviderConfig {
     allowedTools?: string[];
     /** Disable all tools for raw AI mode (alternative to allowedTools: []) */
     disableTools?: boolean;
+    /** Enable bash command execution (shorthand for bashConfig.enabled) */
+    allowBash?: boolean;
+    /** Advanced bash command execution configuration */
+    bashConfig?: BashConfig;
 }
 /**
  * MCP Server configuration
@@ -315,14 +331,6 @@ interface CheckConfig {
     ai_model?: string;
     /** AI provider to use for this check - overrides global setting */
     ai_provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | string;
-    /** Optional persona hint, prepended to the prompt as 'Persona: <value>' */
-    ai_persona?: string;
-    /** Probe promptType for this check (underscore style) */
-    ai_prompt_type?: string;
-    /** System prompt for this check (underscore style) */
-    ai_system_prompt?: string;
-    /** Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt */
-    ai_custom_prompt?: string;
     /** MCP servers for this AI check - overrides global setting */
     ai_mcp_servers?: Record<string, McpServerConfig>;
     /** Claude Code configuration (for claude-code type checks) */
@@ -351,12 +359,6 @@ interface CheckConfig {
     failure_conditions?: FailureConditions;
     /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
     tags?: string[];
-    /**
-     * Allow dependents to run even if this step fails.
-     * Defaults to false (dependents are gated when this step fails).
-     * Similar to GitHub Actions' continue-on-error.
-     */
-    continue_on_failure?: boolean;
     /** Process output as array and run dependent checks for each item */
     forEach?: boolean;
     /**
@@ -375,11 +377,6 @@ interface CheckConfig {
     on_success?: OnSuccessConfig;
     /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
     on_finish?: OnFinishConfig;
-    /**
-     * Hard cap on how many times this check may execute within a single engine run.
-     * Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.
-     */
-    max_runs?: number;
     /**
      * Log provider specific options (optional, only used when type === 'log').
      * Declared here to ensure JSON Schema allows these keys and Ajv does not warn.
@@ -525,17 +522,6 @@ interface RoutingDefaults {
     defaults?: {
         on_fail?: OnFailConfig;
     };
-}
-/**
- * Global engine limits
- */
-interface LimitsConfig {
-    /**
-     * Maximum number of executions per check within a single engine run.
-     * Applies to each distinct scope independently for forEach item executions.
-     * Set to 0 or negative to disable. Default: 50.
-     */
-    max_runs_per_check?: number;
 }
 /**
  * Custom template configuration
@@ -707,6 +693,40 @@ interface VisorHooks {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;
 }
 /**
+ * Custom tool definition for use in MCP blocks
+ */
+interface CustomToolDefinition {
+    /** Tool name - used to reference the tool in MCP blocks */
+    name: string;
+    /** Description of what the tool does */
+    description?: string;
+    /** Input schema for the tool (JSON Schema format) */
+    inputSchema?: {
+        type: 'object';
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+    };
+    /** Command to execute - supports Liquid template */
+    exec: string;
+    /** Optional stdin input - supports Liquid template */
+    stdin?: string;
+    /** Transform the raw output - supports Liquid template */
+    transform?: string;
+    /** Transform the output using JavaScript - alternative to transform */
+    transform_js?: string;
+    /** Working directory for command execution */
+    cwd?: string;
+    /** Environment variables for the command */
+    env?: Record<string, string>;
+    /** Timeout in milliseconds */
+    timeout?: number;
+    /** Whether to parse output as JSON automatically */
+    parseJson?: boolean;
+    /** Expected output schema for validation */
+    outputSchema?: Record<string, unknown>;
+}
+/**
  * Main Visor configuration
  */
 interface VisorConfig {
@@ -714,6 +734,8 @@ interface VisorConfig {
     version: string;
     /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
     extends?: string | string[];
+    /** Custom tool definitions that can be used in MCP blocks */
+    tools?: Record<string, CustomToolDefinition>;
     /** Step configurations (recommended) */
     steps?: Record<string, CheckConfig>;
     /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */
@@ -746,8 +768,6 @@ interface VisorConfig {
     tag_filter?: TagFilter;
     /** Optional routing defaults for retry/goto/run policies */
     routing?: RoutingDefaults;
-    /** Global execution limits */
-    limits?: LimitsConfig;
 }
 
 /**

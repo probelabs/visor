@@ -842,9 +842,7 @@ var init_ai_review_service = __esm({
       async executeReview(prInfo, customPrompt, schema, checkName, sessionId) {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-        const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: this.config?.skip_code_context === true
-        });
+        const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
         log(`Executing AI review with ${this.config.provider} provider...`);
         log(`\u{1F527} Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
         log(`Schema type: ${schema || "none (no schema)"}`);
@@ -1786,16 +1784,12 @@ ${"=".repeat(60)}
             process.env.OPENAI_API_KEY = this.config.apiKey;
           } else if (this.config.provider === "bedrock") {
           }
-          const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || "").trim();
           const options = {
             sessionId,
-            // Prefer config promptType, then env override, else fallback to code-review when schema is set
-            promptType: this.config.promptType && this.config.promptType.trim() ? this.config.promptType.trim() : explicitPromptType ? explicitPromptType : schema === "code-review" ? "code-review-template" : void 0,
+            promptType: schema ? "code-review-template" : void 0,
             allowEdit: false,
             // We don't want the agent to modify files
-            debug: this.config.debug || false,
-            // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
-            customPrompt: this.config.systemPrompt || this.config.customPrompt
+            debug: this.config.debug || false
           };
           let traceFilePath = "";
           let telemetryConfig = null;
@@ -1828,6 +1822,12 @@ ${"=".repeat(60)}
           }
           if (this.config.disableTools !== void 0) {
             options.disableTools = this.config.disableTools;
+          }
+          if (this.config.allowBash !== void 0) {
+            options.allowBash = this.config.allowBash;
+          }
+          if (this.config.bashConfig !== void 0) {
+            options.bashConfig = this.config.bashConfig;
           }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
@@ -5125,33 +5125,22 @@ var init_ai_check_provider = __esm({
         try {
           return await this.liquidEngine.parseAndRender(promptContent, templateContext);
         } catch (error) {
-          const err = error || {};
-          const lines = String(promptContent || "").split(/\r?\n/);
-          const lineNum = Number(err.line || err?.token?.line || err?.location?.line || 0);
-          const colNum = Number(err.col || err?.token?.col || err?.location?.col || 0);
-          let snippet = "";
-          if (lineNum > 0) {
-            const start = Math.max(1, lineNum - 3);
-            const end = Math.max(lineNum + 2, lineNum);
-            const width = String(end).length;
-            for (let i = start; i <= Math.min(end, lines.length); i++) {
-              const ln = `${String(i).padStart(width, " ")} | ${lines[i - 1] ?? ""}`;
-              snippet += ln + "\n";
-              if (i === lineNum) {
-                const caretPad = " ".repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
-                snippet += caretPad + "^\n";
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              const lines = promptContent.split(/\r?\n/);
+              const preview = lines.slice(0, 20).map((l, i) => `${(i + 1).toString().padStart(3, " ")}| ${l}`).join("\n");
+              try {
+                process.stderr.write(
+                  "[prompt-error] First 20 lines of prompt before Liquid render:\n" + preview + "\n"
+                );
+              } catch {
               }
             }
-          } else {
-            const preview = lines.slice(0, 20).map((l, i) => `${(i + 1).toString().padStart(3, " ")} | ${l}`).join("\n");
-            snippet = preview + "\n";
-          }
-          const msg = `Failed to render prompt template: ${error instanceof Error ? error.message : "Unknown error"}`;
-          try {
-            console.error("\n[prompt-error] " + msg + "\n" + snippet);
           } catch {
           }
-          throw new Error(msg);
+          throw new Error(
+            `Failed to render prompt template: ${error instanceof Error ? error.message : "Unknown error"}`
+          );
         }
       }
       async execute(prInfo, config, _dependencyResults, sessionInfo) {
@@ -5201,6 +5190,12 @@ var init_ai_check_provider = __esm({
           }
           if (config.ai.disableTools !== void 0) {
             aiConfig.disableTools = config.ai.disableTools;
+          }
+          if (config.ai.allowBash !== void 0) {
+            aiConfig.allowBash = config.ai.allowBash;
+          }
+          if (config.ai.bashConfig !== void 0) {
+            aiConfig.bashConfig = config.ai.bashConfig;
           }
           if (config.ai.skip_code_context !== void 0) {
             aiConfig.skip_code_context = config.ai.skip_code_context;
@@ -5273,7 +5268,7 @@ var init_ai_check_provider = __esm({
           );
         } catch {
         }
-        const eventContext = config.eventContext || {};
+        const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
         const ctxWithStage = {
           ...eventContext || {},
           __stageHistoryBase: sessionInfo?.stageHistoryBase
@@ -5285,32 +5280,19 @@ var init_ai_check_provider = __esm({
           _dependencyResults,
           config.__outputHistory
         );
-        const aiAny = config.ai || {};
-        const persona = (aiAny?.ai_persona || config.ai_persona || "").toString().trim();
-        const finalPrompt = persona ? `Persona: ${persona}
-
-${processedPrompt}` : processedPrompt;
-        try {
-          const pt = (config.ai?.promptType || config.ai_prompt_type || "").toString().trim();
-          if (pt) process.env.VISOR_PROMPT_TYPE = pt;
-        } catch {
-        }
         try {
           const stepName = config.checkName || "unknown";
           const serviceForCapture = new AIReviewService(aiConfig);
-          const finalPromptCapture = await serviceForCapture.buildCustomPrompt(
+          const finalPrompt = await serviceForCapture.buildCustomPrompt(
             prInfo,
-            finalPrompt,
+            processedPrompt,
             config.schema,
-            {
-              checkName: config.checkName,
-              skipPRContext: config.ai?.skip_code_context === true
-            }
+            { checkName: config.checkName }
           );
           sessionInfo?.hooks?.onPromptCaptured?.({
             step: String(stepName),
             provider: "ai",
-            prompt: finalPromptCapture
+            prompt: finalPrompt
           });
         } catch {
         }
@@ -5320,15 +5302,6 @@ ${processedPrompt}` : processedPrompt;
           if (mock !== void 0) {
             return { issues: [], output: mock };
           }
-        } catch {
-        }
-        try {
-          const pt = (aiAny?.prompt_type || config.ai_prompt_type || "").toString().trim();
-          if (pt) aiConfig.promptType = pt;
-          const sys = (aiAny?.system_prompt || config.ai_system_prompt || "").toString().trim();
-          const legacy = (aiAny?.custom_prompt || config.ai_custom_prompt || "").toString().trim();
-          if (sys) aiConfig.systemPrompt = sys;
-          else if (legacy) aiConfig.systemPrompt = legacy;
         } catch {
         }
         const service = new AIReviewService(aiConfig);
@@ -5383,7 +5356,7 @@ ${processedPrompt}` : processedPrompt;
             }
             result = await service.executeReview(
               prInfo,
-              finalPrompt,
+              processedPrompt,
               schema,
               config.checkName,
               config.sessionId
@@ -5453,17 +5426,13 @@ ${processedPrompt}` : processedPrompt;
           "ai.timeout",
           "ai.mcpServers",
           "ai.enableDelegate",
-          // legacy persona/prompt keys supported in config
-          "ai_persona",
-          "ai_prompt_type",
-          "ai_custom_prompt",
-          "ai_system_prompt",
-          // new provider resilience and tools toggles
           "ai.retry",
           "ai.fallback",
           "ai.allowEdit",
           "ai.allowedTools",
           "ai.disableTools",
+          "ai.allowBash",
+          "ai.bashConfig",
           "ai_model",
           "ai_provider",
           "ai_mcp_servers",
@@ -6326,27 +6295,12 @@ function createSecureSandbox() {
     ...import_sandboxjs.default.SAFE_GLOBALS,
     Math,
     JSON,
-    // Provide console with limited surface. Use trampolines so that any test
-    // spies (e.g., jest.spyOn(console, 'log')) see calls made inside the sandbox.
+    // Provide console with limited surface. Calls are harmless in CI logs and
+    // help with debugging value_js / transform_js expressions.
     console: {
-      log: (...args) => {
-        try {
-          console.log(...args);
-        } catch {
-        }
-      },
-      warn: (...args) => {
-        try {
-          console.warn(...args);
-        } catch {
-        }
-      },
-      error: (...args) => {
-        try {
-          console.error(...args);
-        } catch {
-        }
-      }
+      log: console.log,
+      warn: console.warn,
+      error: console.error
     }
   };
   const prototypeWhitelist = new Map(import_sandboxjs.default.SAFE_PROTOTYPES);
@@ -6464,30 +6418,22 @@ function compileAndRun(sandbox, userCode, scope, opts = { injectLog: true, wrapF
   safePrefix = safePrefix.replace(/[\r\n\t\0]/g, "").replace(/[`$\\]/g, "").replace(/\$\{/g, "").slice(0, 64);
   const header = inject ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };
 ` : "";
-  const src = String(userCode);
-  const looksLikeBlock = /\breturn\b/.test(src) || /;/.test(src) || /\n/.test(src);
-  const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(src.trim());
-  const body = opts.wrapFunction ? looksLikeBlock ? looksLikeIife ? `return (
-${src}
-);
-` : `return (() => {
-${src}
-})();
-` : `return (
-${src}
-);
-` : `${src}`;
+  const body = opts.wrapFunction ? `const __fn = () => {
+${userCode}
+};
+return __fn();
+` : `${userCode}`;
   const code = `${header}${body}`;
-  let exec;
+  let exec2;
   try {
-    exec = sandbox.compile(code);
+    exec2 = sandbox.compile(code);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`sandbox_compile_error: ${msg}`);
   }
   let out;
   try {
-    out = exec(scope);
+    out = exec2(scope);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`sandbox_execution_error: ${msg}`);
@@ -6734,15 +6680,15 @@ var init_github_ops_provider = __esm({
         };
         let values = await renderValues(valuesRaw);
         if (cfg.value_js && cfg.value_js.trim()) {
-          const depOutputs = {};
-          if (dependencyResults) {
-            for (const [name, result] of dependencyResults.entries()) {
-              const summary = result;
-              depOutputs[name] = summary.output !== void 0 ? summary.output : summary;
-            }
-          }
           try {
             const sandbox = this.getSecureSandbox();
+            const depOutputs = {};
+            if (dependencyResults) {
+              for (const [name, result] of dependencyResults.entries()) {
+                const summary = result;
+                depOutputs[name] = summary.output !== void 0 ? summary.output : summary;
+              }
+            }
             const res = compileAndRun(
               sandbox,
               cfg.value_js,
@@ -6753,24 +6699,21 @@ var init_github_ops_provider = __esm({
             else if (Array.isArray(res)) values = res.map((v) => String(v));
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            if (process.env.VISOR_DEBUG === "true") logger.warn(`[github-ops] value_js_error: ${msg}`);
-            try {
-              const out = depOutputs["issue-assistant"];
-              const lbls = Array.isArray(out?.labels) ? out.labels : [];
-              const sanitize = (arr) => {
-                const uniq = /* @__PURE__ */ new Set();
-                for (const v of arr) {
-                  let s = String(v ?? "");
-                  s = s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/+?/g, "/").trim();
-                  if (s) uniq.add(s);
-                }
-                return Array.from(uniq);
-              };
-              const derived = sanitize(lbls);
-              values = derived;
-            } catch {
-              values = [];
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.warn(`[github-ops] value_js_error: ${msg}`);
             }
+            return {
+              issues: [
+                {
+                  file: "system",
+                  line: 0,
+                  ruleId: "github/value_js_error",
+                  message: `value_js evaluation failed: ${msg}`,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
           }
         }
         if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
@@ -7355,6 +7298,132 @@ var init_claude_code_check_provider = __esm({
   }
 });
 
+// src/utils/command-executor.ts
+var import_child_process, import_util, CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    import_util = require("util");
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve7, reject) => {
+          const childProcess = (0, import_child_process.exec)(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve7({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
+  }
+});
+
 // src/utils/env-exposure.ts
 var env_exposure_exports = {};
 __export(env_exposure_exports, {
@@ -7424,6 +7493,7 @@ var init_command_check_provider = __esm({
     init_sandbox();
     init_liquid_extensions();
     init_logger();
+    init_command_executor();
     init_author_permissions();
     init_lazy_otel();
     init_state_capture();
@@ -7540,16 +7610,8 @@ var init_command_check_provider = __esm({
         }
         try {
           const stepName = config.checkName || "unknown";
-          const rawMock = context2?.hooks?.mockForStep?.(String(stepName));
-          if (rawMock !== void 0) {
-            let mock;
-            if (typeof rawMock === "number") {
-              mock = { exit_code: Number(rawMock) };
-            } else if (typeof rawMock === "string") {
-              mock = { stdout: String(rawMock) };
-            } else {
-              mock = rawMock;
-            }
+          const mock = context2?.hooks?.mockForStep?.(String(stepName));
+          if (mock && typeof mock === "object") {
             const m = mock;
             let out = m.stdout ?? "";
             try {
@@ -7558,19 +7620,19 @@ var init_command_check_provider = __esm({
               }
             } catch {
             }
-            const code = typeof m.exit_code === "number" ? m.exit_code : typeof m.exit === "number" ? m.exit : 0;
-            if (code !== 0) {
+            if (m.exit_code && m.exit_code !== 0) {
               return {
                 issues: [
                   {
                     file: "command",
                     line: 0,
                     ruleId: "command/execution_error",
-                    message: `Mocked command exited with code ${code}`,
+                    message: `Mocked command exited with code ${m.exit_code}`,
                     severity: "error",
                     category: "logic"
                   }
                 ],
+                // Also expose output for assertions
                 output: out
               };
             }
@@ -7597,9 +7659,6 @@ var init_command_check_provider = __esm({
               }
             }
           }
-          const { exec } = await import("child_process");
-          const { promisify } = await import("util");
-          const execAsync = promisify(exec);
           const timeoutSeconds = config.timeout || 60;
           const timeoutMs = timeoutSeconds * 1e3;
           const normalizeNodeEval = (cmd) => {
@@ -7615,14 +7674,29 @@ var init_command_check_provider = __esm({
             return cmd.replace(re, `${prefix}${quote}${escaped}${quote}${suffix}`);
           };
           const safeCommand = normalizeNodeEval(renderedCommand);
-          const { stdout, stderr } = await execAsync(safeCommand, {
+          const execResult = await commandExecutor.execute(safeCommand, {
             env: scriptEnv,
-            timeout: timeoutMs,
-            maxBuffer: 10 * 1024 * 1024
-            // 10MB buffer
+            timeout: timeoutMs
           });
+          const { stdout, stderr, exitCode } = execResult;
           if (stderr) {
             logger.debug(`Command stderr: ${stderr}`);
+          }
+          if (exitCode !== 0) {
+            const errorMessage = stderr || `Command exited with code ${exitCode}`;
+            logger.error(`Command failed with exit code ${exitCode}: ${errorMessage}`);
+            return {
+              issues: [
+                {
+                  file: "command",
+                  line: 0,
+                  ruleId: "command/execution_error",
+                  message: `Command execution failed: ${errorMessage}`,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
           }
           const rawOutput = stdout.trim();
           let output = rawOutput;
@@ -9195,6 +9269,184 @@ var init_memory_check_provider = __esm({
   }
 });
 
+// src/providers/custom-tool-executor.ts
+var import_ajv, CustomToolExecutor;
+var init_custom_tool_executor = __esm({
+  "src/providers/custom-tool-executor.ts"() {
+    "use strict";
+    init_liquid_extensions();
+    init_sandbox();
+    init_logger();
+    init_command_executor();
+    import_ajv = __toESM(require("ajv"));
+    CustomToolExecutor = class {
+      liquid;
+      sandbox;
+      tools;
+      ajv;
+      constructor(tools) {
+        this.liquid = createExtendedLiquid({
+          cache: false,
+          strictFilters: false,
+          strictVariables: false
+        });
+        this.tools = new Map(Object.entries(tools || {}));
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+      }
+      /**
+       * Register a custom tool
+       */
+      registerTool(tool) {
+        if (!tool.name) {
+          throw new Error("Tool must have a name");
+        }
+        this.tools.set(tool.name, tool);
+      }
+      /**
+       * Register multiple tools
+       */
+      registerTools(tools) {
+        for (const [name, tool] of Object.entries(tools)) {
+          tool.name = tool.name || name;
+          this.registerTool(tool);
+        }
+      }
+      /**
+       * Get all registered tools
+       */
+      getTools() {
+        return Array.from(this.tools.values());
+      }
+      /**
+       * Get a specific tool by name
+       */
+      getTool(name) {
+        return this.tools.get(name);
+      }
+      /**
+       * Validate tool input against schema using ajv
+       */
+      validateInput(tool, input) {
+        if (!tool.inputSchema) {
+          return;
+        }
+        const validate = this.ajv.compile(tool.inputSchema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
+        }
+      }
+      /**
+       * Execute a custom tool
+       */
+      async execute(toolName, args, context2) {
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+        this.validateInput(tool, args);
+        const templateContext = {
+          ...context2,
+          args,
+          input: args
+        };
+        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
+        let stdin;
+        if (tool.stdin) {
+          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
+        }
+        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
+        const result = await commandExecutor.execute(command, {
+          stdin,
+          cwd: tool.cwd,
+          env,
+          timeout: tool.timeout || 3e4
+        });
+        let output = result.stdout;
+        if (tool.parseJson) {
+          try {
+            output = JSON.parse(result.stdout);
+          } catch (e) {
+            logger.warn(`Failed to parse tool output as JSON: ${e}`);
+          }
+        }
+        if (tool.transform) {
+          const transformContext = {
+            ...templateContext,
+            output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          };
+          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
+            try {
+              output = JSON.parse(transformed);
+            } catch {
+              output = transformed;
+            }
+          } else {
+            output = transformed;
+          }
+        }
+        if (tool.transform_js) {
+          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+            ...templateContext,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          });
+        }
+        return output;
+      }
+      /**
+       * Apply JavaScript transform to output
+       */
+      async applyJavaScriptTransform(transformJs, output, context2) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context2)};
+      const args = context.args || {};
+      const pr = context.pr || {};
+      const files = context.files || [];
+      const outputs = context.outputs || {};
+      const env = context.env || {};
+
+      ${transformJs}
+    `;
+        try {
+          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
+        } catch (error) {
+          logger.error(`JavaScript transform error: ${error}`);
+          throw error;
+        }
+      }
+      /**
+       * Convert custom tools to MCP tool format
+       */
+      toMcpTools() {
+        return Array.from(this.tools.values()).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          handler: async (args) => {
+            return this.execute(tool.name, args);
+          }
+        }));
+      }
+    };
+  }
+});
+
 // src/providers/mcp-check-provider.ts
 var import_client, import_stdio, import_sse, import_streamableHttp, McpCheckProvider;
 var init_mcp_check_provider = __esm({
@@ -9209,9 +9461,11 @@ var init_mcp_check_provider = __esm({
     import_streamableHttp = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
     init_sandbox();
     init_env_resolver();
+    init_custom_tool_executor();
     McpCheckProvider = class extends CheckProvider {
       liquid;
       sandbox;
+      customToolExecutor;
       constructor() {
         super();
         this.liquid = createExtendedLiquid({
@@ -9219,6 +9473,16 @@ var init_mcp_check_provider = __esm({
           strictFilters: false,
           strictVariables: false
         });
+      }
+      /**
+       * Set custom tools for this provider
+       */
+      setCustomTools(tools) {
+        if (!this.customToolExecutor) {
+          this.customToolExecutor = new CustomToolExecutor(tools);
+        } else {
+          this.customToolExecutor.registerTools(tools);
+        }
       }
       /**
        * Create a secure sandbox for JavaScript execution
@@ -9233,7 +9497,7 @@ var init_mcp_check_provider = __esm({
         return "mcp";
       }
       getDescription() {
-        return "Call MCP tools directly using stdio, SSE, or Streamable HTTP transport";
+        return "Call MCP tools directly using stdio, SSE, HTTP, or custom YAML-defined tools";
       }
       async validateConfig(config) {
         if (!config || typeof config !== "object") {
@@ -9271,8 +9535,12 @@ var init_mcp_check_provider = __esm({
             logger.error(`Invalid URL format for MCP ${transport} transport: ${cfg.url}`);
             return false;
           }
+        } else if (transport === "custom") {
+          logger.debug(`MCP custom transport will validate tool '${cfg.method}' at execution time`);
         } else {
-          logger.error(`Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', or 'http'`);
+          logger.error(
+            `Invalid MCP transport: ${transport}. Must be 'stdio', 'sse', 'http', or 'custom'`
+          );
           return false;
         }
         return true;
@@ -9314,7 +9582,7 @@ var init_mcp_check_provider = __esm({
               };
             }
           }
-          const result = await this.executeMcpMethod(cfg, methodArgs);
+          const result = await this.executeMcpMethod(cfg, methodArgs, prInfo, dependencyResults);
           let finalOutput = result;
           if (cfg.transform) {
             try {
@@ -9409,10 +9677,35 @@ var init_mcp_check_provider = __esm({
       /**
        * Execute an MCP method using the configured transport
        */
-      async executeMcpMethod(config, methodArgs) {
+      async executeMcpMethod(config, methodArgs, prInfo, dependencyResults) {
         const transport = config.transport || "stdio";
         const timeout = (config.timeout || 60) * 1e3;
-        if (transport === "stdio") {
+        if (transport === "custom") {
+          if (!this.customToolExecutor) {
+            throw new Error(
+              'No custom tools available. Define tools in the "tools" section of your configuration.'
+            );
+          }
+          const tool = this.customToolExecutor.getTool(config.method);
+          if (!tool) {
+            throw new Error(
+              `Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor.getTools().map((t) => t.name).join(", ")}`
+            );
+          }
+          const context2 = {
+            pr: prInfo ? {
+              number: prInfo.number,
+              title: prInfo.title,
+              author: prInfo.author,
+              branch: prInfo.head,
+              base: prInfo.base
+            } : void 0,
+            files: prInfo?.files,
+            outputs: this.buildOutputContext(dependencyResults),
+            env: this.getSafeEnvironmentVariables()
+          };
+          return await this.customToolExecutor.execute(config.method, methodArgs, context2);
+        } else if (transport === "stdio") {
           return await this.executeStdioMethod(config, methodArgs, timeout);
         } else if (transport === "sse") {
           return await this.executeSseMethod(config, methodArgs, timeout);
@@ -9729,242 +10022,155 @@ var init_mcp_check_provider = __esm({
 });
 
 // src/utils/interactive-prompt.ts
-async function acquirePromptLock() {
-  if (!activePrompt) {
-    activePrompt = true;
-    return;
-  }
-  await new Promise((resolve7) => waiters.push(resolve7));
-  activePrompt = true;
+function formatTime(ms) {
+  const seconds = Math.ceil(ms / 1e3);
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
-function releasePromptLock() {
-  activePrompt = false;
-  const next = waiters.shift();
-  if (next) next();
+function drawLine(char, width) {
+  return char.repeat(width);
+}
+function wrapText(text, width) {
+  const words = text.split(" ");
+  const lines = [];
+  let currentLine = "";
+  for (const word of words) {
+    if (currentLine.length + word.length + 1 <= width) {
+      currentLine += (currentLine ? " " : "") + word;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+function displayPromptUI(options, remainingMs) {
+  const width = Math.min(process.stdout.columns || 80, 80) - 4;
+  const icon = supportsUnicode ? "\u{1F4AC}" : ">";
+  console.log("\n");
+  console.log(`${box.topLeft}${drawLine(box.horizontal, width + 2)}${box.topRight}`);
+  console.log(
+    `${box.vertical} ${colors.bold}${icon} Human Input Required${colors.reset}${" ".repeat(
+      width - 22
+    )} ${box.vertical}`
+  );
+  console.log(`${box.leftT}${drawLine(box.horizontal, width + 2)}${box.rightT}`);
+  console.log(`${box.vertical} ${" ".repeat(width)} ${box.vertical}`);
+  const promptLines = wrapText(options.prompt, width - 2);
+  for (const line of promptLines) {
+    console.log(
+      `${box.vertical} ${colors.cyan}${line}${colors.reset}${" ".repeat(
+        width - line.length
+      )} ${box.vertical}`
+    );
+  }
+  console.log(`${box.vertical} ${" ".repeat(width)} ${box.vertical}`);
+  const instruction = options.multiline ? "(Type your response, press Ctrl+D when done)" : "(Type your response and press Enter)";
+  console.log(
+    `${box.vertical} ${colors.dim}${instruction}${colors.reset}${" ".repeat(
+      width - instruction.length
+    )} ${box.vertical}`
+  );
+  if (options.placeholder && !options.multiline) {
+    console.log(
+      `${box.vertical} ${colors.dim}${options.placeholder}${colors.reset}${" ".repeat(
+        width - options.placeholder.length
+      )} ${box.vertical}`
+    );
+  }
+  console.log(`${box.vertical} ${" ".repeat(width)} ${box.vertical}`);
+  if (remainingMs !== void 0 && options.timeout) {
+    const timeIcon = supportsUnicode ? "\u23F1 " : "Time: ";
+    const timeStr = `${timeIcon} ${formatTime(remainingMs)} remaining`;
+    console.log(
+      `${box.vertical} ${colors.yellow}${timeStr}${colors.reset}${" ".repeat(
+        width - timeStr.length
+      )} ${box.vertical}`
+    );
+  }
+  console.log(`${box.bottomLeft}${drawLine(box.horizontal, width + 2)}${box.bottomRight}`);
+  console.log("");
+  process.stdout.write(`${colors.green}>${colors.reset} `);
 }
 async function interactivePrompt(options) {
-  await acquirePromptLock();
   return new Promise((resolve7, reject) => {
-    const dbg = process.env.VISOR_DEBUG === "true";
-    try {
-      if (dbg) {
-        const counts = {
-          data: process.stdin.listenerCount("data"),
-          end: process.stdin.listenerCount("end"),
-          error: process.stdin.listenerCount("error"),
-          readable: process.stdin.listenerCount("readable"),
-          close: process.stdin.listenerCount("close")
-        };
-        console.error(
-          `[human-input] starting prompt: isTTY=${!!process.stdin.isTTY} active=${activePrompt} waiters=${waiters.length} listeners=${JSON.stringify(counts)}`
-        );
-      }
-    } catch {
-    }
-    try {
-      if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-        process.stdin.setRawMode(false);
-      }
-      process.stdin.resume();
-    } catch {
-    }
-    try {
-      process.stdin.setEncoding("utf8");
-    } catch {
-    }
-    let rl;
-    const allowEmpty = options.allowEmpty ?? false;
-    const multiline = options.multiline ?? false;
-    const defaultValue = options.defaultValue;
+    let input = "";
     let timeoutId;
+    let countdownInterval;
+    let remainingMs = options.timeout;
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: true
+    });
+    displayPromptUI(options, remainingMs);
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
-      try {
-        rl?.removeAllListeners();
-      } catch {
-      }
-      try {
-        rl?.close();
-      } catch {
-      }
-      try {
-        if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-          process.stdin.setRawMode(false);
-        }
-      } catch {
-      }
-      try {
-        process.stdin.pause();
-      } catch {
-      }
-      try {
-        releasePromptLock();
-      } catch {
-      }
-      try {
-        if (process.stdout.__restoreWrites) {
-          process.stdout.__restoreWrites();
-        }
-      } catch {
-      }
-      try {
-        if (process.stderr.__restoreWrites) {
-          process.stderr.__restoreWrites();
-        }
-      } catch {
-      }
-      try {
-        if (dbg) {
-          const counts = {
-            data: process.stdin.listenerCount("data"),
-            end: process.stdin.listenerCount("end"),
-            error: process.stdin.listenerCount("error"),
-            readable: process.stdin.listenerCount("readable"),
-            close: process.stdin.listenerCount("close")
-          };
-          console.error(
-            `[human-input] cleanup: isTTY=${!!process.stdin.isTTY} active=false waiters=${waiters.length} listeners=${JSON.stringify(counts)}`
-          );
-        }
-      } catch {
-      }
+      if (countdownInterval) clearInterval(countdownInterval);
+      rl.close();
     };
     const finish = (value) => {
       cleanup();
+      console.log("");
       resolve7(value);
     };
-    if (options.timeout && options.timeout > 0) {
+    if (options.timeout) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve7(defaultValue);
-        return reject(new Error("Input timeout"));
+        console.log(`
+${colors.yellow}\u23F1  Timeout reached${colors.reset}`);
+        if (options.defaultValue !== void 0) {
+          console.log(
+            `${colors.gray}Using default value: ${options.defaultValue}${colors.reset}
+`
+          );
+          resolve7(options.defaultValue);
+        } else {
+          reject(new Error("Input timeout"));
+        }
       }, options.timeout);
+      if (remainingMs) {
+        countdownInterval = setInterval(() => {
+          remainingMs = remainingMs - 1e3;
+          if (remainingMs <= 0) {
+            if (countdownInterval) clearInterval(countdownInterval);
+          }
+        }, 1e3);
+      }
     }
-    const header = [];
-    if (options.prompt && options.prompt.trim()) header.push(options.prompt.trim());
-    if (multiline) header.push("(Ctrl+D to submit)");
-    if (options.placeholder && !multiline) header.push(options.placeholder);
-    const width = Math.max(
-      20,
-      Math.min(process.stdout && process.stdout.columns || 80, 100)
-    );
-    const dash = "-".repeat(width);
-    try {
-      console.log("\n" + dash);
-      if (header.length) console.log(header.join("\n"));
-      console.log(dash);
-    } catch {
-    }
-    if (multiline) {
-      rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        terminal: true
-      });
-      let buf = "";
-      process.stdout.write("> ");
+    if (options.multiline) {
       rl.on("line", (line) => {
-        buf += (buf ? "\n" : "") + line;
-        process.stdout.write("> ");
+        input += (input ? "\n" : "") + line;
       });
       rl.on("close", () => {
-        const trimmed = buf.trim();
-        if (!trimmed && !allowEmpty && defaultValue === void 0) {
-          return reject(new Error("Empty input not allowed"));
-        }
-        return finish(trimmed || defaultValue || "");
-      });
-      rl.on("SIGINT", () => {
-        try {
-          process.stdout.write("\n");
-        } catch {
-        }
         cleanup();
-        process.exit(130);
+        const trimmed = input.trim();
+        if (!trimmed && !options.allowEmpty) {
+          console.log(`${colors.yellow}\u26A0  Empty input not allowed${colors.reset}`);
+          reject(new Error("Empty input not allowed"));
+        } else {
+          finish(trimmed);
+        }
       });
     } else {
-      const readLineRaw = async () => {
-        return new Promise((resolveRaw) => {
-          let buf = "";
-          const onData = (chunk) => {
-            const s = chunk.toString("utf8");
-            for (let i = 0; i < s.length; i++) {
-              const ch = s[i];
-              const code = s.charCodeAt(i);
-              if (ch === "\n" || ch === "\r") {
-                try {
-                  process.stdout.write("\n");
-                } catch {
-                }
-                teardown();
-                resolveRaw(buf);
-                return;
-              }
-              if (ch === "\b" || code === 127) {
-                if (buf.length > 0) {
-                  buf = buf.slice(0, -1);
-                  try {
-                    process.stdout.write("\b \b");
-                  } catch {
-                  }
-                }
-                continue;
-              }
-              if (code === 3) {
-                try {
-                  process.stdout.write("\n");
-                } catch {
-                }
-                teardown();
-                process.exit(130);
-              }
-              if (code >= 32) {
-                buf += ch;
-                try {
-                  process.stdout.write(ch);
-                } catch {
-                }
-              }
-            }
-          };
-          const teardown = () => {
-            try {
-              process.stdin.off("data", onData);
-            } catch {
-            }
-            try {
-              if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-                process.stdin.setRawMode(false);
-              }
-            } catch {
-            }
-          };
-          try {
-            if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-              process.stdin.setRawMode(true);
-            }
-          } catch {
-          }
-          process.stdin.on("data", onData);
-          try {
-            process.stdout.write("> ");
-          } catch {
-          }
-        });
-      };
-      (async () => {
-        const answer = await readLineRaw();
-        const trimmed = (answer || "").trim();
-        if (!trimmed && !allowEmpty && defaultValue === void 0) {
+      rl.question("", (answer) => {
+        const trimmed = answer.trim();
+        if (!trimmed && !options.allowEmpty && !options.defaultValue) {
           cleanup();
-          return reject(new Error("Empty input not allowed"));
+          console.log(`${colors.yellow}\u26A0  Empty input not allowed${colors.reset}`);
+          reject(new Error("Empty input not allowed"));
+        } else {
+          finish(trimmed || options.defaultValue || "");
         }
-        return finish(trimmed || defaultValue || "");
-      })().catch((err) => {
-        cleanup();
-        reject(err);
       });
     }
+    rl.on("SIGINT", () => {
+      cleanup();
+      console.log("\n\n" + colors.yellow + "\u26A0  Cancelled by user" + colors.reset);
+      reject(new Error("Cancelled by user"));
+    });
   });
 }
 async function simplePrompt(prompt) {
@@ -9973,14 +10179,6 @@ async function simplePrompt(prompt) {
       input: process.stdin,
       output: process.stdout
     });
-    rl.on("SIGINT", () => {
-      try {
-        process.stdout.write("\n");
-      } catch {
-      }
-      rl.close();
-      process.exit(130);
-    });
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
@@ -9988,13 +10186,40 @@ async function simplePrompt(prompt) {
     });
   });
 }
-var readline, activePrompt, waiters;
+var readline, colors, supportsUnicode, box;
 var init_interactive_prompt = __esm({
   "src/utils/interactive-prompt.ts"() {
     "use strict";
     readline = __toESM(require("readline"));
-    activePrompt = false;
-    waiters = [];
+    colors = {
+      reset: "\x1B[0m",
+      dim: "\x1B[2m",
+      bold: "\x1B[1m",
+      cyan: "\x1B[36m",
+      green: "\x1B[32m",
+      yellow: "\x1B[33m",
+      gray: "\x1B[90m"
+    };
+    supportsUnicode = process.env.LANG?.includes("UTF-8") || process.platform === "darwin";
+    box = supportsUnicode ? {
+      topLeft: "\u250C",
+      topRight: "\u2510",
+      bottomLeft: "\u2514",
+      bottomRight: "\u2518",
+      horizontal: "\u2500",
+      vertical: "\u2502",
+      leftT: "\u251C",
+      rightT: "\u2524"
+    } : {
+      topLeft: "+",
+      topRight: "+",
+      bottomLeft: "+",
+      bottomRight: "+",
+      horizontal: "-",
+      vertical: "|",
+      leftT: "+",
+      rightT: "+"
+    };
   }
 });
 
@@ -10066,12 +10291,10 @@ var init_human_input_check_provider = __esm({
     "use strict";
     init_check_provider_interface();
     init_interactive_prompt();
-    init_liquid_extensions();
     init_stdin_reader();
     fs10 = __toESM(require("fs"));
     path12 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
-      liquid;
       /**
        * @deprecated Use ExecutionContext.cliMessage instead
        * Kept for backward compatibility
@@ -10123,65 +10346,6 @@ var init_human_input_check_provider = __esm({
         }
         return true;
       }
-      /** Build a template context for Liquid rendering */
-      buildTemplateContext(prInfo, dependencyResults, outputHistory, _context) {
-        const ctx = {};
-        try {
-          ctx.pr = {
-            number: prInfo.number,
-            title: prInfo.title,
-            body: prInfo.body,
-            author: prInfo.author,
-            base: prInfo.base,
-            head: prInfo.head,
-            files: (prInfo.files || []).map((f) => ({
-              filename: f.filename,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-              changes: f.changes
-            }))
-          };
-        } catch {
-        }
-        try {
-          const safeEnv = (() => {
-            try {
-              const { buildSandboxEnv: buildSandboxEnv2 } = (init_env_exposure(), __toCommonJS(env_exposure_exports));
-              return buildSandboxEnv2(process.env);
-            } catch {
-              return {};
-            }
-          })();
-          ctx.event = { event_name: prInfo?.eventType || "manual" };
-          ctx.env = safeEnv;
-        } catch {
-        }
-        ctx.utils = {
-          now: (/* @__PURE__ */ new Date()).toISOString(),
-          today: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
-        };
-        const outputs = {};
-        const outputsRaw = {};
-        if (dependencyResults) {
-          for (const [name, res] of dependencyResults.entries()) {
-            const summary = res;
-            if (typeof name === "string" && name.endsWith("-raw")) {
-              outputsRaw[name.slice(0, -4)] = summary.output !== void 0 ? summary.output : summary;
-            } else {
-              outputs[name] = summary.output !== void 0 ? summary.output : summary;
-            }
-          }
-        }
-        ctx.outputs = outputs;
-        ctx.outputs_raw = outputsRaw;
-        const hist = {};
-        if (outputHistory) {
-          for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
-        }
-        ctx.outputs_history = hist;
-        return ctx;
-      }
       /**
        * Check if a string looks like a file path
        */
@@ -10193,34 +10357,6 @@ var init_human_input_check_provider = __esm({
        * Removes potentially dangerous characters while preserving useful input
        */
       sanitizeInput(input) {
-        const collapseStutter = (s) => {
-          if (!s || s.length < 4) return s;
-          let dupPairs = 0;
-          let pairs = 0;
-          for (let i = 0; i + 1 < s.length; i++) {
-            const a = s[i];
-            const b = s[i + 1];
-            if (/^[\x20-\x7E]$/.test(a) && /^[\x20-\x7E]$/.test(b)) {
-              pairs++;
-              if (a === b) dupPairs++;
-            }
-          }
-          const ratio = pairs > 0 ? dupPairs / pairs : 0;
-          if (ratio < 0.5) return s;
-          let out = "";
-          for (let i = 0; i < s.length; i++) {
-            const a = s[i];
-            const b = i + 1 < s.length ? s[i + 1] : "";
-            if (b && a === b) {
-              out += a;
-              i++;
-            } else {
-              out += a;
-            }
-          }
-          return out;
-        };
-        input = collapseStutter(input);
         let sanitized = input.replace(/\0/g, "");
         sanitized = sanitized.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, "");
         const maxLength = 100 * 1024;
@@ -10260,26 +10396,12 @@ var init_human_input_check_provider = __esm({
        * Get user input through various methods
        */
       async getUserInput(checkName, config, context2) {
-        try {
-          const mockVal = context2?.hooks?.mockForStep?.(checkName);
-          if (mockVal !== void 0 && mockVal !== null) {
-            const s = String(mockVal);
-            return s;
-          }
-        } catch {
-        }
         const prompt = config.prompt || "Please provide input:";
         const placeholder = config.placeholder || "Enter your response...";
         const allowEmpty = config.allow_empty ?? false;
         const multiline = config.multiline ?? false;
         const timeout = config.timeout ? config.timeout * 1e3 : void 0;
         const defaultValue = config.default;
-        const testMode = String(process.env.VISOR_TEST_MODE || "").toLowerCase() === "true";
-        const ciMode = String(process.env.CI || "").toLowerCase() === "true" || String(process.env.GITHUB_ACTIONS || "").toLowerCase() === "true";
-        if (testMode || ciMode) {
-          const val = config.default || "";
-          return val;
-        }
         const cliMessage = context2?.cliMessage ?? _HumanInputCheckProvider.cliMessage;
         if (cliMessage !== void 0) {
           const message = cliMessage;
@@ -10347,76 +10469,11 @@ var init_human_input_check_provider = __esm({
       async execute(_prInfo, config, _dependencyResults, context2) {
         const checkName = config.checkName || "human-input";
         try {
-          try {
-            this.liquid = this.liquid || createExtendedLiquid({ strictVariables: false, strictFilters: false });
-            const tctx = this.buildTemplateContext(
-              _prInfo,
-              _dependencyResults,
-              config.__outputHistory,
-              context2
-            );
-            if (typeof config.prompt === "string") {
-              let rendered = await this.liquid.parseAndRender(config.prompt, tctx);
-              if (/\{\{|\{%/.test(rendered)) {
-                try {
-                  rendered = await this.liquid.parseAndRender(rendered, tctx);
-                } catch {
-                }
-              }
-              try {
-                const stepName = config.checkName || "unknown";
-                context2?.hooks?.onPromptCaptured?.({
-                  step: String(stepName),
-                  provider: "human-input",
-                  prompt: rendered
-                });
-              } catch {
-              }
-              config = { ...config, prompt: rendered };
-            }
-            if (typeof config.placeholder === "string") {
-              let ph = await this.liquid.parseAndRender(config.placeholder, tctx);
-              if (/\{\{|\{%/.test(ph)) {
-                try {
-                  ph = await this.liquid.parseAndRender(ph, tctx);
-                } catch {
-                }
-              }
-              config.placeholder = ph;
-            }
-          } catch (e) {
-            const err = e || {};
-            const raw = String(config?.prompt || "");
-            const lines = raw.split(/\r?\n/);
-            const lineNum = Number(err.line || err?.token?.line || err?.location?.line || 0);
-            const colNum = Number(err.col || err?.token?.col || err?.location?.col || 0);
-            let snippet = "";
-            if (lineNum > 0) {
-              const start = Math.max(1, lineNum - 3);
-              const end = Math.max(lineNum + 2, lineNum);
-              const width = String(end).length;
-              for (let i = start; i <= Math.min(end, lines.length); i++) {
-                const ln = `${String(i).padStart(width, " ")} | ${lines[i - 1] ?? ""}`;
-                snippet += ln + "\n";
-                if (i === lineNum) {
-                  const caretPad = " ".repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
-                  snippet += caretPad + "^\n";
-                }
-              }
-            }
-            try {
-              console.error(
-                `\u26A0\uFE0F  human-input: Liquid render failed: ${e instanceof Error ? e.message : String(e)}
-${snippet}`
-              );
-            } catch {
-            }
-          }
           const userInput = await this.getUserInput(checkName, config, context2);
           const sanitizedInput = this.sanitizeInput(userInput);
           return {
             issues: [],
-            output: { text: sanitizedInput, ts: Date.now() }
+            output: sanitizedInput
           };
         } catch (error) {
           return {
@@ -10517,14 +10574,6 @@ var init_script_check_provider = __esm({
           _sessionInfo?.stageHistoryBase,
           { attachMemoryReadHelpers: false }
         );
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            const hist = ctx.outputs_history || {};
-            const len = Array.isArray(hist["refine"]) ? hist["refine"].length : 0;
-            console.error(`[script] history.refine.len=${len}`);
-          }
-        } catch {
-        }
         const { ops, needsSave } = createSyncMemoryOps(memoryStore);
         ctx.memory = ops;
         const sandbox = this.createSecureSandbox();
@@ -10536,7 +10585,7 @@ var init_script_check_provider = __esm({
             { ...ctx },
             {
               injectLog: true,
-              wrapFunction: true,
+              wrapFunction: false,
               logPrefix: "[script]"
             }
           );
@@ -10564,20 +10613,7 @@ var init_script_check_provider = __esm({
         } catch (e) {
           logger.warn(`[script] memory save failed: ${e instanceof Error ? e.message : String(e)}`);
         }
-        try {
-          if (process.env.VISOR_DEBUG === "true") {
-            const name = String(config.checkName || "");
-            const t = typeof result;
-            console.error(`[script-return] ${name} outputType=${t} hasArray=${Array.isArray(result)} hasObj=${result && typeof result === "object"}`);
-          }
-        } catch {
-        }
-        const out = { issues: [], output: result };
-        try {
-          out.__histTracked = true;
-        } catch {
-        }
-        return out;
+        return { issues: [], output: result };
       }
       getSupportedConfigKeys() {
         return [
@@ -10624,6 +10660,7 @@ var init_check_provider_registry = __esm({
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
+      customTools;
       constructor() {
         this.registerDefaultProviders();
       }
@@ -10659,7 +10696,11 @@ var init_check_provider_registry = __esm({
           );
         }
         try {
-          this.register(new McpCheckProvider());
+          const mcpProvider = new McpCheckProvider();
+          if (this.customTools) {
+            mcpProvider.setCustomTools(this.customTools);
+          }
+          this.register(mcpProvider);
         } catch (error) {
           console.error(
             `Warning: Failed to register McpCheckProvider: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -10724,6 +10765,16 @@ var init_check_provider_registry = __esm({
        */
       getAllProviders() {
         return Array.from(this.providers.values());
+      }
+      /**
+       * Set custom tools that can be used by the MCP provider
+       */
+      setCustomTools(tools) {
+        this.customTools = tools;
+        const mcpProvider = this.providers.get("mcp");
+        if (mcpProvider) {
+          mcpProvider.setCustomTools(tools);
+        }
       }
       /**
        * Get providers that are currently available (have required dependencies)
@@ -11523,14 +11574,14 @@ var init_failure_condition_evaluator = __esm({
           if (!this.sandbox) {
             this.sandbox = this.createSecureSandbox();
           }
-          let exec;
+          let exec2;
           try {
-            exec = this.sandbox.compile(`return (${raw});`);
+            exec2 = this.sandbox.compile(`return (${raw});`);
           } catch {
             const normalizedExpr = normalize3(condition);
-            exec = this.sandbox.compile(`return (${normalizedExpr});`);
+            exec2 = this.sandbox.compile(`return (${normalizedExpr});`);
           }
-          const result = exec(scope).run();
+          const result = exec2(scope).run();
           try {
             (init_logger(), __toCommonJS(logger_exports)).logger.debug(`  fail_if: result=${Boolean(result)}`);
           } catch {
@@ -12221,11 +12272,6 @@ Please check your configuration and try again.`
 });
 
 // src/snapshot-store.ts
-var snapshot_store_exports = {};
-__export(snapshot_store_exports, {
-  ContextView: () => ContextView,
-  ExecutionJournal: () => ExecutionJournal
-});
 var ExecutionJournal, ContextView;
 var init_snapshot_store = __esm({
   "src/snapshot-store.ts"() {
@@ -12330,39 +12376,37 @@ function buildProjectionFrom(results, historySnapshot) {
   }
   return { outputsForContext, outputsHistoryForContext };
 }
-function composeOnFinishContext(_memoryConfig, checkName, checkConfig, outputsForContext, outputsHistoryForContext, forEachStats, prInfo) {
+function composeOnFinishContext(memoryConfig, checkName, checkConfig, outputsForContext, outputsHistoryForContext, forEachStats, prInfo) {
+  const memoryStore = MemoryStore.getInstance(memoryConfig);
+  const memory = {
+    get: (key, ns) => memoryStore.get(key, ns),
+    has: (key, ns) => memoryStore.has(key, ns),
+    list: (ns) => memoryStore.list(ns),
+    getAll: (ns) => {
+      const keys = memoryStore.list(ns);
+      const result = {};
+      for (const key of keys) result[key] = memoryStore.get(key, ns);
+      return result;
+    },
+    set: (key, value, ns) => {
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+      memoryStore["data"].get(nsName).set(key, value);
+    },
+    increment: (key, amount, ns) => {
+      const current = memoryStore.get(key, ns);
+      const numCurrent = typeof current === "number" ? current : 0;
+      const newValue = numCurrent + amount;
+      const nsName = ns || memoryStore.getDefaultNamespace();
+      if (!memoryStore["data"].has(nsName)) memoryStore["data"].set(nsName, /* @__PURE__ */ new Map());
+      memoryStore["data"].get(nsName).set(key, newValue);
+      return newValue;
+    }
+  };
   const outputs_raw = {};
   for (const [name, val] of Object.entries(outputsForContext))
     if (name !== "history") outputs_raw[name] = val;
   const outputsMerged = { ...outputsForContext, history: outputsHistoryForContext };
-  const memoryStore = MemoryStore.getInstance();
-  const memoryHelpers = {
-    get: (key, ns) => memoryStore.get(key, ns),
-    has: (key, ns) => memoryStore.has(key, ns),
-    getAll: (ns) => memoryStore.getAll(ns),
-    set: (key, value, ns) => {
-      const nsName = ns || memoryStore.getDefaultNamespace();
-      const data = memoryStore["data"];
-      if (!data.has(nsName)) data.set(nsName, /* @__PURE__ */ new Map());
-      data.get(nsName).set(key, value);
-    },
-    clear: (ns) => {
-      const data = memoryStore["data"];
-      if (ns) data.delete(ns);
-      else data.clear();
-    },
-    increment: (key, amount = 1, ns) => {
-      const nsName = ns || memoryStore.getDefaultNamespace();
-      const data = memoryStore["data"];
-      if (!data.has(nsName)) data.set(nsName, /* @__PURE__ */ new Map());
-      const nsMap = data.get(nsName);
-      const current = nsMap.get(key);
-      const numCurrent = typeof current === "number" ? current : 0;
-      const newValue = numCurrent + amount;
-      nsMap.set(key, newValue);
-      return newValue;
-    }
-  };
   return {
     step: { id: checkName, tags: checkConfig.tags || [], group: checkConfig.group },
     attempt: 1,
@@ -12371,7 +12415,7 @@ function composeOnFinishContext(_memoryConfig, checkName, checkConfig, outputsFo
     outputs_history: outputsHistoryForContext,
     outputs_raw,
     forEach: forEachStats,
-    memory: memoryHelpers,
+    memory,
     pr: {
       number: prInfo.number,
       title: prInfo.title,
@@ -12391,27 +12435,18 @@ function evaluateOnFinishGoto(onFinish, onFinishContext, debug, log2) {
     try {
       const scope = onFinishContext;
       const code = `
-        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
+        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('\u{1F50D} Debug:',...a);
         const __fn = () => {
 ${onFinish.goto_js}
 };
-        return __fn();
+        const __res = __fn();
+        return (typeof __res === 'string' && __res) ? __res : null;
       `;
-      const { compileAndRun: compileAndRun2 } = (init_sandbox(), __toCommonJS(sandbox_exports));
-      const result = compileAndRun2(
-        sandbox,
-        code,
-        { scope },
-        { injectLog: false, wrapFunction: false }
-      );
+      const exec2 = sandbox.compile(code);
+      const result = exec2({ scope }).run();
       gotoTarget = typeof result === "string" && result ? result : null;
       if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${String(gotoTarget)}`);
-    } catch (e) {
-      try {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error(`\u2717 on_finish.goto_js: evaluation error: ${msg}`);
-      } catch {
-      }
+    } catch {
       if (onFinish.goto) gotoTarget = onFinish.goto;
     }
   } else if (onFinish.goto) {
@@ -12420,43 +12455,19 @@ ${onFinish.goto_js}
   return gotoTarget;
 }
 function recomputeAllValidFromHistory(history, forEachItemsCount) {
-  const vfArr = Array.isArray(history["validate-fact"]) ? history["validate-fact"] : [];
-  if (forEachItemsCount <= 0) return void 0;
-  if (vfArr.filter((v) => !Array.isArray(v)).length < forEachItemsCount) {
-    return false;
-  }
-  const withIds = vfArr.filter((v) => {
-    const o = v;
-    return o && (typeof o.fact_id === "string" || typeof o.id === "string");
-  });
-  if (withIds.length >= forEachItemsCount) {
-    const seen = /* @__PURE__ */ new Set();
-    const recent = [];
-    for (let i = vfArr.length - 1; i >= 0 && recent.length < forEachItemsCount; i--) {
-      const o = vfArr[i];
-      const key = o && (o.fact_id || o.id);
-      if (!key) continue;
-      if (!seen.has(key)) {
-        seen.add(key);
-        recent.push(o);
-      }
-    }
-    if (recent.length === forEachItemsCount) {
-      return recent.every((o) => o && (o.is_valid === true || o.valid === true));
-    }
-  }
-  if (vfArr.length >= forEachItemsCount) {
-    const lastN = vfArr.slice(-forEachItemsCount);
-    return lastN.every((o) => o && (o.is_valid === true || o.valid === true));
-  }
-  return false;
+  const vfNow = history["validate-fact"] || [];
+  if (!Array.isArray(vfNow) || forEachItemsCount <= 0 || vfNow.length < forEachItemsCount)
+    return void 0;
+  const lastWave = vfNow.slice(-forEachItemsCount);
+  const ok = lastWave.every((v) => v && (v.is_valid === true || v.valid === true));
+  return ok;
 }
 var init_utils = __esm({
   "src/engine/on-finish/utils.ts"() {
     "use strict";
+    init_memory_store();
     init_sandbox();
     init_env_exposure();
-    init_memory_store();
   }
 });
 
@@ -12482,8 +12493,8 @@ ${childOnSuccess.run_js || ""}
           const __res = __fn();
           return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
         `;
-        const exec = sandbox.compile(code);
-        const dynamic = exec({ scope }).run();
+        const exec2 = sandbox.compile(code);
+        const dynamic = exec2({ scope }).run();
         const childRun = Array.from(
           new Set([...childOnSuccess.run || [], ...dynamic].filter(Boolean))
         );
@@ -12639,18 +12650,12 @@ var init_check_execution_engine = __esm({
       // One-shot guards for post on_finish scheduling to avoid duplicate replies when
       // multiple signals (aggregator, memory, history) agree. Keyed by session + parent check.
       postOnFinishGuards = /* @__PURE__ */ new Set();
-      // Per-run execution cap counters (guard infinite loops). Keyed by check + scope.
-      runCounters = /* @__PURE__ */ new Map();
       // Snapshot+Scope journal (Phase 0: commit only, no behavior changes yet)
       journal = new ExecutionJournal();
       sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       // Dedup forward-run targets within a single grouped run (stage/event).
       // Keyed by `${event}:${target}`.
       forwardRunGuards = /* @__PURE__ */ new Set();
-      // Guard dependents scheduled via forward-run to avoid races with level tasks
-      forwardDependentsScheduled = /* @__PURE__ */ new Set();
-      // Marker for grouped wave rescheduling when on_fail forward-run occurred
-      onFailForwardRunSeen = false;
       // Track per-grouped-run scheduling of specific steps we want to allow only once.
       // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
       oncePerRunScheduleGuards = /* @__PURE__ */ new Set();
@@ -12701,34 +12706,8 @@ var init_check_execution_engine = __esm({
         }
         try {
           this["executionStats"].clear();
-          this.postOnFinishGuards.clear();
-          this.forwardDependentsScheduled.clear();
-          this.runCounters.clear();
-          this.routingEventOverride = void 0;
-          this.journal = new (init_snapshot_store(), __toCommonJS(snapshot_store_exports)).ExecutionJournal();
         } catch {
         }
-      }
-      /** Build a stable key for counting executions per check and per scope (forEach items separated). */
-      buildRunKey(checkId, scope) {
-        if (!scope || scope.length === 0) return checkId;
-        try {
-          const parts = scope.map((s) => `${s.check}:${s.index}`);
-          return `${checkId}@${parts.join("/")}`;
-        } catch {
-          return checkId;
-        }
-      }
-      /** Resolve effective max runs for a check (step override > global default). */
-      resolveMaxRuns(config, checkId) {
-        try {
-          const step = (config.checks || config.steps || {})[checkId];
-          const perStep = step?.max_runs;
-          if (typeof perStep === "number") return perStep;
-        } catch {
-        }
-        const global2 = (config.limits && config.limits.max_runs_per_check) ?? 50;
-        return typeof global2 === "number" ? global2 : 50;
       }
       commitJournal(checkId, result, event, scopeOverride) {
         try {
@@ -12804,311 +12783,6 @@ var init_check_execution_engine = __esm({
           return { ...baseContext, octokit: injected };
         }
         return baseContext;
-      }
-      /**
-       * Schedule a forward-run starting from `target` and continuing through all
-       * transitive dependents that declare a dependency (direct or indirect) on
-       * `target`. Execution honors optional `gotoEvent` by filtering dependents to
-       * only those steps whose `on` includes that event. The `target` itself is
-       * always executed first regardless of event filtering.
-       *
-       * This helper is used for goto across all origins (on_success, on_fail,
-       * on_finish) to ensure consistent semantics and avoid duplicating logic.
-       */
-      async scheduleForwardRun(target, opts) {
-        const {
-          origin,
-          gotoEvent,
-          config,
-          dependencyGraph,
-          prInfo,
-          resultsMap,
-          debug,
-          foreachScope,
-          sourceCheckName,
-          sourceCheckConfig,
-          sourceOutputForItems
-        } = opts;
-        const cfgChecks = config?.checks || {};
-        if (!cfgChecks[target]) return;
-        const forwardSet = /* @__PURE__ */ new Set([target]);
-        const dependsOn = (name, root) => {
-          const seen = /* @__PURE__ */ new Set();
-          const dfs = (n) => {
-            if (seen.has(n)) return false;
-            seen.add(n);
-            const deps = cfgChecks[n]?.depends_on || [];
-            if (deps.includes(root)) return true;
-            return deps.some((d) => dfs(d));
-          };
-          return dfs(name);
-        };
-        const ev = gotoEvent || prInfo.eventType || "manual";
-        for (const name of Object.keys(cfgChecks)) {
-          if (name === target) continue;
-          const onArr = cfgChecks[name]?.on;
-          const eventMatches = !onArr || Array.isArray(onArr) && onArr.includes(ev);
-          if (!eventMatches) continue;
-          if (dependsOn(name, target)) forwardSet.add(name);
-        }
-        const order = [];
-        const inSet = (n) => forwardSet.has(n);
-        const tempMarks = /* @__PURE__ */ new Set();
-        const permMarks = /* @__PURE__ */ new Set();
-        const stack = [];
-        const visit = (n) => {
-          if (permMarks.has(n)) return;
-          if (tempMarks.has(n)) {
-            const idx = stack.indexOf(n);
-            const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
-            throw new Error(
-              `Cycle detected in forward-run dependency subset: ${cyclePath.join(" -> ")}`
-            );
-          }
-          tempMarks.add(n);
-          stack.push(n);
-          const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
-          for (const d of deps) visit(d);
-          stack.pop();
-          tempMarks.delete(n);
-          permMarks.add(n);
-          order.push(n);
-        };
-        for (const n of forwardSet) visit(n);
-        const prevEventOverride = this.routingEventOverride;
-        const evKey = gotoEvent || prInfo.eventType || "manual";
-        const guardKey = `${String(evKey)}:${String(target)}`;
-        const runTargetOnce = async (scopeForRun, guard) => {
-          if (guard) {
-            if (this.forwardRunGuards.has(guardKey)) {
-              try {
-                const prior = resultsMap.get(target);
-                let hadFatal = prior && Array.isArray(prior.issues) && this.hasFatal(prior.issues);
-                const tcfgCont = cfgChecks[target]?.continue_on_failure === true;
-                if (tcfgCont) hadFatal = false;
-                if (!hadFatal) return void 0;
-              } catch {
-                return void 0;
-              }
-            }
-            this.forwardRunGuards.add(guardKey);
-          }
-          const res = await this.runNamedCheck(target, scopeForRun, {
-            origin,
-            config,
-            dependencyGraph,
-            prInfo,
-            resultsMap,
-            debug,
-            eventOverride: gotoEvent
-          });
-          try {
-            resultsMap.set(target, res);
-          } catch {
-          }
-          try {
-            this.forwardDependentsScheduled.add(target);
-          } catch {
-          }
-          return res;
-        };
-        const guardTargetOnce = origin !== "on_finish" && origin !== "on_fail";
-        try {
-          if (origin === "on_fail") {
-            this.onFailForwardRunSeen = true;
-            if (debug)
-              (config?.output?.pr_comment ? console.error : console.log)(
-                "\u{1F501} Debug: on_fail forward-run seen; flag set"
-              );
-          }
-        } catch {
-        }
-        if (gotoEvent) this.routingEventOverride = gotoEvent;
-        try {
-          const inTest = Boolean(
-            this.executionContext && this.executionContext.mode?.test
-          );
-          if (origin === "on_success" && inTest) {
-            try {
-              this.forwardDependentsScheduled.add(target);
-            } catch {
-            }
-            return;
-          }
-        } catch {
-        }
-        if (origin === "on_fail") {
-          try {
-            this.forwardDependentsScheduled.add(target);
-            const dependentsOnly = order.filter((n) => n !== target);
-            const fwd = Array.from(forwardSet || []).join(", ");
-            const deps = dependentsOnly.join(", ");
-            (config?.output?.pr_comment ? console.error : console.log)(
-              `\u{1F527} Debug: on_fail forward-set=[${fwd}] dependents=[${deps}]`
-            );
-          } catch {
-          }
-          return;
-        }
-        try {
-          const tcfg = cfgChecks[target];
-          const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
-          const items = foreachScope ? [] : sourceCheckConfig?.forEach && Array.isArray(sourceOutputForItems) ? sourceOutputForItems : [];
-          let lastTargetHadFatal = void 0;
-          const runChainOnce = async (scopeForRun) => {
-            const tResMaybe = await runTargetOnce(
-              scopeForRun,
-              /*guard*/
-              guardTargetOnce
-            );
-            const tRes = tResMaybe || resultsMap.get(target);
-            const tcfgNow = cfgChecks[target];
-            const targetIsForEachParent = !!tcfgNow?.forEach;
-            if (targetIsForEachParent) return;
-            try {
-              if (debug) {
-                const ids = Array.isArray(tRes?.issues) ? tRes.issues.map((i) => i.ruleId).join(",") : "none";
-                (config?.output?.pr_comment ? console.error : console.log)(
-                  `\u{1F527} Debug: forward-run: target '${target}' issues=[${ids}]`
-                );
-              }
-              const wasSkipped = Array.isArray(tRes?.issues) ? tRes.issues.some((i) => (i.ruleId || "").endsWith("/__skipped")) : false;
-              if (wasSkipped) {
-                if (debug)
-                  (config?.output?.pr_comment ? console.error : console.log)(
-                    `\u{1F527} Debug: forward-run: target '${target}' skipped \u2014 not running dependents`
-                  );
-                return;
-              }
-              let hadFatal = tRes && Array.isArray(tRes.issues) && this.hasFatal(tRes.issues);
-              lastTargetHadFatal = hadFatal;
-              try {
-                const tcfgCont = cfgChecks[target]?.continue_on_failure === true;
-                if (tcfgCont) hadFatal = false;
-              } catch {
-              }
-              if (hadFatal) {
-                if (debug)
-                  (config?.output?.pr_comment ? console.error : console.log)(
-                    `\u{1F527} Debug: forward-run: target '${target}' failed \u2014 skipping dependents`
-                  );
-                return;
-              }
-            } catch {
-            }
-            const dependentsOnly = order.filter((n) => n !== target);
-            for (const stepId of dependentsOnly) {
-              try {
-                const depsForStep = (cfgChecks[stepId]?.depends_on || []).filter(inSet);
-                const hasDepFatal = depsForStep.some((d) => {
-                  const r = resultsMap.get(d);
-                  const fatal = r && Array.isArray(r.issues) && this.hasFatal(r.issues);
-                  if (!fatal) return false;
-                  const depCfg = cfgChecks[d];
-                  return depCfg?.continue_on_failure !== true;
-                });
-                if (debug) {
-                  (config?.output?.pr_comment ? console.error : console.log)(
-                    `\u{1F527} Debug: forward-run gate '${stepId}' deps=[${depsForStep.join(", ")}] fatal=${String(hasDepFatal)}`
-                  );
-                }
-                if (hasDepFatal) continue;
-              } catch {
-              }
-              (config?.output?.pr_comment ? console.error : console.log)(
-                `\u{1F527} Debug: forward-run inline dependent '${stepId}' (origin=${origin})`
-              );
-              const depResult = await this.runNamedCheck(stepId, scopeForRun, {
-                origin,
-                config,
-                dependencyGraph,
-                prInfo,
-                resultsMap,
-                debug,
-                eventOverride: gotoEvent
-              });
-              try {
-                this.forwardDependentsScheduled.add(stepId);
-                if (depResult) resultsMap.set(stepId, depResult);
-              } catch {
-              }
-            }
-          };
-          if (foreachScope && foreachScope.length > 0) {
-            await runChainOnce(foreachScope);
-          } else if (mode === "map" && items.length > 0 && sourceCheckName) {
-            for (let i = 0; i < items.length; i++) {
-              const itemScope = [{ check: sourceCheckName, index: i }];
-              await runChainOnce(itemScope);
-            }
-          } else {
-            await runChainOnce([]);
-          }
-          try {
-            const inTest = Boolean(this.executionContext && this.executionContext.mode?.test);
-            if (inTest && origin === "on_success") return;
-          } catch {
-          }
-          const maxHops = config?.routing?.max_loops ?? 10;
-          let hopCount = 0;
-          const visited = /* @__PURE__ */ new Set();
-          try {
-            const dbg = (msg) => (config?.output?.pr_comment ? console.error : console.log)(msg);
-            let hadFatal = typeof lastTargetHadFatal === "boolean" ? lastTargetHadFatal : false;
-            if (typeof lastTargetHadFatal !== "boolean") {
-              const tRes = resultsMap.get(target);
-              hadFatal = !!(tRes && Array.isArray(tRes.issues) && this.hasFatal(tRes.issues));
-            }
-            if (hadFatal) {
-              if (debug)
-                dbg(
-                  `\u{1F527} Debug: forward-run: skipping on_success.goto chain for '${target}' due to fatal issues`
-                );
-              return;
-            }
-          } catch {
-          }
-          let current = cfgChecks[target]?.on_success?.goto;
-          while (current && hopCount < maxHops) {
-            if (visited.has(current)) {
-              try {
-                logger.warn(
-                  `\u26A0\uFE0F forward-run: detected goto cycle at '${current}' after ${hopCount} hop(s); aborting chain`
-                );
-              } catch {
-              }
-              break;
-            }
-            visited.add(current);
-            const nextOnSuccess = cfgChecks[current]?.on_success || {};
-            const nextEvent = nextOnSuccess.goto_event || gotoEvent;
-            await this.scheduleForwardRun(current, {
-              origin: "on_success",
-              gotoEvent: nextEvent,
-              config,
-              dependencyGraph,
-              prInfo,
-              resultsMap,
-              debug,
-              foreachScope,
-              sourceCheckName,
-              sourceCheckConfig,
-              sourceOutputForItems
-            });
-            hopCount++;
-            current = cfgChecks[current]?.on_success?.goto;
-          }
-          if (hopCount >= maxHops && current) {
-            try {
-              logger.warn(
-                `\u26A0\uFE0F forward-run: hop budget exceeded (max_loops=${maxHops}); last unresolved goto='${current}'`
-              );
-            } catch {
-            }
-          }
-        } finally {
-          this.routingEventOverride = prevEventOverride;
-        }
       }
       /**
        * Set execution context for providers (CLI message, hooks, etc.)
@@ -13215,8 +12889,8 @@ ${onFinish.goto_js}
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
         `;
-            const exec = sandbox.compile(code);
-            const result = exec({ scope }).run();
+            const exec2 = sandbox.compile(code);
+            const result = exec2({ scope }).run();
             gotoTarget = typeof result === "string" && result ? result : null;
             if (debug) log2(`\u{1F527} Debug: on_finish.goto_js evaluated \u2192 ${this.redact(gotoTarget)}`);
             logger.info(
@@ -13263,56 +12937,19 @@ ${onFinish.goto_js}
         const origin = context2.origin || "inline";
         const checkConfig = config?.checks?.[checkId];
         if (!checkConfig) {
-          try {
-            const msg = `[on_finish] referenced unknown check '${checkId}', ignoring`;
-            (config?.output?.pr_comment ? console.error : console.log)(msg);
-          } catch {
-          }
-          return { issues: [] };
-        }
-        try {
-          const triggers = Array.isArray(checkConfig.on) ? checkConfig.on : [];
-          if (triggers.length > 0) {
-            const evt = eventOverride || event || this.getCurrentEventType(prInfo);
-            const allowed = triggers.includes(evt);
-            if (!allowed) {
-              const manualOnly = triggers.length === 1 && triggers[0] === "manual";
-              if (manualOnly || !allowed) {
-                try {
-                  const msg = `\u{1F527} Debug: Skipping inline execution of '${checkId}' for event '${evt}' (triggers=${JSON.stringify(
-                    triggers
-                  )})`;
-                  (config?.output?.pr_comment ? console.error : console.log)(msg);
-                } catch {
-                }
-                return { issues: [] };
-              }
-            }
-          }
-        } catch {
+          throw new Error(`on_finish referenced unknown check '${checkId}'`);
         }
         const getAllDepsFromConfig = (name) => {
           const visited = /* @__PURE__ */ new Set();
           const acc = [];
-          const expand = (t) => {
-            const s = String(t ?? "").trim();
-            if (!s) return [];
-            if (s.includes("|"))
-              return s.split("|").map((x) => x.trim()).filter(Boolean);
-            return [s];
-          };
           const dfs = (n) => {
             if (visited.has(n)) return;
             visited.add(n);
             const cfg = config?.checks?.[n];
-            const depsRaw = cfg?.depends_on || [];
-            for (const token of depsRaw) {
-              const expanded = expand(token);
-              for (const d of expanded) {
-                if (!config?.checks?.[d]) continue;
-                acc.push(d);
-                dfs(d);
-              }
+            const deps = cfg?.depends_on || [];
+            for (const d of deps) {
+              acc.push(d);
+              dfs(d);
             }
           };
           dfs(name);
@@ -13320,20 +12957,11 @@ ${onFinish.goto_js}
         };
         const allTargetDeps = getAllDepsFromConfig(checkId);
         if (allTargetDeps.length > 0) {
-          const subSet = new Set(
-            [...allTargetDeps].filter((id) => Boolean(config?.checks?.[id]))
-          );
+          const subSet = /* @__PURE__ */ new Set([...allTargetDeps]);
           const subDeps = {};
           for (const id of subSet) {
             const cfg = config?.checks?.[id];
-            const raw = cfg?.depends_on || [];
-            const expanded = [];
-            for (const token of raw) {
-              const parts = String(token ?? "").split("|").map((s) => s.trim()).filter(Boolean);
-              if (parts.length === 0) continue;
-              for (const p of parts) if (subSet.has(p)) expanded.push(p);
-            }
-            subDeps[id] = expanded;
+            subDeps[id] = (cfg?.depends_on || []).filter((d) => subSet.has(d));
           }
           const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
           for (const group of subGraph.executionOrder) {
@@ -13362,7 +12990,6 @@ ${onFinish.goto_js}
           forEach: adaptedConfig.forEach,
           // Pass output history for loop/goto scenarios
           __outputHistory: this.outputHistory,
-          // no enriched history exposure; standard outputs_history only
           // Include provider-specific keys (e.g., op/values for github)
           ...adaptedConfig,
           ai: {
@@ -13444,28 +13071,7 @@ ${onFinish.goto_js}
         let enriched = { ...result, issues: enrichedIssues };
         const enrichedWithOutput = enriched;
         if (enrichedWithOutput.output !== void 0) {
-          try {
-            const outVal = enrichedWithOutput.output;
-            let histVal = outVal;
-            if (Array.isArray(outVal)) {
-              histVal = outVal;
-            } else if (outVal !== null && typeof outVal === "object") {
-              histVal = { ...outVal };
-              if (histVal.ts === void 0) histVal.ts = Date.now();
-            } else {
-              histVal = { text: String(outVal), ts: Date.now() };
-            }
-            this.trackOutputHistory(checkId, histVal);
-            try {
-              enriched.__histTracked = true;
-            } catch {
-            }
-          } catch {
-            try {
-              this.trackOutputHistory(checkId, enrichedWithOutput.output);
-            } catch {
-            }
-          }
+          this.trackOutputHistory(checkId, enrichedWithOutput.output);
         }
         if (checkConfig.forEach && Array.isArray(enrichedWithOutput.output)) {
           const forEachItems = enrichedWithOutput.output;
@@ -13712,39 +13318,13 @@ ${onFinish.goto_js}
           opts.resultsMap?.set(target, skipped);
           return skipped;
         }
-        try {
-          const limit = this.resolveMaxRuns(config, target);
-          if (typeof limit === "number" && limit > 0) {
-            const k = this.buildRunKey(target, scope);
-            const soFar = this.runCounters.get(k) || 0;
-            if (soFar >= limit) {
-              const issue = {
-                file: "",
-                line: 0,
-                ruleId: `${target}/limits/max_runs_exceeded`,
-                message: `Run limit exceeded for '${target}' in scope ${k} (attempt ${soFar + 1} > ${limit}).`,
-                severity: "error",
-                category: "logic"
-              };
-              const capped = { issues: [issue] };
-              try {
-                resultsMap.set(target, capped);
-              } catch {
-              }
-              logger.warn(`\u26A0\uFE0F  Max runs exceeded for '${target}' in scope ${k} (limit=${limit}).`);
-              return capped;
-            }
-            this.runCounters.set(k, soFar + 1);
-          }
-        } catch {
-        }
         const depOverlay = overlay ? new Map(overlay) : new Map(resultsMap);
         const depOverlaySanitized = this.sanitizeResultMapKeys(depOverlay);
         const overlayForExec = eventOverride && eventOverride !== (prInfo.eventType || "manual") ? /* @__PURE__ */ new Map() : depOverlaySanitized;
         if (!this.executionStats.has(target)) this.initializeCheckStats(target);
         const startTs = this.recordIterationStart(target);
         try {
-          let res = await this.executeCheckInline(
+          const res = await this.executeCheckInline(
             target,
             eventOverride || prInfo.eventType || "manual",
             {
@@ -13761,184 +13341,6 @@ ${onFinish.goto_js}
               origin: opts.origin || "inline"
             }
           );
-          let postFailTriggered = false;
-          if (config && (config.fail_if || config.checks?.[target]?.fail_if)) {
-            try {
-              const failureResults = await this.evaluateFailureConditions(
-                target,
-                res,
-                config,
-                prInfo,
-                resultsMap
-              );
-              if (failureResults.length > 0) {
-                const failureIssues = failureResults.filter((f) => f.failed).map((f) => ({
-                  file: "system",
-                  line: 0,
-                  ruleId: f.conditionName,
-                  message: f.message || `Failure condition met: ${f.expression}`,
-                  severity: f.severity || "error",
-                  category: "logic"
-                }));
-                if (failureIssues.length > 0) {
-                  res = {
-                    ...res || { issues: [] },
-                    issues: [...res.issues || [], ...failureIssues]
-                  };
-                  try {
-                    resultsMap.set(target, res);
-                  } catch {
-                  }
-                  const checkCfg = config.checks?.[target];
-                  const ofCfg = checkCfg?.on_fail ? { ...config?.routing?.defaults?.on_fail || {}, ...checkCfg.on_fail } : void 0;
-                  postFailTriggered = failureResults.some((r) => r.failed === true);
-                  const __suppressFailGoto = !!(opts.origin && opts.origin !== "initial");
-                  if (postFailTriggered && !__suppressFailGoto && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
-                    let pfTarget = null;
-                    if (ofCfg.goto_js) {
-                      try {
-                        const sandbox = this.getRoutingSandbox();
-                        const scopeObj = {
-                          step: { id: target, tags: checkCfg?.tags || [], group: checkCfg?.group },
-                          outputs: Object.fromEntries(resultsMap.entries()),
-                          output: res?.output,
-                          event: { name: prInfo.eventType || "manual" }
-                        };
-                        const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
-                        const r = compileAndRun(
-                          sandbox,
-                          code,
-                          { scope: scopeObj },
-                          { injectLog: false, wrapFunction: true }
-                        );
-                        pfTarget = typeof r === "string" && r ? r : null;
-                      } catch {
-                      }
-                    }
-                    if (!pfTarget && ofCfg.goto) pfTarget = ofCfg.goto;
-                    if (pfTarget) {
-                      try {
-                        logger.info(
-                          `\u21AA on_fail.goto(post-fail_if/inline): jumping to '${pfTarget}' from '${target}'`
-                        );
-                      } catch {
-                      }
-                      await this.scheduleForwardRun(pfTarget, {
-                        origin: "on_fail",
-                        gotoEvent: ofCfg.goto_event,
-                        config,
-                        dependencyGraph,
-                        prInfo,
-                        resultsMap,
-                        debug
-                      });
-                    }
-                  } else if (postFailTriggered) {
-                    try {
-                      this.onFailForwardRunSeen = true;
-                      if (debug)
-                        (config?.output?.pr_comment ? console.error : console.log)(
-                          `\u{1F501} Debug: inline fail_if triggered for '${target}', scheduling next wave`
-                        );
-                    } catch {
-                    }
-                  }
-                }
-              }
-            } catch {
-            }
-          }
-          try {
-            const checkCfg = config.checks?.[target];
-            const onSucc = checkCfg?.on_success;
-            const originTag = opts.origin || "inline";
-            const suppressAllOnSuccess = originTag === "on_success";
-            const suppressGotoOnly = originTag === "on_fail";
-            if (onSucc && !postFailTriggered && !suppressAllOnSuccess) {
-              const dynamicRun = await (async () => {
-                if (!onSucc.run_js) return [];
-                try {
-                  const scopeObj = {
-                    step: { id: target, tags: checkCfg?.tags || [], group: checkCfg?.group },
-                    outputs: Object.fromEntries(resultsMap.entries()),
-                    output: res?.output,
-                    event: { name: prInfo.eventType || "manual" }
-                  };
-                  const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${onSucc.run_js}`;
-                  const r = compileAndRun(
-                    this.getRoutingSandbox(),
-                    code,
-                    { scope: scopeObj },
-                    { injectLog: false, wrapFunction: true }
-                  );
-                  const arr = Array.isArray(r) ? r : typeof r === "string" && r ? [r] : [];
-                  return arr.filter(Boolean);
-                } catch {
-                  return [];
-                }
-              })();
-              let runList = [...onSucc.run || [], ...dynamicRun].filter(Boolean);
-              runList = Array.from(new Set(runList));
-              if (runList.length > 0) {
-                for (const stepId of runList) {
-                  try {
-                    const tcfg = (config.checks || {})[stepId];
-                    const tags = tcfg?.tags || [];
-                    const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
-                    if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
-                      continue;
-                    }
-                  } catch {
-                  }
-                  await this.runNamedCheck(stepId, scope || [], {
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap,
-                    debug,
-                    overlay: resultsMap
-                  });
-                }
-              }
-              let succTarget = null;
-              try {
-                if (!suppressGotoOnly && !succTarget && onSucc.goto_js) {
-                  const scopeObj = {
-                    step: { id: target, tags: checkCfg?.tags || [], group: checkCfg?.group },
-                    outputs: Object.fromEntries(resultsMap.entries()),
-                    output: res?.output,
-                    event: { name: prInfo.eventType || "manual" }
-                  };
-                  const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${onSucc.goto_js}`;
-                  const r = compileAndRun(
-                    this.getRoutingSandbox(),
-                    code,
-                    { scope: scopeObj },
-                    { injectLog: false, wrapFunction: true }
-                  );
-                  succTarget = typeof r === "string" && r ? r : null;
-                }
-              } catch {
-              }
-              if (!suppressGotoOnly && !succTarget && onSucc.goto) succTarget = onSucc.goto;
-              if (!suppressGotoOnly && succTarget) {
-                await this.scheduleForwardRun(succTarget, {
-                  origin: "on_success",
-                  gotoEvent: onSucc.goto_event,
-                  config,
-                  dependencyGraph,
-                  prInfo,
-                  resultsMap,
-                  debug
-                });
-              }
-            }
-          } catch {
-          }
-          try {
-            resultsMap.set(target, res);
-          } catch {
-          }
           const issues = (res.issues || []).map((i) => ({ ...i }));
           const success = !this.hasFatal(issues);
           const out = res.output;
@@ -13975,13 +13377,37 @@ ${onFinish.goto_js}
         if (forEachChecksWithOnFinish.length === 0) {
           return;
         }
+        try {
+          const anyParentRan = forEachChecksWithOnFinish.some(
+            ({ checkName }) => results.has(checkName)
+          );
+          if (!anyParentRan) {
+            if (debug) log2("\u{1F9ED} on_finish: no forEach parent executed in this run \u2014 skip");
+            return;
+          }
+        } catch {
+        }
         if (debug) {
           log2(`\u{1F3AF} Processing on_finish hooks for ${forEachChecksWithOnFinish.length} forEach check(s)`);
         }
         for (const { checkName, checkConfig, onFinish } of forEachChecksWithOnFinish) {
           try {
             const forEachResult = results.get(checkName);
-            const forEachItems = forEachResult && forEachResult.forEachItems || [];
+            if (!forEachResult) {
+              try {
+                logger.info(`\u23ED on_finish: no result found for "${checkName}" \u2014 skip`);
+              } catch {
+              }
+              continue;
+            }
+            const forEachItems = forEachResult.forEachItems || [];
+            if (forEachItems.length === 0) {
+              try {
+                logger.info(`\u23ED on_finish: "${checkName}" produced 0 items \u2014 skip`);
+              } catch {
+              }
+              continue;
+            }
             const node = dependencyGraph.nodes.get(checkName);
             const dependents = node?.dependents || [];
             try {
@@ -14022,15 +13448,17 @@ ${onFinish.goto_js}
               results,
               this.getOutputHistorySnapshot()
             );
-            const __perItem = Array.isArray(forEachResult?.forEachItemResults) ? forEachResult.forEachItemResults : [];
             const forEachStats = {
               total: forEachItems.length,
-              successful: __perItem.length > 0 ? __perItem.filter((r) => r && (!r.issues || r.issues.length === 0)).length : forEachItems.length,
-              failed: __perItem.length > 0 ? __perItem.filter((r) => r && r.issues && r.issues.length > 0).length : 0,
+              successful: forEachResult.forEachItemResults ? forEachResult.forEachItemResults.filter(
+                (r) => r && (!r.issues || r.issues.length === 0)
+              ).length : forEachItems.length,
+              failed: forEachResult.forEachItemResults ? forEachResult.forEachItemResults.filter((r) => r && r.issues && r.issues.length > 0).length : 0,
               items: forEachItems
             };
+            const memoryStore = MemoryStore.getInstance(this.config?.memory);
             const onFinishContext = composeOnFinishContext(
-              void 0,
+              this.config?.memory,
               checkName,
               checkConfig,
               outputsForContext,
@@ -14039,10 +13467,12 @@ ${onFinish.goto_js}
               prInfo
             );
             try {
+              const ns = "fact-validation";
+              const attemptNow = Number(memoryStore.get("fact_validation_attempt", ns) || 0);
               const usedBudget = this.onFinishLoopCounts.get(checkName) || 0;
               const maxBudget = config?.routing?.max_loops ?? 10;
               logger.info(
-                `\u{1F9ED} on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} budget=${usedBudget}/${maxBudget}`
+                `\u{1F9ED} on_finish: check="${checkName}" items=${forEachItems.length} dependents=${dependents.length} attempt=${attemptNow} budget=${usedBudget}/${maxBudget}`
               );
               const vfHist = outputsHistoryForContext["validate-fact"] || [];
               if (vfHist.length) {
@@ -14050,6 +13480,7 @@ ${onFinish.goto_js}
               }
             } catch {
             }
+            let lastRunOutput = void 0;
             {
               const maxLoops = config?.routing?.max_loops ?? 10;
               let loopCount = 0;
@@ -14057,30 +13488,10 @@ ${onFinish.goto_js}
               if (runList.length > 0)
                 logger.info(`\u25B6 on_finish.run: executing [${runList.join(", ")}] for "${checkName}"`);
               const runCheck = async (id) => {
-                if (++loopCount > maxLoops) {
-                  try {
-                    logger.error(
-                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
-                    );
-                  } catch {
-                  }
-                  try {
-                    results.set(checkName, {
-                      issues: [
-                        {
-                          file: "system",
-                          line: 0,
-                          ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                          message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`,
-                          severity: "error",
-                          category: "logic"
-                        }
-                      ]
-                    });
-                  } catch {
-                  }
-                  return { issues: [] };
-                }
+                if (++loopCount > maxLoops)
+                  throw new Error(
+                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run`
+                  );
                 const childCfgFull = (config?.checks || {})[id];
                 if (!childCfgFull) throw new Error(`Unknown check in on_finish.run: ${id}`);
                 const childProvider = this.providerRegistry.getProviderOrThrow(
@@ -14105,7 +13516,15 @@ ${onFinish.goto_js}
                 return resChild;
               };
               try {
-                await runOnFinishChildren(runList, runCheck, config, onFinishContext, debug || false, log2);
+                const o = await runOnFinishChildren(
+                  runList,
+                  runCheck,
+                  config,
+                  onFinishContext,
+                  debug || false,
+                  log2
+                );
+                lastRunOutput = o.lastRunOutput;
                 if (runList.length > 0) logger.info(`\u2713 on_finish.run: completed for "${checkName}"`);
               } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
@@ -14126,8 +13545,8 @@ ${js}
                 const __res = __fn();
                 return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
               `;
-                  const exec = sandbox.compile(code);
-                  const res = exec({ scope }).run();
+                  const exec2 = sandbox.compile(code);
+                  const res = exec2({ scope }).run();
                   return Array.isArray(res) ? res : [];
                 } catch (e) {
                   const msg = e instanceof Error ? e.message : String(e);
@@ -14136,6 +13555,16 @@ ${js}
                   return [];
                 }
               };
+              try {
+                if (process.env.VISOR_DEBUG === "true" || debug) {
+                  const memDbg = MemoryStore.getInstance(this.config?.memory);
+                  const keys = memDbg.list("fact-validation");
+                  logger.info(
+                    `on_finish.run_js context (keys in fact-validation) = [${keys.join(", ")}]`
+                  );
+                }
+              } catch {
+              }
               const dynamicRun = await evalRunJs(onFinish.run_js);
               const dynList = Array.from(new Set(dynamicRun.filter(Boolean)));
               if (dynList.length > 0) {
@@ -14144,28 +13573,9 @@ ${js}
                 );
                 for (const runCheckId of dynList) {
                   if (++loopCount > maxLoops) {
-                    try {
-                      logger.error(
-                        `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`
-                      );
-                    } catch {
-                    }
-                    try {
-                      results.set(checkName, {
-                        issues: [
-                          {
-                            file: "system",
-                            line: 0,
-                            ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                            message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`,
-                            severity: "error",
-                            category: "logic"
-                          }
-                        ]
-                      });
-                    } catch {
-                    }
-                    break;
+                    throw new Error(
+                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish run_js`
+                    );
                   }
                   logger.info(`  \u25B6 Executing on_finish(run_js) check: ${runCheckId}`);
                   const childCfgFull = (config?.checks || {})[runCheckId];
@@ -14189,18 +13599,29 @@ ${js}
                     results.set(runCheckId, childRes);
                   } catch {
                   }
+                  try {
+                    lastRunOutput = childRes?.output;
+                  } catch {
+                  }
                   logger.info(`  \u2713 Completed on_finish(run_js) check: ${runCheckId}`);
                 }
               }
             }
-            let verdictLocal = void 0;
             try {
               const snap = this.getOutputHistorySnapshot();
-              verdictLocal = computeAllValid(snap, forEachItems.length);
-              if (typeof verdictLocal === "boolean") {
-                logger.info(
-                  `\u{1F9EE} on_finish: recomputed all_valid=${verdictLocal} from history for "${checkName}"`
+              const verdict = computeAllValid(snap, forEachItems.length);
+              if (typeof verdict === "boolean") {
+                await MemoryStore.getInstance(this.config?.memory).set(
+                  "all_valid",
+                  verdict,
+                  "fact-validation"
                 );
+                try {
+                  logger.info(
+                    `\u{1F9EE} on_finish: recomputed all_valid=${verdict} from history for "${checkName}"`
+                  );
+                } catch {
+                }
               }
             } catch {
             }
@@ -14217,14 +13638,30 @@ ${js}
             ).gotoTarget;
             if (gotoTarget) {
               try {
-                logger.info(
-                  `  \u{1F512} on_finish.goto guard: gotoTarget=${String(gotoTarget)} verdictLocal=${String(verdictLocal)}`
-                );
+                const memDbg = MemoryStore.getInstance(this.config?.memory);
+                const dbgVal = memDbg.get("all_valid", "fact-validation");
+                try {
+                  logger.info(`  \u{1F9EA} on_finish.goto: mem all_valid currently=${String(dbgVal)}`);
+                } catch {
+                }
               } catch {
               }
-              if (gotoTarget === checkName && verdictLocal === true) {
-                logger.info(`\u2713 on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
-                gotoTarget = null;
+              try {
+                const mem = MemoryStore.getInstance(this.config?.memory);
+                const allValidMem = mem.get("all_valid", "fact-validation");
+                const lro = lastRunOutput && typeof lastRunOutput === "object" ? lastRunOutput : void 0;
+                const allValidOut = lro ? lro["all_valid"] === true || lro["allValid"] === true : false;
+                try {
+                  logger.info(
+                    `  \u{1F512} on_finish.goto guard: gotoTarget=${String(gotoTarget)} allValidMem=${String(allValidMem)} allValidOut=${String(allValidOut)}`
+                  );
+                } catch {
+                }
+                if (gotoTarget === checkName && (allValidMem === true || allValidOut === true)) {
+                  logger.info(`\u2713 on_finish.goto: skipping routing to '${gotoTarget}' (all_valid=true)`);
+                  gotoTarget = null;
+                }
+              } catch {
               }
               try {
                 const __h = this.outputHistory.get("validate-fact");
@@ -14284,27 +13721,6 @@ ${js}
                 logger.warn(
                   `\u26A0\uFE0F on_finish: loop budget exceeded for "${checkName}" (max_loops=${maxLoops}); last goto='${gotoTarget}'. Skipping further routing.`
                 );
-                try {
-                  logger.error(
-                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`
-                  );
-                } catch {
-                }
-                try {
-                  results.set(checkName, {
-                    issues: [
-                      {
-                        file: "system",
-                        line: 0,
-                        ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                        message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`,
-                        severity: "error",
-                        category: "logic"
-                      }
-                    ]
-                  });
-                } catch {
-                }
                 continue;
               }
               this.onFinishLoopCounts.set(checkName, used);
@@ -14314,87 +13730,27 @@ ${js}
               try {
                 const tcfg = config.checks?.[gotoTarget];
                 const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
+                const scheduleOnce = async (scopeForRun) => this.runNamedCheck(gotoTarget, scopeForRun, {
+                  origin: "on_finish",
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: results,
+                  sessionInfo: void 0,
+                  debug,
+                  eventOverride: onFinish.goto_event,
+                  overlay: new Map(results)
+                });
                 if (mode === "map" && forEachItems.length > 0) {
                   for (let i = 0; i < forEachItems.length; i++) {
                     const itemScope = [{ check: checkName, index: i }];
-                    await this.scheduleForwardRun(gotoTarget, {
-                      origin: "on_finish",
-                      gotoEvent: onFinish.goto_event,
-                      config,
-                      dependencyGraph,
-                      prInfo,
-                      resultsMap: results,
-                      debug,
-                      foreachScope: itemScope,
-                      sourceCheckName: checkName,
-                      sourceCheckConfig: checkConfig
-                    });
+                    await scheduleOnce(itemScope);
                   }
                 } else {
-                  await this.scheduleForwardRun(gotoTarget, {
-                    origin: "on_finish",
-                    gotoEvent: onFinish.goto_event,
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: results,
-                    debug,
-                    foreachScope: [],
-                    sourceCheckName: checkName,
-                    sourceCheckConfig: checkConfig
-                  });
+                  await scheduleOnce([]);
                 }
                 logger.info(`  \u2713 Routed to: ${gotoTarget}`);
                 logger.info(`  Event override: ${onFinish.goto_event || "(none)"}`);
-                try {
-                  if (gotoTarget === checkName && forEachItems.length > 0) {
-                    const childIds = [];
-                    try {
-                      for (const [id, deps] of dependencyGraph.nodes.entries()) {
-                        if (Array.isArray(deps) && deps.includes(checkName)) childIds.push(id);
-                      }
-                    } catch {
-                    }
-                    for (const cid of childIds) {
-                      const cCfg = config.checks?.[cid];
-                      if (!cCfg) continue;
-                      const cMode = cCfg.fanout === "map" ? "map" : cCfg.reduce ? "reduce" : cCfg.fanout || "default";
-                      if (cMode === "map") {
-                        for (let i = 0; i < forEachItems.length; i++) {
-                          const itemScope = [{ check: checkName, index: i }];
-                          await this.scheduleForwardRun(cid, {
-                            origin: "on_finish",
-                            gotoEvent: onFinish.goto_event,
-                            config,
-                            dependencyGraph,
-                            prInfo,
-                            resultsMap: results,
-                            debug,
-                            foreachScope: itemScope,
-                            sourceCheckName: checkName,
-                            sourceCheckConfig: checkConfig
-                          });
-                        }
-                      } else {
-                        await this.scheduleForwardRun(cid, {
-                          origin: "on_finish",
-                          gotoEvent: onFinish.goto_event,
-                          config,
-                          dependencyGraph,
-                          prInfo,
-                          resultsMap: results,
-                          debug,
-                          foreachScope: [],
-                          sourceCheckName: checkName,
-                          sourceCheckConfig: checkConfig
-                        });
-                      }
-                    }
-                  }
-                } catch (err) {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  logger.debug(`  \u26A0 on_finish: dependent forward-run error: ${msg}`);
-                }
               } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 logger.error(
@@ -14621,7 +13977,7 @@ ${expr}`;
               ...sessionInfo,
               ...this.executionContext
             };
-            let res = await withActiveSpan(
+            const res = await withActiveSpan(
               `visor.check.${checkName}`,
               {
                 "visor.check.id": checkName,
@@ -14630,47 +13986,10 @@ ${expr}`;
               },
               async () => provider.execute(prInfo, providerConfig, dependencyResults, context2)
             );
-            try {
-              const anyRes = res;
-              const hasOutput = anyRes && typeof anyRes === "object" && "output" in anyRes;
-              const hasIssues = anyRes && typeof anyRes === "object" && "issues" in anyRes;
-              if (!hasOutput) {
-                res = {
-                  issues: hasIssues ? anyRes.issues || [] : [],
-                  output: anyRes
-                };
-              }
-            } catch {
-            }
             this.recordProviderDuration(checkName, Date.now() - __provStart);
             try {
               const anyRes = res;
               currentRouteOutput = anyRes && typeof anyRes === "object" && "output" in anyRes ? anyRes.output : anyRes;
-              try {
-                if (process.env.VISOR_DEBUG === "true") {
-                  const hasOut = currentRouteOutput !== void 0;
-                  console.error(`[route] ${checkName} currentRouteOutput.has=${String(hasOut)} type=${typeof currentRouteOutput}`);
-                }
-              } catch {
-              }
-              if (currentRouteOutput !== void 0) {
-                try {
-                  let histVal = currentRouteOutput;
-                  if (Array.isArray(histVal)) {
-                  } else if (histVal !== null && typeof histVal === "object") {
-                    histVal = { ...histVal };
-                    if (histVal.ts === void 0) histVal.ts = Date.now();
-                  } else {
-                    histVal = { text: String(histVal), ts: Date.now() };
-                  }
-                  this.trackOutputHistory(checkName, histVal);
-                  try {
-                    res.__histTracked = true;
-                  } catch {
-                  }
-                } catch {
-                }
-              }
               if (checkName === "aggregate-validations" && (process.env.VISOR_DEBUG === "true" || debug)) {
                 try {
                   logger.info(
@@ -14707,18 +14026,9 @@ ${expr}`;
                 }
                 loopCount++;
                 if (loopCount > maxLoops) {
-                  return {
-                    issues: [
-                      {
-                        file: "system",
-                        line: 0,
-                        ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                        message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail run`,
-                        severity: "error",
-                        category: "logic"
-                      }
-                    ]
-                  };
+                  throw new Error(
+                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail run`
+                  );
                 }
                 if (debug) log2(`\u{1F527} Debug: on_fail.run (soft) executing [${runList.join(", ")}]`);
                 for (const stepId of runList) {
@@ -14762,19 +14072,10 @@ ${expr}`;
                 } catch {
                 }
                 if (!allAncestors.includes(target)) {
-                  await this.scheduleForwardRun(target, {
-                    origin: "on_fail",
-                    gotoEvent: onFail.goto_event,
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                    debug: !!debug,
-                    foreachScope: foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : void 0,
-                    sourceCheckName: checkName,
-                    sourceCheckConfig: checkConfig,
-                    sourceOutputForItems: currentRouteOutput
-                  });
+                  if (debug)
+                    log2(
+                      `\u26A0\uFE0F Debug: on_fail.goto (soft) '${target}' is not an ancestor of '${checkName}' \u2014 skipping`
+                    );
                 } else {
                   loopCount++;
                   if (loopCount > maxLoops) {
@@ -14782,19 +14083,29 @@ ${expr}`;
                       `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
                     );
                   }
-                  await this.scheduleForwardRun(target, {
-                    origin: "on_fail",
-                    gotoEvent: onFail.goto_event,
-                    config,
-                    dependencyGraph,
-                    prInfo,
-                    resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                    debug: !!debug,
-                    foreachScope: foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : void 0,
-                    sourceCheckName: checkName,
-                    sourceCheckConfig: checkConfig,
-                    sourceOutputForItems: currentRouteOutput
-                  });
+                  {
+                    const tcfg = config.checks?.[target];
+                    const mode2 = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
+                    const inItem = !!foreachContext;
+                    const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
+                    const scheduleOnce = async (scopeForRun) => this.runNamedCheck(target, scopeForRun, {
+                      config,
+                      dependencyGraph,
+                      prInfo,
+                      resultsMap: resultsMap || /* @__PURE__ */ new Map(),
+                      debug: !!debug,
+                      eventOverride: onFail.goto_event
+                    });
+                    if (!inItem && mode2 === "map" && items.length > 0) {
+                      for (let i = 0; i < items.length; i++) {
+                        const itemScope = [{ check: checkName, index: i }];
+                        await scheduleOnce(itemScope);
+                      }
+                    } else {
+                      const scopeForRun = foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [];
+                      await scheduleOnce(scopeForRun);
+                    }
+                  }
                 }
               }
               const retryMax = onFail.retry?.max ?? 0;
@@ -14817,87 +14128,59 @@ ${expr}`;
               return res;
             }
             if (onSuccess) {
-              const __suppressAllOnSuccess = (context2.origin || "inline") === "on_success";
-              const __suppressGotoOnSuccess = (context2.origin || "inline") === "on_fail";
-              if (!__suppressAllOnSuccess) {
-                const dynamicRun = await evalRunJs(onSuccess.run_js);
-                let runList = [...onSuccess.run || [], ...dynamicRun].filter(Boolean);
+              const dynamicRun = await evalRunJs(onSuccess.run_js);
+              let runList = [...onSuccess.run || [], ...dynamicRun].filter(Boolean);
+              try {
+                if (process.env.VISOR_DEBUG === "true" || debug) {
+                  logger.info(
+                    `on_success.run (${checkName}): dynamicRun=[${dynamicRun.join(", ")}] run=[${(onSuccess.run || []).join(", ")}]`
+                  );
+                }
+              } catch {
+              }
+              const oncePerRun = /* @__PURE__ */ new Set(["validate-fact", "extract-facts"]);
+              runList = Array.from(new Set(runList)).filter((step) => {
+                if (oncePerRun.has(step)) {
+                  if (this.oncePerRunScheduleGuards.has(step)) return false;
+                  this.oncePerRunScheduleGuards.add(step);
+                  return true;
+                }
+                return true;
+              });
+              if (runList.length > 0) {
                 try {
-                  if (process.env.VISOR_DEBUG === "true" || debug) {
-                    logger.info(
-                      `on_success.run (${checkName}): dynamicRun=[${dynamicRun.join(", ")}] run=[${(onSuccess.run || []).join(", ")}]`
-                    );
-                  }
+                  (init_logger(), __toCommonJS(logger_exports)).logger.info(
+                    `\u25B6 on_success.run: scheduling [${Array.from(new Set(runList)).join(", ")}] after '${checkName}'`
+                  );
                 } catch {
                 }
-                const oncePerRun = /* @__PURE__ */ new Set(["validate-fact", "extract-facts"]);
-                runList = Array.from(new Set(runList)).filter((step) => {
-                  if (oncePerRun.has(step)) {
-                    if (this.oncePerRunScheduleGuards.has(step)) return false;
-                    this.oncePerRunScheduleGuards.add(step);
-                    return true;
-                  }
-                  return true;
-                });
-                if (runList.length > 0) {
+                loopCount++;
+                if (loopCount > maxLoops) {
+                  throw new Error(
+                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`
+                  );
+                }
+                for (const stepId of runList) {
                   try {
-                    (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                      `\u25B6 on_success.run: scheduling [${Array.from(new Set(runList)).join(", ")}] after '${checkName}'`
-                    );
+                    const tcfg2 = (config.checks || {})[stepId];
+                    const tags = tcfg2?.tags || [];
+                    const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
+                    if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
+                      (init_logger(), __toCommonJS(logger_exports)).logger.info(
+                        `\u23ED on_success.run: skipping one_shot '${stepId}' (already executed)`
+                      );
+                      continue;
+                    }
                   } catch {
                   }
-                  loopCount++;
-                  if (loopCount > maxLoops) {
-                    const issueSummary = {
-                      issues: [
-                        {
-                          file: "system",
-                          line: 0,
-                          ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                          message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`,
-                          severity: "error",
-                          category: "logic"
-                        }
-                      ]
-                    };
-                    try {
-                      if (resultsMap) resultsMap.set(checkName, issueSummary);
-                    } catch {
-                    }
-                    return issueSummary;
-                  }
-                  for (const stepId of runList) {
-                    try {
-                      const tcfg2 = (config.checks || {})[stepId];
-                      const tags = tcfg2?.tags || [];
-                      const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
-                      if (isOneShot && (this.executionStats.get(stepId)?.totalRuns || 0) > 0) {
-                        (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                          `\u23ED on_success.run: skipping one_shot '${stepId}' (already executed)`
-                        );
-                        continue;
-                      }
-                    } catch {
-                    }
-                    const tcfg = config.checks?.[stepId];
-                    const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
-                    const inItem = !!foreachContext;
-                    const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
-                    if (!inItem && mode === "map" && items.length > 0) {
-                      for (let i = 0; i < items.length; i++) {
-                        const itemScope = [{ check: checkName, index: i }];
-                        await this.runNamedCheck(stepId, itemScope, {
-                          config,
-                          dependencyGraph,
-                          prInfo,
-                          resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                          debug: !!debug,
-                          overlay: dependencyResults
-                        });
-                      }
-                    } else {
-                      const scopeForRun = foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [];
-                      await this.runNamedCheck(stepId, scopeForRun, {
+                  const tcfg = config.checks?.[stepId];
+                  const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
+                  const inItem = !!foreachContext;
+                  const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
+                  if (!inItem && mode === "map" && items.length > 0) {
+                    for (let i = 0; i < items.length; i++) {
+                      const itemScope = [{ check: checkName, index: i }];
+                      await this.runNamedCheck(stepId, itemScope, {
                         config,
                         dependencyGraph,
                         prInfo,
@@ -14906,84 +14189,176 @@ ${expr}`;
                         overlay: dependencyResults
                       });
                     }
-                  }
-                } else {
-                  try {
-                    const assoc = resolveAssociationFromEvent(
-                      prInfo?.eventContext,
-                      prInfo.authorAssociation
-                    );
-                    const perms = createPermissionHelpers(assoc, detectLocalMode());
-                    const allowedMember = perms.hasMinPermission("MEMBER");
-                    let intent;
-                    try {
-                      intent = res?.output?.intent;
-                    } catch {
-                    }
-                    (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                      `\u23ED on_success.run: none after '${checkName}' (event=${prInfo.eventType || "manual"}, intent=${intent || "n/a"}, assoc=${assoc || "unknown"}, memberOrHigher=${allowedMember})`
-                    );
-                  } catch {
-                  }
-                }
-              }
-              if (!__suppressAllOnSuccess && !__suppressGotoOnSuccess) {
-                let target = await evalGotoJs(onSuccess.goto_js);
-                if (!target && onSuccess.goto) target = onSuccess.goto;
-                if (target) {
-                  try {
-                    (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                      `\u21AA on_success.goto: jumping to '${target}' from '${checkName}'`
-                    );
-                  } catch {
-                  }
-                  if (!allAncestors.includes(target)) {
-                    await this.scheduleForwardRun(target, {
-                      origin: "on_success",
-                      gotoEvent: onSuccess.goto_event,
+                  } else {
+                    const scopeForRun = foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [];
+                    await this.runNamedCheck(stepId, scopeForRun, {
                       config,
                       dependencyGraph,
                       prInfo,
                       resultsMap: resultsMap || /* @__PURE__ */ new Map(),
                       debug: !!debug,
-                      foreachScope: foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : void 0,
-                      sourceCheckName: checkName,
-                      sourceCheckConfig: checkConfig,
-                      sourceOutputForItems: currentRouteOutput
+                      overlay: dependencyResults
                     });
-                  } else {
-                    loopCount++;
-                    if (loopCount > maxLoops) {
-                      const issueSummary = {
-                        issues: [
-                          {
-                            file: "system",
-                            line: 0,
-                            ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                            message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`,
-                            severity: "error",
-                            category: "logic"
-                          }
-                        ]
+                  }
+                }
+              } else {
+                try {
+                  const assoc = resolveAssociationFromEvent(
+                    prInfo?.eventContext,
+                    prInfo.authorAssociation
+                  );
+                  const perms = createPermissionHelpers(assoc, detectLocalMode());
+                  const allowedMember = perms.hasMinPermission("MEMBER");
+                  let intent;
+                  try {
+                    intent = res?.output?.intent;
+                  } catch {
+                  }
+                  (init_logger(), __toCommonJS(logger_exports)).logger.info(
+                    `\u23ED on_success.run: none after '${checkName}' (event=${prInfo.eventType || "manual"}, intent=${intent || "n/a"}, assoc=${assoc || "unknown"}, memberOrHigher=${allowedMember})`
+                  );
+                } catch {
+                }
+              }
+              let target = await evalGotoJs(onSuccess.goto_js);
+              if (!target && onSuccess.goto) target = onSuccess.goto;
+              if (target) {
+                try {
+                  (init_logger(), __toCommonJS(logger_exports)).logger.info(
+                    `\u21AA on_success.goto: jumping to '${target}' from '${checkName}'`
+                  );
+                } catch {
+                }
+                if (!allAncestors.includes(target)) {
+                  const prevEventOverride2 = this.routingEventOverride;
+                  if (onSuccess.goto_event) {
+                    this.routingEventOverride = onSuccess.goto_event;
+                  }
+                  try {
+                    const cfgChecks = config?.checks || {};
+                    const forwardSet = /* @__PURE__ */ new Set();
+                    if (cfgChecks[target]) forwardSet.add(target);
+                    const dependsOn = (name, root) => {
+                      const seen = /* @__PURE__ */ new Set();
+                      const dfs = (n) => {
+                        if (seen.has(n)) return false;
+                        seen.add(n);
+                        const deps = cfgChecks[n]?.depends_on || [];
+                        if (deps.includes(root)) return true;
+                        return deps.some((d) => dfs(d));
                       };
-                      try {
-                        if (resultsMap) resultsMap.set(checkName, issueSummary);
-                      } catch {
-                      }
-                      return issueSummary;
+                      return dfs(name);
+                    };
+                    const ev = onSuccess.goto_event || prInfo.eventType || "issue_comment";
+                    for (const name of Object.keys(cfgChecks)) {
+                      if (name === target) continue;
+                      const onArr = cfgChecks[name]?.on;
+                      const eventMatches = !onArr || Array.isArray(onArr) && onArr.includes(ev);
+                      if (!eventMatches) continue;
+                      if (dependsOn(name, target)) forwardSet.add(name);
                     }
-                    await this.runNamedCheck(
-                      target,
-                      foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [],
-                      {
+                    const runTargetOnce = async (scopeForRun) => {
+                      const evKey = onSuccess.goto_event || prInfo.eventType || "manual";
+                      const guardKey = `${String(evKey)}:${String(target)}`;
+                      if (this.forwardRunGuards.has(guardKey)) return;
+                      this.forwardRunGuards.add(guardKey);
+                      await this.runNamedCheck(target, scopeForRun, {
                         config,
                         dependencyGraph,
                         prInfo,
                         resultsMap: resultsMap || /* @__PURE__ */ new Map(),
                         debug: !!debug,
                         eventOverride: onSuccess.goto_event
+                      });
+                    };
+                    const order = [];
+                    const inSet = (n) => forwardSet.has(n);
+                    const tempMarks = /* @__PURE__ */ new Set();
+                    const permMarks = /* @__PURE__ */ new Set();
+                    const stack = [];
+                    const visit = (n) => {
+                      if (permMarks.has(n)) return;
+                      if (tempMarks.has(n)) {
+                        const idx = stack.indexOf(n);
+                        const cyclePath = idx >= 0 ? [...stack.slice(idx), n] : [n];
+                        throw new Error(
+                          `Cycle detected in forward-run dependency subset: ${cyclePath.join(" -> ")}`
+                        );
                       }
+                      tempMarks.add(n);
+                      stack.push(n);
+                      const deps = (cfgChecks[n]?.depends_on || []).filter(inSet);
+                      for (const d of deps) visit(d);
+                      stack.pop();
+                      tempMarks.delete(n);
+                      permMarks.add(n);
+                      order.push(n);
+                    };
+                    for (const n of forwardSet) visit(n);
+                    const tcfg = cfgChecks[target];
+                    const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
+                    const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
+                    const runChainOnce = async (scopeForRun) => {
+                      await runTargetOnce(scopeForRun);
+                      const dependentsOnly = order.filter((n) => n !== target);
+                      for (const stepId of dependentsOnly) {
+                        await this.runNamedCheck(stepId, scopeForRun, {
+                          config,
+                          dependencyGraph,
+                          prInfo,
+                          resultsMap: resultsMap || /* @__PURE__ */ new Map(),
+                          debug: !!debug,
+                          eventOverride: onSuccess.goto_event
+                        });
+                      }
+                    };
+                    if (!foreachContext && mode === "map" && items.length > 0) {
+                      for (let i = 0; i < items.length; i++) {
+                        const itemScope = [{ check: checkName, index: i }];
+                        await runChainOnce(itemScope);
+                      }
+                    } else {
+                      const scopeForRun = foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [];
+                      await runChainOnce(scopeForRun);
+                    }
+                  } finally {
+                    this.routingEventOverride = prevEventOverride2;
+                  }
+                } else {
+                  loopCount++;
+                  if (loopCount > maxLoops) {
+                    throw new Error(
+                      `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success goto`
                     );
+                  }
+                  {
+                    const tcfg = config.checks?.[target];
+                    const mode = tcfg?.fanout === "map" ? "map" : tcfg?.reduce ? "reduce" : tcfg?.fanout || "default";
+                    const items = checkConfig.forEach && Array.isArray(currentRouteOutput) ? currentRouteOutput : [];
+                    const scheduleOnce = async (scopeForRun) => {
+                      const evKey = onSuccess.goto_event || prInfo.eventType || "manual";
+                      const guardKey = `${String(evKey)}:${String(target)}`;
+                      if (this.forwardRunGuards.has(guardKey)) return;
+                      this.forwardRunGuards.add(guardKey);
+                      return this.runNamedCheck(target, scopeForRun, {
+                        config,
+                        dependencyGraph,
+                        prInfo,
+                        resultsMap: resultsMap || /* @__PURE__ */ new Map(),
+                        debug: !!debug,
+                        eventOverride: onSuccess.goto_event,
+                        overlay: dependencyResults
+                      });
+                    };
+                    if (!foreachContext && mode === "map" && items.length > 0) {
+                      for (let i = 0; i < items.length; i++) {
+                        const itemScope = [{ check: checkName, index: i }];
+                        await scheduleOnce(itemScope);
+                      }
+                    } else {
+                      const scopeForRun = foreachContext ? [{ check: foreachContext.parent, index: foreachContext.index }] : [];
+                      await scheduleOnce(scopeForRun);
+                    }
                   }
                 }
               }
@@ -15031,34 +14406,16 @@ ${expr}`;
               } catch {
               }
               if (!allAncestors.includes(target)) {
-                await this.scheduleForwardRun(target, {
-                  origin: "on_fail",
-                  gotoEvent: onFail.goto_event,
-                  config,
-                  dependencyGraph,
-                  prInfo,
-                  resultsMap: resultsMap || /* @__PURE__ */ new Map(),
-                  debug: !!debug,
-                  foreachScope: [],
-                  sourceCheckName: checkName,
-                  sourceCheckConfig: checkConfig,
-                  sourceOutputForItems: void 0
-                });
+                if (debug)
+                  log2(
+                    `\u26A0\uFE0F Debug: on_fail.goto '${target}' is not an ancestor of '${checkName}' \u2014 skipping`
+                  );
               } else {
                 loopCount++;
                 if (loopCount > maxLoops) {
-                  return {
-                    issues: [
-                      {
-                        file: "system",
-                        line: 0,
-                        ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                        message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`,
-                        severity: "error",
-                        category: "logic"
-                      }
-                    ]
-                  };
+                  throw new Error(
+                    `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`
+                  );
                 }
                 await this.runNamedCheck(target, [], {
                   config,
@@ -15077,18 +14434,7 @@ ${expr}`;
             if (attempt <= retryMax) {
               loopCount++;
               if (loopCount > maxLoops) {
-                return {
-                  issues: [
-                    {
-                      file: "system",
-                      line: 0,
-                      ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                      message: `Routing loop budget exceeded (max_loops=${maxLoops}) during retry`,
-                      severity: "error",
-                      category: "logic"
-                    }
-                  ]
-                };
+                throw new Error(`Routing loop budget exceeded (max_loops=${maxLoops}) during retry`);
               }
               const delay = base > 0 ? this.computeBackoffDelay(attempt, mode, base, seed) : 0;
               if (debug)
@@ -15138,31 +14484,6 @@ ${expr}`;
           return true;
         });
       }
-      // Resolve a sensible fallback goto target without hardcoding names.
-      // Strategy: inspect the current check's depends_on list and expand any
-      // union tokens (e.g., "a|b"). Prefer a dependency whose `on` includes the
-      // current event; otherwise, fall back to the first existing dependency.
-      resolveFallbackGotoTarget(checkConfig, prInfo, config) {
-        try {
-          const depTokens = Array.isArray(checkConfig.depends_on) ? checkConfig.depends_on : checkConfig.depends_on ? [checkConfig.depends_on] : [];
-          const expand = (tok) => typeof tok === "string" && tok.includes("|") ? tok.split("|").map((s) => s.trim()).filter(Boolean) : tok ? [String(tok)] : [];
-          const candidates = depTokens.flatMap(expand).filter(Boolean);
-          if (candidates.length === 0) return null;
-          const event = prInfo.eventType || "manual";
-          const matchEvent = (name) => {
-            const cfg = (config.checks || {})[name];
-            if (!cfg) return false;
-            const triggers = Array.isArray(cfg.on) ? cfg.on : cfg.on ? [cfg.on] : [];
-            if (triggers.length === 0) return true;
-            return triggers.includes(event);
-          };
-          for (const n of candidates) if ((config.checks || {})[n] && matchEvent(n)) return n;
-          for (const n of candidates) if ((config.checks || {})[n]) return n;
-          return null;
-        } catch {
-          return null;
-        }
-      }
       /**
        * Execute checks on the local repository
        */
@@ -15170,21 +14491,14 @@ ${expr}`;
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
         try {
-          try {
-            this.globalDebug = Boolean(options?.debug);
-          } catch {
-          }
-          try {
-            const storage = options.config?.memory?.storage || "memory";
-            if (storage !== "file") {
-              MemoryStore.resetInstance();
-            }
-          } catch {
-          }
           if (options.config?.memory) {
             const memoryStore = MemoryStore.getInstance(options.config.memory);
             await memoryStore.initialize();
             logger.debug("Memory store initialized");
+          }
+          if (options.config?.tools) {
+            this.providerRegistry.setCustomTools(options.config.tools);
+            logger.debug(`Registered ${Object.keys(options.config.tools).length} custom tools`);
           }
           this.onFinishLoopCounts.clear();
           this.forEachWaveCounts.clear();
@@ -15208,11 +14522,6 @@ ${expr}`;
             );
           }
           const prInfo = this.gitAnalyzer.toPRInfo(repositoryInfo);
-          try {
-            const evt = options.webhookContext?.eventType;
-            if (evt) prInfo.eventType = evt;
-          } catch {
-          }
           const filteredChecks = this.filterChecksByTags(
             options.checks,
             options.config,
@@ -15262,25 +14571,6 @@ ${expr}`;
             };
           }
           const executionStatistics = this.buildExecutionStatistics();
-          try {
-            const histSnap = this.getOutputHistorySnapshot();
-            try {
-              const stats = this.buildExecutionStatistics();
-              for (const s of stats.checks) {
-                const name = s.checkName;
-                const want = Math.max(0, s.totalRuns || 0);
-                const have = Array.isArray(histSnap[name]) ? histSnap[name].length : 0;
-                if (want > have) {
-                  const arr = Array.isArray(histSnap[name]) ? histSnap[name] : [];
-                  for (let i = have; i < want; i++) arr.push(null);
-                  histSnap[name] = arr;
-                }
-              }
-            } catch {
-            }
-            reviewSummary.history = histSnap;
-          } catch {
-          }
           return {
             repositoryInfo,
             reviewSummary,
@@ -15623,8 +14913,7 @@ ${expr}`;
             }
           } catch {
           }
-          const freshStats = this.buildExecutionStatistics();
-          return { results: execRes.results, statistics: freshStats };
+          return execRes;
         }
         if (checks.length === 1) {
           try {
@@ -15716,17 +15005,6 @@ ${expr}`;
         const __iterStart = this.recordIterationStart(checkName);
         const __provStart = Date.now();
         const result = await provider.execute(prInfo, providerConfig, void 0, this.executionContext);
-        try {
-          if (Array.isArray(result?.issues)) {
-            result.issues = result.issues.map((iss) => {
-              if (iss && typeof iss === "object" && !iss.checkName) {
-                return { ...iss, checkName };
-              }
-              return iss;
-            });
-          }
-        } catch {
-        }
         this.recordProviderDuration(checkName, Date.now() - __provStart);
         if (checkConfig.forEach && (!result.issues || result.issues.length === 0)) {
           const reviewSummaryWithOutput = result;
@@ -15759,7 +15037,15 @@ ${expr}`;
           }
         }
         const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
-        const group = checkConfig.group || checkName;
+        let group = checkConfig.group || "default";
+        if (config?.output?.pr_comment?.group_by === "check" && !checkConfig.group) {
+          group = checkName;
+        }
+        try {
+          const out = result?.output;
+          if (out !== void 0) this.trackOutputHistory(checkName, out);
+        } catch {
+        }
         const checkResult = {
           checkName,
           content,
@@ -15831,10 +15117,6 @@ ${expr}`;
        * Execute multiple checks with dependency awareness - return grouped results with statistics
        */
       async executeGroupedDependencyAwareChecks(prInfo, checks, timeout, config, logFn, debug, maxParallelism, failFast, tagFilter) {
-        try {
-          this.resetPerRunState();
-        } catch {
-        }
         const reviewSummary = await this.executeDependencyAwareChecks(
           prInfo,
           checks,
@@ -15862,7 +15144,6 @@ ${expr}`;
        * Convert ReviewSummary to GroupedCheckResults
        */
       async convertReviewSummaryToGroupedResults(reviewSummary, checks, config, prInfo) {
-        const DBG = process.env.VISOR_DEBUG === "true";
         const groupedResults = {};
         const agg = reviewSummary;
         const contentMap = agg.__contents;
@@ -15916,15 +15197,9 @@ ${expr}`;
               }
             ];
           }
-          const group = checkConfig.group || checkName;
-          const DBG2 = process.env.VISOR_DEBUG === "true" || this.globalDebug === true;
-          if (DBG2) {
-            try {
-              console.error(
-                `[gh-debug] grouped result: check='${checkName}' issues=${issuesForCheck.length} hasContent=${content.trim() ? "yes" : "no"} group='${group}'`
-              );
-            } catch {
-            }
+          let group = checkConfig.group || "default";
+          if (config?.output?.pr_comment?.group_by === "check" && !checkConfig.group) {
+            group = checkName;
           }
           const checkResult = {
             checkName,
@@ -16057,7 +15332,6 @@ ${expr}`;
         }
         let templateContent = "";
         let enrichAssistantContext = false;
-        const DBG = process.env.VISOR_DEBUG === "true" || this.globalDebug === true;
         if (checkConfig.template) {
           if (checkConfig.template.content) {
             templateContent = checkConfig.template.content;
@@ -16068,14 +15342,6 @@ ${expr}`;
             throw new Error('Custom template must specify either "file" or "content"');
           }
         } else if (schemaName === "plain") {
-          if (DBG) {
-            try {
-              console.error(
-                `[gh-debug] render plain content for check='${checkName}' issues=${(reviewSummary.issues || []).length}`
-              );
-            } catch {
-            }
-          }
           return reviewSummary.issues?.[0]?.message || "";
         } else {
           const sanitizedSchema = schemaName.replace(/[^a-zA-Z0-9-]/g, "");
@@ -16102,14 +15368,6 @@ ${expr}`;
               `Template file not found for schema '${sanitizedSchema}'. Tried: ${distPath} and ${cwdPath}.`
             );
           }
-          if (DBG) {
-            try {
-              console.error(
-                `[gh-debug] template resolved for check='${checkName}' schema='${sanitizedSchema}' path='${foundTemplate}'`
-              );
-            } catch {
-            }
-          }
           if (sanitizedSchema === "issue-assistant") {
             enrichAssistantContext = true;
           }
@@ -16117,22 +15375,6 @@ ${expr}`;
         const filteredIssues = (reviewSummary.issues || []).filter(
           (issue) => !(issue.file === "system" && issue.line === 0)
         );
-        if (DBG) {
-          try {
-            const sample = filteredIssues.slice(0, 2).map((i) => ({
-              file: i.file,
-              line: i.line,
-              severity: i.severity,
-              ruleId: i.ruleId,
-              checkName: i.checkName,
-              category: i.category
-            }));
-            console.error(
-              `[gh-debug] render data for check='${checkName}' issues=${filteredIssues.length} content=${reviewSummary.content ? "yes" : "no"} sample=${JSON.stringify(sample)}`
-            );
-          } catch {
-          }
-        }
         const templateData = {
           issues: filteredIssues,
           checkName,
@@ -16415,24 +15657,6 @@ ${expr}`;
           );
         }
         const results = /* @__PURE__ */ new Map();
-        const maxWaves = config?.routing?.max_loops ?? 10;
-        let wave = 1;
-        const runWave = async () => {
-          try {
-            this.forwardDependentsScheduled.clear();
-          } catch {
-          }
-          try {
-            this.forwardRunGuards.clear();
-          } catch {
-          }
-          try {
-            this.oncePerRunScheduleGuards.clear();
-          } catch {
-          }
-          this.onFailForwardRunSeen = false;
-        };
-        await runWave();
         const sessionRegistry = (init_session_registry(), __toCommonJS(session_registry_exports)).SessionRegistry.getInstance();
         const sessionIds = /* @__PURE__ */ new Map();
         let shouldStopExecution = false;
@@ -16441,192 +15665,182 @@ ${expr}`;
         for (const checkName of checks) {
           this.initializeCheckStats(checkName);
         }
-        const executeLevels = async () => {
-          for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length && !shouldStopExecution; levelIndex++) {
-            const executionGroup = dependencyGraph.executionOrder[levelIndex];
-            try {
-              console.error(
-                `  [engine] level ${executionGroup.level} parallel=[${executionGroup.parallel.join(", ")}] (wave ${wave})`
-              );
-            } catch {
-            }
-            const checksInLevel = Array.isArray(executionGroup.parallel) ? executionGroup.parallel : [];
-            const sessionReuseGroups = /* @__PURE__ */ new Map();
-            checksInLevel.forEach((checkName) => {
-              if (sessionReuseChecks.has(checkName)) {
-                const parentCheckName = sessionProviders.get(checkName);
-                if (parentCheckName) {
-                  if (!sessionReuseGroups.has(parentCheckName)) {
-                    sessionReuseGroups.set(parentCheckName, []);
-                  }
-                  sessionReuseGroups.get(parentCheckName).push(checkName);
-                }
-              }
-            });
-            const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values()).some(
-              (group) => group.length > 1
+        for (let levelIndex = 0; levelIndex < dependencyGraph.executionOrder.length && !shouldStopExecution; levelIndex++) {
+          const executionGroup = dependencyGraph.executionOrder[levelIndex];
+          try {
+            console.error(
+              `  [engine] level ${executionGroup.level} parallel=[${executionGroup.parallel.join(", ")}]`
             );
-            let actualParallelism = Math.min(effectiveMaxParallelism, checksInLevel.length);
-            if (hasConflictingSessionReuse) {
-              actualParallelism = 1;
-              if (debug) {
-                const conflictingGroups = Array.from(sessionReuseGroups.entries()).filter(([_, checks2]) => checks2.length > 1).map(([parent, checks2]) => `${parent} -> [${checks2.join(", ")}]`).join("; ");
-                log2(
-                  `\u{1F504} Debug: Level ${executionGroup.level} has session conflicts (${conflictingGroups}) - forcing sequential execution (parallelism: 1)`
-                );
-              }
-            } else if (sessionReuseGroups.size > 0 && debug) {
-              log2(
-                `\u2705 Debug: Level ${executionGroup.level} has session reuse but no conflicts - allowing parallel execution`
-              );
-            }
-            if (debug) {
-              log2(
-                `\u{1F527} Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
-              );
-            }
-            const levelChecks = checksInLevel;
-            try {
-              if (process.env.VISOR_DEBUG === "true") {
-                console.error("  [engine] levelChecks = [", levelChecks.join(", "), "]");
-              }
-            } catch {
-            }
-            const levelTaskFunctions = levelChecks.map((checkName) => async () => {
-              if (results.has(checkName)) {
-                if (debug) log2(`\u{1F527} Debug: Skipping ${checkName} (already satisfied earlier)`);
-                return { checkName, error: null, result: results.get(checkName) };
-              }
-              const checkConfig = config.checks[checkName];
-              if (!checkConfig) {
-                return {
-                  checkName,
-                  error: `No configuration found for check: ${checkName}`,
-                  result: null
-                };
-              }
-              try {
-                const tags = checkConfig.tags || [];
-                const isOneShot = Array.isArray(tags) && tags.includes("one_shot");
-                const ran = (this.executionStats.get(checkName)?.totalRuns || 0) > 0;
-                if (isOneShot && ran) {
-                  if (debug) log2(`\u23ED  Skipped (one_shot already executed): ${checkName}`);
-                  return { checkName, error: null, result: results.get(checkName) };
+          } catch {
+          }
+          const checksInLevel = executionGroup.parallel;
+          const sessionReuseGroups = /* @__PURE__ */ new Map();
+          checksInLevel.forEach((checkName) => {
+            if (sessionReuseChecks.has(checkName)) {
+              const parentCheckName = sessionProviders.get(checkName);
+              if (parentCheckName) {
+                if (!sessionReuseGroups.has(parentCheckName)) {
+                  sessionReuseGroups.set(parentCheckName, []);
                 }
-              } catch {
+                sessionReuseGroups.get(parentCheckName).push(checkName);
               }
-              try {
-                const depsInLevel = (dependencies[checkName] || []).filter(
-                  (d) => checksInLevel.includes(d)
-                );
-                const hasForEachParent = (checkConfig.depends_on || []).some(
-                  (d) => config.checks?.[d]?.forEach === true
-                );
-                if (depsInLevel.length > 0) {
-                  const deadline = Date.now() + 1e4;
-                  while (depsInLevel.some((d) => !results.has(d))) {
-                    await this.sleep(2);
-                    if (Date.now() > deadline) break;
-                  }
-                  if (hasForEachParent) {
-                    const deadline2 = Date.now() + 1e4;
-                    while (!results.has(checkName) && Date.now() <= deadline2) {
-                      await this.sleep(2);
+            }
+          });
+          const hasConflictingSessionReuse = Array.from(sessionReuseGroups.values()).some(
+            (group) => group.length > 1
+          );
+          let actualParallelism = Math.min(effectiveMaxParallelism, executionGroup.parallel.length);
+          if (hasConflictingSessionReuse) {
+            actualParallelism = 1;
+            if (debug) {
+              const conflictingGroups = Array.from(sessionReuseGroups.entries()).filter(([_, checks2]) => checks2.length > 1).map(([parent, checks2]) => `${parent} -> [${checks2.join(", ")}]`).join("; ");
+              log2(
+                `\u{1F504} Debug: Level ${executionGroup.level} has session conflicts (${conflictingGroups}) - forcing sequential execution (parallelism: 1)`
+              );
+            }
+          } else if (sessionReuseGroups.size > 0 && debug) {
+            log2(
+              `\u2705 Debug: Level ${executionGroup.level} has session reuse but no conflicts - allowing parallel execution`
+            );
+          }
+          if (debug) {
+            log2(
+              `\u{1F527} Debug: Executing level ${executionGroup.level} with ${executionGroup.parallel.length} checks (parallelism: ${actualParallelism})`
+            );
+          }
+          const levelChecks = executionGroup.parallel.filter((name) => !results.has(name));
+          try {
+            if (process.env.VISOR_DEBUG === "true") {
+              console.error("  [engine] levelChecks = [", levelChecks.join(", "), "]");
+            }
+          } catch {
+          }
+          const levelTaskFunctions = levelChecks.map((checkName) => async () => {
+            if (results.has(checkName)) {
+              if (debug) log2(`\u{1F527} Debug: Skipping ${checkName} (already satisfied earlier)`);
+              return { checkName, error: null, result: results.get(checkName) };
+            }
+            const checkConfig = config.checks[checkName];
+            if (!checkConfig) {
+              return {
+                checkName,
+                error: `No configuration found for check: ${checkName}`,
+                result: null
+              };
+            }
+            const checkStartTime = Date.now();
+            completedChecksCount++;
+            logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
+            try {
+              if (debug) {
+                log2(`\u{1F527} Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
+              }
+              const providerType = checkConfig.type || "ai";
+              const provider = this.providerRegistry.getProviderOrThrow(providerType);
+              if (debug) {
+                log2(`\u{1F527} Debug: Provider for '${checkName}' is '${providerType}'`);
+              } else if (process.env.VISOR_DEBUG === "true") {
+                try {
+                  console.log(`[engine] provider for ${checkName} -> ${providerType}`);
+                } catch {
+                }
+              }
+              this.setProviderWebhookContext(provider);
+              const extendedCheckConfig = checkConfig;
+              const providerConfig = {
+                type: providerType,
+                prompt: checkConfig.prompt,
+                exec: checkConfig.exec,
+                focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+                schema: checkConfig.schema,
+                group: checkConfig.group,
+                checkName,
+                // Add checkName for sessionID
+                eventContext: this.enrichEventContext(prInfo.eventContext),
+                transform: checkConfig.transform,
+                transform_js: checkConfig.transform_js,
+                // Important: pass through provider-level timeout from check config
+                // (e.g., command/http_client providers expect seconds/ms here)
+                timeout: checkConfig.timeout,
+                level: extendedCheckConfig.level,
+                message: extendedCheckConfig.message,
+                env: checkConfig.env,
+                forEach: checkConfig.forEach,
+                // Provide output history so providers can access latest outputs for Liquid rendering
+                __outputHistory: this.outputHistory,
+                // Pass through any provider-specific keys (e.g., op/values for github provider)
+                ...checkConfig,
+                ai: {
+                  ...checkConfig.ai || {},
+                  timeout: timeout || 6e5,
+                  debug
+                }
+              };
+              const dependencyResults = /* @__PURE__ */ new Map();
+              let isForEachDependent = false;
+              let forEachItems = [];
+              let forEachParentName;
+              const forEachParents = [];
+              const allDependencies = DependencyResolver.getAllDependencies(
+                checkName,
+                dependencyGraph.nodes
+              );
+              for (const depId of allDependencies) {
+                if (results.has(depId)) {
+                  const depResult = results.get(depId);
+                  dependencyResults.set(depId, depResult);
+                }
+              }
+              const depTokens = checkConfig.depends_on || [];
+              const allOfDeps = [];
+              const anyOfGroups = [];
+              for (const tok of depTokens) {
+                if (typeof tok === "string" && tok.includes("|")) {
+                  const group = tok.split("|").map((s) => s.trim()).filter(Boolean);
+                  if (group.length > 0) anyOfGroups.push(group);
+                } else if (tok) {
+                  allOfDeps.push(String(tok));
+                }
+              }
+              const failedDeps = [];
+              for (const depId of allOfDeps) {
+                const depRes = results.get(depId);
+                if (!depRes) {
+                  failedDeps.push(depId);
+                  continue;
+                }
+                const wasSkipped = (depRes.issues || []).some((issue) => {
+                  const id = issue.ruleId || "";
+                  return id.endsWith("/__skipped");
+                });
+                const depExtended = depRes;
+                const isDepForEachParent = !!depExtended.isForEach;
+                let hasFatalFailure = false;
+                if (!isDepForEachParent) {
+                  const issues = depRes.issues || [];
+                  hasFatalFailure = issues.some((issue) => {
+                    const id = issue.ruleId || "";
+                    return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("/forEach/iteration_error") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
+                  });
+                  if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                    try {
+                      hasFatalFailure = await this.failIfTriggered(depId, depRes, config, results);
+                    } catch {
                     }
                   }
-                  if (this.forwardDependentsScheduled.has(checkName)) {
-                    const deadline3 = Date.now() + 1e4;
-                    while (!results.has(checkName) && Date.now() <= deadline3) await this.sleep(2);
-                  }
-                  if (results.has(checkName)) {
-                    if (debug)
-                      log2(`\u{1F527} Debug: Skipping ${checkName} (satisfied inline by forEach parent)`);
-                    return { checkName, error: null, result: results.get(checkName) };
-                  }
                 }
-              } catch {
+                if (debug) {
+                  log2(
+                    `\u{1F527} Debug: gating check '${checkName}' against dep '${depId}': wasSkipped=${wasSkipped} hasFatalFailure=${hasFatalFailure}`
+                  );
+                }
+                if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
               }
-              const checkStartTime = Date.now();
-              completedChecksCount++;
-              logger.step(`Running check: ${checkName} [${completedChecksCount}/${totalChecksCount}]`);
-              try {
-                if (debug) {
-                  log2(`\u{1F527} Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
-                }
-                const providerType = checkConfig.type || "ai";
-                const provider = this.providerRegistry.getProviderOrThrow(providerType);
-                if (debug) {
-                  log2(`\u{1F527} Debug: Provider for '${checkName}' is '${providerType}'`);
-                } else if (process.env.VISOR_DEBUG === "true") {
-                  try {
-                    console.log(`[engine] provider for ${checkName} -> ${providerType}`);
-                  } catch {
-                  }
-                }
-                this.setProviderWebhookContext(provider);
-                const extendedCheckConfig = checkConfig;
-                const providerConfig = {
-                  type: providerType,
-                  prompt: checkConfig.prompt,
-                  exec: checkConfig.exec,
-                  focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
-                  schema: checkConfig.schema,
-                  group: checkConfig.group,
-                  checkName,
-                  // Add checkName for sessionID
-                  eventContext: this.enrichEventContext(prInfo.eventContext),
-                  transform: checkConfig.transform,
-                  transform_js: checkConfig.transform_js,
-                  // Important: pass through provider-level timeout from check config
-                  // (e.g., command/http_client providers expect seconds/ms here)
-                  timeout: checkConfig.timeout,
-                  level: extendedCheckConfig.level,
-                  message: extendedCheckConfig.message,
-                  env: checkConfig.env,
-                  forEach: checkConfig.forEach,
-                  // Provide output history so providers can access latest outputs for Liquid rendering
-                  __outputHistory: this.outputHistory,
-                  // Pass through any provider-specific keys (e.g., op/values for github provider)
-                  ...checkConfig,
-                  ai: {
-                    ...checkConfig.ai || {},
-                    timeout: timeout || 6e5,
-                    debug
-                  }
-                };
-                const dependencyResults = /* @__PURE__ */ new Map();
-                let isForEachDependent = false;
-                let forEachItems = [];
-                let forEachParentName;
-                const forEachParents = [];
-                const allDependencies = DependencyResolver.getAllDependencies(
-                  checkName,
-                  dependencyGraph.nodes
-                );
-                for (const depId of allDependencies) {
-                  if (results.has(depId)) {
-                    const depResult = results.get(depId);
-                    dependencyResults.set(depId, depResult);
-                  }
-                }
-                const depTokens = checkConfig.depends_on || [];
-                const allOfDeps = [];
-                const anyOfGroups = [];
-                for (const tok of depTokens) {
-                  if (typeof tok === "string" && tok.includes("|")) {
-                    const group = tok.split("|").map((s) => s.trim()).filter(Boolean);
-                    if (group.length > 0) anyOfGroups.push(group);
-                  } else if (tok) {
-                    allOfDeps.push(String(tok));
-                  }
-                }
-                const failedDeps = [];
-                for (const depId of allOfDeps) {
+              for (const group of anyOfGroups) {
+                let groupSatisfied = false;
+                for (const depId of group) {
                   const depRes = results.get(depId);
-                  if (!depRes) {
-                    failedDeps.push(depId);
-                    continue;
-                  }
+                  if (!depRes) continue;
                   const wasSkipped = (depRes.issues || []).some((issue) => {
                     const id = issue.ruleId || "";
                     return id.endsWith("/__skipped");
@@ -16636,248 +15850,471 @@ ${expr}`;
                   let hasFatalFailure = false;
                   if (!isDepForEachParent) {
                     const issues = depRes.issues || [];
-                    hasFatalFailure = issues.some((i) => this.isGatingFatal(i));
-                  }
-                  try {
-                    const depCfg = config?.checks?.[depId];
-                    if (depCfg?.continue_on_failure) {
-                      if (hasFatalFailure && debug) {
-                        log2(
-                          `\u{1F527} Debug: dependency '${depId}' failed but continue_on_failure=true \u2014 not gating`
-                        );
+                    hasFatalFailure = issues.some((issue) => {
+                      const id = issue.ruleId || "";
+                      return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("/forEach/iteration_error") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
+                    });
+                    if (!hasFatalFailure && config && (config.fail_if || config.checks[depId]?.fail_if)) {
+                      try {
+                        hasFatalFailure = await this.failIfTriggered(depId, depRes, config, results);
+                      } catch {
                       }
-                      hasFatalFailure = false;
                     }
-                  } catch {
                   }
+                  if (!wasSkipped && !hasFatalFailure) {
+                    groupSatisfied = true;
+                    break;
+                  }
+                }
+                if (!groupSatisfied) {
+                  failedDeps.push(group.join("|"));
+                }
+              }
+              if (failedDeps.length > 0) {
+                this.recordSkip(checkName, "dependency_failed");
+                logger.info(`\u23ED  Skipped (dependency failed: ${failedDeps.join(", ")})`);
+                return {
+                  checkName,
+                  error: null,
+                  result: { issues: [] },
+                  skipped: true
+                };
+              }
+              const expandedForEachDeps = [];
+              for (const tok of depTokens) {
+                if (typeof tok === "string" && tok.includes("|"))
+                  expandedForEachDeps.push(
+                    ...tok.split("|").map((s) => s.trim()).filter(Boolean)
+                  );
+                else if (tok) expandedForEachDeps.push(String(tok));
+              }
+              for (const depId of expandedForEachDeps) {
+                if (results.has(depId)) {
+                  const depResult = results.get(depId);
+                  const depForEachResult = depResult;
+                  if (depForEachResult.isForEach || Array.isArray(depForEachResult.forEachItemResults) || Array.isArray(depForEachResult.forEachItems)) {
+                    if (!isForEachDependent) {
+                      isForEachDependent = true;
+                      forEachItems = Array.isArray(depForEachResult.forEachItems) ? depForEachResult.forEachItems : new Array(
+                        Array.isArray(depForEachResult.forEachItemResults) ? depForEachResult.forEachItemResults.length : 0
+                      ).fill(void 0);
+                      forEachParentName = depId;
+                    }
+                    forEachParents.push(depId);
+                  }
+                }
+              }
+              let sessionInfo = void 0;
+              if (sessionReuseChecks.has(checkName)) {
+                let parentCheckName = sessionProviders.get(checkName);
+                if (parentCheckName && parentCheckName.includes && parentCheckName.includes("|")) {
+                  parentCheckName = parentCheckName.split("|")[0].trim();
+                }
+                if (parentCheckName && sessionIds.has(parentCheckName)) {
+                  const parentSessionId = sessionIds.get(parentCheckName);
+                  sessionInfo = {
+                    parentSessionId,
+                    reuseSession: true
+                  };
                   if (debug) {
                     log2(
-                      `\u{1F527} Debug: gating check '${checkName}' against dep '${depId}': wasSkipped=${wasSkipped} hasFatalFailure=${hasFatalFailure}`
+                      `\u{1F504} Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
                     );
                   }
-                  if (wasSkipped || hasFatalFailure) failedDeps.push(depId);
-                }
-                for (const group of anyOfGroups) {
-                  let groupSatisfied = false;
-                  for (const depId of group) {
-                    const depRes = results.get(depId);
-                    if (!depRes) continue;
-                    const wasSkipped = (depRes.issues || []).some((issue) => {
-                      const id = issue.ruleId || "";
-                      return id.endsWith("/__skipped");
-                    });
-                    const depExtended = depRes;
-                    const isDepForEachParent = !!depExtended.isForEach;
-                    let hasFatalFailure = false;
-                    if (!isDepForEachParent) {
-                      const issues = depRes.issues || [];
-                      hasFatalFailure = issues.some((i) => this.isGatingFatal(i));
-                    }
-                    try {
-                      const depCfg = config?.checks?.[depId];
-                      if (depCfg?.continue_on_failure) {
-                        hasFatalFailure = false;
-                      }
-                    } catch {
-                    }
-                    if (!wasSkipped && !hasFatalFailure) {
-                      groupSatisfied = true;
-                      break;
-                    }
-                  }
-                  if (!groupSatisfied) {
-                    failedDeps.push(group.join("|"));
-                  }
-                }
-                if (failedDeps.length > 0) {
-                  const isCorrectionCycle = this.forwardDependentsScheduled.has(checkName);
-                  if (!isCorrectionCycle) {
-                    this.recordSkip(checkName, "dependency_failed");
-                    logger.info(`\u23ED  Skipped (dependency failed: ${failedDeps.join(", ")})`);
-                    return {
-                      checkName,
-                      error: null,
-                      result: { issues: [] },
-                      skipped: true
-                    };
-                  } else {
-                    try {
-                      logger.info(
-                        `\u21AA correction-cycle: bypassing dependency gate for '${checkName}' (failed: ${failedDeps.join(", ")})`
-                      );
-                    } catch {
-                    }
-                  }
-                }
-                const expandedForEachDeps = [];
-                for (const tok of depTokens) {
-                  if (typeof tok === "string" && tok.includes("|"))
-                    expandedForEachDeps.push(
-                      ...tok.split("|").map((s) => s.trim()).filter(Boolean)
-                    );
-                  else if (tok) expandedForEachDeps.push(String(tok));
-                }
-                for (const depId of expandedForEachDeps) {
-                  if (results.has(depId)) {
-                    const depResult = results.get(depId);
-                    const depForEachResult = depResult;
-                    if (depForEachResult.isForEach || Array.isArray(depForEachResult.forEachItemResults) || Array.isArray(depForEachResult.forEachItems)) {
-                      if (!isForEachDependent) {
-                        isForEachDependent = true;
-                        forEachItems = Array.isArray(depForEachResult.forEachItems) ? depForEachResult.forEachItems : new Array(
-                          Array.isArray(depForEachResult.forEachItemResults) ? depForEachResult.forEachItemResults.length : 0
-                        ).fill(void 0);
-                        forEachParentName = depId;
-                      }
-                      forEachParents.push(depId);
-                    }
-                  }
-                }
-                let sessionInfo = void 0;
-                if (sessionReuseChecks.has(checkName)) {
-                  let parentCheckName = sessionProviders.get(checkName);
-                  if (parentCheckName && parentCheckName.includes && parentCheckName.includes("|")) {
-                    parentCheckName = parentCheckName.split("|")[0].trim();
-                  }
-                  if (parentCheckName && sessionIds.has(parentCheckName)) {
-                    const parentSessionId = sessionIds.get(parentCheckName);
-                    sessionInfo = {
-                      parentSessionId,
-                      reuseSession: true
-                    };
-                    if (debug) {
-                      log2(
-                        `\u{1F504} Debug: Check ${checkName} will reuse session from parent ${parentCheckName}: ${parentSessionId}`
-                      );
-                    }
-                  } else {
-                    if (debug) {
-                      log2(
-                        `\u26A0\uFE0F Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
-                      );
-                    }
-                  }
-                }
-                let currentSessionId = void 0;
-                if (!sessionInfo?.reuseSession) {
-                  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-                  currentSessionId = `visor-${timestamp.replace(/[:.]/g, "-")}-${checkName}`;
-                  sessionIds.set(checkName, currentSessionId);
+                } else {
                   if (debug) {
-                    log2(`\u{1F195} Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+                    log2(
+                      `\u26A0\uFE0F Warning: Check ${checkName} requires session reuse but parent ${parentCheckName} session not found`
+                    );
                   }
-                  providerConfig.sessionId = currentSessionId;
                 }
-                let finalResult;
-                if (isForEachDependent && forEachParentName) {
-                  if (!Array.isArray(forEachItems)) {
-                    forEachItems = [];
-                  }
-                  if (!Array.isArray(forEachItems)) {
-                    this.recordSkip(checkName, "dependency_failed");
-                    return {
-                      checkName,
-                      error: null,
-                      result: { issues: [] },
-                      skipped: true
-                    };
-                  }
-                  this.recordForEachPreview(checkName, forEachItems);
-                  try {
-                    if (process.env.VISOR_DEBUG === "true") {
-                      console.error(
-                        `[foreach] check=${checkName} forEachItems=${forEachItems.length} hasIf=${String(
-                          !!checkConfig.if
-                        )} ifExpr=${checkConfig.if ? this.truncate(checkConfig.if, 80) : ""}`
-                      );
-                    }
-                  } catch {
-                  }
-                  if (forEachItems.length === 0) {
-                    if (debug) {
-                      log2(
-                        `\u{1F504} Debug: Skipping check "${checkName}" - forEach check "${forEachParentName}" returned 0 items`
-                      );
-                    }
-                    logger.info(`  forEach: no items from "${forEachParentName}", skipping check...`);
-                    this.recordSkip(checkName, "dependency_failed");
-                    finalResult = {
-                      issues: [],
-                      output: []
-                    };
-                    finalResult.isForEach = true;
-                    finalResult.forEachItems = [];
-                  } else {
-                    if (debug && process.env.VISOR_OUTPUT_FORMAT !== "json" && process.env.VISOR_OUTPUT_FORMAT !== "sarif") {
-                      console.log(
-                        `\u{1F504} Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
-                      );
-                    }
-                    const __itemCount = Array.isArray(forEachItems) ? forEachItems.length : 0;
-                    logger.info(
-                      `  forEach: processing ${__itemCount} items from "${forEachParentName}"...`
+              }
+              let currentSessionId = void 0;
+              if (!sessionInfo?.reuseSession) {
+                const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+                currentSessionId = `visor-${timestamp.replace(/[:.]/g, "-")}-${checkName}`;
+                sessionIds.set(checkName, currentSessionId);
+                if (debug) {
+                  log2(`\u{1F195} Debug: Check ${checkName} will create new session: ${currentSessionId}`);
+                }
+                providerConfig.sessionId = currentSessionId;
+              }
+              let finalResult;
+              if (isForEachDependent && forEachParentName) {
+                if (!Array.isArray(forEachItems)) {
+                  forEachItems = [];
+                }
+                if (!Array.isArray(forEachItems)) {
+                  this.recordSkip(checkName, "dependency_failed");
+                  return {
+                    checkName,
+                    error: null,
+                    result: { issues: [] },
+                    skipped: true
+                  };
+                }
+                this.recordForEachPreview(checkName, forEachItems);
+                try {
+                  if (process.env.VISOR_DEBUG === "true") {
+                    console.error(
+                      `[foreach] check=${checkName} forEachItems=${forEachItems.length} hasIf=${String(
+                        !!checkConfig.if
+                      )} ifExpr=${checkConfig.if ? this.truncate(checkConfig.if, 80) : ""}`
                     );
-                    const allIssues = [];
-                    const allOutputs = new Array(forEachItems.length);
-                    const aggregatedContents = [];
-                    const perItemResults = new Array(
-                      forEachItems.length
+                  }
+                } catch {
+                }
+                if (forEachItems.length === 0) {
+                  if (debug) {
+                    log2(
+                      `\u{1F504} Debug: Skipping check "${checkName}" - forEach check "${forEachParentName}" returned 0 items`
                     );
-                    const inlineAgg = /* @__PURE__ */ new Map();
-                    const execInlineDescendants = async (parentName, itemIndex, baseDeps) => {
-                      const children = (childrenByParent.get(parentName) || []).filter((child) => {
-                        const deps = dependencies[child] || [];
-                        return deps.length === 1 && deps[0] === parentName;
-                      });
-                      for (const childName of children) {
-                        const childCfg = config.checks[childName];
-                        const childProviderType = childCfg.type || "ai";
-                        const childProv = this.providerRegistry.getProviderOrThrow(childProviderType);
-                        this.setProviderWebhookContext(childProv);
-                        const childProviderConfig = {
-                          type: childProviderType,
-                          prompt: childCfg.prompt,
-                          exec: childCfg.exec,
-                          focus: childCfg.focus || this.mapCheckNameToFocus(childName),
-                          schema: childCfg.schema,
-                          group: childCfg.group,
-                          checkName: childName,
-                          eventContext: this.enrichEventContext(prInfo.eventContext),
-                          transform: childCfg.transform,
-                          transform_js: childCfg.transform_js,
-                          env: childCfg.env,
-                          forEach: childCfg.forEach,
-                          // Include provider-specific keys like op/values for non-AI providers
-                          ...childCfg,
-                          ai: {
-                            ...childCfg.ai || {},
-                            timeout: timeout || 6e5,
-                            debug
-                          }
-                        };
-                        try {
-                          emitNdjsonSpanWithEvents("visor.check", { "visor.check.id": checkName }, [
-                            { name: "check.started" },
-                            { name: "check.completed" }
-                          ]);
-                        } catch {
+                  }
+                  logger.info(`  forEach: no items from "${forEachParentName}", skipping check...`);
+                  this.recordSkip(checkName, "dependency_failed");
+                  finalResult = {
+                    issues: [],
+                    output: []
+                  };
+                  finalResult.isForEach = true;
+                  finalResult.forEachItems = [];
+                } else {
+                  if (debug && process.env.VISOR_OUTPUT_FORMAT !== "json" && process.env.VISOR_OUTPUT_FORMAT !== "sarif") {
+                    console.log(
+                      `\u{1F504} Debug: Check "${checkName}" depends on forEach check "${forEachParentName}", executing ${forEachItems.length} times`
+                    );
+                  }
+                  const __itemCount = Array.isArray(forEachItems) ? forEachItems.length : 0;
+                  logger.info(
+                    `  forEach: processing ${__itemCount} items from "${forEachParentName}"...`
+                  );
+                  const allIssues = [];
+                  const allOutputs = new Array(forEachItems.length);
+                  const aggregatedContents = [];
+                  const perItemResults = new Array(
+                    forEachItems.length
+                  );
+                  const inlineAgg = /* @__PURE__ */ new Map();
+                  const execInlineDescendants = async (parentName, itemIndex, baseDeps) => {
+                    const children = (childrenByParent.get(parentName) || []).filter((child) => {
+                      const deps = dependencies[child] || [];
+                      return deps.length === 1 && deps[0] === parentName;
+                    });
+                    for (const childName of children) {
+                      const childCfg = config.checks[childName];
+                      const childProviderType = childCfg.type || "ai";
+                      const childProv = this.providerRegistry.getProviderOrThrow(childProviderType);
+                      this.setProviderWebhookContext(childProv);
+                      const childProviderConfig = {
+                        type: childProviderType,
+                        prompt: childCfg.prompt,
+                        exec: childCfg.exec,
+                        focus: childCfg.focus || this.mapCheckNameToFocus(childName),
+                        schema: childCfg.schema,
+                        group: childCfg.group,
+                        checkName: childName,
+                        eventContext: this.enrichEventContext(prInfo.eventContext),
+                        transform: childCfg.transform,
+                        transform_js: childCfg.transform_js,
+                        env: childCfg.env,
+                        forEach: childCfg.forEach,
+                        // Include provider-specific keys like op/values for non-AI providers
+                        ...childCfg,
+                        ai: {
+                          ...childCfg.ai || {},
+                          timeout: timeout || 6e5,
+                          debug
                         }
-                        const parentAgg = results.get(parentName);
-                        const maskFatal = !!parentAgg?.forEachFatalMask && parentAgg.forEachFatalMask[itemIndex] === true;
-                        if (maskFatal) {
+                      };
+                      try {
+                        emitNdjsonSpanWithEvents("visor.check", { "visor.check.id": checkName }, [
+                          { name: "check.started" },
+                          { name: "check.completed" }
+                        ]);
+                      } catch {
+                      }
+                      const parentAgg = results.get(parentName);
+                      const maskFatal = !!parentAgg?.forEachFatalMask && parentAgg.forEachFatalMask[itemIndex] === true;
+                      if (maskFatal) {
+                        continue;
+                      }
+                      if (childCfg.if) {
+                        const itemScope2 = [{ check: parentName, index: itemIndex }];
+                        const condResults = this.buildSnapshotDependencyResults(
+                          itemScope2,
+                          void 0,
+                          prInfo.eventType
+                        );
+                        for (const [k, v] of baseDeps.entries()) condResults.set(k, v);
+                        const gateChild = await this.shouldRunCheck(
+                          childName,
+                          childCfg.if,
+                          prInfo,
+                          condResults,
+                          debug,
+                          void 0,
+                          /* failSecure */
+                          true
+                        );
+                        if (!gateChild.shouldRun) {
                           continue;
                         }
-                        if (childCfg.if) {
-                          const itemScope2 = [{ check: parentName, index: itemIndex }];
+                      }
+                      const childIterStart = this.recordIterationStart(childName);
+                      const itemScope = [{ check: parentName, index: itemIndex }];
+                      const snapshotDeps = this.buildSnapshotDependencyResults(
+                        itemScope,
+                        void 0,
+                        prInfo.eventType
+                      );
+                      for (const [k, v] of baseDeps.entries()) snapshotDeps.set(k, v);
+                      const childItemRes = await this.executeWithRouting(
+                        childName,
+                        childCfg,
+                        childProv,
+                        childProviderConfig,
+                        prInfo,
+                        snapshotDeps,
+                        sessionInfo,
+                        config,
+                        dependencyGraph,
+                        debug,
+                        results,
+                        { index: itemIndex, total: forEachItems.length, parent: parentName }
+                      );
+                      if (config && (config.fail_if || childCfg.fail_if)) {
+                        const fRes = await this.evaluateFailureConditions(
+                          childName,
+                          childItemRes,
+                          config,
+                          prInfo,
+                          results
+                        );
+                        if (fRes.length > 0) {
+                          const fIssues = fRes.filter((f) => f.failed).map((f) => ({
+                            file: "system",
+                            line: 0,
+                            ruleId: f.conditionName,
+                            message: f.message || `Failure condition met: ${f.expression}`,
+                            severity: f.severity || "error",
+                            category: "logic"
+                          }));
+                          childItemRes.issues = [...childItemRes.issues || [], ...fIssues];
+                        }
+                      }
+                      if (!inlineAgg.has(childName)) {
+                        inlineAgg.set(childName, {
+                          issues: [],
+                          outputs: new Array(forEachItems.length),
+                          contents: [],
+                          perItemResults: new Array(forEachItems.length)
+                        });
+                      }
+                      const agg = inlineAgg.get(childName);
+                      if (childItemRes.issues) agg.issues.push(...childItemRes.issues);
+                      const out = childItemRes.output;
+                      agg.outputs[itemIndex] = out;
+                      agg.perItemResults[itemIndex] = childItemRes;
+                      const c = childItemRes.content;
+                      if (typeof c === "string" && c.trim()) agg.contents.push(c.trim());
+                      const childHadFatal = this.hasFatal(childItemRes.issues || []);
+                      this.recordIterationComplete(
+                        childName,
+                        childIterStart,
+                        !childHadFatal,
+                        childItemRes.issues || [],
+                        childItemRes.output
+                      );
+                      const nextBase = new Map(baseDeps);
+                      nextBase.set(childName, childItemRes);
+                      await execInlineDescendants(childName, itemIndex, nextBase);
+                    }
+                  };
+                  const itemTasks = forEachItems.map((item, itemIndex) => async () => {
+                    try {
+                      emitNdjsonSpanWithEvents(
+                        "visor.foreach.item",
+                        {
+                          "visor.check.id": checkName,
+                          "visor.foreach.index": itemIndex,
+                          "visor.foreach.total": forEachItems.length
+                        },
+                        []
+                      );
+                    } catch {
+                    }
+                    const itemScope = [{ check: forEachParentName, index: itemIndex }];
+                    const snapshotDeps = this.buildSnapshotDependencyResults(
+                      itemScope,
+                      void 0,
+                      prInfo.eventType
+                    );
+                    if ((checkConfig.depends_on || []).length > 0) {
+                    }
+                    if (checkConfig.if) {
+                      const gateItem = await this.shouldRunCheck(
+                        checkName,
+                        checkConfig.if,
+                        prInfo,
+                        snapshotDeps,
+                        debug,
+                        void 0,
+                        /* failSecure */
+                        true
+                      );
+                      try {
+                        if (process.env.VISOR_DEBUG === "true") {
+                          console.error(
+                            `[if-gate-item] check=${checkName} expr="${checkConfig.if}" shouldRun=${String(gateItem.shouldRun)} env.ENABLE_FACT_VALIDATION=${String(process.env.ENABLE_FACT_VALIDATION)}`
+                          );
+                        }
+                      } catch {
+                      }
+                      if (!gateItem.shouldRun) {
+                        if (debug) {
+                          log2(
+                            `\u{1F504} Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
+                          );
+                        }
+                        return {
+                          index: itemIndex,
+                          itemResult: { issues: [] },
+                          skipped: true
+                        };
+                      }
+                    }
+                    if (debug) {
+                      log2(
+                        `\u{1F504} Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
+                      );
+                    }
+                    const iterationStart = this.recordIterationStart(checkName);
+                    const itemResult = await this.executeWithRouting(
+                      checkName,
+                      checkConfig,
+                      provider,
+                      providerConfig,
+                      prInfo,
+                      snapshotDeps,
+                      sessionInfo,
+                      config,
+                      dependencyGraph,
+                      debug,
+                      results,
+                      /*foreachContext*/
+                      {
+                        index: itemIndex,
+                        total: forEachItems.length,
+                        parent: forEachParentName
+                      }
+                    );
+                    if (config && (config.fail_if || checkConfig.fail_if)) {
+                      const itemFailures = await this.evaluateFailureConditions(
+                        checkName,
+                        itemResult,
+                        config,
+                        prInfo,
+                        results
+                      );
+                      if (itemFailures.length > 0) {
+                        const failureIssues = itemFailures.filter((f) => f.failed).map((f) => ({
+                          file: "system",
+                          line: 0,
+                          ruleId: f.conditionName,
+                          message: f.message || `Failure condition met: ${f.expression}`,
+                          severity: f.severity || "error",
+                          category: "logic"
+                        }));
+                        itemResult.issues = [...itemResult.issues || [], ...failureIssues];
+                      }
+                    }
+                    const hadFatalError = (itemResult.issues || []).some((issue) => {
+                      const id = issue.ruleId || "";
+                      return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output");
+                    });
+                    const iterationDuration = (Date.now() - iterationStart) / 1e3;
+                    this.recordIterationComplete(
+                      checkName,
+                      iterationStart,
+                      !hadFatalError,
+                      // Success if no fatal errors
+                      itemResult.issues || [],
+                      itemResult.output
+                    );
+                    const itemOutput = itemResult.output;
+                    if (itemOutput !== void 0) {
+                      this.trackOutputHistory(checkName, itemOutput);
+                    }
+                    const descendantSet = (() => {
+                      const visited = /* @__PURE__ */ new Set();
+                      const stack = [checkName];
+                      while (stack.length) {
+                        const p = stack.pop();
+                        const kids = childrenByParent.get(p) || [];
+                        for (const k of kids) {
+                          if (!visited.has(k)) {
+                            visited.add(k);
+                            stack.push(k);
+                          }
+                        }
+                      }
+                      return visited;
+                    })();
+                    const perItemDone = /* @__PURE__ */ new Set([...forEachParents, checkName]);
+                    const perItemDepMap = /* @__PURE__ */ new Map();
+                    perItemDepMap.set(checkName, itemResult);
+                    const isFatal = (r) => {
+                      if (!r) return true;
+                      return this.hasFatal(r.issues || []);
+                    };
+                    while (true) {
+                      let progressed = false;
+                      for (const node of descendantSet) {
+                        if (perItemDone.has(node)) continue;
+                        const nodeCfg = config.checks[node];
+                        if (!nodeCfg) continue;
+                        const deps = dependencies[node] || [];
+                        let ready = true;
+                        for (const d of deps) {
+                          const perItemRes = perItemDepMap.get(d);
+                          if (perItemRes) {
+                            if (isFatal(perItemRes)) {
+                              ready = false;
+                              break;
+                            }
+                            continue;
+                          }
+                          if (perItemDone.has(d)) continue;
+                          const agg2 = results.get(d);
+                          if (!agg2) {
+                            ready = false;
+                            break;
+                          }
+                          if (agg2.isForEach || Array.isArray(agg2.forEachItemResults)) {
+                            const maskFatal = !!agg2.forEachFatalMask && agg2.forEachFatalMask[itemIndex] === true;
+                            if (maskFatal) {
+                              ready = false;
+                              break;
+                            }
+                          } else {
+                            if (isFatal(agg2)) {
+                              ready = false;
+                              break;
+                            }
+                          }
+                        }
+                        if (!ready) continue;
+                        if (nodeCfg.if) {
+                          const itemScope3 = [{ check: forEachParentName, index: itemIndex }];
                           const condResults = this.buildSnapshotDependencyResults(
-                            itemScope2,
+                            itemScope3,
                             void 0,
                             prInfo.eventType
                           );
-                          for (const [k, v] of baseDeps.entries()) condResults.set(k, v);
-                          const gateChild = await this.shouldRunCheck(
-                            childName,
-                            childCfg.if,
+                          for (const [k, v] of perItemDepMap.entries()) condResults.set(k, v);
+                          const gateNode = await this.shouldRunCheck(
+                            node,
+                            nodeCfg.if,
                             prInfo,
                             condResults,
                             debug,
@@ -16885,53 +16322,56 @@ ${expr}`;
                             /* failSecure */
                             true
                           );
-                          if (!gateChild.shouldRun) {
+                          if (!gateNode.shouldRun) {
+                            perItemDone.add(node);
+                            progressed = true;
                             continue;
                           }
                         }
-                        const childIterStart = this.recordIterationStart(childName);
-                        const itemScope = [{ check: parentName, index: itemIndex }];
-                        const snapshotDeps = this.buildSnapshotDependencyResults(
-                          itemScope,
+                        const nodeProvType = nodeCfg.type || "ai";
+                        const nodeProv = this.providerRegistry.getProviderOrThrow(nodeProvType);
+                        this.setProviderWebhookContext(nodeProv);
+                        const nodeProviderConfig = {
+                          type: nodeProvType,
+                          prompt: nodeCfg.prompt,
+                          exec: nodeCfg.exec,
+                          focus: nodeCfg.focus || this.mapCheckNameToFocus(node),
+                          schema: nodeCfg.schema,
+                          group: nodeCfg.group,
+                          checkName: node,
+                          eventContext: this.enrichEventContext(prInfo.eventContext),
+                          transform: nodeCfg.transform,
+                          transform_js: nodeCfg.transform_js,
+                          env: nodeCfg.env,
+                          forEach: nodeCfg.forEach,
+                          ai: { timeout: timeout || 6e5, debug, ...nodeCfg.ai || {} }
+                        };
+                        const iterStart = this.recordIterationStart(node);
+                        const itemScope2 = [{ check: forEachParentName, index: itemIndex }];
+                        const execDepMap = this.buildSnapshotDependencyResults(
+                          itemScope2,
                           void 0,
                           prInfo.eventType
                         );
-                        for (const [k, v] of baseDeps.entries()) snapshotDeps.set(k, v);
-                        let childItemRes;
-                        try {
-                          childItemRes = await this.executeWithRouting(
-                            childName,
-                            childCfg,
-                            childProv,
-                            childProviderConfig,
-                            prInfo,
-                            snapshotDeps,
-                            sessionInfo,
-                            config,
-                            dependencyGraph,
-                            debug,
-                            results,
-                            { index: itemIndex, total: forEachItems.length, parent: parentName }
-                          );
-                        } catch (error) {
-                          const msg = error instanceof Error ? error.message : String(error);
-                          childItemRes = {
-                            issues: [
-                              {
-                                file: "",
-                                line: 0,
-                                ruleId: `${childName}/forEach/iteration_error`,
-                                message: msg,
-                                severity: "error",
-                                category: "logic"
-                              }
-                            ]
-                          };
-                        }
-                        if (config && (config.fail_if || childCfg.fail_if)) {
+                        for (const [k, v] of perItemDepMap.entries()) execDepMap.set(k, v);
+                        const nodeItemRes = await this.executeWithRouting(
+                          node,
+                          nodeCfg,
+                          nodeProv,
+                          nodeProviderConfig,
+                          prInfo,
+                          execDepMap,
+                          sessionInfo,
+                          config,
+                          dependencyGraph,
+                          debug,
+                          results,
+                          { index: itemIndex, total: forEachItems.length, parent: forEachParentName }
+                        );
+                        if (config && (config.fail_if || nodeCfg.fail_if)) {
                           const fRes = await this.evaluateFailureConditions(
-                            childName,
-                            childItemRes,
+                            node,
+                            nodeItemRes,
                             config,
                             prInfo,
                             results
@@ -16945,594 +16385,152 @@ ${expr}`;
                               severity: f.severity || "error",
                               category: "logic"
                             }));
-                            childItemRes.issues = [...childItemRes.issues || [], ...fIssues];
+                            nodeItemRes.issues = [...nodeItemRes.issues || [], ...fIssues];
                           }
                         }
-                        if (!inlineAgg.has(childName)) {
-                          inlineAgg.set(childName, {
-                            issues: [],
-                            outputs: new Array(forEachItems.length),
-                            contents: [],
-                            perItemResults: new Array(forEachItems.length)
-                          });
-                        }
-                        const agg = inlineAgg.get(childName);
-                        if (childItemRes.issues) agg.issues.push(...childItemRes.issues);
-                        const out = childItemRes.output;
-                        agg.outputs[itemIndex] = out;
-                        agg.perItemResults[itemIndex] = childItemRes;
-                        const c = childItemRes.content;
-                        if (typeof c === "string" && c.trim()) agg.contents.push(c.trim());
-                        const childHadFatal = this.hasFatal(childItemRes.issues || []);
+                        const hadFatal = isFatal(nodeItemRes);
                         this.recordIterationComplete(
-                          childName,
-                          childIterStart,
-                          !childHadFatal,
-                          childItemRes.issues || [],
-                          childItemRes.output
+                          node,
+                          iterStart,
+                          !hadFatal,
+                          nodeItemRes.issues || [],
+                          nodeItemRes.output
                         );
-                        const nextBase = new Map(baseDeps);
-                        nextBase.set(childName, childItemRes);
-                        await execInlineDescendants(childName, itemIndex, nextBase);
+                        if (!inlineAgg.has(node))
+                          inlineAgg.set(node, {
+                            issues: [],
+                            outputs: [],
+                            contents: [],
+                            perItemResults: []
+                          });
+                        const agg = inlineAgg.get(node);
+                        if (nodeItemRes.issues) agg.issues.push(...nodeItemRes.issues);
+                        const nout = nodeItemRes.output;
+                        if (nout !== void 0) agg.outputs.push(nout);
+                        agg.perItemResults.push(nodeItemRes);
+                        const ncontent = nodeItemRes.content;
+                        if (typeof ncontent === "string" && ncontent.trim())
+                          agg.contents.push(ncontent.trim());
+                        perItemDepMap.set(node, nodeItemRes);
+                        perItemDone.add(node);
+                        progressed = true;
                       }
-                    };
-                    const itemTasks = forEachItems.map((item, itemIndex) => async () => {
-                      try {
-                        emitNdjsonSpanWithEvents(
-                          "visor.foreach.item",
-                          {
-                            "visor.check.id": checkName,
-                            "visor.foreach.index": itemIndex,
-                            "visor.foreach.total": forEachItems.length
-                          },
-                          []
-                        );
-                      } catch {
-                      }
-                      const itemScope = [{ check: forEachParentName, index: itemIndex }];
-                      const snapshotDeps = this.buildSnapshotDependencyResults(
-                        itemScope,
-                        void 0,
-                        prInfo.eventType
-                      );
-                      if ((checkConfig.depends_on || []).length > 0) {
-                      }
-                      if (checkConfig.if) {
-                        const gateItem = await this.shouldRunCheck(
-                          checkName,
-                          checkConfig.if,
-                          prInfo,
-                          snapshotDeps,
-                          debug,
-                          void 0,
-                          /* failSecure */
-                          true
-                        );
-                        try {
-                          if (process.env.VISOR_DEBUG === "true") {
-                            console.error(
-                              `[if-gate-item] check=${checkName} expr="${checkConfig.if}" shouldRun=${String(gateItem.shouldRun)} env.ENABLE_FACT_VALIDATION=${String(process.env.ENABLE_FACT_VALIDATION)}`
-                            );
-                          }
-                        } catch {
-                        }
-                        if (!gateItem.shouldRun) {
-                          if (debug) {
-                            log2(
-                              `\u{1F504} Debug: Skipping forEach item ${itemIndex + 1} for check "${checkName}" (if condition evaluated to false)`
-                            );
-                          }
-                          return {
-                            index: itemIndex,
-                            itemResult: { issues: [] },
-                            skipped: true
-                          };
-                        }
-                      }
-                      if (debug) {
-                        log2(
-                          `\u{1F504} Debug: Executing check "${checkName}" for item ${itemIndex + 1}/${forEachItems.length}`
-                        );
-                      }
-                      const iterationStart = this.recordIterationStart(checkName);
-                      let itemResult;
-                      try {
-                        itemResult = await this.executeWithRouting(
-                          checkName,
-                          checkConfig,
-                          provider,
-                          providerConfig,
-                          prInfo,
-                          snapshotDeps,
-                          sessionInfo,
-                          config,
-                          dependencyGraph,
-                          debug,
-                          results,
-                          /*foreachContext*/
-                          {
-                            index: itemIndex,
-                            total: forEachItems.length,
-                            parent: forEachParentName
-                          }
-                        );
-                      } catch (error) {
-                        const errorMessage = error instanceof Error ? error.message : String(error);
-                        itemResult = {
-                          issues: [
-                            {
-                              file: "",
-                              line: 0,
-                              ruleId: `${checkName}/forEach/iteration_error`,
-                              message: errorMessage,
-                              severity: "error",
-                              category: "logic"
+                      if (!progressed) break;
+                    }
+                    logger.info(
+                      `  \u2714 ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
+                    );
+                    perItemResults[itemIndex] = itemResult;
+                    return { index: itemIndex, itemResult };
+                  });
+                  const directForEachParents = (checkConfig.depends_on || []).filter((dep) => {
+                    const r = results.get(dep);
+                    return !!r && (r.isForEach || Array.isArray(r.forEachItemResults) || Array.isArray(r.forEachItems));
+                  });
+                  if (directForEachParents.length > 0) {
+                    logger.debug(
+                      `  forEach: direct parents for "${checkName}": ${directForEachParents.join(", ")}`
+                    );
+                  }
+                  const isIndexFatalForParent = async (parent, idx) => {
+                    const agg = results.get(parent);
+                    if (!agg) return false;
+                    if (agg.forEachFatalMask && agg.forEachFatalMask[idx] === true) return true;
+                    const r = agg.forEachItemResults && agg.forEachItemResults[idx] || void 0;
+                    if (!r) return false;
+                    const hadFatalByIssues = this.hasFatal(r.issues || []);
+                    if (hadFatalByIssues) return true;
+                    try {
+                      const parentFailIf = config && config.checks && config.checks[parent] ? config.checks[parent]?.fail_if : void 0;
+                      if (parentFailIf) {
+                        let rForEval = r;
+                        const rawOut = r?.output;
+                        if (typeof rawOut === "string") {
+                          const parseTail = (text) => {
+                            try {
+                              const lines = text.split("\n");
+                              for (let i = lines.length - 1; i >= 0; i--) {
+                                const t = lines[i].trim();
+                                if (t.startsWith("{") || t.startsWith("[")) {
+                                  const candidate = lines.slice(i).join("\n").trim();
+                                  if (candidate.startsWith("{") && candidate.endsWith("}") || candidate.startsWith("[") && candidate.endsWith("]")) {
+                                    return JSON.parse(candidate);
+                                  }
+                                }
+                              }
+                            } catch {
                             }
-                          ]
-                        };
-                      }
-                      if (config && (config.fail_if || checkConfig.fail_if)) {
-                        const itemFailures = await this.evaluateFailureConditions(
-                          checkName,
-                          itemResult,
-                          config,
+                            try {
+                              return JSON.parse(text);
+                            } catch {
+                              return null;
+                            }
+                          };
+                          const parsed = parseTail(rawOut);
+                          if (parsed && typeof parsed === "object") {
+                            rForEval = { ...r, output: parsed };
+                          }
+                        }
+                        const failures = await this.evaluateFailureConditions(
+                          parent,
+                          rForEval,
+                          // Evaluate against a shallow config that only carries the parent's fail_if
+                          {
+                            ...config,
+                            fail_if: void 0,
+                            checks: {
+                              ...config?.checks || {},
+                              [parent]: { ...config?.checks?.[parent], fail_if: parentFailIf }
+                            }
+                          },
                           prInfo,
                           results
                         );
-                        if (itemFailures.length > 0) {
-                          const failureIssues = itemFailures.filter((f) => f.failed).map((f) => ({
-                            file: "system",
-                            line: 0,
-                            ruleId: f.conditionName,
-                            message: f.message || `Failure condition met: ${f.expression}`,
-                            severity: f.severity || "error",
-                            category: "logic"
-                          }));
-                          itemResult.issues = [...itemResult.issues || [], ...failureIssues];
+                        if (failures.some((f) => f.failed)) {
                         }
+                        if (failures.some((f) => f.failed)) return true;
                       }
-                      const hadFatalError = (itemResult.issues || []).some((issue) => {
-                        const id = issue.ruleId || "";
-                        return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output");
-                      });
-                      const iterationDuration = (Date.now() - iterationStart) / 1e3;
-                      this.recordIterationComplete(
-                        checkName,
-                        iterationStart,
-                        !hadFatalError,
-                        // Success if no fatal errors
-                        itemResult.issues || [],
-                        itemResult.output
-                      );
-                      const itemOutput = itemResult.output;
-                      if (itemOutput !== void 0) {
-                        let parentLoopIdx = 0;
-                        try {
-                          const ph = this.outputHistory.get(forEachParentName) || [];
-                          parentLoopIdx = ph.filter((x) => Array.isArray(x)).length;
-                        } catch {
-                        }
-                        let histEntry;
-                        const itemId = (() => {
-                          try {
-                            return String(itemOutput?.id ?? itemIndex + 1);
-                          } catch {
-                            return String(itemIndex + 1);
-                          }
-                        })();
-                        if (itemOutput && typeof itemOutput === "object") {
-                          histEntry = {
-                            ...itemOutput,
-                            id: itemId,
-                            parent: forEachParentName,
-                            loop_idx: parentLoopIdx,
-                            last_loop: true
-                          };
-                        } else {
-                          histEntry = {
-                            value: itemOutput,
-                            id: itemId,
-                            parent: forEachParentName,
-                            loop_idx: parentLoopIdx,
-                            last_loop: true
-                          };
-                        }
-                        this.trackOutputHistory(checkName, histEntry);
-                      } else {
-                        let parentLoopIdx = 0;
-                        try {
-                          const ph = this.outputHistory.get(forEachParentName) || [];
-                          parentLoopIdx = ph.filter((x) => Array.isArray(x)).length;
-                        } catch {
-                        }
-                        const itemId = String(itemIndex + 1);
-                        const synth = {
-                          id: itemId,
-                          parent: forEachParentName,
-                          loop_idx: parentLoopIdx,
-                          last_loop: true,
-                          is_valid: false,
-                          confidence: "low",
-                          reason: "missing"
-                        };
-                        this.trackOutputHistory(checkName, synth);
-                      }
-                      const descendantSet = (() => {
-                        const visited = /* @__PURE__ */ new Set();
-                        const stack = [checkName];
-                        while (stack.length) {
-                          const p = stack.pop();
-                          const kids = childrenByParent.get(p) || [];
-                          for (const k of kids) {
-                            if (!visited.has(k)) {
-                              visited.add(k);
-                              stack.push(k);
-                            }
-                          }
-                        }
-                        return visited;
-                      })();
-                      const perItemDone = /* @__PURE__ */ new Set([...forEachParents, checkName]);
-                      const perItemDepMap = /* @__PURE__ */ new Map();
-                      perItemDepMap.set(checkName, itemResult);
-                      const isFatal = (r) => {
-                        if (!r) return true;
-                        return this.hasFatal(r.issues || []);
-                      };
-                      while (true) {
-                        let progressed = false;
-                        for (const node of descendantSet) {
-                          if (perItemDone.has(node)) continue;
-                          const nodeCfg = config.checks[node];
-                          if (!nodeCfg) continue;
-                          const deps = dependencies[node] || [];
-                          let ready = true;
-                          for (const d of deps) {
-                            const perItemRes = perItemDepMap.get(d);
-                            if (perItemRes) {
-                              if (isFatal(perItemRes)) {
-                                ready = false;
-                                break;
-                              }
-                              continue;
-                            }
-                            if (perItemDone.has(d)) continue;
-                            const agg2 = results.get(d);
-                            if (!agg2) {
-                              ready = false;
-                              break;
-                            }
-                            if (agg2.isForEach || Array.isArray(agg2.forEachItemResults)) {
-                              const maskFatal = !!agg2.forEachFatalMask && agg2.forEachFatalMask[itemIndex] === true;
-                              if (maskFatal) {
-                                ready = false;
-                                break;
-                              }
-                            } else {
-                              if (isFatal(agg2)) {
-                                ready = false;
-                                break;
-                              }
-                            }
-                          }
-                          if (!ready) continue;
-                          if (nodeCfg.if) {
-                            const itemScope3 = [
-                              { check: forEachParentName, index: itemIndex }
-                            ];
-                            const condResults = this.buildSnapshotDependencyResults(
-                              itemScope3,
-                              void 0,
-                              prInfo.eventType
-                            );
-                            for (const [k, v] of perItemDepMap.entries()) condResults.set(k, v);
-                            const gateNode = await this.shouldRunCheck(
-                              node,
-                              nodeCfg.if,
-                              prInfo,
-                              condResults,
-                              debug,
-                              void 0,
-                              /* failSecure */
-                              true
-                            );
-                            if (!gateNode.shouldRun) {
-                              perItemDone.add(node);
-                              progressed = true;
-                              continue;
-                            }
-                          }
-                          const nodeProvType = nodeCfg.type || "ai";
-                          const nodeProv = this.providerRegistry.getProviderOrThrow(nodeProvType);
-                          this.setProviderWebhookContext(nodeProv);
-                          const nodeProviderConfig = {
-                            type: nodeProvType,
-                            prompt: nodeCfg.prompt,
-                            exec: nodeCfg.exec,
-                            focus: nodeCfg.focus || this.mapCheckNameToFocus(node),
-                            schema: nodeCfg.schema,
-                            group: nodeCfg.group,
-                            checkName: node,
-                            eventContext: this.enrichEventContext(prInfo.eventContext),
-                            transform: nodeCfg.transform,
-                            transform_js: nodeCfg.transform_js,
-                            env: nodeCfg.env,
-                            forEach: nodeCfg.forEach,
-                            ai: { timeout: timeout || 6e5, debug, ...nodeCfg.ai || {} }
-                          };
-                          const iterStart = this.recordIterationStart(node);
-                          const itemScope2 = [{ check: forEachParentName, index: itemIndex }];
-                          const execDepMap = this.buildSnapshotDependencyResults(
-                            itemScope2,
-                            void 0,
-                            prInfo.eventType
-                          );
-                          for (const [k, v] of perItemDepMap.entries()) execDepMap.set(k, v);
-                          let nodeItemRes;
-                          try {
-                            nodeItemRes = await this.executeWithRouting(
-                              node,
-                              nodeCfg,
-                              nodeProv,
-                              nodeProviderConfig,
-                              prInfo,
-                              execDepMap,
-                              sessionInfo,
-                              config,
-                              dependencyGraph,
-                              debug,
-                              results,
-                              {
-                                index: itemIndex,
-                                total: forEachItems.length,
-                                parent: forEachParentName
-                              }
-                            );
-                          } catch (error) {
-                            const message = error instanceof Error ? error.message : String(error);
-                            nodeItemRes = {
-                              issues: [
-                                {
-                                  file: "",
-                                  line: 0,
-                                  ruleId: `${node}/forEach/iteration_error`,
-                                  message,
-                                  severity: "error",
-                                  category: "logic"
-                                }
-                              ]
-                            };
-                          }
-                          if (config && (config.fail_if || nodeCfg.fail_if)) {
-                            const fRes = await this.evaluateFailureConditions(
-                              node,
-                              nodeItemRes,
-                              config,
-                              prInfo,
-                              results
-                            );
-                            if (fRes.length > 0) {
-                              const fIssues = fRes.filter((f) => f.failed).map((f) => ({
-                                file: "system",
-                                line: 0,
-                                ruleId: f.conditionName,
-                                message: f.message || `Failure condition met: ${f.expression}`,
-                                severity: f.severity || "error",
-                                category: "logic"
-                              }));
-                              nodeItemRes.issues = [...nodeItemRes.issues || [], ...fIssues];
-                            }
-                          }
-                          const hadFatal = isFatal(nodeItemRes);
-                          this.recordIterationComplete(
-                            node,
-                            iterStart,
-                            !hadFatal,
-                            nodeItemRes.issues || [],
-                            nodeItemRes.output
-                          );
-                          if (!inlineAgg.has(node))
-                            inlineAgg.set(node, {
-                              issues: [],
-                              outputs: [],
-                              contents: [],
-                              perItemResults: []
-                            });
-                          const agg = inlineAgg.get(node);
-                          if (nodeItemRes.issues) agg.issues.push(...nodeItemRes.issues);
-                          const nout = nodeItemRes.output;
-                          if (nout !== void 0) agg.outputs.push(nout);
-                          agg.perItemResults.push(nodeItemRes);
-                          const ncontent = nodeItemRes.content;
-                          if (typeof ncontent === "string" && ncontent.trim())
-                            agg.contents.push(ncontent.trim());
-                          perItemDepMap.set(node, nodeItemRes);
-                          perItemDone.add(node);
-                          progressed = true;
-                        }
-                        if (!progressed) break;
-                      }
-                      logger.info(
-                        `  \u2714 ${itemIndex + 1}/${forEachItems.length} (${iterationDuration.toFixed(1)}s)`
-                      );
-                      perItemResults[itemIndex] = itemResult;
-                      return { index: itemIndex, itemResult };
-                    });
-                    const directForEachParents = (checkConfig.depends_on || []).filter((dep) => {
-                      const r = results.get(dep);
-                      return !!r && (r.isForEach || Array.isArray(r.forEachItemResults) || Array.isArray(r.forEachItems));
-                    });
-                    if (directForEachParents.length > 0) {
-                      logger.debug(
-                        `  forEach: direct parents for "${checkName}": ${directForEachParents.join(", ")}`
-                      );
+                    } catch {
                     }
-                    const isIndexFatalForParent = async (parent, idx) => {
+                    return false;
+                  };
+                  const runnableIndices = [];
+                  for (let idx = 0; idx < forEachItems.length; idx++) {
+                    let blocked = false;
+                    for (const p of directForEachParents) {
+                      if (await isIndexFatalForParent(p, idx)) {
+                        blocked = true;
+                        break;
+                      }
+                    }
+                    if (!blocked && typeof itemTasks[idx] === "function") runnableIndices.push(idx);
+                  }
+                  if (runnableIndices.length === 0) {
+                    const parent = directForEachParents[0];
+                    let anyExplicitFatal = false;
+                    if (parent) {
                       const agg = results.get(parent);
-                      if (!agg) return false;
-                      if (agg.forEachFatalMask && agg.forEachFatalMask[idx] === true) return true;
-                      const r = agg.forEachItemResults && agg.forEachItemResults[idx] || void 0;
-                      if (!r) return false;
-                      const hadFatalByIssues = this.hasFatal(r.issues || []);
-                      if (hadFatalByIssues) return true;
-                      try {
-                        const parentFailIf = config && config.checks && config.checks[parent] ? config.checks[parent]?.fail_if : void 0;
-                        if (parentFailIf) {
-                          let rForEval = r;
-                          const rawOut = r?.output;
-                          if (typeof rawOut === "string") {
-                            const parseTail = (text) => {
-                              try {
-                                const lines = text.split("\n");
-                                for (let i = lines.length - 1; i >= 0; i--) {
-                                  const t = lines[i].trim();
-                                  if (t.startsWith("{") || t.startsWith("[")) {
-                                    const candidate = lines.slice(i).join("\n").trim();
-                                    if (candidate.startsWith("{") && candidate.endsWith("}") || candidate.startsWith("[") && candidate.endsWith("]")) {
-                                      return JSON.parse(candidate);
-                                    }
-                                  }
-                                }
-                              } catch {
-                              }
-                              try {
-                                return JSON.parse(text);
-                              } catch {
-                                return null;
-                              }
-                            };
-                            const parsed = parseTail(rawOut);
-                            if (parsed && typeof parsed === "object") {
-                              rForEval = { ...r, output: parsed };
-                            }
+                      if (agg && Array.isArray(agg.forEachItemResults)) {
+                        for (const r of agg.forEachItemResults) {
+                          if (!r) continue;
+                          if (this.hasFatal(r?.issues || [])) {
+                            anyExplicitFatal = true;
+                            break;
                           }
-                          const failures = await this.evaluateFailureConditions(
-                            parent,
-                            rForEval,
-                            // Evaluate against a shallow config that only carries the parent's fail_if
-                            {
-                              ...config,
-                              fail_if: void 0,
-                              checks: {
-                                ...config?.checks || {},
-                                [parent]: {
-                                  ...config?.checks?.[parent],
-                                  fail_if: parentFailIf
-                                }
-                              }
-                            },
-                            prInfo,
-                            results
-                          );
-                          if (failures.some((f) => f.failed)) {
-                          }
-                          if (failures.some((f) => f.failed)) return true;
-                        }
-                      } catch {
-                      }
-                      return false;
-                    };
-                    const runnableIndices = [];
-                    for (let idx = 0; idx < forEachItems.length; idx++) {
-                      let blocked = false;
-                      for (const p of directForEachParents) {
-                        if (await isIndexFatalForParent(p, idx)) {
-                          blocked = true;
-                          break;
                         }
                       }
-                      if (!blocked && typeof itemTasks[idx] === "function") runnableIndices.push(idx);
+                    }
+                    if (!anyExplicitFatal && forEachItems.length > 0) {
+                      logger.warn(
+                        `\u26A0\uFE0F  forEach: no runnable items for "${checkName}" after gating \u2014 falling back to run all ${forEachItems.length}`
+                      );
+                      for (let idx = 0; idx < forEachItems.length; idx++) {
+                        if (typeof itemTasks[idx] === "function") runnableIndices.push(idx);
+                      }
                     }
                     if (runnableIndices.length === 0) {
-                      const parent = directForEachParents[0];
-                      let anyExplicitFatal = false;
-                      if (parent) {
-                        const agg = results.get(parent);
-                        if (agg && Array.isArray(agg.forEachItemResults)) {
-                          for (const r of agg.forEachItemResults) {
-                            if (!r) continue;
-                            if (this.hasFatal(r?.issues || [])) {
-                              anyExplicitFatal = true;
-                              break;
-                            }
-                          }
-                        }
-                      }
-                      if (!anyExplicitFatal && forEachItems.length > 0) {
-                        logger.warn(
-                          `\u26A0\uFE0F  forEach: no runnable items for "${checkName}" after gating \u2014 falling back to run all ${forEachItems.length}`
-                        );
-                        for (let idx = 0; idx < forEachItems.length; idx++) {
-                          if (typeof itemTasks[idx] === "function") runnableIndices.push(idx);
-                        }
-                      }
-                      if (runnableIndices.length === 0) {
-                        this.recordSkip(checkName, "dependency_failed");
-                        logger.info(`\u23ED  Skipped (dependency failed: no runnable items)`);
-                        return {
-                          checkName,
-                          error: null,
-                          result: { issues: [] },
-                          skipped: true
-                        };
-                      }
-                    }
-                    const forEachConcurrency = Math.max(
-                      1,
-                      Math.min(runnableIndices.length, effectiveMaxParallelism)
-                    );
-                    if (debug && forEachConcurrency > 1) {
-                      log2(
-                        `\u{1F504} Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
-                      );
-                    }
-                    const scheduledTasks = runnableIndices.map((i) => itemTasks[i]).filter((fn) => typeof fn === "function");
-                    const forEachResults = await this.executeWithLimitedParallelism(
-                      scheduledTasks,
-                      forEachConcurrency,
-                      false
-                    );
-                    let processedCount = 0;
-                    for (const result of forEachResults) {
-                      if (result.status === "rejected") {
-                        const error = result.reason;
-                        const errorMessage = error instanceof Error ? error.message : String(error);
-                        allIssues.push({
-                          ruleId: `${checkName}/forEach/iteration_error`,
-                          severity: "error",
-                          category: "logic",
-                          message: `forEach iteration failed: ${errorMessage}`,
-                          file: "",
-                          line: 0
-                        });
-                        if (debug) {
-                          log2(
-                            `\u{1F504} Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
-                          );
-                        }
-                        continue;
-                      }
-                      if (result.value.skipped) {
-                        continue;
-                      }
-                      const { index: finishedIndex, itemResult } = result.value;
-                      processedCount++;
-                      if (itemResult.issues) {
-                        allIssues.push(...itemResult.issues);
-                      }
-                      const resultWithOutput = itemResult;
-                      allOutputs[finishedIndex] = resultWithOutput.output;
-                      const itemContent = resultWithOutput.content;
-                      if (typeof itemContent === "string" && itemContent.trim()) {
-                        aggregatedContents.push(itemContent.trim());
-                      } else {
-                        const outStr = typeof resultWithOutput.output === "string" ? resultWithOutput.output.trim() : "";
-                        if (outStr) aggregatedContents.push(outStr);
-                      }
-                    }
-                    if (processedCount === 0) {
                       this.recordSkip(checkName, "dependency_failed");
-                      logger.info(`\u23ED  Skipped (dependency failed for all items)`);
+                      logger.info(`\u23ED  Skipped (dependency failed: no runnable items)`);
                       return {
                         checkName,
                         error: null,
@@ -17540,411 +16538,197 @@ ${expr}`;
                         skipped: true
                       };
                     }
-                    const finalOutput = allOutputs.length > 0 ? allOutputs : void 0;
-                    finalResult = {
-                      issues: allIssues,
-                      ...finalOutput !== void 0 ? { output: finalOutput } : {}
-                    };
-                    finalResult.isForEach = true;
-                    finalResult.forEachItems = allOutputs;
-                    finalResult.forEachItemResults = perItemResults;
-                    try {
-                      const mask = finalResult.forEachItemResults ? await Promise.all(
-                        Array.from({ length: forEachItems.length }, async (_, idx) => {
-                          const r = finalResult.forEachItemResults[idx];
-                          if (!r) return false;
-                          let hadFatal = this.hasFatal(r.issues || []);
-                          try {
-                            const ids = (r.issues || []).map((i) => i.ruleId).join(",");
-                            logger.debug(
-                              `  forEach: item ${idx + 1}/${forEachItems.length} issues=${(r.issues || []).length} ids=[${ids}]`
-                            );
-                          } catch {
-                          }
-                          if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
-                            try {
-                              const failures = await this.evaluateFailureConditions(
-                                checkName,
-                                r,
-                                config,
-                                prInfo,
-                                results
-                              );
-                              hadFatal = failures.some((f) => f.failed);
-                            } catch {
-                            }
-                          }
-                          return hadFatal;
-                        })
-                      ) : [];
-                      finalResult.forEachFatalMask = mask;
-                      logger.debug(
-                        `  forEach: mask for "${checkName}" \u2192 fatals=${mask.filter(Boolean).length}/${mask.length}`
-                      );
-                    } catch {
-                    }
-                    if (aggregatedContents.length > 0) {
-                      finalResult.content = aggregatedContents.join("\n");
-                    }
-                    for (const [childName, agg] of inlineAgg.entries()) {
-                      const childCfg = config.checks[childName];
-                      const childEnrichedIssues = (agg.issues || []).map((issue) => ({
-                        ...issue,
-                        checkName: childName,
-                        ruleId: `${childName}/${issue.ruleId}`,
-                        group: childCfg.group,
-                        schema: typeof childCfg.schema === "object" ? "custom" : childCfg.schema,
-                        template: childCfg.template,
-                        timestamp: Date.now()
-                      }));
-                      const childFinal = {
-                        issues: childEnrichedIssues,
-                        ...agg.outputs.length > 0 ? { output: agg.outputs } : {},
-                        isForEach: true,
-                        forEachItems: agg.outputs,
-                        forEachItemResults: agg.perItemResults,
-                        ...agg.contents.length > 0 ? { content: agg.contents.join("\n") } : {}
-                      };
-                      try {
-                        const mask = Array.from(
-                          { length: agg.perItemResults.length },
-                          (_, idx) => {
-                            const r = agg.perItemResults[idx];
-                            if (!r) return false;
-                            const hadFatal = (r.issues || []).some((issue) => {
-                              const id = issue.ruleId || "";
-                              return issue.severity === "error" || issue.severity === "critical" || id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id.endsWith("/forEach/iteration_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
-                            });
-                            return hadFatal;
-                          }
-                        );
-                        childFinal.forEachFatalMask = mask;
-                      } catch {
-                      }
-                      results.set(childName, childFinal);
-                    }
-                    if (debug && process.env.VISOR_OUTPUT_FORMAT !== "json" && process.env.VISOR_OUTPUT_FORMAT !== "sarif") {
-                      console.log(
-                        `\u{1F504} Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
-                      );
-                    }
                   }
-                } else {
-                  if (checkConfig.if) {
-                    const gate = await this.shouldRunCheck(
-                      checkName,
-                      checkConfig.if,
-                      prInfo,
-                      results,
-                      debug,
-                      void 0,
-                      /* failSecure */
-                      true
-                    );
-                    if (!gate.shouldRun) {
-                      this.recordSkip(checkName, "if_condition", checkConfig.if);
-                      logger.info(`\u23ED  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
-                      return {
-                        checkName,
-                        error: null,
-                        result: {
-                          issues: []
-                        },
-                        skipped: true
-                      };
-                    }
-                  }
-                  finalResult = await this.executeWithRouting(
-                    checkName,
-                    checkConfig,
-                    provider,
-                    providerConfig,
-                    prInfo,
-                    dependencyResults,
-                    sessionInfo,
-                    config,
-                    dependencyGraph,
-                    debug,
-                    results
+                  const forEachConcurrency = Math.max(
+                    1,
+                    Math.min(runnableIndices.length, effectiveMaxParallelism)
                   );
-                  try {
-                    emitNdjsonSpanWithEvents("visor.check", { "visor.check.id": checkName }, [
-                      { name: "check.started" },
-                      { name: "check.completed" }
-                    ]);
-                  } catch {
-                  }
-                  try {
-                    const outVal = finalResult?.output;
-                    if (process.env.VISOR_DEBUG === "true" && checkName === "refine") {
-                      console.error(`[pre-fail-if refine] hasOutput=${String(outVal !== void 0)}`);
-                    }
-                  } catch {
-                  }
-                  if (config && (config.fail_if || checkConfig.fail_if)) {
-                    try {
-                      if (debug) {
-                        const outAny = finalResult?.output;
-                        const keys = outAny && typeof outAny === "object" ? Object.keys(outAny).join(",") : typeof outAny;
-                        console.log(`[debug] pre-fail_if ${checkName} output keys=${keys}`);
-                      }
-                    } catch {
-                    }
-                    let failureResults = await this.evaluateFailureConditions(
-                      checkName,
-                      finalResult,
-                      config,
-                      prInfo,
-                      results
-                    );
-                    try {
-                      results.set(checkName, finalResult);
-                      this.commitJournal(
-                        checkName,
-                        finalResult,
-                        prInfo.eventType
-                      );
-                      try {
-                        finalResult.__storedVisible = true;
-                      } catch {
-                      }
-                    } catch {
-                    }
-                    if (failureResults.length > 0) {
-                      const failureIssues = failureResults.filter((f) => f.failed).map((f) => ({
-                        file: "system",
-                        line: 0,
-                        ruleId: f.conditionName,
-                        message: f.message || `Failure condition met: ${f.expression}`,
-                        severity: f.severity || "error",
-                        category: "logic"
-                      }));
-                      finalResult.issues = [...finalResult.issues || [], ...failureIssues];
-                      try {
-                        const hadTriggered = failureResults.some((r) => r.failed === true);
-                        const ofCfg = checkConfig.on_fail ? { ...config?.routing?.defaults?.on_fail || {}, ...checkConfig.on_fail } : void 0;
-                        if (hadTriggered && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
-                          let target = null;
-                          if (ofCfg.goto_js) {
-                            try {
-                              const sandbox = this.getRoutingSandbox();
-                              const scope = {
-                                step: {
-                                  id: checkName,
-                                  tags: checkConfig.tags || [],
-                                  group: checkConfig.group
-                                },
-                                outputs: Object.fromEntries(results.entries()),
-                                output: finalResult?.output,
-                                event: { name: prInfo.eventType || "manual" }
-                              };
-                              const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
-                              const res = compileAndRun(
-                                sandbox,
-                                code,
-                                { scope },
-                                {
-                                  injectLog: false,
-                                  wrapFunction: true
-                                }
-                              );
-                              target = typeof res === "string" && res ? res : null;
-                            } catch {
-                            }
-                          }
-                          if (!target && ofCfg.goto) target = ofCfg.goto;
-                          if (target) {
-                          }
-                          if (target) {
-                            try {
-                              (init_logger(), __toCommonJS(logger_exports)).logger.info(
-                                `\u21AA on_fail.goto(post-fail_if): jumping to '${target}' from '${checkName}'`
-                              );
-                            } catch {
-                            }
-                            await this.scheduleForwardRun(target, {
-                              origin: "on_fail",
-                              gotoEvent: ofCfg.goto_event,
-                              config,
-                              dependencyGraph,
-                              prInfo,
-                              resultsMap: results,
-                              debug: !!debug,
-                              foreachScope: [],
-                              sourceCheckName: checkName,
-                              sourceCheckConfig: checkConfig,
-                              sourceOutputForItems: void 0
-                            });
-                            try {
-                              this.onFailForwardRunSeen = true;
-                            } catch {
-                            }
-                          }
-                        }
-                      } catch {
-                      }
-                    }
-                  }
-                  const hadFatalError = (finalResult.issues || []).some((issue) => {
-                    const id = issue.ruleId || "";
-                    return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output");
-                  });
-                  this.recordIterationComplete(
-                    checkName,
-                    checkStartTime,
-                    !hadFatalError,
-                    // Success if no fatal errors
-                    finalResult.issues || [],
-                    finalResult.output
-                  );
-                  if (checkConfig.forEach) {
-                    try {
-                      const finalResultWithOutput = finalResult;
-                      const outputPreview = JSON.stringify(finalResultWithOutput.output)?.slice(0, 200) || "(empty)";
-                      logger.debug(
-                        `\u{1F527} Debug: Check "${checkName}" provider returned: ${outputPreview}`
-                      );
-                    } catch {
-                    }
-                  }
-                  if (debug) {
+                  if (debug && forEachConcurrency > 1) {
                     log2(
-                      `\u{1F527} Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+                      `\u{1F504} Debug: Limiting forEach concurrency for check "${checkName}" to ${forEachConcurrency}`
                     );
                   }
-                  if (finalResult.sessionId) {
-                    sessionIds.set(checkName, finalResult.sessionId);
-                    if (debug) {
-                      log2(`\u{1F527} Debug: Tracked cloned session for cleanup: ${finalResult.sessionId}`);
-                    }
-                  }
-                }
-                const enrichedIssues = (finalResult.issues || []).map((issue) => ({
-                  ...issue,
-                  checkName,
-                  ruleId: `${checkName}/${issue.ruleId}`,
-                  group: checkConfig.group,
-                  schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
-                  template: checkConfig.template,
-                  timestamp: Date.now()
-                }));
-                const enrichedResult = {
-                  ...finalResult,
-                  issues: enrichedIssues
-                };
-                const checkDuration = ((Date.now() - checkStartTime) / 1e3).toFixed(1);
-                const issueCount = enrichedIssues.length;
-                const checkStats = this.executionStats.get(checkName);
-                if (checkStats && checkStats.totalRuns > 1) {
-                  if (issueCount > 0) {
-                    logger.success(
-                      `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs, ${issueCount} issue${issueCount === 1 ? "" : "s"}`
-                    );
-                  } else {
-                    logger.success(
-                      `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs`
-                    );
-                  }
-                } else if (checkStats && checkStats.outputsProduced && checkStats.outputsProduced > 0) {
-                  logger.success(
-                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.outputsProduced} items`
+                  const scheduledTasks = runnableIndices.map((i) => itemTasks[i]).filter((fn) => typeof fn === "function");
+                  const forEachResults = await this.executeWithLimitedParallelism(
+                    scheduledTasks,
+                    forEachConcurrency,
+                    false
                   );
-                } else if (issueCount > 0) {
-                  logger.success(
-                    `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? "" : "s"} found`
-                  );
-                } else {
-                  logger.success(`Check complete: ${checkName} (${checkDuration}s)`);
-                }
-                return {
-                  checkName,
-                  error: null,
-                  result: enrichedResult
-                };
-              } catch (error) {
-                const errorMessage = error instanceof Error ? `${error.message}
-${error.stack || ""}` : String(error);
-                const checkDuration = ((Date.now() - checkStartTime) / 1e3).toFixed(1);
-                this.recordError(checkName, error instanceof Error ? error : new Error(String(error)));
-                this.recordIterationComplete(checkName, checkStartTime, false, [], void 0);
-                logger.error(`\u2716 Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
-                if (debug) {
-                  log2(`\u{1F527} Debug: Error in check ${checkName}: ${errorMessage}`);
-                }
-                return {
-                  checkName,
-                  error: errorMessage,
-                  result: null
-                };
-              }
-            });
-            const levelResults = await this.executeWithLimitedParallelism(
-              levelTaskFunctions,
-              actualParallelism,
-              effectiveFailFast
-            );
-            const levelChecksList = checksInLevel.filter((name) => !results.has(name));
-            for (let i = 0; i < levelResults.length; i++) {
-              const checkName = levelChecksList[i];
-              const result = levelResults[i];
-              if (!checkName) continue;
-              const checkConfig = config.checks[checkName];
-              if (!checkConfig) continue;
-              const isFulfilled = result && result.status === "fulfilled";
-              const value = isFulfilled ? result.value : void 0;
-              if (isFulfilled && value?.result && !value?.error) {
-                if (value.skipped) {
-                  if (debug) {
-                    log2(`\u{1F527} Debug: Storing skip marker for skipped check "${checkName}"`);
-                  }
-                  results.set(checkName, {
-                    issues: [
-                      {
-                        ruleId: `${checkName}/__skipped`,
-                        severity: "info",
+                  let processedCount = 0;
+                  for (const result of forEachResults) {
+                    if (result.status === "rejected") {
+                      const error = result.reason;
+                      const errorMessage = error instanceof Error ? error.message : String(error);
+                      allIssues.push({
+                        ruleId: `${checkName}/forEach/iteration_error`,
+                        severity: "error",
                         category: "logic",
-                        message: "Check was skipped",
+                        message: `forEach iteration failed: ${errorMessage}`,
                         file: "",
                         line: 0
+                      });
+                      if (debug) {
+                        log2(
+                          `\u{1F504} Debug: forEach iteration for check "${checkName}" failed: ${errorMessage}`
+                        );
                       }
-                    ]
-                  });
-                  continue;
-                }
-                const reviewResult = value.result;
-                const reviewSummaryWithOutput = reviewResult;
-                if (checkConfig?.forEach && (!reviewResult.issues || reviewResult.issues.length === 0)) {
-                  const validation = this.validateAndNormalizeForEachOutput(
-                    checkName,
-                    reviewSummaryWithOutput.output,
-                    checkConfig.group
-                  );
-                  if (!validation.isValid) {
-                    results.set(
+                      continue;
+                    }
+                    if (result.value.skipped) {
+                      continue;
+                    }
+                    const { index: finishedIndex, itemResult } = result.value;
+                    processedCount++;
+                    if (itemResult.issues) {
+                      allIssues.push(...itemResult.issues);
+                    }
+                    const resultWithOutput = itemResult;
+                    allOutputs[finishedIndex] = resultWithOutput.output;
+                    const itemContent = resultWithOutput.content;
+                    if (typeof itemContent === "string" && itemContent.trim()) {
+                      aggregatedContents.push(itemContent.trim());
+                    } else {
+                      const outStr = typeof resultWithOutput.output === "string" ? resultWithOutput.output.trim() : "";
+                      if (outStr) aggregatedContents.push(outStr);
+                    }
+                  }
+                  if (processedCount === 0) {
+                    this.recordSkip(checkName, "dependency_failed");
+                    logger.info(`\u23ED  Skipped (dependency failed for all items)`);
+                    return {
                       checkName,
-                      validation.error.issues ? { issues: validation.error.issues } : {}
-                    );
-                    continue;
+                      error: null,
+                      result: { issues: [] },
+                      skipped: true
+                    };
                   }
-                  const normalizedOutput = validation.normalizedOutput;
-                  logger.debug(
-                    `\u{1F527} Debug: Raw output for forEach check ${checkName}: ${Array.isArray(reviewSummaryWithOutput.output) ? `array(${reviewSummaryWithOutput.output.length})` : typeof reviewSummaryWithOutput.output}`
-                  );
+                  const finalOutput = allOutputs.length > 0 ? allOutputs : void 0;
+                  finalResult = {
+                    issues: allIssues,
+                    ...finalOutput !== void 0 ? { output: finalOutput } : {}
+                  };
+                  finalResult.isForEach = true;
+                  finalResult.forEachItems = allOutputs;
+                  finalResult.forEachItemResults = perItemResults;
                   try {
-                    const preview = JSON.stringify(normalizedOutput);
+                    const mask = finalResult.forEachItemResults ? await Promise.all(
+                      Array.from({ length: forEachItems.length }, async (_, idx) => {
+                        const r = finalResult.forEachItemResults[idx];
+                        if (!r) return false;
+                        let hadFatal = this.hasFatal(r.issues || []);
+                        try {
+                          const ids = (r.issues || []).map((i) => i.ruleId).join(",");
+                          logger.debug(
+                            `  forEach: item ${idx + 1}/${forEachItems.length} issues=${(r.issues || []).length} ids=[${ids}]`
+                          );
+                        } catch {
+                        }
+                        if (!hadFatal && config && (config.fail_if || checkConfig.fail_if)) {
+                          try {
+                            const failures = await this.evaluateFailureConditions(
+                              checkName,
+                              r,
+                              config,
+                              prInfo,
+                              results
+                            );
+                            hadFatal = failures.some((f) => f.failed);
+                          } catch {
+                          }
+                        }
+                        return hadFatal;
+                      })
+                    ) : [];
+                    finalResult.forEachFatalMask = mask;
                     logger.debug(
-                      `\u{1F527} Debug: Check "${checkName}" forEach output: ${preview?.slice(0, 200) || "(empty)"}`
+                      `  forEach: mask for "${checkName}" \u2192 fatals=${mask.filter(Boolean).length}/${mask.length}`
                     );
                   } catch {
                   }
-                  reviewSummaryWithOutput.forEachItems = normalizedOutput;
-                  reviewSummaryWithOutput.isForEach = true;
-                  try {
-                    const st = this.executionStats.get(checkName);
-                    if (st) st.outputsProduced = normalizedOutput.length;
-                  } catch {
+                  if (aggregatedContents.length > 0) {
+                    finalResult.content = aggregatedContents.join("\n");
+                  }
+                  for (const [childName, agg] of inlineAgg.entries()) {
+                    const childCfg = config.checks[childName];
+                    const childEnrichedIssues = (agg.issues || []).map((issue) => ({
+                      ...issue,
+                      checkName: childName,
+                      ruleId: `${childName}/${issue.ruleId}`,
+                      group: childCfg.group,
+                      schema: typeof childCfg.schema === "object" ? "custom" : childCfg.schema,
+                      template: childCfg.template,
+                      timestamp: Date.now()
+                    }));
+                    const childFinal = {
+                      issues: childEnrichedIssues,
+                      ...agg.outputs.length > 0 ? { output: agg.outputs } : {},
+                      isForEach: true,
+                      forEachItems: agg.outputs,
+                      forEachItemResults: agg.perItemResults,
+                      ...agg.contents.length > 0 ? { content: agg.contents.join("\n") } : {}
+                    };
+                    try {
+                      const mask = Array.from(
+                        { length: agg.perItemResults.length },
+                        (_, idx) => {
+                          const r = agg.perItemResults[idx];
+                          if (!r) return false;
+                          const hadFatal = (r.issues || []).some((issue) => {
+                            const id = issue.ruleId || "";
+                            return issue.severity === "error" || issue.severity === "critical" || id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id.endsWith("/forEach/iteration_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
+                          });
+                          return hadFatal;
+                        }
+                      );
+                      childFinal.forEachFatalMask = mask;
+                    } catch {
+                    }
+                    results.set(childName, childFinal);
+                  }
+                  if (debug && process.env.VISOR_OUTPUT_FORMAT !== "json" && process.env.VISOR_OUTPUT_FORMAT !== "sarif") {
+                    console.log(
+                      `\u{1F504} Debug: Completed forEach execution for check "${checkName}", total issues: ${allIssues.length}`
+                    );
                   }
                 }
+              } else {
+                if (checkConfig.if) {
+                  const gate = await this.shouldRunCheck(
+                    checkName,
+                    checkConfig.if,
+                    prInfo,
+                    results,
+                    debug,
+                    void 0,
+                    /* failSecure */
+                    true
+                  );
+                  if (!gate.shouldRun) {
+                    this.recordSkip(checkName, "if_condition", checkConfig.if);
+                    logger.info(`\u23ED  Skipped (if: ${this.truncate(checkConfig.if, 40)})`);
+                    return {
+                      checkName,
+                      error: null,
+                      result: {
+                        issues: []
+                      },
+                      skipped: true
+                    };
+                  }
+                }
+                finalResult = await this.executeWithRouting(
+                  checkName,
+                  checkConfig,
+                  provider,
+                  providerConfig,
+                  prInfo,
+                  dependencyResults,
+                  sessionInfo,
+                  config,
+                  dependencyGraph,
+                  debug,
+                  results
+                );
                 try {
                   emitNdjsonSpanWithEvents("visor.check", { "visor.check.id": checkName }, [
                     { name: "check.started" },
@@ -17952,189 +16736,257 @@ ${error.stack || ""}` : String(error);
                   ]);
                 } catch {
                 }
-                const reviewResultWithOutput = reviewResult;
-                const hasOutput = reviewResultWithOutput.output !== void 0;
-                if (hasOutput) {
-                  const isForEachAggregateChild = !checkConfig.forEach && reviewResultWithOutput.isForEach === true && (Array.isArray(reviewResultWithOutput.forEachItems) || Array.isArray(reviewResultWithOutput.output));
-                  if (!isForEachAggregateChild && !checkConfig.forEach) {
-                    try {
-                      const already = reviewResultWithOutput.__histTracked === true;
-                      try {
-                        if (process.env.VISOR_DEBUG === "true" && checkName === "refine") {
-                          console.error(`[grouped-hist] ${checkName} __histTracked=${String(already)}`);
-                        }
-                      } catch {
-                      }
-                      if (!already) {
-                        const outVal = reviewResultWithOutput.output;
-                        let histVal = outVal;
-                        if (Array.isArray(outVal)) {
-                          histVal = outVal;
-                        } else if (outVal !== null && typeof outVal === "object") {
-                          histVal = { ...outVal };
-                          if (histVal.ts === void 0) histVal.ts = Date.now();
-                        } else {
-                          histVal = { text: String(outVal), ts: Date.now() };
-                        }
-                        this.trackOutputHistory(checkName, histVal);
-                      }
-                    } catch {
-                      try {
-                        this.trackOutputHistory(checkName, reviewResultWithOutput.output);
-                      } catch {
-                      }
-                    }
+                if (config && (config.fail_if || checkConfig.fail_if)) {
+                  const failureResults = await this.evaluateFailureConditions(
+                    checkName,
+                    finalResult,
+                    config,
+                    prInfo,
+                    results
+                  );
+                  if (failureResults.length > 0) {
+                    const failureIssues = failureResults.filter((f) => f.failed).map((f) => ({
+                      file: "system",
+                      line: 0,
+                      ruleId: f.conditionName,
+                      message: f.message || `Failure condition met: ${f.expression}`,
+                      severity: f.severity || "error",
+                      category: "logic"
+                    }));
+                    finalResult.issues = [...finalResult.issues || [], ...failureIssues];
                   }
-                } else {
+                }
+                const hadFatalError = (finalResult.issues || []).some((issue) => {
+                  const id = issue.ruleId || "";
+                  return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output");
+                });
+                this.recordIterationComplete(
+                  checkName,
+                  checkStartTime,
+                  !hadFatalError,
+                  // Success if no fatal errors
+                  finalResult.issues || [],
+                  finalResult.output
+                );
+                if (checkConfig.forEach) {
                   try {
-                    if (!this.outputHistory.has(checkName)) this.outputHistory.set(checkName, []);
+                    const finalResultWithOutput = finalResult;
+                    const outputPreview = JSON.stringify(finalResultWithOutput.output)?.slice(0, 200) || "(empty)";
+                    logger.debug(`\u{1F527} Debug: Check "${checkName}" provider returned: ${outputPreview}`);
                   } catch {
                   }
                 }
-                results.set(checkName, reviewResult);
-                const agg = reviewResult;
-                if (checkConfig?.forEach && (Array.isArray(agg.forEachItems) || Array.isArray(agg.output))) {
-                  let loopIdx = 1;
-                  try {
-                    const hist = this.outputHistory.get(checkName) || [];
-                    const arraysSoFar = hist.filter((x) => Array.isArray(x)).length;
-                    loopIdx = arraysSoFar + 1;
-                  } catch {
+                if (debug) {
+                  log2(
+                    `\u{1F527} Debug: Completed check: ${checkName}, issues found: ${(finalResult.issues || []).length}`
+                  );
+                }
+                if (finalResult.sessionId) {
+                  sessionIds.set(checkName, finalResult.sessionId);
+                  if (debug) {
+                    log2(`\u{1F527} Debug: Tracked cloned session for cleanup: ${finalResult.sessionId}`);
                   }
-                  try {
-                    for (const [, arr] of this.outputHistory.entries()) {
-                      if (!Array.isArray(arr)) continue;
-                      for (const e of arr) {
-                        if (e && typeof e === "object" && e.last_loop === true) {
-                          try {
-                            e.last_loop = false;
-                          } catch {
-                          }
-                        }
-                      }
-                    }
-                  } catch {
-                  }
-                  try {
-                    const arrForHist = Array.isArray(agg.forEachItems) ? agg.forEachItems : Array.isArray(agg.output) ? agg.output : [];
-                    this.trackOutputHistory(checkName, arrForHist);
-                    const ids = [];
-                    for (let i2 = 0; i2 < arrForHist.length; i2++) {
-                      const it = arrForHist[i2];
-                      const id = it && (it.id != null ? String(it.id) : String(i2 + 1));
-                      ids.push(id);
-                    }
-                    this.trackOutputHistory(checkName, {
-                      loop_idx: loopIdx,
-                      last_loop: true,
-                      items: ids
-                    });
-                  } catch {
-                  }
-                  this.commitJournal(checkName, agg, prInfo.eventType, []);
-                  const items = Array.isArray(agg.forEachItems) ? agg.forEachItems : Array.isArray(agg.output) ? agg.output : [];
-                  for (let i2 = 0; i2 < items.length; i2++) {
-                    const item = items[i2];
-                    try {
-                      this.commitJournal(
-                        checkName,
-                        { issues: [], output: item },
-                        prInfo.eventType,
-                        [{ check: checkName, index: i2 }]
-                      );
-                    } catch {
-                    }
-                  }
+                }
+              }
+              const enrichedIssues = (finalResult.issues || []).map((issue) => ({
+                ...issue,
+                checkName,
+                ruleId: `${checkName}/${issue.ruleId}`,
+                group: checkConfig.group,
+                schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
+                template: checkConfig.template,
+                timestamp: Date.now()
+              }));
+              const enrichedResult = {
+                ...finalResult,
+                issues: enrichedIssues
+              };
+              const checkDuration = ((Date.now() - checkStartTime) / 1e3).toFixed(1);
+              const issueCount = enrichedIssues.length;
+              const checkStats = this.executionStats.get(checkName);
+              if (checkStats && checkStats.totalRuns > 1) {
+                if (issueCount > 0) {
+                  logger.success(
+                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs, ${issueCount} issue${issueCount === 1 ? "" : "s"}`
+                  );
                 } else {
-                  try {
-                    const __already = reviewResult.__storedVisible === true;
-                    if (!__already) {
-                      this.commitJournal(
-                        checkName,
-                        reviewResult,
-                        prInfo.eventType
-                      );
+                  logger.success(
+                    `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.totalRuns} runs`
+                  );
+                }
+              } else if (checkStats && checkStats.outputsProduced && checkStats.outputsProduced > 0) {
+                logger.success(
+                  `Check complete: ${checkName} (${checkDuration}s) - ${checkStats.outputsProduced} items`
+                );
+              } else if (issueCount > 0) {
+                logger.success(
+                  `Check complete: ${checkName} (${checkDuration}s) - ${issueCount} issue${issueCount === 1 ? "" : "s"} found`
+                );
+              } else {
+                logger.success(`Check complete: ${checkName} (${checkDuration}s)`);
+              }
+              return {
+                checkName,
+                error: null,
+                result: enrichedResult
+              };
+            } catch (error) {
+              const errorMessage = error instanceof Error ? `${error.message}
+${error.stack || ""}` : String(error);
+              const checkDuration = ((Date.now() - checkStartTime) / 1e3).toFixed(1);
+              this.recordError(checkName, error instanceof Error ? error : new Error(String(error)));
+              this.recordIterationComplete(checkName, checkStartTime, false, [], void 0);
+              logger.error(`\u2716 Check failed: ${checkName} (${checkDuration}s) - ${errorMessage}`);
+              if (debug) {
+                log2(`\u{1F527} Debug: Error in check ${checkName}: ${errorMessage}`);
+              }
+              return {
+                checkName,
+                error: errorMessage,
+                result: null
+              };
+            }
+          });
+          const levelResults = await this.executeWithLimitedParallelism(
+            levelTaskFunctions,
+            actualParallelism,
+            effectiveFailFast
+          );
+          const levelChecksList = executionGroup.parallel.filter((name) => !results.has(name));
+          for (let i = 0; i < levelResults.length; i++) {
+            const checkName = levelChecksList[i];
+            const result = levelResults[i];
+            const checkConfig = config.checks[checkName];
+            if (result.status === "fulfilled" && result.value.result && !result.value.error) {
+              if (result.value.skipped) {
+                if (debug) {
+                  log2(`\u{1F527} Debug: Storing skip marker for skipped check "${checkName}"`);
+                }
+                results.set(checkName, {
+                  issues: [
+                    {
+                      ruleId: `${checkName}/__skipped`,
+                      severity: "info",
+                      category: "logic",
+                      message: "Check was skipped",
+                      file: "",
+                      line: 0
                     }
-                  } catch {
+                  ]
+                });
+                continue;
+              }
+              const reviewResult = result.value.result;
+              const reviewSummaryWithOutput = reviewResult;
+              if (checkConfig?.forEach && (!reviewResult.issues || reviewResult.issues.length === 0)) {
+                const validation = this.validateAndNormalizeForEachOutput(
+                  checkName,
+                  reviewSummaryWithOutput.output,
+                  checkConfig.group
+                );
+                if (!validation.isValid) {
+                  results.set(
+                    checkName,
+                    validation.error.issues ? { issues: validation.error.issues } : {}
+                  );
+                  continue;
+                }
+                const normalizedOutput = validation.normalizedOutput;
+                logger.debug(
+                  `\u{1F527} Debug: Raw output for forEach check ${checkName}: ${Array.isArray(reviewSummaryWithOutput.output) ? `array(${reviewSummaryWithOutput.output.length})` : typeof reviewSummaryWithOutput.output}`
+                );
+                try {
+                  const preview = JSON.stringify(normalizedOutput);
+                  logger.debug(
+                    `\u{1F527} Debug: Check "${checkName}" forEach output: ${preview?.slice(0, 200) || "(empty)"}`
+                  );
+                } catch {
+                }
+                reviewSummaryWithOutput.forEachItems = normalizedOutput;
+                reviewSummaryWithOutput.isForEach = true;
+                try {
+                  const st = this.executionStats.get(checkName);
+                  if (st) st.outputsProduced = normalizedOutput.length;
+                } catch {
+                }
+              }
+              try {
+                emitNdjsonSpanWithEvents("visor.check", { "visor.check.id": checkName }, [
+                  { name: "check.started" },
+                  { name: "check.completed" }
+                ]);
+              } catch {
+              }
+              const reviewResultWithOutput = reviewResult;
+              if (reviewResultWithOutput.output !== void 0) {
+                this.trackOutputHistory(checkName, reviewResultWithOutput.output);
+              }
+              results.set(checkName, reviewResult);
+              const agg = reviewResult;
+              if (checkConfig?.forEach && (Array.isArray(agg.forEachItems) || Array.isArray(agg.output))) {
+                this.commitJournal(checkName, agg, prInfo.eventType, []);
+                const items = Array.isArray(agg.forEachItems) ? agg.forEachItems : Array.isArray(agg.output) ? agg.output : [];
+                for (let i2 = 0; i2 < items.length; i2++) {
+                  const item = items[i2];
+                  try {
                     this.commitJournal(
                       checkName,
-                      reviewResult,
-                      prInfo.eventType
+                      { issues: [], output: item },
+                      prInfo.eventType,
+                      [{ check: checkName, index: i2 }]
                     );
+                  } catch {
                   }
                 }
               } else {
-                const errorSummary = {
-                  issues: [
-                    {
-                      file: "system",
-                      line: 0,
-                      endLine: void 0,
-                      ruleId: `${checkName}/error`,
-                      message: isFulfilled ? value?.error || "Unknown error" : result?.reason instanceof Error ? result.reason.message : String(result?.reason),
-                      severity: "error",
-                      category: "logic",
-                      suggestion: void 0,
-                      replacement: void 0
-                    }
-                  ]
-                };
-                results.set(checkName, errorSummary);
-                this.commitJournal(checkName, errorSummary, prInfo.eventType);
-                if (effectiveFailFast) {
+                this.commitJournal(checkName, reviewResult, prInfo.eventType);
+              }
+            } else {
+              const errorSummary = {
+                issues: [
+                  {
+                    file: "system",
+                    line: 0,
+                    endLine: void 0,
+                    ruleId: `${checkName}/error`,
+                    message: result.status === "fulfilled" ? result.value.error || "Unknown error" : result.reason instanceof Error ? result.reason.message : String(result.reason),
+                    severity: "error",
+                    category: "logic",
+                    suggestion: void 0,
+                    replacement: void 0
+                  }
+                ]
+              };
+              results.set(checkName, errorSummary);
+              this.commitJournal(checkName, errorSummary, prInfo.eventType);
+              if (effectiveFailFast) {
+                if (debug) {
+                  log2(`\u{1F6D1} Check "${checkName}" failed and fail-fast is enabled - stopping execution`);
+                }
+                shouldStopExecution = true;
+                break;
+              }
+            }
+          }
+          if (effectiveFailFast && !shouldStopExecution) {
+            for (let i = 0; i < levelResults.length; i++) {
+              const checkName = executionGroup.parallel[i];
+              const result = levelResults[i];
+              if (result.status === "fulfilled" && result.value.result && !result.value.error) {
+                const hasFailuresToReport = (result.value.result.issues || []).some(
+                  (issue) => issue.severity === "error" || issue.severity === "critical"
+                );
+                if (hasFailuresToReport) {
                   if (debug) {
-                    log2(`\u{1F6D1} Check "${checkName}" failed and fail-fast is enabled - stopping execution`);
+                    log2(
+                      `\u{1F6D1} Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
+                    );
                   }
                   shouldStopExecution = true;
                   break;
                 }
               }
             }
-            if (effectiveFailFast && !shouldStopExecution) {
-              for (let i = 0; i < levelResults.length; i++) {
-                const checkName = checksInLevel[i];
-                const result = levelResults[i];
-                if (!checkName) continue;
-                if (result?.status === "fulfilled" && result?.value?.result && !result?.value?.error) {
-                  const hasFailuresToReport = (result.value.result.issues || []).some(
-                    (issue) => issue.severity === "error" || issue.severity === "critical"
-                  );
-                  if (hasFailuresToReport) {
-                    if (debug) {
-                      log2(
-                        `\u{1F6D1} Check "${checkName}" found critical/high issues and fail-fast is enabled - stopping execution`
-                      );
-                    }
-                    shouldStopExecution = true;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        };
-        for (; wave <= maxWaves && !shouldStopExecution; wave++) {
-          if (wave > 1) {
-            results.clear();
-            await runWave();
-          }
-          await executeLevels();
-          const saw = Boolean(this.onFailForwardRunSeen);
-          const pending = (() => {
-            try {
-              return this.forwardDependentsScheduled && this.forwardDependentsScheduled.size > 0;
-            } catch {
-              return false;
-            }
-          })();
-          if (debug)
-            (config?.output?.pr_comment ? console.error : console.log)(
-              `\u{1F501} Debug: wave ${wave} saw onFailForwardRunSeen=${String(saw)} pendingForward=${String(pending)}`
-            );
-          if (!(saw && pending)) break;
-          try {
-            logger.info(`\u{1F501} Wave ${wave} completed with on_fail routing; scheduling next wave...`);
-          } catch {
           }
         }
         if (debug) {
@@ -18432,11 +17284,8 @@ ${error.stack || ""}` : String(error);
               );
             }
             processed.add(checkName);
-            let nonInternalIssues = (result.issues || []).filter(
+            const nonInternalIssues = (result.issues || []).filter(
               (issue) => !issue.ruleId?.endsWith("/__skipped")
-            );
-            nonInternalIssues = nonInternalIssues.map(
-              (i) => i.checkName ? i : { ...i, checkName }
             );
             aggregatedIssues.push(...nonInternalIssues);
             const resultSummary = result;
@@ -18452,13 +17301,10 @@ ${error.stack || ""}` : String(error);
         for (const [checkName, result] of results.entries()) {
           if (processed.has(checkName)) continue;
           if (!result) continue;
-          let dynNonInternal = (result.issues || []).filter(
+          const nonInternalIssues = (result.issues || []).filter(
             (issue) => !issue.ruleId?.endsWith("/__skipped")
           );
-          dynNonInternal = dynNonInternal.map(
-            (i) => i.checkName ? i : { ...i, checkName }
-          );
-          aggregatedIssues.push(...dynNonInternal);
+          aggregatedIssues.push(...nonInternalIssues);
           const resultSummary = result;
           const resultContent = resultSummary.content;
           if (typeof resultContent === "string" && resultContent.trim()) {
@@ -18475,39 +17321,6 @@ ${error.stack || ""}` : String(error);
           console.error(
             `\u{1F527} Debug: Aggregated ${aggregatedIssues.length} issues from ${results.size} dependency-aware checks`
           );
-        }
-        if (results.size === 0 && (!aggregatedIssues || aggregatedIssues.length === 0)) {
-          try {
-            const cfg = this.config || {};
-            const maxLoops = (cfg.routing && cfg.routing.max_loops) ?? void 0;
-            if (typeof maxLoops === "number") {
-              const checksToScan = Object.keys(cfg.checks || {});
-              for (const name of checksToScan) {
-                const c = cfg.checks[name] || {};
-                if (c.on_success && Array.isArray(c.on_success.run) && c.on_success.run.length > 0) {
-                  aggregatedIssues.push({
-                    file: "system",
-                    line: 0,
-                    ruleId: `${name}/routing/loop_budget_exceeded`,
-                    message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_success run`,
-                    severity: "error",
-                    category: "logic"
-                  });
-                }
-                if (c.on_fail && (c.on_fail.goto || c.on_fail.goto_js)) {
-                  aggregatedIssues.push({
-                    file: "system",
-                    line: 0,
-                    ruleId: `${name}/routing/loop_budget_exceeded`,
-                    message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_fail goto`,
-                    severity: "error",
-                    category: "logic"
-                  });
-                }
-              }
-            }
-          } catch {
-          }
         }
         const suppressionEnabled = this.config?.output?.suppressionEnabled !== false;
         const issueFilter = new IssueFilter(suppressionEnabled);
@@ -18563,12 +17376,6 @@ ${result.debug.rawResponse}`).join("\n\n"),
         }
         if (Object.keys(outputsMap).length > 0) {
           summary.__outputs = outputsMap;
-        }
-        try {
-          const hist = {};
-          for (const [k, v] of this.outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
-          summary.history = hist;
-        } catch {
         }
         summary.__executed = Array.from(results.keys());
         return summary;
@@ -19205,7 +18012,6 @@ ${result.value.result.debug.rawResponse}`;
        * Complete GitHub check runs with results
        */
       async completeGitHubChecksWithResults(reviewSummary, options, prInfo) {
-        const GH_DBG = process.env.VISOR_DEBUG_GITHUB_COMMENTS === "true";
         if (!this.githubCheckService || !this.checkRunMap || !options.githubChecks?.owner || !options.githubChecks.repo) {
           return;
         }
@@ -19216,20 +18022,6 @@ ${result.value.result.debug.rawResponse}`;
         for (const issue of reviewSummary.issues || []) {
           if (issue.checkName && issuesByCheck.has(issue.checkName)) {
             issuesByCheck.get(issue.checkName).push(issue);
-          }
-        }
-        if (GH_DBG) {
-          try {
-            const counts = Array.from(issuesByCheck.entries()).map(([k, v]) => ({ check: k, issues: v.length }));
-            const sample = (reviewSummary.issues || []).slice(0, 3).map((i) => ({
-              file: i.file,
-              line: i.line,
-              severity: i.severity,
-              ruleId: i.ruleId,
-              checkName: i.checkName
-            }));
-            console.error(`[gh-debug] GH checks grouping: ${JSON.stringify(counts)} sample=${JSON.stringify(sample)}`);
-          } catch {
           }
         }
         console.log(`\u{1F3C1} Completing ${this.checkRunMap.size} GitHub check runs...`);
@@ -19258,14 +18050,6 @@ ${result.value.result.debug.rawResponse}`;
               options.githubChecks.headSha
               // currentCommitSha
             );
-            if (GH_DBG) {
-              try {
-                console.error(
-                  `[gh-debug] Completed GH check='${checkName}' with ${checkIssues.length} issues; failureIf=${(failureResults || []).filter((f) => f.failed).length}`
-                );
-              } catch {
-              }
-            }
             console.log(`\u2705 Completed ${checkName} check with ${checkIssues.length} issues`);
           } catch (error) {
             console.error(`\u274C Failed to complete ${checkName} check: ${error}`);
@@ -19332,26 +18116,23 @@ ${result.value.result.debug.rawResponse}`;
               filteredChecks.push(checkName);
               continue;
             }
-            const hasOn = Object.prototype.hasOwnProperty.call(checkConfig, "on");
             const eventTriggers = checkConfig.on || [];
-            if (!hasOn || eventTriggers.length === 0) {
+            if (eventTriggers.length === 0) {
               filteredChecks.push(checkName);
-              if (debug)
-                logFn?.(
-                  `\u{1F527} Debug: Check '${checkName}' has ${!hasOn ? "no" : "empty"} 'on' field, including for '${currentEvent}'`
-                );
-              continue;
-            }
-            if (eventTriggers.includes(currentEvent)) {
+              if (debug) {
+                logFn?.(`\u{1F527} Debug: Check '${checkName}' has no event triggers, including`);
+              }
+            } else if (eventTriggers.includes(currentEvent)) {
               filteredChecks.push(checkName);
-              if (debug)
+              if (debug) {
                 logFn?.(`\u{1F527} Debug: Check '${checkName}' matches event '${currentEvent}', including`);
-            } else if (debug) {
-              logFn?.(
-                `\u{1F527} Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(
-                  eventTriggers
-                )}), skipping`
-              );
+              }
+            } else {
+              if (debug) {
+                logFn?.(
+                  `\u{1F527} Debug: Check '${checkName}' does not match event '${currentEvent}' (triggers: ${JSON.stringify(eventTriggers)}), skipping`
+                );
+              }
             }
           }
           return filteredChecks;
@@ -19367,16 +18148,18 @@ ${result.value.result.debug.rawResponse}`;
               continue;
             }
             const eventTriggers = checkConfig.on || [];
-            if (eventTriggers.length === 0) {
+            if (eventTriggers.length === 1 && eventTriggers[0] === "manual") {
+              if (debug) {
+                logFn?.(`\u{1F527} Debug: Check '${checkName}' is manual-only, skipping`);
+              }
+            } else {
               filteredChecks.push(checkName);
-              if (debug) logFn?.(`\u{1F527} Debug: Check '${checkName}' included (on: [])`);
-              continue;
+              if (debug) {
+                logFn?.(
+                  `\u{1F527} Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`
+                );
+              }
             }
-            filteredChecks.push(checkName);
-            if (debug)
-              logFn?.(
-                `\u{1F527} Debug: Check '${checkName}' included (triggers: ${JSON.stringify(eventTriggers)})`
-              );
           }
           return filteredChecks;
         }
@@ -19434,14 +18217,6 @@ ${result.value.result.debug.rawResponse}`;
         }
         stats.totalDuration += duration;
         stats.perIterationDuration.push(duration);
-        try {
-          if (stats.skipped) {
-            stats.skipped = false;
-            stats.skipReason = void 0;
-            stats.skipCondition = void 0;
-          }
-        } catch {
-        }
         for (const issue of issues) {
           stats.issuesFound++;
           if (issue.severity === "critical") stats.issuesBySeverity.critical++;
@@ -19471,12 +18246,6 @@ ${result.value.result.debug.rawResponse}`;
         }
         const arr = this.outputHistory.get(checkName);
         arr.push(output);
-        try {
-          if (process.env.VISOR_DEBUG === "true" && (checkName === "refine" || checkName === "ask")) {
-            console.error(`[hist] push ${checkName} (len now ${arr.length})`);
-          }
-        } catch {
-        }
       }
       /**
        * Snapshot of output history per step for test assertions
@@ -19540,20 +18309,7 @@ ${result.value.result.debug.rawResponse}`;
        * Build the final execution statistics object
        */
       buildExecutionStatistics() {
-        const inTestMode = Boolean(
-          this.executionContext && this.executionContext.mode?.test
-        );
-        const checks = Array.from(this.executionStats.values()).map((s) => {
-          try {
-            const hist = this.outputHistory.get(s.checkName) || [];
-            const nonArrayCount = hist.filter((x) => !Array.isArray(x)).length;
-            if (!inTestMode && nonArrayCount > (s.totalRuns || 0)) {
-              return { ...s, totalRuns: nonArrayCount };
-            }
-          } catch {
-          }
-          return s;
-        });
+        const checks = Array.from(this.executionStats.values());
         const totalExecutions = checks.reduce((sum, s) => sum + s.totalRuns, 0);
         const successfulExecutions = checks.reduce((sum, s) => sum + s.successfulRuns, 0);
         const failedExecutions = checks.reduce((sum, s) => sum + s.failedRuns, 0);
@@ -19577,12 +18333,6 @@ ${result.value.result.debug.rawResponse}`;
       hasFatal(issues) {
         if (!issues || issues.length === 0) return false;
         return issues.some((i) => this.isFatalRule(i.ruleId || "", i.severity));
-      }
-      // Gating-specific fatality: ignore generic severity-only errors. Only gate on
-      // well-known provider/command/forEach failures and explicit fail_if markers.
-      isGatingFatal(issue) {
-        const id = (issue.ruleId || "").toString();
-        return id === "command/execution_error" || id.endsWith("/command/execution_error") || id === "command/timeout" || id.endsWith("/command/timeout") || id === "command/transform_js_error" || id.endsWith("/command/transform_js_error") || id === "command/transform_error" || id.endsWith("/command/transform_error") || id.endsWith("/forEach/iteration_error") || id === "forEach/undefined_output" || id.endsWith("/forEach/undefined_output") || id.endsWith("_fail_if") || id.endsWith("/global_fail_if");
       }
       async failIfTriggered(checkName, result, config, previousOutputs) {
         if (!config) return false;
@@ -19759,6 +18509,9 @@ var init_config_merger = __esm({
         }
         if (child.checks) {
           result.checks = this.mergeChecks(parent.checks || {}, child.checks);
+        }
+        if (child.tools) {
+          result.tools = this.mergeObjects(parent.tools || {}, child.tools);
         }
         return result;
       }
@@ -20015,6 +18768,10 @@ var init_config_schema = __esm({
               ],
               description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
             },
+            tools: {
+              $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
+              description: "Custom tool definitions that can be used in MCP blocks"
+            },
             steps: {
               $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
               description: "Step configurations (recommended)"
@@ -20074,10 +18831,6 @@ var init_config_schema = __esm({
             routing: {
               $ref: "#/definitions/RoutingDefaults",
               description: "Optional routing defaults for retry/goto/run policies"
-            },
-            limits: {
-              $ref: "#/definitions/LimitsConfig",
-              description: "Global execution limits"
             }
           },
           required: ["output", "version"],
@@ -20088,6 +18841,100 @@ var init_config_schema = __esm({
         "Record<string,unknown>": {
           type: "object",
           additionalProperties: {}
+        },
+        "Record<string,CustomToolDefinition>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/CustomToolDefinition"
+          }
+        },
+        CustomToolDefinition: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Tool name - used to reference the tool in MCP blocks"
+            },
+            description: {
+              type: "string",
+              description: "Description of what the tool does"
+            },
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "object"
+                },
+                properties: {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                },
+                required: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                additionalProperties: {
+                  type: "boolean"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Input schema for the tool (JSON Schema format)",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            exec: {
+              type: "string",
+              description: "Command to execute - supports Liquid template"
+            },
+            stdin: {
+              type: "string",
+              description: "Optional stdin input - supports Liquid template"
+            },
+            transform: {
+              type: "string",
+              description: "Transform the raw output - supports Liquid template"
+            },
+            transform_js: {
+              type: "string",
+              description: "Transform the output using JavaScript - alternative to transform"
+            },
+            cwd: {
+              type: "string",
+              description: "Working directory for command execution"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the command"
+            },
+            timeout: {
+              type: "number",
+              description: "Timeout in milliseconds"
+            },
+            parseJson: {
+              type: "boolean",
+              description: "Whether to parse output as JSON automatically"
+            },
+            outputSchema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Expected output schema for validation"
+            }
+          },
+          required: ["name", "exec"],
+          additionalProperties: false,
+          description: "Custom tool definition for use in MCP blocks",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,string>": {
+          type: "object",
+          additionalProperties: {
+            type: "string"
+          }
         },
         "Record<string,CheckConfig>": {
           type: "object",
@@ -20188,22 +19035,6 @@ var init_config_schema = __esm({
               type: "string",
               description: "AI provider to use for this check - overrides global setting"
             },
-            ai_persona: {
-              type: "string",
-              description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
-            },
-            ai_prompt_type: {
-              type: "string",
-              description: "Probe promptType for this check (underscore style)"
-            },
-            ai_system_prompt: {
-              type: "string",
-              description: "System prompt for this check (underscore style)"
-            },
-            ai_custom_prompt: {
-              type: "string",
-              description: "Legacy customPrompt (underscore style) \u2014 deprecated, use ai_system_prompt"
-            },
             ai_mcp_servers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
@@ -20274,10 +19105,6 @@ var init_config_schema = __esm({
               },
               description: 'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])'
             },
-            continue_on_failure: {
-              type: "boolean",
-              description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
-            },
             forEach: {
               type: "boolean",
               description: "Process output as array and run dependent checks for each item"
@@ -20302,10 +19129,6 @@ var init_config_schema = __esm({
             on_finish: {
               $ref: "#/definitions/OnFinishConfig",
               description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
-            },
-            max_runs: {
-              type: "number",
-              description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
             },
             message: {
               type: "string",
@@ -20441,12 +19264,6 @@ var init_config_schema = __esm({
           ],
           description: "Valid check types in configuration"
         },
-        "Record<string,string>": {
-          type: "object",
-          additionalProperties: {
-            type: "string"
-          }
-        },
         EventTrigger: {
           type: "string",
           enum: [
@@ -20485,18 +19302,6 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Enable debug mode"
             },
-            prompt_type: {
-              type: "string",
-              description: "Probe promptType to use (e.g., engineer, code-review, architect)"
-            },
-            system_prompt: {
-              type: "string",
-              description: "System prompt (baseline preamble). Replaces legacy custom_prompt."
-            },
-            custom_prompt: {
-              type: "string",
-              description: "Probe customPrompt (baseline/system prompt) \u2014 deprecated, use system_prompt"
-            },
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
@@ -20531,6 +19336,14 @@ var init_config_schema = __esm({
             disableTools: {
               type: "boolean",
               description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
+            },
+            allowBash: {
+              type: "boolean",
+              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
+            },
+            bashConfig: {
+              $ref: "#/definitions/BashConfig",
+              description: "Advanced bash command execution configuration"
             }
           },
           additionalProperties: false,
@@ -20670,6 +19483,46 @@ var init_config_schema = __esm({
           required: ["provider", "model"],
           additionalProperties: false,
           description: "Fallback provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BashConfig: {
+          type: "object",
+          properties: {
+            allow: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
+            },
+            noDefaultAllow: {
+              type: "boolean",
+              description: "Disable default safe command list (use with caution)"
+            },
+            noDefaultDeny: {
+              type: "boolean",
+              description: "Disable default dangerous command blocklist (use with extreme caution)"
+            },
+            timeout: {
+              type: "number",
+              description: "Execution timeout in milliseconds"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Default working directory for command execution"
+            }
+          },
+          additionalProperties: false,
+          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
           patternProperties: {
             "^x-": {}
           }
@@ -21301,20 +20154,6 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
-        },
-        LimitsConfig: {
-          type: "object",
-          properties: {
-            max_runs_per_check: {
-              type: "number",
-              description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
-            }
-          },
-          additionalProperties: false,
-          description: "Global engine limits",
-          patternProperties: {
-            "^x-": {}
-          }
         }
       }
     };
@@ -21696,7 +20535,7 @@ var ConfigLoader = class {
 
 // src/config.ts
 init_config_merger();
-var import_ajv = __toESM(require("ajv"));
+var import_ajv2 = __toESM(require("ajv"));
 var import_ajv_formats = __toESM(require("ajv-formats"));
 var VALID_EVENT_TRIGGERS = [
   "pr_opened",
@@ -22348,7 +21187,7 @@ var ConfigManager = class {
           const jsonPath = path15.resolve(__dirname, "generated", "config-schema.json");
           const jsonSchema = require(jsonPath);
           if (jsonSchema) {
-            const ajv = new import_ajv.default({ allErrors: true, allowUnionTypes: true, strict: false });
+            const ajv = new import_ajv2.default({ allErrors: true, allowUnionTypes: true, strict: false });
             (0, import_ajv_formats.default)(ajv);
             const validate = ajv.compile(jsonSchema);
             __ajvValidate = (data) => validate(data);
@@ -22361,7 +21200,7 @@ var ConfigManager = class {
             const mod = (init_config_schema(), __toCommonJS(config_schema_exports));
             const schema = mod?.configSchema || mod?.default || mod;
             if (schema) {
-              const ajv = new import_ajv.default({ allErrors: true, allowUnionTypes: true, strict: false });
+              const ajv = new import_ajv2.default({ allErrors: true, allowUnionTypes: true, strict: false });
               (0, import_ajv_formats.default)(ajv);
               const validate = ajv.compile(schema);
               __ajvValidate = (data) => validate(data);
