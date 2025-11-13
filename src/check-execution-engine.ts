@@ -973,7 +973,8 @@ export class CheckExecutionEngine {
           opts.resultsMap || new Map<string, ReviewSummary>(),
           !!debug,
           opts.eventOverride,
-          /* failSecure */ true
+          /* failSecure */ true,
+          this.executionContext?.workflowInputs
         );
         if (!gate.shouldRun) {
           // Record a skipped marker compatible with summary rendering
@@ -3527,7 +3528,8 @@ export class CheckExecutionEngine {
     results: Map<string, ReviewSummary>,
     debug?: boolean,
     eventOverride?: import('./types/config').EventTrigger,
-    failSecure = false
+    failSecure = false,
+    workflowInputs?: Record<string, unknown>
   ): Promise<{ shouldRun: boolean; error?: string }> {
     try {
       const eventName = eventOverride
@@ -3559,6 +3561,7 @@ export class CheckExecutionEngine {
         environment: getSafeEnvironmentVariables(),
         previousResults: results,
         authorAssociation: commenterAssoc,
+        workflowInputs,
       });
 
       if (!shouldRun && debug) {
@@ -4626,7 +4629,8 @@ export class CheckExecutionEngine {
                       condResults,
                       debug,
                       undefined,
-                      /* failSecure */ true
+                      /* failSecure */ true,
+                      this.executionContext?.workflowInputs
                     );
                     if (!gateChild.shouldRun) {
                       continue;
@@ -4758,7 +4762,8 @@ export class CheckExecutionEngine {
                     snapshotDeps,
                     debug,
                     undefined,
-                    /* failSecure */ true
+                    /* failSecure */ true,
+                    this.executionContext?.workflowInputs
                   );
                   try {
                     if (process.env.VISOR_DEBUG === 'true') {
@@ -4958,7 +4963,8 @@ export class CheckExecutionEngine {
                         condResults,
                         debug,
                         undefined,
-                        /* failSecure */ true
+                        /* failSecure */ true,
+                        this.executionContext?.workflowInputs
                       );
                       if (!gateNode.shouldRun) {
                         perItemDone.add(node);
@@ -5449,7 +5455,8 @@ export class CheckExecutionEngine {
                 results,
                 debug,
                 undefined,
-                /* failSecure */ true
+                /* failSecure */ true,
+                this.executionContext?.workflowInputs
               );
 
               if (!gate.shouldRun) {
@@ -5982,7 +5989,8 @@ export class CheckExecutionEngine {
             new Map<string, ReviewSummary>(),
             debug,
             this.routingEventOverride,
-            /* failSecure */ true
+            /* failSecure */ true,
+            this.executionContext?.workflowInputs
           );
 
           if (!gate.shouldRun) {

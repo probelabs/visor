@@ -45,8 +45,16 @@ export class ConfigMerger {
       result.tools = this.mergeObjects(parent.tools || {}, child.tools);
     }
 
-    // Note: extends should not be in the final merged config
-    // It's only used during the loading process
+    // Merge workflow imports (concatenate arrays)
+    if (child.imports) {
+      const parentImports = parent.imports || [];
+      const childImports = child.imports || [];
+      // Combine and deduplicate
+      result.imports = [...new Set([...parentImports, ...childImports])];
+    }
+
+    // Note: extends/include should not be in the final merged config
+    // They are only used during the loading process
 
     return result;
   }

@@ -12,6 +12,7 @@ import { MemoryCheckProvider } from './memory-check-provider';
 import { McpCheckProvider } from './mcp-check-provider';
 import { HumanInputCheckProvider } from './human-input-check-provider';
 import { ScriptCheckProvider } from './script-check-provider';
+import { WorkflowCheckProvider } from './workflow-check-provider';
 import { CustomToolDefinition } from '../types/config';
 
 /**
@@ -53,6 +54,7 @@ export class CheckProviderRegistry {
     this.register(new MemoryCheckProvider());
     this.register(new GitHubOpsProvider());
     this.register(new HumanInputCheckProvider());
+    this.register(new WorkflowCheckProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {

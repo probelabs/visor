@@ -1,0 +1,74 @@
+# Simple PR validation workflow
+# File: workflows/pr-validation.yaml
+
+id: pr-validation
+name: PR Validation
+description: Validates pull requests with customizable checks
+version: "1.0.0"
+
+# Input parameters
+inputs:
+  - name: min_coverage
+    description: Minimum test coverage percentage
+    schema:
+      type: number
+      minimum: 0
+      maximum: 100
+    default: 80
+
+  - name: max_complexity
+    description: Maximum cyclomatic complexity allowed
+    schema:
+      type: number
+      minimum: 1
+      maximum: 50
+    default: 10
+
+  - name: file_patterns
+    description: File patterns to analyze
+    schema:
+      type: array
+      items:
+        type: string
+    default: ["*.js", "*.ts"]
+
+# Output parameters
+outputs:
+  - name: passed
+    description: Whether all checks passed
+    value_js: |
+      const coveragePassed = steps.coverage.output.percentage >= inputs.min_coverage;
+      const complexityPassed = steps.complexity.output.max <= inputs.max_complexity;
+      return coveragePassed && complexityPassed;
+
+  - name: report
+    description: Validation report
+    value: |
+      PR Validation Report:
+      =====================
+      Test Coverage: {{ steps.coverage.output.percentage }}% (min: {{ inputs.min_coverage }}%)
+      Max Complexity: {{ steps.complexity.output.max }} (limit: {{ inputs.max_complexity }})
+      Files Analyzed: {{ inputs.file_patterns | join: ', ' }}
+
+      Result: {{ outputs.passed ? 'PASSED' : 'FAILED' }}
+
+# Steps at root level
+steps:
+  coverage:
+    type: command
+    exec: |
+      # Simulate coverage check
+      echo '{"percentage": 85, "files": 42}'
+
+  complexity:
+    type: command
+    exec: |
+      # Simulate complexity analysis
+      echo '{"max": 8, "average": 5, "functions": 15}'
+    depends_on: [coverage]
+
+  report:
+    type: log
+    message: "{{ outputs.report }}"
+    level: "{{ outputs.passed ? 'info' : 'error' }}"
+    depends_on: [complexity]

@@ -1,0 +1,94 @@
+# Quick PR validation workflow
+# Performs basic checks for PR validation
+
+id: quick-pr-check
+name: Quick PR Check
+description: Fast workflow for initial PR validation
+version: "1.0.0"
+category: validation
+
+# Input parameters
+inputs:
+  - name: pr_type
+    description: Type of PR (feature, bugfix, hotfix)
+    schema:
+      type: string
+      enum: ["feature", "bugfix", "hotfix"]
+    required: true
+
+  - name: run_tests
+    description: Whether to run tests
+    schema:
+      type: boolean
+    default: true
+
+  - name: run_lint
+    description: Whether to run linting
+    schema:
+      type: boolean
+    default: true
+
+# Output parameters
+outputs:
+  - name: approval_status
+    description: Whether the PR passes quick checks
+    value_js: |
+      const testsPassed = !inputs.run_tests || steps.run_tests?.output?.success || false;
+      const lintPassed = !inputs.run_lint || steps.lint_check?.output?.passed || false;
+      return testsPassed && lintPassed ? "approved" : "needs_work";
+
+  - name: summary
+    description: Summary of the quick check
+    value: |
+      Quick Check Results for {{ inputs.pr_type }} PR:
+      {% if inputs.run_tests %}
+      - Tests: {{ steps.run_tests.output.success ? 'Passed' : 'Failed' }}
+      {% endif %}
+      {% if inputs.run_lint %}
+      - Linting: {{ steps.lint_check.output.passed ? 'Passed' : 'Failed' }}
+      {% endif %}
+      Overall Status: {{ outputs.approval_status }}
+
+# Workflow steps at root level
+steps:
+  run_tests:
+    type: command
+    exec: npm test
+    timeout: 300
+    if: inputs.run_tests === true
+
+  lint_check:
+    type: command
+    exec: npm run lint
+    depends_on: [run_tests]
+    if: inputs.run_lint === true
+
+  pr_summary:
+    type: log
+    message: |
+      Quick Check Results for {{ inputs.pr_type }} PR:
+      {% if inputs.run_tests %}
+      - Tests: {{ steps.run_tests.output.success ? 'Passed' : 'Failed' }}
+      {% endif %}
+      {% if inputs.run_lint %}
+      - Linting: {{ steps.lint_check.output.passed ? 'Passed' : 'Failed' }}
+      {% endif %}
+      Status: {{ outputs.approval_status }}
+    depends_on: [lint_check]
+    level: info
+
+# Example usage
+examples:
+  - name: Full validation
+    description: Run all checks
+    inputs:
+      pr_type: feature
+      run_tests: true
+      run_lint: true
+
+  - name: Quick lint only
+    description: Skip tests, only run linting
+    inputs:
+      pr_type: hotfix
+      run_tests: false
+      run_lint: true

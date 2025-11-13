@@ -462,7 +462,7 @@ export class McpCheckProvider extends CheckProvider {
   ): Promise<unknown> {
     const transport = new StdioClientTransport({
       command: config.command!,
-      args: config.args,
+      args: config.command_args as string[] | undefined,
       env: config.env,
       cwd: config.workingDirectory,
     });
@@ -722,7 +722,7 @@ export class McpCheckProvider extends CheckProvider {
       'type',
       'transport',
       'command',
-      'args',
+      'command_args',
       'env',
       'workingDirectory',
       'url',

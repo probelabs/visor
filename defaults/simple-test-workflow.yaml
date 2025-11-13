@@ -1,0 +1,28 @@
+# Minimal test workflow to debug recursion issue
+id: simple-test
+name: Simple Test Workflow
+version: "1.0.0"
+
+inputs:
+  - name: message
+    schema:
+      type: string
+    default: "Hello"
+
+outputs:
+  - name: result
+    value_js: |
+      return steps.echo_step.output;
+
+steps:
+  echo_step:
+    type: command
+    exec: |
+      echo '{"message": "{{ inputs.message }}", "status": "ok"}'
+
+tests:
+  test_simple:
+    type: workflow
+    workflow: simple-test
+    args:
+      message: "Test message"

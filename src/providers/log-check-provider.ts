@@ -1,4 +1,4 @@
-import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
+import { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { Liquid } from 'liquidjs';
@@ -62,7 +62,7 @@ export class LogCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    context?: ExecutionContext
   ): Promise<ReviewSummary> {
     const message = config.message as string;
     const level = (config.level as LogLevel) || 'info';
@@ -77,7 +77,8 @@ export class LogCheckProvider extends CheckProvider {
       includePrContext,
       includeDependencies,
       includeMetadata,
-      config.__outputHistory as Map<string, unknown[]> | undefined
+      config.__outputHistory as Map<string, unknown[]> | undefined,
+      context
     );
 
     // Render the log message template
@@ -113,7 +114,8 @@ export class LogCheckProvider extends CheckProvider {
     _includePrContext: boolean = true,
     _includeDependencies: boolean = true,
     includeMetadata: boolean = true,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    executionContext?: ExecutionContext
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -193,6 +195,11 @@ export class LogCheckProvider extends CheckProvider {
         workingDirectory: process.cwd(),
       };
     }
+
+    // Add workflow inputs if available
+    const workflowInputs = executionContext?.workflowInputs || {};
+    logger.debug(`[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`);
+    context.inputs = workflowInputs;
 
     return context;
   }

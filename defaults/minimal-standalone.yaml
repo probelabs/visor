@@ -1,0 +1,13 @@
+id: minimal
+name: Minimal Workflow
+version: "1.0.0"
+
+steps:
+  echo_step:
+    type: log
+    message: "Workflow step executed"
+
+tests:
+  test_log:
+    type: log
+    message: "Test executed successfully"

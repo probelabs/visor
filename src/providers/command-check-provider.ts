@@ -130,6 +130,8 @@ export class CommandCheckProvider extends CheckProvider {
       })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
+      // Workflow inputs (when executing within a workflow)
+      inputs: context?.workflowInputs || {},
       env: this.getSafeEnvironmentVariables(),
     };
 
@@ -367,6 +369,7 @@ export class CommandCheckProvider extends CheckProvider {
             pr: templateContext.pr,
             files: templateContext.files,
             outputs: this.makeOutputsJsonSmart(templateContext.outputs),
+            inputs: templateContext.inputs || {},
             env: templateContext.env,
             permissions: createPermissionHelpers(
               resolveAssociationFromEvent((prInfo as any).eventContext, prInfo.authorAssociation),
@@ -401,6 +404,7 @@ export class CommandCheckProvider extends CheckProvider {
             const pr = scope.pr;
             const files = scope.files;
             const outputs = scope.outputs;
+            const inputs = scope.inputs;
             const env = scope.env;
             const log = (...args) => { console.log('🔍 Debug:', ...args); };
             const hasMinPermission = scope.permissions.hasMinPermission;

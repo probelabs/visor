@@ -1,0 +1,27 @@
+# Test without using type: workflow in tests
+id: simple-test-v2
+name: Simple Test Workflow V2
+version: "1.0.0"
+
+inputs:
+  - name: message
+    schema:
+      type: string
+    default: "Hello"
+
+outputs:
+  - name: result
+    value_js: |
+      return steps.echo_step.output;
+
+steps:
+  echo_step:
+    type: command
+    exec: |
+      echo '{"message": "{{ inputs.message }}", "status": "ok"}'
+
+tests:
+  test_simple:
+    type: command
+    exec: |
+      echo '{"test": "passed", "message": "Workflow registered successfully"}'

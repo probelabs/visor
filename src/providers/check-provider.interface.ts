@@ -13,7 +13,8 @@ export interface CheckProviderConfig {
   command?: string; // For PR comment triggers
   exec?: string; // For command execution (supports Liquid templates)
   stdin?: string; // Optional stdin input (supports Liquid templates)
-  args?: string[]; // Deprecated: use exec with inline args instead
+  args?: string[] | Record<string, unknown>; // string[] deprecated for command args; Record for workflow inputs
+  command_args?: string[]; // MCP stdio command arguments
   interpreter?: string;
   url?: string;
   method?: string;
@@ -53,6 +54,8 @@ export interface ExecutionContext {
    * relying on global execution history.
    */
   stageHistoryBase?: Record<string, number>;
+  /** Workflow inputs - available when executing within a workflow */
+  workflowInputs?: Record<string, unknown>;
   /** SDK hooks for human input */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

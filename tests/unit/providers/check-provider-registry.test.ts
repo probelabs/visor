@@ -173,8 +173,8 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 13 default providers (ai, command, script, http, http_input, http_client, noop, log, memory, github, claude-code, mcp, human-input) + 2 custom = 15 total
-      expect(providers.length).toBe(15);
+      // Reset adds 14 default providers (ai, command, script, http, http_input, http_client, noop, log, memory, github, claude-code, mcp, human-input, workflow) + 2 custom = 16 total
+      expect(providers.length).toBe(16);
     });
   });
 

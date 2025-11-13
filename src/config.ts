@@ -53,6 +53,7 @@ export class ConfigManager {
     'log',
     'github',
     'human-input',
+    'workflow',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
@@ -98,8 +99,9 @@ export class ConfigManager {
         throw new Error('Configuration file must contain a valid YAML object');
       }
 
-      // Handle extends directive if present
-      if (parsedConfig.extends) {
+      // Handle extends/include directive (include is an alias for extends)
+      const extendsValue = parsedConfig.extends || (parsedConfig as any).include;
+      if (extendsValue) {
         const loaderOptions: ConfigLoaderOptions = {
           baseDir: path.dirname(resolvedPath),
           allowRemote: this.isRemoteExtendsAllowed(),
@@ -110,12 +112,12 @@ export class ConfigManager {
         const loader = new ConfigLoader(loaderOptions);
         const merger = new ConfigMerger();
 
-        // Process extends
-        const extends_ = Array.isArray(parsedConfig.extends)
-          ? parsedConfig.extends
-          : [parsedConfig.extends];
+        // Process extends/include
+        const extends_ = Array.isArray(extendsValue)
+          ? extendsValue
+          : [extendsValue];
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { extends: _extendsField, ...configWithoutExtends } = parsedConfig;
+        const { extends: _extendsField, include: _includeField, ...configWithoutExtends } = parsedConfig as any;
 
         // Load and merge all parent configurations
         let mergedConfig: Partial<VisorConfig> = {};
@@ -132,8 +134,17 @@ export class ConfigManager {
         parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
 
+      // Check if this is a workflow definition file (has 'id' field indicating it's a workflow)
+      // Do this BEFORE normalizing to avoid copying workflow steps to checks
+      if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path.dirname(resolvedPath));
+      }
+
       // Normalize 'checks' and 'steps' - support both keys for backward compatibility
       parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+
+      // Load workflows if defined
+      await this.loadWorkflows(parsedConfig, path.dirname(resolvedPath));
 
       if (validate) {
         this.validateConfig(parsedConfig);
@@ -347,6 +358,77 @@ export class ConfigManager {
     }
 
     return null;
+  }
+
+  /**
+   * Convert a workflow definition file to a visor config
+   * When a workflow YAML is run standalone, register the workflow and use its tests as checks
+   */
+  private async convertWorkflowToConfig(
+    workflowData: any,
+    basePath: string
+  ): Promise<Partial<VisorConfig>> {
+    const { WorkflowRegistry } = await import('./workflow-registry');
+    const registry = WorkflowRegistry.getInstance();
+
+    // Register the workflow
+    const workflowId = workflowData.id;
+    logger.info(`Detected standalone workflow file: ${workflowId}`);
+
+    // Extract tests before modifying workflowData
+    const tests = workflowData.tests || {};
+
+    // Create a clean workflow definition (without tests)
+    const workflowDefinition = { ...workflowData };
+    delete workflowDefinition.tests;
+
+    // Register the workflow itself
+    const result = registry.register(workflowDefinition, 'standalone', { override: true });
+    if (!result.valid && result.errors) {
+      const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+      throw new Error(`Failed to register workflow '${workflowId}':\n${errors}`);
+    }
+
+    logger.info(`Registered workflow '${workflowId}' for standalone execution`);
+
+    // Create a COMPLETELY NEW visor config with ONLY the test checks
+    // This prevents any workflow fields from leaking into the config
+    const visorConfig: Partial<VisorConfig> = {
+      version: '1.0',
+      steps: tests,
+      checks: tests, // Backward compatibility
+    };
+
+    logger.debug(`Standalone workflow config has ${Object.keys(tests).length} test checks`);
+    logger.debug(`Test check names: ${Object.keys(tests).join(', ')}`);
+    logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(', ')}`);
+
+    return visorConfig;
+  }
+
+  /**
+   * Load and register workflows from configuration
+   */
+  private async loadWorkflows(config: Partial<VisorConfig>, basePath: string): Promise<void> {
+    // Only import workflows from external files
+    if (!config.imports || config.imports.length === 0) {
+      return;
+    }
+
+    const { WorkflowRegistry } = await import('./workflow-registry');
+    const registry = WorkflowRegistry.getInstance();
+
+    // Import workflow files
+    for (const source of config.imports) {
+      const results = await registry.import(source, { basePath, validate: true });
+      for (const result of results) {
+        if (!result.valid && result.errors) {
+          const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+          throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+        }
+      }
+      logger.info(`Imported workflows from: ${source}`);
+    }
   }
 
   /**
