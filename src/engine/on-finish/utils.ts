@@ -142,9 +142,19 @@ export function evaluateOnFinishGoto(
       );
       try {
         if (debug) {
-          const hist = (onFinishContext && onFinishContext.outputs && (onFinishContext.outputs as any).history) || {};
-          const vf = Array.isArray(hist['validate-fact']) ? hist['validate-fact'].filter((x:any)=>!Array.isArray(x)) : [];
-          const items = (onFinishContext && onFinishContext.forEach && (onFinishContext.forEach as any).last_wave_size) || 0;
+          const hist =
+            (onFinishContext &&
+              onFinishContext.outputs &&
+              (onFinishContext.outputs as any).history) ||
+            {};
+          const vf = Array.isArray(hist['validate-fact'])
+            ? hist['validate-fact'].filter((x: any) => !Array.isArray(x))
+            : [];
+          const items =
+            (onFinishContext &&
+              onFinishContext.forEach &&
+              (onFinishContext.forEach as any).last_wave_size) ||
+            0;
           log(`🔧 Debug: goto_js result=${String(result)} items=${items} vf_count=${vf.length}`);
         }
       } catch {}
@@ -188,8 +198,9 @@ export function recomputeAllValidFromHistory(
     const sameWave = withLoop.filter(v => Number(v.loop_idx) === maxLoop);
     try {
       if (process.env.VISOR_DEBUG === 'true') {
-        // eslint-disable-next-line no-console
-        console.error(`[ofAllValid] loop_idx=${maxLoop} sameWave=${sameWave.length} items=${forEachItemsCount}`);
+        console.error(
+          `[ofAllValid] loop_idx=${maxLoop} sameWave=${sameWave.length} items=${forEachItemsCount}`
+        );
       }
     } catch {}
     if (sameWave.length >= forEachItemsCount) {

@@ -95,15 +95,21 @@ export function decideRouting(
       }
       const items = (ctx.forEach && (ctx.forEach as any).last_wave_size) || 0;
       const vf = Array.isArray((ctx.outputs as any).history?.['validate-fact'])
-        ? ((ctx.outputs as any).history['validate-fact'] as unknown[]).filter((x: unknown) => !Array.isArray(x))
+        ? ((ctx.outputs as any).history['validate-fact'] as unknown[]).filter(
+            (x: unknown) => !Array.isArray(x)
+          )
         : [];
       const waves = items > 0 ? Math.floor(vf.length / items) : 0;
       const last = items > 0 ? vf.slice(-items) : [];
-      const allOk = last.length === items && last.every((v: any) => v && (v.is_valid === true || v.valid === true));
-      if (!gotoTarget && !allOk && Number.isFinite(n) && n > 0 && waves < (1 + n)) {
+      const allOk =
+        last.length === items &&
+        last.every((v: any) => v && (v.is_valid === true || v.valid === true));
+      if (!gotoTarget && !allOk && Number.isFinite(n) && n > 0 && waves < 1 + n) {
         gotoTarget = checkName;
         if (debug)
-          log(`🔧 Debug: decideRouting fallback → '${checkName}' (waves=${waves} < maxWaves=${1 + n})`);
+          log(
+            `🔧 Debug: decideRouting fallback → '${checkName}' (waves=${waves} < maxWaves=${1 + n})`
+          );
       }
     } catch {}
   }

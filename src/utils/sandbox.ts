@@ -27,9 +27,21 @@ export function createSecureSandbox(): Sandbox {
     // Provide console with limited surface. Use trampolines so that any test
     // spies (e.g., jest.spyOn(console, 'log')) see calls made inside the sandbox.
     console: {
-      log: (...args: unknown[]) => { try { (console as any).log(...args); } catch {} },
-      warn: (...args: unknown[]) => { try { (console as any).warn(...args); } catch {} },
-      error: (...args: unknown[]) => { try { (console as any).error(...args); } catch {} },
+      log: (...args: unknown[]) => {
+        try {
+          (console as any).log(...args);
+        } catch {}
+      },
+      warn: (...args: unknown[]) => {
+        try {
+          (console as any).warn(...args);
+        } catch {}
+      },
+      error: (...args: unknown[]) => {
+        try {
+          (console as any).error(...args);
+        } catch {}
+      },
     },
   } as Record<string, unknown>;
 
