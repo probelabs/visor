@@ -1,6 +1,0 @@
-version: "1.0"
-
-checks:
-  test_log:
-    type: log
-    message: "Simple test"

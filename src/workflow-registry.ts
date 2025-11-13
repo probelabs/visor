@@ -413,14 +413,21 @@ export class WorkflowRegistry {
       dependencies[stepId] = step.depends_on || [];
     }
 
-    // Use DependencyResolver to check for cycles
-    const graph = DependencyResolver.buildDependencyGraph(dependencies);
+    try {
+      // Use DependencyResolver to check for cycles
+      const graph = DependencyResolver.buildDependencyGraph(dependencies);
 
-    if (graph.hasCycles && graph.cycleNodes) {
-      return graph.cycleNodes;
+      if (graph.hasCycles && graph.cycleNodes) {
+        return graph.cycleNodes;
+      }
+
+      return [];
+    } catch {
+      // DependencyResolver throws error for non-existent dependencies
+      // This should be caught by the dependency validation in validateWorkflow
+      // Return empty array here and let the validation handle it
+      return [];
     }
-
-    return [];
   }
 
   /**
