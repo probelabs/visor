@@ -224,7 +224,8 @@ describe('WorkflowCheckProvider', () => {
         type: 'workflow',
         workflow: 'test-workflow',
         workflow_inputs: {
-          language: '{% if pr.files[0].filename contains ".ts" %}typescript{% else %}javascript{% endif %}',
+          language:
+            '{% if pr.files[0].filename contains ".ts" %}typescript{% else %}javascript{% endif %}',
           threshold: 85,
         },
       };

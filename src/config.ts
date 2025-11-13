@@ -113,11 +113,13 @@ export class ConfigManager {
         const merger = new ConfigMerger();
 
         // Process extends/include
-        const extends_ = Array.isArray(extendsValue)
-          ? extendsValue
-          : [extendsValue];
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { extends: _extendsField, include: _includeField, ...configWithoutExtends } = parsedConfig as any;
+        const {
+          extends: _extendsField,
+          include: _includeField,
+          ...configWithoutExtends
+        } = parsedConfig as any;
 
         // Load and merge all parent configurations
         let mergedConfig: Partial<VisorConfig> = {};
@@ -366,7 +368,7 @@ export class ConfigManager {
    */
   private async convertWorkflowToConfig(
     workflowData: any,
-    basePath: string
+    _basePath: string
   ): Promise<Partial<VisorConfig>> {
     const { WorkflowRegistry } = await import('./workflow-registry');
     const registry = WorkflowRegistry.getInstance();

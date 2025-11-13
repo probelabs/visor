@@ -138,7 +138,12 @@ export class WorkflowExecutor {
             ...runOptions.context,
             workflowInputs: executionContext.inputs,
           };
-          const result = await this.executeStep(stepConfig, runOptions.prInfo, stepResults, stepContext);
+          const result = await this.executeStep(
+            stepConfig,
+            runOptions.prInfo,
+            stepResults,
+            stepContext
+          );
 
           stepResults.set(stepId, result);
           stepSummaries.push({
@@ -164,7 +169,12 @@ export class WorkflowExecutor {
       }
 
       // Compute workflow outputs
-      const outputs = await this.computeOutputs(workflow, executionContext, stepResults, runOptions.prInfo);
+      const outputs = await this.computeOutputs(
+        workflow,
+        executionContext,
+        stepResults,
+        runOptions.prInfo
+      );
       executionContext.outputs = outputs;
 
       // Aggregate results
@@ -216,7 +226,9 @@ export class WorkflowExecutor {
     const graph = DependencyResolver.buildDependencyGraph(dependencies);
 
     if (graph.hasCycles) {
-      throw new Error(`Circular dependency detected in workflow steps: ${graph.cycleNodes?.join(' -> ')}`);
+      throw new Error(
+        `Circular dependency detected in workflow steps: ${graph.cycleNodes?.join(' -> ')}`
+      );
     }
 
     // Flatten execution groups to get linear order
@@ -315,7 +327,10 @@ export class WorkflowExecutor {
               inputs: executionContext.inputs,
               outputs: Object.fromEntries(stepResults),
               steps: Object.fromEntries(
-                Array.from(stepResults.entries()).map(([id, result]) => [id, (result as any).output])
+                Array.from(stepResults.entries()).map(([id, result]) => [
+                  id,
+                  (result as any).output,
+                ])
               ),
             },
             { injectLog: true, logPrefix: 'workflow.input.expression' }
@@ -437,7 +452,10 @@ export class WorkflowExecutor {
       }
 
       if (extResult.confidence) {
-        if (extResult.confidence === 'low' || (extResult.confidence === 'medium' && minConfidence === 'high')) {
+        if (
+          extResult.confidence === 'low' ||
+          (extResult.confidence === 'medium' && minConfidence === 'high')
+        ) {
           minConfidence = extResult.confidence;
         }
       }
@@ -457,7 +475,10 @@ export class WorkflowExecutor {
   private evaluateCondition(condition: string, context: any): boolean {
     try {
       const sandbox = createSecureSandbox();
-      const result = compileAndRun(sandbox, condition, context, { injectLog: true, logPrefix: 'workflow.condition' });
+      const result = compileAndRun(sandbox, condition, context, {
+        injectLog: true,
+        logPrefix: 'workflow.condition',
+      });
       return Boolean(result);
     } catch (error) {
       logger.warn(`Failed to evaluate condition '${condition}': ${error}`);

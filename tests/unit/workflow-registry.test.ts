@@ -507,8 +507,8 @@ steps:
 
       const list = registry.list();
       expect(list).toHaveLength(2);
-      expect(list.map((w) => w.id)).toContain('workflow1');
-      expect(list.map((w) => w.id)).toContain('workflow2');
+      expect(list.map(w => w.id)).toContain('workflow1');
+      expect(list.map(w => w.id)).toContain('workflow2');
     });
 
     it('should unregister workflow', () => {

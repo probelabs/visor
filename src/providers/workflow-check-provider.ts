@@ -74,7 +74,7 @@ export class WorkflowCheckProvider extends CheckProvider {
     // Validate inputs
     const validation = this.registry.validateInputs(workflow, inputs);
     if (!validation.valid) {
-      const errors = validation.errors?.map((e) => `${e.path}: ${e.message}`).join(', ');
+      const errors = validation.errors?.map(e => `${e.path}: ${e.message}`).join(', ');
       throw new Error(`Invalid workflow inputs: ${errors}`);
     }
 
@@ -115,15 +115,7 @@ export class WorkflowCheckProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return [
-      'workflow',
-      'args',
-      'overrides',
-      'output_mapping',
-      'timeout',
-      'env',
-      'checkName',
-    ];
+    return ['workflow', 'args', 'overrides', 'output_mapping', 'timeout', 'env', 'checkName'];
   }
 
   async isAvailable(): Promise<boolean> {
@@ -196,7 +188,10 @@ export class WorkflowCheckProvider extends CheckProvider {
   /**
    * Apply overrides to workflow steps
    */
-  private applyOverrides(workflow: WorkflowDefinition, config: CheckProviderConfig): WorkflowDefinition {
+  private applyOverrides(
+    workflow: WorkflowDefinition,
+    config: CheckProviderConfig
+  ): WorkflowDefinition {
     const overrideConfig = config.overrides || config.workflow_overrides; // Support both for compatibility
     if (!overrideConfig) {
       return workflow;
@@ -279,7 +274,8 @@ export class WorkflowCheckProvider extends CheckProvider {
       lines.push('');
       lines.push('Outputs:');
       for (const [key, value] of Object.entries(outputs)) {
-        const formatted = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+        const formatted =
+          typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
         lines.push(`- ${key}: ${formatted}`);
       }
     }
@@ -288,7 +284,9 @@ export class WorkflowCheckProvider extends CheckProvider {
       lines.push('');
       lines.push('Step Results:');
       for (const summary of result.stepSummaries) {
-        lines.push(`- ${summary.stepId}: ${summary.status} (${summary.issues?.length || 0} issues)`);
+        lines.push(
+          `- ${summary.stepId}: ${summary.status} (${summary.issues?.length || 0} issues)`
+        );
       }
     }
 

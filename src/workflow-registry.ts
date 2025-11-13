@@ -106,7 +106,7 @@ export class WorkflowRegistry {
    * List all registered workflows
    */
   public list(): WorkflowDefinition[] {
-    return Array.from(this.workflows.values()).map((entry) => entry.definition);
+    return Array.from(this.workflows.values()).map(entry => entry.definition);
   }
 
   /**
@@ -133,7 +133,10 @@ export class WorkflowRegistry {
   /**
    * Import workflows from a file or URL
    */
-  public async import(source: string, options?: WorkflowImportOptions): Promise<WorkflowValidationResult[]> {
+  public async import(
+    source: string,
+    options?: WorkflowImportOptions
+  ): Promise<WorkflowValidationResult[]> {
     const results: WorkflowValidationResult[] = [];
 
     try {
@@ -192,7 +195,10 @@ export class WorkflowRegistry {
   /**
    * Import multiple workflow sources
    */
-  public async importMany(sources: string[], options?: WorkflowImportOptions): Promise<Map<string, WorkflowValidationResult[]>> {
+  public async importMany(
+    sources: string[],
+    options?: WorkflowImportOptions
+  ): Promise<Map<string, WorkflowValidationResult[]>> {
     const results = new Map<string, WorkflowValidationResult[]>();
 
     for (const source of sources) {
@@ -231,7 +237,10 @@ export class WorkflowRegistry {
           errors.push({ path: `inputs[${i}].name`, message: 'Input parameter name is required' });
         }
         if (!input.schema) {
-          warnings.push({ path: `inputs[${i}].schema`, message: 'Input parameter schema is recommended' });
+          warnings.push({
+            path: `inputs[${i}].schema`,
+            message: 'Input parameter schema is recommended',
+          });
         }
       }
     }
@@ -280,7 +289,7 @@ export class WorkflowRegistry {
             }
             if (typedMapping.source === 'param') {
               // Validate that the parameter exists
-              const paramExists = workflow.inputs?.some((p) => p.name === typedMapping.value);
+              const paramExists = workflow.inputs?.some(p => p.name === typedMapping.value);
               if (!paramExists) {
                 errors.push({
                   path: `steps.${stepId}.inputs.${inputName}`,
@@ -313,7 +322,10 @@ export class WorkflowRegistry {
   /**
    * Validate input values against workflow input schema
    */
-  public validateInputs(workflow: WorkflowDefinition, inputs: Record<string, unknown>): WorkflowValidationResult {
+  public validateInputs(
+    workflow: WorkflowDefinition,
+    inputs: Record<string, unknown>
+  ): WorkflowValidationResult {
     const errors: Array<{ path: string; message: string; value?: unknown }> = [];
 
     if (!workflow.inputs) {
@@ -365,7 +377,9 @@ export class WorkflowRegistry {
     }
 
     // Handle file paths
-    const filePath = path.isAbsolute(source) ? source : path.resolve(basePath || process.cwd(), source);
+    const filePath = path.isAbsolute(source)
+      ? source
+      : path.resolve(basePath || process.cwd(), source);
     return await fs.readFile(filePath, 'utf-8');
   }
 
@@ -381,7 +395,9 @@ export class WorkflowRegistry {
       try {
         return yaml.load(content);
       } catch (error) {
-        throw new Error(`Failed to parse workflow file ${source}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(
+          `Failed to parse workflow file ${source}: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
   }
@@ -432,12 +448,17 @@ export class WorkflowRegistry {
   /**
    * Validate a value against a JSON schema
    */
-  private validateAgainstSchema(value: unknown, schema: JsonSchema): { valid: boolean; error?: string } {
+  private validateAgainstSchema(
+    value: unknown,
+    schema: JsonSchema
+  ): { valid: boolean; error?: string } {
     try {
       const validate = this.ajv.compile(schema as any);
       const valid = validate(value);
       if (!valid) {
-        const errors = validate.errors?.map((e) => `${e.instancePath || '/'}: ${e.message}`).join(', ');
+        const errors = validate.errors
+          ?.map(e => `${e.instancePath || '/'}: ${e.message}`)
+          .join(', ');
         return { valid: false, error: errors };
       }
       return { valid: true };

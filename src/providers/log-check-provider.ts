@@ -198,7 +198,9 @@ export class LogCheckProvider extends CheckProvider {
 
     // Add workflow inputs if available
     const workflowInputs = executionContext?.workflowInputs || {};
-    logger.debug(`[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`);
+    logger.debug(
+      `[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`
+    );
     context.inputs = workflowInputs;
 
     return context;

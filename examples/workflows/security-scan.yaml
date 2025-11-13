@@ -16,7 +16,6 @@ inputs:
     schema:
       type: string
       enum: ["critical", "high", "medium", "low"]
-      default: "medium"
     default: "medium"
     required: false
 
@@ -24,7 +23,6 @@ inputs:
     description: Whether to scan dependencies for vulnerabilities
     schema:
       type: boolean
-      default: true
     default: true
     required: false
 
