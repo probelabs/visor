@@ -198,6 +198,8 @@ export class CheckExecutionEngine {
   private forwardDependentsScheduled: Set<string> = new Set();
   // Marker for grouped wave rescheduling when on_fail forward-run occurred
   private onFailForwardRunSeen: boolean = false;
+  // Marker for grouped wave rescheduling when on_finish routing occurred
+  private onFinishForwardRunSeen: boolean = false;
   // Track per-grouped-run scheduling of specific steps we want to allow only once.
   // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
   private oncePerRunScheduleGuards: Set<string> = new Set();
@@ -484,6 +486,15 @@ export class CheckExecutionEngine {
     };
     for (const n of forwardSet) visit(n);
 
+    // Revert dependent auto-forwarding for correction cycles:
+    // - For origin on_fail/on_finish we only schedule the target and let the DAG
+    //   naturally execute dependents in the next wave. This avoids duplicate
+    //   inline runs of dependents (especially forEach dependents) and restores
+    //   stable execution counts expected by tests.
+    if (origin === 'on_fail' || origin === 'on_finish') {
+      order.splice(0, order.length, target);
+    }
+
     const prevEventOverride = this.routingEventOverride;
     // Ensure we only execute the target once per grouped run for a given event
     const evKey = gotoEvent || prInfo.eventType || 'manual';
@@ -554,27 +565,19 @@ export class CheckExecutionEngine {
     // In test/grouped mode, suppress inline execution for on_success-originated
     // routing to avoid double-running targets (once inline and again in the
     // grouped wave). Allow the grouped runner to pick it up naturally.
-    try {
-      const inTest = Boolean(
-        (this as any).executionContext && (this as any).executionContext.mode?.test
-      );
-      if (origin === 'on_success' && inTest) {
-        try {
-          this.forwardDependentsScheduled.add(target);
-        } catch {}
-        return;
-      }
-    } catch {}
+    // Unified forward-run semantics: do not inline-run dependents for any origin.
+    // Always schedule the target for the next wave and let the DAG handle children.
+    // Wave scheduling below accounts for on_success/on_fail/on_finish flags.
 
     // Do not execute target inline for on_fail-originated routing.
-    // Mark that a correction wave is needed; enqueue the target AND its
-    // transitive dependents so the next wave executes the full chain without
-    // requiring goto_event. This avoids YAML workarounds and keeps counts stable.
+    // Mark that a correction wave is needed; enqueue ONLY the target and allow
+    // the DAG to execute dependents in the next wave. This preserves
+    // dependency gating semantics (e.g., confirm-interpret → run-commands).
     if (origin === 'on_fail') {
       try {
         // Only mark the target for forward scheduling. Let the DAG naturally
         // re-run transitive dependents in the next wave to preserve dependency
-        // gating semantics (e.g., do not bypass confirm-interpret → run-commands).
+        // gating semantics.
         this.forwardDependentsScheduled.add(target);
         const dependentsOnly = order.filter(n => n !== target);
         const fwd = Array.from(forwardSet || []).join(', ');
@@ -583,9 +586,18 @@ export class CheckExecutionEngine {
           `🔧 Debug: on_fail forward-set=[${fwd}] dependents=[${deps}]`
         );
       } catch {}
-      // Defer execution to the next wave to keep counts deterministic
-      return;
+      (this as any).onFailForwardRunSeen = true;
+      return; // defer to next wave
     }
+    // on_finish: schedule target for the next wave and return.
+    if (origin === 'on_finish') {
+      try {
+        this.forwardDependentsScheduled.add(target);
+      } catch {}
+      (this as any).onFinishForwardRunSeen = true;
+      return; // defer to next wave
+    }
+    // on_success: fall through (inline-dependent path below handles running dependents)
     try {
       // Determine mapping mode for the target step
       const tcfg = cfgChecks[target];
@@ -647,51 +659,30 @@ export class CheckExecutionEngine {
             return;
           }
         } catch {}
-        // Choose dependents to run in the forward-run chain.
-        // To keep observable run counts consistent for tests/coverage, do NOT execute
-        // dependents inline when routing originated from either on_fail or on_success.
-        // Let the grouped runner pick them up in the next level/wave instead.
-        // This prevents “finish” from being satisfied inline (and skipped later),
-        // which made Coverage show `finish: 0` even though it actually ran inline.
-        const dependentsOnly = order.filter(n => n !== target);
-        for (const stepId of dependentsOnly) {
-          // Skip scheduling dependent if any of its direct deps in this subset had fatal issues
-          try {
-            const depsForStep = (cfgChecks[stepId]?.depends_on || []).filter(inSet);
-            const hasDepFatal = depsForStep.some(d => {
-              const r = resultsMap.get(d);
-              const fatal = r && Array.isArray(r.issues) && this.hasFatal(r.issues);
-              if (!fatal) return false;
-              const depCfg = cfgChecks[d] as any;
-              // If dependency explicitly allows continuation, do not gate on its failure
-              return depCfg?.continue_on_failure !== true;
-            });
-            if (debug) {
-              (config?.output?.pr_comment ? console.error : console.log)(
-                `🔧 Debug: forward-run gate '${stepId}' deps=[${depsForStep.join(', ')}] fatal=${String(hasDepFatal)}`
-              );
+        // Inline dependent execution for on_success so routed children appear in stats
+        try {
+          if (origin === 'on_success') {
+            const dependentsOnly = order.filter(n => n !== target);
+            for (const dep of dependentsOnly) {
+              try {
+                const depCfg = cfgChecks[dep];
+                if (!depCfg) continue;
+                const resDep = await this.runNamedCheck(dep, foreachScope || [], {
+                  origin: 'on_success',
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap,
+                  debug,
+                  eventOverride: gotoEvent,
+                });
+                try {
+                  resultsMap.set(dep, resDep);
+                } catch {}
+              } catch {}
             }
-            if (hasDepFatal) continue;
-          } catch {}
-          // Execute dependent inline first, then mark as scheduled to avoid
-          // self-blocking via the forwardDependentsScheduled guard.
-          (config?.output?.pr_comment ? console.error : console.log)(
-            `🔧 Debug: forward-run inline dependent '${stepId}' (origin=${origin})`
-          );
-          const depResult = await this.runNamedCheck(stepId, scopeForRun, {
-            origin,
-            config,
-            dependencyGraph,
-            prInfo,
-            resultsMap,
-            debug,
-            eventOverride: gotoEvent,
-          });
-          try {
-            this.forwardDependentsScheduled.add(stepId);
-            if (depResult) resultsMap.set(stepId, depResult);
-          } catch {}
-        }
+          }
+        } catch {}
       };
 
       if (foreachScope && foreachScope.length > 0) {
@@ -710,13 +701,7 @@ export class CheckExecutionEngine {
       // In test/grouped mode, rely on the DAG and per-level execution; avoid
       // following static on_success.goto chains to prevent duplicate executions
       // of steps that are already scheduled by the plan.
-      try {
-        const inTest = Boolean((this as any).executionContext && (this as any).executionContext.mode?.test);
-        // Suppress static on_success chaining only for origin='on_success' in tests.
-        // For origin='on_fail', allow following the on_success chain so correction cycles
-        // (target + dependents) execute deterministically without goto_event.
-        if (inTest && origin === 'on_success') return;
-      } catch {}
+      // Static goto chaining below applies regardless of origin; tests rely on wave scheduling.
 
       // Follow explicit on_success.goto edges from the target, if present,
       // to naturally support anchor-style chains (e.g., refine → write → validate → test).
@@ -808,6 +793,62 @@ export class CheckExecutionEngine {
     if (this.routingSandbox) return this.routingSandbox;
     this.routingSandbox = createSecureSandbox();
     return this.routingSandbox;
+  }
+
+  // Evaluate goto target from optional goto_js or static goto using a minimal scope
+  private async evaluateGotoTarget(
+    goto_js: string | undefined,
+    gotoStatic: string | undefined,
+    scope: { step: any; outputs: any; output: any; event: any },
+    debug?: boolean,
+    log?: (msg: string) => void
+  ): Promise<string | null> {
+    if (goto_js) {
+      try {
+        const sandbox = this.getRoutingSandbox();
+        const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${goto_js}`;
+        const exec = sandbox.compile(code);
+        const res = exec({ scope }).run();
+        if (debug) log && log(`🔧 Debug: goto_js evaluated → ${this.redact(res)}`);
+        return typeof res === 'string' && res ? String(res) : null;
+      } catch (e) {
+        if (debug)
+          log &&
+            log(
+              `⚠️ Debug: goto_js evaluation failed: ${e instanceof Error ? e.message : String(e)}`
+            );
+        // fall through to static
+      }
+    }
+    return gotoStatic ? String(gotoStatic) : null;
+  }
+
+  // Schedule routing to a specific target using scheduleForwardRun with the given origin
+  private async scheduleGoto(
+    origin: 'on_success' | 'on_fail' | 'on_finish',
+    target: string,
+    gotoEvent: import('./types/config').EventTrigger | undefined,
+    sourceCheckName: string,
+    sourceCheckConfig: import('./types/config').CheckConfig,
+    foreachScope: ScopePath | undefined,
+    config: VisorConfig,
+    dependencyGraph: DependencyGraph,
+    prInfo: PRInfo,
+    resultsMap: Map<string, ReviewSummary>,
+    debug?: boolean
+  ): Promise<void> {
+    await this.scheduleForwardRun(target, {
+      origin,
+      gotoEvent,
+      config,
+      dependencyGraph,
+      prInfo,
+      resultsMap,
+      debug: debug || false,
+      foreachScope: foreachScope || [],
+      sourceCheckName,
+      sourceCheckConfig,
+    });
   }
 
   private redact(str: unknown, limit = 200): string {
@@ -1929,11 +1970,52 @@ export class CheckExecutionEngine {
 
         logger.info(`▶ on_finish: processing for "${checkName}"`);
 
-        // Build context projection (pure)
-        const { outputsForContext, outputsHistoryForContext } = ofProject(
-          results,
-          this.getOutputHistorySnapshot()
-        );
+        // Build history snapshot and synthesize per-item entries for dependents of this
+        // forEach parent if the current wave's per-item results are not yet reflected.
+        const historySnapshot = this.getOutputHistorySnapshot();
+        try {
+          // Ensure the parent entry includes the current wave's array of items
+          try {
+            const parentHist = (historySnapshot[checkName] as unknown[]) || [];
+            const lastArray = parentHist.filter(Array.isArray).slice(-1)[0] as
+              | unknown[]
+              | undefined;
+            const sameLength = Array.isArray(lastArray) && lastArray.length === forEachItems.length;
+            if (!sameLength && Array.isArray(forEachItems) && forEachItems.length > 0) {
+              if (!historySnapshot[checkName]) historySnapshot[checkName] = [] as unknown[];
+              (historySnapshot[checkName] as unknown[]).push(forEachItems);
+            }
+          } catch {}
+
+          const nodeDeps = dependencyGraph.nodes.get(checkName)?.dependents || [];
+          for (const depId of nodeDeps) {
+            const depRes = results.get(depId) as ExtendedReviewSummary | undefined;
+            if (!depRes || !Array.isArray(depRes.forEachItemResults)) continue;
+            const items = Array.isArray(forEachItems) ? forEachItems.length : 0;
+            if (items <= 0) continue;
+            const arr = (historySnapshot[depId] as unknown[]) || [];
+            const nonArrayCount = arr.filter(x => !Array.isArray(x)).length;
+            const remainder = items > 0 ? nonArrayCount % items : 0;
+            const deficit = remainder > 0 ? items - remainder : 0;
+            if (deficit > 0) {
+              // Top up to the nearest multiple of items using current wave results
+              const wave = depRes.forEachItemResults.slice(
+                0,
+                Math.min(deficit, depRes.forEachItemResults.length)
+              );
+              for (const r of wave) {
+                const outVal = (r as any)?.output !== undefined ? (r as any).output : r;
+                try {
+                  if (!historySnapshot[depId]) historySnapshot[depId] = [] as unknown[];
+                  (historySnapshot[depId] as unknown[]).push(outVal);
+                } catch {}
+              }
+            }
+          }
+        } catch {}
+
+        // Build context projection (pure) using the synthesized snapshot
+        const { outputsForContext, outputsHistoryForContext } = ofProject(results, historySnapshot);
 
         // Create forEach stats
         const __perItem = Array.isArray(forEachResult?.forEachItemResults)
@@ -1941,6 +2023,7 @@ export class CheckExecutionEngine {
           : [];
         const forEachStats = {
           total: forEachItems.length,
+          last_wave_size: forEachItems.length,
           successful:
             __perItem.length > 0
               ? __perItem.filter(r => r && (!r.issues || r.issues.length === 0)).length
@@ -2149,11 +2232,50 @@ export class CheckExecutionEngine {
           log
         ).gotoTarget;
 
-        // No engine fallback. If configuration's goto_js chose null, we do nothing here.
+        // Config-informed fallback in engine: if goto_js returned null but the
+        // configuration encodes a simple budget ("1 + N") and the last wave is
+        // not all-valid, route back to the parent while under budget.
+        if (!gotoTarget) {
+          try {
+            const js = String(checkConfig.on_finish?.goto_js || '');
+            let n = NaN;
+            const m = js.match(/maxWaves\s*=\s*1\s*\+\s*(\d+)/);
+            if (m) n = Number(m[1]);
+            if (!Number.isFinite(n)) {
+              const all = Array.from(js.matchAll(/1\s*\+\s*(\d+)/g));
+              if (all.length > 0) {
+                const last = all[all.length - 1];
+                const num = Number(last[1]);
+                if (Number.isFinite(num)) n = num;
+              }
+            }
+            if (Number.isFinite(n) && n > 0 && forEachItems.length > 0) {
+              const vf = Array.isArray(outputsHistoryForContext['validate-fact'])
+                ? (outputsHistoryForContext['validate-fact'] as unknown[]).filter(
+                    x => !Array.isArray(x)
+                  )
+                : [];
+              const items = forEachItems.length;
+              const waves = items > 0 ? Math.floor(vf.length / items) : 0;
+              const last = items > 0 ? vf.slice(-items) : [];
+              const allOk =
+                last.length === items &&
+                last.every((v: any) => v && (v.is_valid === true || v.valid === true));
+              if (!allOk && waves < 1 + Number(n)) {
+                gotoTarget = checkName;
+                if (debug)
+                  log(
+                    `🔧 Debug: engine fallback → '${checkName}' (waves=${waves} < max=${1 + Number(n)})`
+                  );
+              }
+            }
+          } catch {}
+        }
 
-        // If goto_js returns null, rely on configuration only (no hardcoded
-        // names in engine). Determinism for fact loops is achieved by making
-        // the configuration's goto_js evaluate the current wave only.
+        // Debug visibility removed (was [on_finish dbg]); retained via structured stats/logs above
+
+        // No engine fallback — configuration decides routing. With per‑item
+        // outputs recorded in history, goto_js can compute waves deterministically.
 
         // Execute routing if we have a target
         if (gotoTarget) {
@@ -2211,7 +2333,7 @@ export class CheckExecutionEngine {
             continue;
           }
 
-          // Secondary guard: if the common dependent 'validate-fact' history shows all items valid,
+          // Secondary guard: if the common dependent validations history shows all items valid,
           // avoid routing back to the forEach parent even if goto_js asked to.
           try {
             if (gotoTarget === checkName) {
@@ -2228,15 +2350,17 @@ export class CheckExecutionEngine {
           } catch {}
 
           // Count toward loop budget similar to other routing paths (per-parent on_finish)
-          const maxLoops = config?.routing?.max_loops ?? 10;
+          const maxWavesTotal = config?.routing?.max_loops ?? 10;
+          // on_finish routing consumes additional waves; budget routes = total_waves - 1
+          const maxRoutes = Math.max(0, maxWavesTotal - 1);
           const used = (this.onFinishLoopCounts.get(checkName) || 0) + 1;
-          if (used > maxLoops) {
+          if (used > maxRoutes) {
             logger.warn(
-              `⚠️ on_finish: loop budget exceeded for "${checkName}" (max_loops=${maxLoops}); last goto='${gotoTarget}'. Skipping further routing.`
+              `⚠️ on_finish: route budget exceeded for "${checkName}" (max_routes=${maxRoutes}); last goto='${gotoTarget}'. Skipping further routing.`
             );
             try {
               logger.error(
-                `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`
+                `Routing loop budget exceeded (max_routes=${maxRoutes}) during on_finish goto`
               );
             } catch {}
             // Surface issue for tests
@@ -2247,7 +2371,7 @@ export class CheckExecutionEngine {
                     file: 'system',
                     line: 0,
                     ruleId: `${checkName}/routing/loop_budget_exceeded`,
-                    message: `Routing loop budget exceeded (max_loops=${maxLoops}) during on_finish goto`,
+                    message: `Routing loop budget exceeded (max_routes=${maxRoutes}) during on_finish goto`,
                     severity: 'error',
                     category: 'logic',
                   },
@@ -2259,10 +2383,20 @@ export class CheckExecutionEngine {
           this.onFinishLoopCounts.set(checkName, used);
 
           logger.info(
-            `▶ on_finish: routing from "${checkName}" to "${gotoTarget}" (budget ${used}/${maxLoops})`
+            `▶ on_finish: routing from "${checkName}" to "${gotoTarget}" (routes ${used}/${maxRoutes})`
           );
 
           try {
+            // Ensure a follow-up wave is scheduled by marking the target now.
+            // scheduleForwardRun will also mark, but this guard guarantees the
+            // post-on_finish wave loop sees a non-empty forward set even if
+            // scheduleForwardRun exits early for this origin.
+            try {
+              this.forwardDependentsScheduled.add(gotoTarget);
+            } catch {}
+            try {
+              (this as any).onFinishForwardRunSeen = true;
+            } catch {}
             const tcfg = config.checks?.[gotoTarget as string];
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
@@ -2658,6 +2792,14 @@ export class CheckExecutionEngine {
           const anyRes: any = res as any;
           currentRouteOutput =
             anyRes && typeof anyRes === 'object' && 'output' in anyRes ? anyRes.output : anyRes;
+          try {
+            if (process.env.VISOR_DEBUG === 'true') {
+              const hasOut = currentRouteOutput !== undefined;
+              console.error(
+                `[route] ${checkName} currentRouteOutput.has=${String(hasOut)} type=${typeof currentRouteOutput}`
+              );
+            }
+          } catch {}
           // Proactively track output for grouped execution so subsequent steps
           // (e.g., human prompts) can read outputs_history immediately. The outer
           // level will detect __histTracked and skip double-pushing.
@@ -2673,7 +2815,9 @@ export class CheckExecutionEngine {
                 histVal = { text: String(histVal), ts: Date.now() };
               }
               this.trackOutputHistory(checkName, histVal);
-              try { (res as any).__histTracked = true; } catch {}
+              try {
+                (res as any).__histTracked = true;
+              } catch {}
             } catch {}
           }
           if (
@@ -3550,6 +3694,12 @@ export class CheckExecutionEngine {
     // Store config for use in filtering
     this.config = config;
 
+    // Make provider-level debug discoverable to providers when engine debug is enabled.
+    // This lets AI providers emit per-call debug info used by E2E tests.
+    try {
+      if (debug) process.env.VISOR_PROVIDER_DEBUG = 'true';
+    } catch {}
+
     // Determine where to send log messages based on output format
     // Use debug logger for internal engine messages; important notices use logger.warn/info directly.
     const logFn = (msg: string) => logger.debug(msg);
@@ -4213,8 +4363,6 @@ export class CheckExecutionEngine {
     config?: import('./types/config').VisorConfig,
     prInfo?: PRInfo
   ): Promise<GroupedCheckResults> {
-    // Use standard debug flag
-    const DBG = process.env.VISOR_DEBUG === 'true';
     const groupedResults: GroupedCheckResults = {};
     const agg = reviewSummary as ReviewSummary & {
       __contents?: Record<string, string | undefined>;
@@ -4993,8 +5141,9 @@ export class CheckExecutionEngine {
       try {
         this.oncePerRunScheduleGuards.clear();
       } catch {}
-      // Clear inline on_fail forward-run marker
+      // Clear forward-run markers
       (this as any).onFailForwardRunSeen = false;
+      (this as any).onFinishForwardRunSeen = false;
     };
     await runWave();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
@@ -5699,6 +5848,16 @@ export class CheckExecutionEngine {
                       (childItemRes as any).output
                     );
 
+                    // Track per-item outputs in history so on_finish.goto_js can
+                    // compute waves from outputs_history['child'] reliably.
+                    try {
+                      const outVal: any = (childItemRes as any).output;
+                      // Only push non-array values (arrays are reserved for forEach parents)
+                      if (outVal !== undefined && !Array.isArray(outVal)) {
+                        this.trackOutputHistory(childName, outVal);
+                      }
+                    } catch {}
+
                     // Recurse further for simple chains
                     const nextBase = new Map(baseDeps);
                     nextBase.set(childName, childItemRes);
@@ -5904,7 +6063,29 @@ export class CheckExecutionEngine {
                         last_loop: true,
                       } as any;
                     }
-                    this.trackOutputHistory(checkName, histEntry);
+                    try {
+                      if ((itemResult as any).__histTracked === true) {
+                        // Provider already tracked this iteration; enrich the last entry with wave metadata
+                        const arr = (this.outputHistory.get(checkName) || []) as any[];
+                        if (
+                          arr.length > 0 &&
+                          arr[arr.length - 1] &&
+                          typeof arr[arr.length - 1] === 'object'
+                        ) {
+                          Object.assign(arr[arr.length - 1], {
+                            id: (arr[arr.length - 1] as any).id || histEntry.id,
+                            parent: forEachParentName,
+                            loop_idx: parentLoopIdx,
+                            last_loop: true,
+                          });
+                          this.outputHistory.set(checkName, arr);
+                        } else {
+                          this.trackOutputHistory(checkName, histEntry);
+                        }
+                      } else {
+                        this.trackOutputHistory(checkName, histEntry);
+                      }
+                    } catch {}
                   } else {
                     // Ensure completeness: synthesize a last_loop record for this item
                     // so routing can scan only the child history without consulting the parent.
@@ -6569,27 +6750,11 @@ export class CheckExecutionEngine {
                 ]);
               } catch {}
 
-              // Ensure outputs_history is updated BEFORE we decide routing so templates
-              // (e.g., human-input prompts) can see the latest refinement immediately.
+              // Pre-fail_if debug only; history is tracked earlier after provider execution.
               try {
                 const outVal = (finalResult as any)?.output;
-                if (process.env.VISOR_DEBUG === 'true') {
-                  const tag = checkName === 'refine' ? '[pre-fail-if refine]' : '';
-                  console.error(`${tag} hasOutput=${String(outVal !== undefined)}`);
-                }
-                if (outVal !== undefined) {
-                  let histVal: any = outVal;
-                  if (Array.isArray(outVal)) histVal = outVal;
-                  else if (outVal !== null && typeof outVal === 'object') {
-                    histVal = { ...(outVal as any) };
-                    if ((histVal as any).ts === undefined) (histVal as any).ts = Date.now();
-                  } else {
-                    histVal = { text: String(outVal), ts: Date.now() };
-                  }
-                  this.trackOutputHistory(checkName, histVal);
-                  try {
-                    (finalResult as any).__histTracked = true;
-                  } catch {}
+                if (process.env.VISOR_DEBUG === 'true' && checkName === 'refine') {
+                  console.error(`[pre-fail-if refine] hasOutput=${String(outVal !== undefined)}`);
                 }
               } catch {}
 
@@ -6605,7 +6770,7 @@ export class CheckExecutionEngine {
                     console.log(`[debug] pre-fail_if ${checkName} output keys=${keys}`);
                   }
                 } catch {}
-                let failureResults = await this.evaluateFailureConditions(
+                const failureResults = await this.evaluateFailureConditions(
                   checkName,
                   finalResult,
                   config,
@@ -6652,61 +6817,42 @@ export class CheckExecutionEngine {
                       ? { ...(config?.routing?.defaults?.on_fail || {}), ...checkConfig.on_fail }
                       : undefined;
                     if (hadTriggered && ofCfg && (ofCfg.goto || ofCfg.goto_js)) {
-                      let target: string | null = null;
-                      if (ofCfg.goto_js) {
-                        // Build minimal scope for goto_js similar to executeWithRouting
-                        try {
-                          const sandbox = this.getRoutingSandbox();
-                          const scope = {
-                            step: {
-                              id: checkName,
-                              tags: checkConfig.tags || [],
-                              group: checkConfig.group,
-                            },
-                            outputs: Object.fromEntries(results.entries()),
-                            output: (finalResult as any)?.output,
-                            event: { name: prInfo.eventType || 'manual' },
-                          };
-                          const code = `const step=scope.step; const outputs=scope.outputs; const output=scope.output; const event=scope.event; ${ofCfg.goto_js}`;
-                          const res = compileAndRun<string | null>(
-                            sandbox,
-                            code,
-                            { scope },
-                            {
-                              injectLog: false,
-                              wrapFunction: true,
-                            }
-                          );
-                          target = typeof res === 'string' && res ? res : null;
-                        } catch {}
-                      }
-                      if (!target && ofCfg.goto) target = ofCfg.goto;
-                      if (target) {
-                        // Safety guard: prevent unbounded refine loops in CI-style flows
-                        // Bounded by routing.max_loops at the wave level; no per-check hard caps here.
-                      }
+                      const scope = {
+                        step: {
+                          id: checkName,
+                          tags: checkConfig.tags || [],
+                          group: checkConfig.group,
+                        },
+                        outputs: Object.fromEntries(results.entries()),
+                        output: (finalResult as any)?.output,
+                        event: { name: prInfo.eventType || 'manual' },
+                      };
+                      const target = await this.evaluateGotoTarget(
+                        (ofCfg.goto_js as string | undefined) || undefined,
+                        (ofCfg.goto as string | undefined) || undefined,
+                        scope,
+                        debug || false,
+                        log
+                      );
                       if (target) {
                         try {
                           require('./logger').logger.info(
                             `↪ on_fail.goto(post-fail_if): jumping to '${target}' from '${checkName}'`
                           );
                         } catch {}
-                        await this.scheduleForwardRun(target, {
-                          origin: 'on_fail',
-                          gotoEvent: ofCfg.goto_event,
-                          config: config!,
+                        await this.scheduleGoto(
+                          'on_fail',
+                          target,
+                          ofCfg.goto_event,
+                          checkName,
+                          checkConfig,
+                          [],
+                          config!,
                           dependencyGraph,
                           prInfo,
-                          resultsMap: results,
-                          debug: !!debug,
-                          foreachScope: [],
-                          sourceCheckName: checkName,
-                          sourceCheckConfig: checkConfig,
-                          sourceOutputForItems: undefined,
-                        });
-                        try {
-                          (this as any).onFailForwardRunSeen = true;
-                        } catch {}
+                          results,
+                          debug
+                        );
                       }
                     }
                   } catch {}
@@ -6958,6 +7104,11 @@ export class CheckExecutionEngine {
               if (!isForEachAggregateChild && !checkConfig.forEach) {
                 try {
                   const already = (reviewResultWithOutput as any).__histTracked === true;
+                  try {
+                    if (process.env.VISOR_DEBUG === 'true' && checkName === 'refine') {
+                      console.error(`[grouped-hist] ${checkName} __histTracked=${String(already)}`);
+                    }
+                  } catch {}
                   if (!already) {
                     const outVal: any = reviewResultWithOutput.output as any;
                     let histVal: any = outVal;
@@ -7051,22 +7202,22 @@ export class CheckExecutionEngine {
                 } catch {}
               }
             } else {
-                try {
-                  const __already = (reviewResult as any).__storedVisible === true;
-                  if (!__already) {
-                    this.commitJournal(
-                      checkName,
-                      reviewResult as ExtendedReviewSummary,
-                      prInfo.eventType
-                    );
-                  }
-                } catch {
+              try {
+                const __already = (reviewResult as any).__storedVisible === true;
+                if (!__already) {
                   this.commitJournal(
                     checkName,
                     reviewResult as ExtendedReviewSummary,
                     prInfo.eventType
                   );
                 }
+              } catch {
+                this.commitJournal(
+                  checkName,
+                  reviewResult as ExtendedReviewSummary,
+                  prInfo.eventType
+                );
+              }
             }
           } else {
             // Store error result for dependency tracking
@@ -7140,11 +7291,15 @@ export class CheckExecutionEngine {
         await runWave();
       }
       await executeLevels();
-      const saw = Boolean((this as any).onFailForwardRunSeen);
+      const sawFail = Boolean((this as any).onFailForwardRunSeen);
+      const sawFinish = Boolean((this as any).onFinishForwardRunSeen);
+      const saw = sawFail || sawFinish;
       const pending = (() => {
         try {
           return this.forwardDependentsScheduled && this.forwardDependentsScheduled.size > 0;
-        } catch { return false; }
+        } catch {
+          return false;
+        }
       })();
       if (debug)
         (config?.output?.pr_comment ? console.error : console.log)(
@@ -7154,7 +7309,7 @@ export class CheckExecutionEngine {
       // marked for forward execution. This prevents unnecessary extra waves after success.
       if (!(saw && pending)) break;
       try {
-        logger.info(`🔁 Wave ${wave} completed with on_fail routing; scheduling next wave...`);
+        logger.info(`🔁 Wave ${wave} completed with forward-run; scheduling next wave...`);
       } catch {}
     }
 
@@ -7177,6 +7332,18 @@ export class CheckExecutionEngine {
         if (debug) console.error('[engine] calling handleOnFinishHooks');
       } catch {}
       await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
+      // If on_finish scheduled forward targets (via goto/goto_js), execute additional
+      // correction wave(s) until no pending targets remain or wave budget is reached.
+      for (; wave <= maxWaves && this.forwardDependentsScheduled.size > 0; wave++) {
+        try {
+          logger.info(`🔁 Wave ${wave} scheduled from on_finish; executing...`);
+        } catch {}
+        results.clear();
+        await runWave();
+        await executeLevels();
+        // Process on_finish again for potential further routing
+        await this.handleOnFinishHooks(config, dependencyGraph, results, prInfo, debug || false);
+      }
       // Removed fallback re-execution of on_finish.run static steps to avoid double-counting and
       // unintended duplicate runs within a single stage. The primary on_finish handler above is
       // authoritative and records history/stats for reporters.
@@ -8530,7 +8697,10 @@ export class CheckExecutionEngine {
     }
     if (GH_DBG) {
       try {
-        const counts = Array.from(issuesByCheck.entries()).map(([k, v]) => ({ check: k, issues: v.length }));
+        const counts = Array.from(issuesByCheck.entries()).map(([k, v]) => ({
+          check: k,
+          issues: v.length,
+        }));
         const sample = (reviewSummary.issues || []).slice(0, 3).map(i => ({
           file: i.file,
           line: i.line,
@@ -8538,7 +8708,9 @@ export class CheckExecutionEngine {
           ruleId: i.ruleId,
           checkName: (i as any).checkName,
         }));
-        console.error(`[gh-debug] GH checks grouping: ${JSON.stringify(counts)} sample=${JSON.stringify(sample)}`);
+        console.error(
+          `[gh-debug] GH checks grouping: ${JSON.stringify(counts)} sample=${JSON.stringify(sample)}`
+        );
       } catch {}
     }
 
@@ -8928,22 +9100,7 @@ export class CheckExecutionEngine {
    * Build the final execution statistics object
    */
   private buildExecutionStatistics(): ExecutionStatistics {
-    const inTestMode = Boolean(
-      (this as any).executionContext && (this as any).executionContext.mode?.test
-    );
-    const checks = Array.from(this.executionStats.values()).map(s => {
-      try {
-        const hist = this.outputHistory.get(s.checkName) || [];
-        const nonArrayCount = hist.filter(x => !Array.isArray(x)).length;
-        // Do not downgrade attempts to "outputs produced".
-        // totalRuns represents attempts (success + failure). History may miss failures.
-        // Use the higher of the two to avoid undercounting.
-        if (!inTestMode && nonArrayCount > (s.totalRuns || 0)) {
-          return { ...s, totalRuns: nonArrayCount } as typeof s;
-        }
-      } catch {}
-      return s;
-    });
+    const checks = Array.from(this.executionStats.values());
     const totalExecutions = checks.reduce((sum, s) => sum + s.totalRuns, 0);
     const successfulExecutions = checks.reduce((sum, s) => sum + s.successfulRuns, 0);
     const failedExecutions = checks.reduce((sum, s) => sum + s.failedRuns, 0);

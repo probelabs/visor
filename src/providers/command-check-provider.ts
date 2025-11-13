@@ -182,7 +182,8 @@ export class CommandCheckProvider extends CheckProvider {
             out = JSON.parse(out);
           }
         } catch {}
-        const code = typeof m.exit_code === 'number' ? m.exit_code : typeof m.exit === 'number' ? m.exit : 0;
+        const code =
+          typeof m.exit_code === 'number' ? m.exit_code : typeof m.exit === 'number' ? m.exit : 0;
         if (code !== 0) {
           return {
             issues: [

@@ -134,6 +134,16 @@ export class AIReviewService {
 
     this.sessionRegistry = SessionRegistry.getInstance();
 
+    // If debug was not explicitly provided, honor standard env flags so tests/CLI
+    // can enable provider-level debug without modifying per-check configs.
+    if (typeof this.config.debug === 'undefined') {
+      try {
+        if (process.env.VISOR_PROVIDER_DEBUG === 'true' || process.env.VISOR_DEBUG === 'true') {
+          this.config.debug = true;
+        }
+      } catch {}
+    }
+
     // Respect explicit provider if set (e.g., 'mock' during tests) — do not override from env
     const providerExplicit =
       typeof this.config.provider === 'string' && this.config.provider.length > 0;

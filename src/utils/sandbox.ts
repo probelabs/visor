@@ -27,9 +27,21 @@ export function createSecureSandbox(): Sandbox {
     // Provide console with limited surface. Use trampolines so that any test
     // spies (e.g., jest.spyOn(console, 'log')) see calls made inside the sandbox.
     console: {
-      log: (...args: unknown[]) => { try { (console as any).log(...args); } catch {} },
-      warn: (...args: unknown[]) => { try { (console as any).warn(...args); } catch {} },
-      error: (...args: unknown[]) => { try { (console as any).error(...args); } catch {} },
+      log: (...args: unknown[]) => {
+        try {
+          (console as any).log(...args);
+        } catch {}
+      },
+      warn: (...args: unknown[]) => {
+        try {
+          (console as any).warn(...args);
+        } catch {}
+      },
+      error: (...args: unknown[]) => {
+        try {
+          (console as any).error(...args);
+        } catch {}
+      },
     },
   } as Record<string, unknown>;
 
@@ -195,9 +207,15 @@ export function compileAndRun<T = unknown>(
   // - Otherwise treat it as a pure expression and return its value directly.
   const src = String(userCode);
   const looksLikeBlock = /\breturn\b/.test(src) || /;/.test(src) || /\n/.test(src);
+  // Heuristic: if the snippet itself looks like an IIFE/callable expression
+  // (e.g., `(() => { ... })()` or `(function(){ ... })()`), return its value
+  // directly to avoid swallowing the result by nesting it inside another block.
+  const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(src.trim());
   const body = opts.wrapFunction
     ? looksLikeBlock
-      ? `return (() => {\n${src}\n})();\n`
+      ? looksLikeIife
+        ? `return (\n${src}\n);\n`
+        : `return (() => {\n${src}\n})();\n`
       : `return (\n${src}\n);\n`
     : `${src}`;
   const code = `${header}${body}`;

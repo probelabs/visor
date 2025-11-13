@@ -128,7 +128,7 @@ export function evaluateOnFinishGoto(
     try {
       const scope = onFinishContext;
       const code = `
-        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+        const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
         const __fn = () => {\n${onFinish.goto_js}\n};
         return __fn();
       `;
@@ -140,6 +140,24 @@ export function evaluateOnFinishGoto(
         { scope },
         { injectLog: false, wrapFunction: false }
       );
+      try {
+        if (debug) {
+          const hist =
+            (onFinishContext &&
+              onFinishContext.outputs &&
+              (onFinishContext.outputs as any).history) ||
+            {};
+          const vf = Array.isArray(hist['validate-fact'])
+            ? hist['validate-fact'].filter((x: any) => !Array.isArray(x))
+            : [];
+          const items =
+            (onFinishContext &&
+              onFinishContext.forEach &&
+              (onFinishContext.forEach as any).last_wave_size) ||
+            0;
+          log(`🔧 Debug: goto_js result=${String(result)} items=${items} vf_count=${vf.length}`);
+        }
+      } catch {}
       gotoTarget = typeof result === 'string' && result ? result : null;
       if (debug) log(`🔧 Debug: on_finish.goto_js evaluated → ${String(gotoTarget)}`);
     } catch (e) {
@@ -162,49 +180,98 @@ export function recomputeAllValidFromHistory(
   history: Record<string, unknown[]>,
   forEachItemsCount: number
 ): boolean | undefined {
-  const vfArr = Array.isArray(history['validate-fact'])
+  const vfArrRaw = Array.isArray(history['validate-fact'])
     ? (history['validate-fact'] as unknown[])
     : [];
   if (forEachItemsCount <= 0) return undefined;
-  // If we have fewer per-item results than the wave size, the current wave
-  // cannot be considered all-valid yet. Be pessimistic and return false so
-  // on_finish can trigger another correction wave.
-  if (vfArr.filter(v => !Array.isArray(v)).length < forEachItemsCount) {
-    return false;
+
+  // Consider only non-array entries (per-item results)
+  const vfArr = vfArrRaw.filter(v => !Array.isArray(v)) as any[];
+  if (vfArr.length < forEachItemsCount) return false;
+
+  // 1) Prefer strict last-wave grouping when loop_idx metadata is present.
+  const withLoop = vfArr.filter(
+    v => v && typeof v === 'object' && Number.isFinite((v as any).loop_idx)
+  ) as Array<{ loop_idx: number } & Record<string, unknown>>;
+  if (withLoop.length >= forEachItemsCount) {
+    const maxLoop = Math.max(...withLoop.map(v => Number(v.loop_idx)));
+    const sameWave = withLoop.filter(v => Number(v.loop_idx) === maxLoop);
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        console.error(
+          `[ofAllValid] loop_idx=${maxLoop} sameWave=${sameWave.length} items=${forEachItemsCount}`
+        );
+      }
+    } catch {}
+    if (sameWave.length >= forEachItemsCount) {
+      // If we have ids, take the last N distinct by id; otherwise, take last N
+      const take = (() => {
+        const withIds = sameWave.filter(
+          o => typeof (o as any).fact_id === 'string' || typeof (o as any).id === 'string'
+        );
+        if (withIds.length >= forEachItemsCount) {
+          const recent: any[] = [];
+          const seen = new Set<string>();
+          for (let i = sameWave.length - 1; i >= 0 && recent.length < forEachItemsCount; i--) {
+            const o: any = sameWave[i];
+            const key = (o.fact_id || o.id) as string | undefined;
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            recent.push(o);
+          }
+          if (recent.length === forEachItemsCount) return recent;
+        }
+        return sameWave.slice(-forEachItemsCount);
+      })();
+      const ok = take.every(o => o && ((o as any).is_valid === true || (o as any).valid === true));
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const vals = take.map(o => (o as any).is_valid ?? (o as any).valid);
+          console.error(`[ofAllValid] loop verdicts=${JSON.stringify(vals)} ok=${ok}`);
+        }
+      } catch {}
+      return ok;
+    }
   }
 
-  // If entries have per-item identifiers, compute verdict from the most recent
-  // wave by walking backward and taking the last N distinct ids.
-  const withIds = vfArr.filter(v => {
-    const o = v as any;
-    return o && (typeof o.fact_id === 'string' || typeof o.id === 'string');
-  });
-
+  // 2) Fall back to last N distinct-by-id across the whole history
+  const withIds = vfArr.filter(
+    o => typeof (o as any).fact_id === 'string' || typeof (o as any).id === 'string'
+  );
   if (withIds.length >= forEachItemsCount) {
-    const seen = new Set<string>();
     const recent: any[] = [];
+    const seen = new Set<string>();
     for (let i = vfArr.length - 1; i >= 0 && recent.length < forEachItemsCount; i--) {
-      const o = vfArr[i] as any;
-      const key = (o && (o.fact_id || o.id)) as string | undefined;
-      if (!key) continue;
-      if (!seen.has(key)) {
-        seen.add(key);
-        recent.push(o);
-      }
+      const o: any = vfArr[i];
+      const key = (o.fact_id || o.id) as string | undefined;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      recent.push(o);
     }
     if (recent.length === forEachItemsCount) {
-      return recent.every(o => o && (o.is_valid === true || o.valid === true));
+      const ok = recent.every(o => o && (o.is_valid === true || o.valid === true));
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const vals = recent.map(o => (o as any).is_valid ?? (o as any).valid);
+          console.error(`[ofAllValid] id-recent verdicts=${JSON.stringify(vals)} ok=${ok}`);
+        }
+      } catch {}
+      return ok;
     }
-    // Fall through if we couldn't collect enough distinct ids
   }
 
-  // ID-less shape: treat the last N entries as the current wave.
-  // This matches unit-test expectations where history items are simple booleans.
+  // 3) Last-resort fallback: treat last N entries as current wave
   if (vfArr.length >= forEachItemsCount) {
     const lastN = vfArr.slice(-forEachItemsCount) as any[];
-    return lastN.every(o => o && (o.is_valid === true || o.valid === true));
+    const ok = lastN.every(o => o && (o.is_valid === true || o.valid === true));
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        const vals = lastN.map(o => (o as any).is_valid ?? (o as any).valid);
+        console.error(`[ofAllValid] tail verdicts=${JSON.stringify(vals)} ok=${ok}`);
+      }
+    } catch {}
+    return ok;
   }
 
-  // Not enough signal to decide for the requested wave size.
   return false;
 }

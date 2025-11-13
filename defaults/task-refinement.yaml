@@ -410,21 +410,25 @@ tests:
       expect:
         calls:
           - step: ask
-            exactly: 1
+            exactly: 2
           - step: refine
-            exactly: 1
+            exactly: 2
           - step: plan-commands
-            at_least: 1
+            exactly: 2
           - step: ask-confirm
-            exactly: 1
+            exactly: 2
           - step: confirm-interpret
-            exactly: 1
+            exactly: 2
           - step: run-commands
-            exactly: 1
+            exactly: 2
           - step: finish
-            exactly: 0
-        # No outputs assertion here because failing run may be routed inline
-        # and some engines suppress exposing output on failed steps in final map.
+            exactly: 1
+        prompts:
+          - step: plan-commands
+            index: last
+            contains:
+              - "Previous attempt failed"
+              - "Run results"
 
     - name: confirm-amend-json
       description: User pastes JSON array of edited commands; interpreter parses and proceeds.
