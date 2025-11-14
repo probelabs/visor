@@ -70,6 +70,14 @@ export class ScriptCheckProvider extends CheckProvider {
       (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined,
       { attachMemoryReadHelpers: false }
     );
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        const hist: any = (ctx as any).outputs_history || {};
+        const len = Array.isArray(hist['refine']) ? hist['refine'].length : 0;
+
+        console.error(`[script] history.refine.len=${len}`);
+      }
+    } catch {}
 
     // Attach synchronous memory ops consistent with memory provider
     const { ops, needsSave } = createSyncMemoryOps(memoryStore);
@@ -85,7 +93,7 @@ export class ScriptCheckProvider extends CheckProvider {
         { ...ctx },
         {
           injectLog: true,
-          wrapFunction: false,
+          wrapFunction: true,
           logPrefix: '[script]',
         }
       );
@@ -120,7 +128,20 @@ export class ScriptCheckProvider extends CheckProvider {
       logger.warn(`[script] memory save failed: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    return { issues: [], output: result } as ReviewSummary & { output: unknown };
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        const name = String((config as any).checkName || '');
+        const t = typeof result;
+        console.error(
+          `[script-return] ${name} outputType=${t} hasArray=${Array.isArray(result)} hasObj=${result && typeof result === 'object'}`
+        );
+      }
+    } catch {}
+    const out: any = { issues: [], output: result } as ReviewSummary & { output: unknown };
+    try {
+      (out as any).__histTracked = true;
+    } catch {}
+    return out;
   }
 
   getSupportedConfigKeys(): string[] {

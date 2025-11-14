@@ -30,6 +30,7 @@ interface TracedProbeAgentOptions extends ProbeAgentOptions {
   tracer?: unknown; // SimpleTelemetry tracer
   _telemetryConfig?: unknown; // SimpleTelemetry config
   _traceFilePath?: string;
+  customPrompt?: string;
 }
 
 export interface AIReviewConfig {
@@ -43,6 +44,12 @@ export interface AIReviewConfig {
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
   // Enable delegate tool for task distribution to subagents
   enableDelegate?: boolean;
+  // ProbeAgent persona/prompt family (e.g., 'engineer', 'code-review', 'architect')
+  promptType?: string;
+  // System prompt to prepend (baseline/preamble). Replaces legacy customPrompt
+  systemPrompt?: string;
+  // Backward-compat: legacy key still accepted internally
+  customPrompt?: string;
   // Retry configuration for AI provider calls
   retry?: import('./types/config').AIRetryConfig;
   // Fallback configuration for provider failures
@@ -131,6 +138,16 @@ export class AIReviewService {
 
     this.sessionRegistry = SessionRegistry.getInstance();
 
+    // If debug was not explicitly provided, honor standard env flags so tests/CLI
+    // can enable provider-level debug without modifying per-check configs.
+    if (typeof this.config.debug === 'undefined') {
+      try {
+        if (process.env.VISOR_PROVIDER_DEBUG === 'true' || process.env.VISOR_DEBUG === 'true') {
+          this.config.debug = true;
+        }
+      } catch {}
+    }
+
     // Respect explicit provider if set (e.g., 'mock' during tests) — do not override from env
     const providerExplicit =
       typeof this.config.provider === 'string' && this.config.provider.length > 0;
@@ -186,7 +203,10 @@ export class AIReviewService {
     const timestamp = new Date().toISOString();
 
     // Build prompt from custom instructions
-    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema);
+    // Respect provider-level skip_code_context by skipping PR context wrapper when requested
+    const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
+      skipPRContext: (this.config as any)?.skip_code_context === true,
+    });
 
     log(`Executing AI review with ${this.config.provider} provider...`);
     log(`🔧 Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -1369,11 +1389,22 @@ ${'='.repeat(60)}
         // No need to set apiKey as it uses AWS SDK authentication
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
+      const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || '').trim();
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
-        promptType: schema ? ('code-review-template' as 'code-review') : undefined,
+        // Prefer config promptType, then env override, else fallback to code-review when schema is set
+        promptType:
+          this.config.promptType && this.config.promptType.trim()
+            ? (this.config.promptType.trim() as any)
+            : explicitPromptType
+              ? (explicitPromptType as any)
+              : schema === 'code-review'
+                ? ('code-review-template' as any)
+                : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
+        // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
+        customPrompt: this.config.systemPrompt || this.config.customPrompt,
       };
 
       // Enable tracing in debug mode for better diagnostics

@@ -470,25 +470,40 @@ export class AICheckProvider extends CheckProvider {
     try {
       return await this.liquidEngine.parseAndRender(promptContent, templateContext);
     } catch (error) {
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          const lines = promptContent.split(/\r?\n/);
-          const preview = lines
-            .slice(0, 20)
-            .map((l, i) => `${(i + 1).toString().padStart(3, ' ')}| ${l}`)
-            .join('\n');
-          try {
-            process.stderr.write(
-              '[prompt-error] First 20 lines of prompt before Liquid render:\n' + preview + '\n'
-            );
-          } catch {}
+      // Always show a helpful snippet with a caret, similar to YAML errors
+      const err: any = error || {};
+      const lines = String(promptContent || '').split(/\r?\n/);
+      const lineNum: number = Number(err.line || err?.token?.line || err?.location?.line || 0);
+      const colNum: number = Number(err.col || err?.token?.col || err?.location?.col || 0);
+      let snippet = '';
+      if (lineNum > 0) {
+        const start = Math.max(1, lineNum - 3);
+        const end = Math.max(lineNum + 2, lineNum);
+        const width = String(end).length;
+        for (let i = start; i <= Math.min(end, lines.length); i++) {
+          const ln = `${String(i).padStart(width, ' ')} | ${lines[i - 1] ?? ''}`;
+          snippet += ln + '\n';
+          if (i === lineNum) {
+            const caretPad = ' '.repeat(Math.max(0, colNum > 1 ? colNum - 1 : 0) + width + 3);
+            snippet += caretPad + '^\n';
+          }
         }
+      } else {
+        // Fallback preview of the first 20 lines
+        const preview = lines
+          .slice(0, 20)
+          .map((l, i) => `${(i + 1).toString().padStart(3, ' ')} | ${l}`)
+          .join('\n');
+        snippet = preview + '\n';
+      }
+      const msg = `Failed to render prompt template: ${
+        error instanceof Error ? error.message : 'Unknown error'
+      }`;
+      // Print a clear, user-friendly error with context
+      try {
+        console.error('\n[prompt-error] ' + msg + '\n' + snippet);
       } catch {}
-      throw new Error(
-        `Failed to render prompt template: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
-      );
+      throw new Error(msg);
     }
   }
 
@@ -678,8 +693,10 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
 
     // Process prompt with Liquid templates and file loading
-    // Skip event context (PR diffs, files, etc.) if requested
-    const eventContext = config.ai?.skip_code_context ? {} : config.eventContext;
+    // Do NOT strip event context on skip_code_context — that flag only controls
+    // whether we embed PR diffs/large code context later in AIReviewService.
+    // Keep repository/comment metadata available for prompts and tests.
+    const eventContext = config.eventContext || {};
     // Thread stageHistoryBase via eventContext for prompt rendering so
     // Liquid templates can get outputs_history_stage (computed from baseline).
     const ctxWithStage = {
@@ -697,22 +714,37 @@ export class AICheckProvider extends CheckProvider {
       (config as any).__outputHistory as Map<string, unknown[]> | undefined
     );
 
-    // No implicit prompt mutations here — prompts should come from YAML.
+    // Optional persona (vendor extension): ai.ai_persona or ai_persona.
+    // This is a light-weight preamble, not a rewriting of the user's prompt.
+    const aiAny = (config.ai || {}) as any;
+    // Persona (underscore only)
+    const persona = (aiAny?.ai_persona || (config as any).ai_persona || '').toString().trim();
+    const finalPrompt = persona ? `Persona: ${persona}\n\n${processedPrompt}` : processedPrompt;
+    // Expose promptType to AIReviewService via env (bridge until ProbeAgent supports it in our SDK surface)
+    try {
+      const pt = ((config.ai as any)?.promptType || (config as any).ai_prompt_type || '')
+        .toString()
+        .trim();
+      if (pt) process.env.VISOR_PROMPT_TYPE = pt;
+    } catch {}
 
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
       const stepName = (config as any).checkName || 'unknown';
       const serviceForCapture = new AIReviewService(aiConfig);
-      const finalPrompt = await (serviceForCapture as any).buildCustomPrompt(
+      const finalPromptCapture = await (serviceForCapture as any).buildCustomPrompt(
         prInfo,
-        processedPrompt,
+        finalPrompt,
         config.schema,
-        { checkName: (config as any).checkName }
+        {
+          checkName: (config as any).checkName,
+          skipPRContext: (config.ai as any)?.skip_code_context === true,
+        }
       );
       sessionInfo?.hooks?.onPromptCaptured?.({
         step: String(stepName),
         provider: 'ai',
-        prompt: finalPrompt,
+        prompt: finalPromptCapture,
       });
       // capture hook retained; no extra console diagnostics
     } catch {}
@@ -727,6 +759,19 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
+    try {
+      const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '').toString().trim();
+      if (pt) (aiConfig as any).promptType = pt;
+      // Prefer new system_prompt; fall back to legacy custom_prompt for backward compatibility
+      const sys = (aiAny?.system_prompt || (config as any).ai_system_prompt || '')
+        .toString()
+        .trim();
+      const legacy = (aiAny?.custom_prompt || (config as any).ai_custom_prompt || '')
+        .toString()
+        .trim();
+      if (sys) (aiConfig as any).systemPrompt = sys;
+      else if (legacy) (aiConfig as any).systemPrompt = legacy;
+    } catch {}
     const service = new AIReviewService(aiConfig);
 
     // Pass the custom prompt and schema - no fallbacks
@@ -794,7 +839,7 @@ export class AICheckProvider extends CheckProvider {
         }
         result = await service.executeReview(
           prInfo,
-          processedPrompt,
+          finalPrompt,
           schema,
           config.checkName,
           config.sessionId
@@ -883,6 +928,12 @@ export class AICheckProvider extends CheckProvider {
       'ai.timeout',
       'ai.mcpServers',
       'ai.enableDelegate',
+      // legacy persona/prompt keys supported in config
+      'ai_persona',
+      'ai_prompt_type',
+      'ai_custom_prompt',
+      'ai_system_prompt',
+      // new provider resilience and tools toggles
       'ai.retry',
       'ai.fallback',
       'ai.allowEdit',

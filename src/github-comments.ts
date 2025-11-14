@@ -221,8 +221,7 @@ ${content}
       const totalScore = items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length;
       const totalIssues = items.reduce((sum, item) => sum + (item.issuesFound || 0), 0);
 
-      const emoji = this.getCheckTypeEmoji(groupKey);
-      const title = `${emoji} ${this.formatGroupTitle(groupKey, totalScore, totalIssues)}`;
+      const title = this.formatGroupTitle(groupKey, totalScore, totalIssues);
 
       const sectionContent = items.map(item => item.content).join('\n\n');
       sections.push(this.createCollapsibleSection(title, sectionContent, totalIssues > 0));
@@ -403,24 +402,7 @@ ${content}
     return 'Critical Issues';
   }
 
-  /**
-   * Get emoji for check type
-   */
-  private getCheckTypeEmoji(checkType: string): string {
-    const emojiMap: Record<string, string> = {
-      performance: '📈',
-      security: '🔒',
-      architecture: '🏗️',
-      style: '🎨',
-      all: '🔍',
-      Excellent: '✅',
-      Good: '👍',
-      'Needs Improvement': '⚠️',
-      'Critical Issues': '🚨',
-      Unknown: '❓',
-    };
-    return emojiMap[checkType] || '📝';
-  }
+  // Emoji helper removed: plain titles are used in group headers
 
   /**
    * Format group title with score and issue count

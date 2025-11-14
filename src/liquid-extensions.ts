@@ -269,6 +269,8 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
       return [];
     }
   });
+
+  // Removed: merge_sort_by filter (unused)
 }
 
 /**

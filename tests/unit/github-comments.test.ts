@@ -339,8 +339,9 @@ describe('CommentManager', () => {
 
       const result = commentManager.formatGroupedResults(results, 'check');
 
-      expect(result).toContain('📈 performance Review (Score: 75/100) - 5 issues found');
-      expect(result).toContain('🔒 security Review (Score: 90/100) - 1 issues found');
+      // Titles no longer include step/category emojis; assert plain headings
+      expect(result).toContain('performance Review (Score: 75/100) - 5 issues found');
+      expect(result).toContain('security Review (Score: 90/100) - 1 issues found');
       expect(result).toContain('<details open>'); // Should expand sections with issues
     });
 
@@ -352,8 +353,9 @@ describe('CommentManager', () => {
 
       const result = commentManager.formatGroupedResults(results, 'severity');
 
-      expect(result).toContain('👍 Good Review');
-      expect(result).toContain('🚨 Critical Issues Review');
+      // Group headers do not include severity emojis; plain titles are used
+      expect(result).toContain('Good Review');
+      expect(result).toContain('Critical Issues Review');
     });
   });
 

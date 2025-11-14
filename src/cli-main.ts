@@ -289,10 +289,41 @@ export async function main(): Promise<void> {
   let debugServer: DebugVisualizerServer | null = null;
 
   try {
+    // Preflight: detect obviously stale dist relative to src and warn early.
+    // This avoids confusing behavior when engine routing changed but dist wasn't rebuilt.
+    (function warnIfStaleDist() {
+      try {
+        const projectRoot = process.cwd();
+        const distIndex = path.join(projectRoot, 'dist', 'index.js');
+        const srcDir = path.join(projectRoot, 'src');
+        const statDist = fs.existsSync(distIndex) ? fs.statSync(distIndex) : null;
+        const srcNewestMtime = (function walk(dir: string): number {
+          let newest = 0;
+          if (!fs.existsSync(dir)) return 0;
+          for (const entry of fs.readdirSync(dir)) {
+            if (entry === 'debug-visualizer' || entry === 'sdk') continue;
+            const full = path.join(dir, entry);
+            const st = fs.statSync(full);
+            if (st.isDirectory()) newest = Math.max(newest, walk(full));
+            else if (/\.tsx?$/.test(entry)) newest = Math.max(newest, st.mtimeMs);
+          }
+          return newest;
+        })(srcDir);
+        if (statDist && srcNewestMtime && srcNewestMtime > statDist.mtimeMs + 1) {
+          // Print once, concise but explicit.
+          console.error(
+            '⚠  Detected stale build: src/* is newer than dist/index.js. Run "npm run build:cli".'
+          );
+        }
+      } catch {
+        /* ignore preflight errors */
+      }
+    })();
+
     // IMPORTANT: detect subcommands before constructing CLI/commander to avoid
     // any argument parsing side-effects (e.g., extra positional args like 'test').
     // Also filter out the --cli flag if it exists (used to force CLI mode in GH Actions)
-    const filteredArgv = process.argv.filter(arg => arg !== '--cli');
+    let filteredArgv = process.argv.filter(arg => arg !== '--cli');
 
     // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
     try {
@@ -327,6 +358,30 @@ export async function main(): Promise<void> {
     if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
       await handleTestCommand(filteredArgv);
       return;
+    }
+    // Check for build subcommand: run the official agent-builder config
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'build') {
+      // Transform into a standard run with our official builder config (agent-builder.yaml).
+      // Require a positional target: `build <path/to/agent.yaml>`
+      const base = filteredArgv.slice(0, 2);
+      let rest = filteredArgv.slice(3); // preserve flags like --message
+      const preferred = path.resolve(process.cwd(), 'defaults', 'agent-builder.yaml');
+      const fallback = path.resolve(process.cwd(), 'defaults', 'agent-build.yaml');
+      const chosen = fs.existsSync(preferred) ? preferred : fallback;
+
+      if (rest.length === 0 || String(rest[0]).startsWith('-')) {
+        console.error('Usage: visor build <path/to/agent.yaml> [--message "brief" ...]');
+        process.exitCode = 1;
+        return;
+      }
+
+      const targetPath = path.resolve(process.cwd(), String(rest[0]));
+      process.env.VISOR_AGENT_PATH = targetPath; // builder decides mode via Liquid readfile
+      rest = rest.slice(1);
+
+      // Do not force code context globally; respect per-step ai.skip_code_context.
+      // Builder YAML controls whether to include repo context.
+      filteredArgv = [...base, '--config', chosen, '--event', 'manual', ...rest];
     }
     // Construct CLI and ConfigManager only after subcommand handling
     const cli = new CLI();
@@ -452,12 +507,12 @@ export async function main(): Promise<void> {
 
     // Start debug server if requested (AFTER config is loaded)
     if (options.debugServer) {
-      const port = options.debugPort || 3456;
+      const requestedPort = options.debugPort || 3456;
 
-      console.log(`🔍 Starting debug visualizer on port ${port}...`);
+      console.log(`🔍 Starting debug visualizer on port ${requestedPort}...`);
 
       debugServer = new DebugVisualizerServer();
-      await debugServer.start(port);
+      await debugServer.start(requestedPort);
 
       // Set config on server BEFORE opening browser
       debugServer.setConfig(config);
@@ -472,12 +527,13 @@ export async function main(): Promise<void> {
         quiet: true, // Suppress console output when debug server is active
       });
 
-      console.log(`✅ Debug visualizer running at http://localhost:${port}`);
+      const boundPort = debugServer.getPort();
+      console.log(`✅ Debug visualizer running at http://localhost:${boundPort}`);
 
       // Open browser unless VISOR_NOBROWSER is set (useful for CI/tests)
       if (process.env.VISOR_NOBROWSER !== 'true') {
         console.log(`   Opening browser...`);
-        await open(`http://localhost:${port}`);
+        await open(`http://localhost:${boundPort}`);
       }
 
       console.log(`⏸️  Waiting for you to click "Start Execution" in the browser...`);
@@ -570,10 +626,20 @@ export async function main(): Promise<void> {
     const addDependencies = (checkName: string) => {
       const checkConfig = config.checks?.[checkName];
       if (checkConfig?.depends_on) {
-        for (const dep of checkConfig.depends_on) {
-          if (!checksWithDependencies.has(dep)) {
-            checksWithDependencies.add(dep);
-            addDependencies(dep); // Recursively add dependencies of dependencies
+        for (const raw of checkConfig.depends_on) {
+          const parts =
+            typeof raw === 'string' && raw.includes('|')
+              ? raw
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : [String(raw)];
+          for (const dep of parts) {
+            if (!availableChecks.includes(dep)) continue; // ignore OR tokens that are not real checks
+            if (!checksWithDependencies.has(dep)) {
+              checksWithDependencies.add(dep);
+              addDependencies(dep); // Recursively add dependencies of dependencies
+            }
           }
         }
       }
@@ -586,6 +652,42 @@ export async function main(): Promise<void> {
 
     // Update checksToRun to include dependencies
     checksToRun = Array.from(checksWithDependencies);
+
+    // Prune internal dependencies from the root set so we only start from DAG sinks.
+    // This prevents re-running dependency steps (e.g., human-input collectors) as
+    // independent roots across waves. The engine will expand dependencies anyway.
+    const getAllDeps = (name: string, seen = new Set<string>()): Set<string> => {
+      if (seen.has(name)) return new Set();
+      seen.add(name);
+      const out = new Set<string>();
+      const cfg = config.checks?.[name];
+      const depTokens: any[] = cfg?.depends_on
+        ? Array.isArray(cfg.depends_on)
+          ? cfg.depends_on
+          : [cfg.depends_on]
+        : [];
+      const expand = (tok: any): string[] =>
+        typeof tok === 'string' && tok.includes('|')
+          ? tok
+              .split('|')
+              .map(s => s.trim())
+              .filter(Boolean)
+          : tok != null
+            ? [String(tok)]
+            : [];
+      for (const raw of depTokens.flatMap(expand)) {
+        if (!availableChecks.includes(raw)) continue;
+        out.add(raw);
+        for (const d of getAllDeps(raw, seen)) out.add(d);
+      }
+      return out;
+    };
+
+    const rootsPruned = checksToRun.filter(chk => {
+      // Keep chk only if no other selected root depends on it (directly or transitively)
+      return !checksToRun.some(other => other !== chk && getAllDeps(other).has(chk));
+    });
+    if (rootsPruned.length > 0) checksToRun = rootsPruned;
 
     // Use stderr for status messages when outputting formatted results to stdout
     // Suppress all status messages when outputting JSON to avoid breaking parsers

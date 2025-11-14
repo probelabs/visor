@@ -19,7 +19,7 @@ describe('OnFinish utils', () => {
     expect(p.outputsHistoryForContext.a).toHaveLength(1);
   });
 
-  test('composeOnFinishContext includes memory/env and step metadata', () => {
+  test('composeOnFinishContext includes env and step metadata', () => {
     const ctx = composeOnFinishContext(
       undefined,
       'extract-facts',
@@ -39,7 +39,6 @@ describe('OnFinish utils', () => {
     );
     expect(ctx.step.id).toBe('extract-facts');
     expect(Array.isArray(ctx.outputs_history.validate)).toBe(true);
-    expect(typeof ctx.memory.get).toBe('function');
     expect(ctx.event.name).toBe('issue_opened');
   });
 

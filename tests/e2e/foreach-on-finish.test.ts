@@ -593,6 +593,7 @@ output:
       expect(result).toContain('Posted verified response');
       // Should not route back (no retry)
       expect(result).not.toMatch(/Routed to:/i);
+      // Expect stable execution accounting
       expect(result).toMatch(/Checks:\s*4 configured\s*→\s*7 executions/);
     });
 

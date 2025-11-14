@@ -58,6 +58,11 @@ jobs:
           ./dist/index.js --cli --version
           ./dist/index.js --cli --help
 
+      - name: Run scenario tests
+        run: npm test -- tests/scenarios/
+        env:
+          CI: true
+
       - name: Test package installation
         run: |
           npm pack
@@ -89,41 +94,5 @@ jobs:
           comment-on-pr: 'false'
           add-reactions: 'false'
 
-  test-scenarios:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          # cache: 'npm' # Disabled due to rollup optional dependency bug
-
-      - name: Install dependencies
-        run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
-          rm -rf node_modules package-lock.json
-          npm install
-          # Explicitly install rollup platform-specific binary
-          npm install --no-save @rollup/rollup-linux-x64-gnu
-
-      - name: Build (first to ensure dist/ exists)
-        run: npm run build --ignore-scripts
-
-      - name: Run act scenario tests
-        run: npm test -- tests/scenarios/
-
-      - name: Test PR review functionality (mock)
-        uses: ./
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-review: 'false'
-          ai-model: 'mock'
-          ai-provider: 'mock'
-          config-path: '.visor.test.yaml'
-          comment-on-pr: 'false'
-          add-reactions: 'false'
-        env:
-          GITHUB_EVENT_NAME: 'repository'
+  # Consolidated scenario tests into the main 'test' job to avoid duplication.
+  # If you need to split later, prefer a matrix or a reusable workflow.

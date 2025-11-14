@@ -103,8 +103,11 @@ export function buildPrInfoFromFixture(
     }
   }
   try {
-    (prInfo as any).includeCodeContext = false;
-    (prInfo as any).isPRContext = false;
+    // Default to allowing code context & diffs in tests unless explicitly disabled.
+    const allowCtx =
+      String(process.env.VISOR_TEST_ALLOW_CODE_CONTEXT || 'true').toLowerCase() === 'true';
+    (prInfo as any).includeCodeContext = allowCtx;
+    (prInfo as any).isPRContext = allowCtx;
   } catch {}
   return prInfo;
 }

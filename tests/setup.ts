@@ -67,12 +67,16 @@ afterEach(() => {
 // Set global Jest timeout for all tests
 jest.setTimeout(10000); // 10 seconds max per test
 
-// Configure console to reduce noise in test output
+// Configure console to reduce noise in test output.
+// When VISOR_DEBUG=true or VISOR_TEST_SHOW_LOGS=true, keep real console to allow debugging logs.
 const originalConsole = global.console;
-global.console = {
-  ...originalConsole,
-  log: jest.fn(), // Silence console.log during tests
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
-} as Console;
+const SHOW_LOGS = process.env.VISOR_DEBUG === 'true' || process.env.VISOR_TEST_SHOW_LOGS === 'true';
+if (!SHOW_LOGS) {
+  global.console = {
+    ...originalConsole,
+    log: jest.fn(), // Silence console.log during tests
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  } as Console;
+}

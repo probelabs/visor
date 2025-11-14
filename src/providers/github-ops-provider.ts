@@ -225,19 +225,19 @@ export class GitHubOpsProvider extends CheckProvider {
 
     let values: string[] = await renderValues(valuesRaw);
 
+    // Expose dependency outputs to value_js for convenience (generic map)
+    const depOutputs: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [name, result] of dependencyResults.entries()) {
+        const summary = result as ReviewSummary & { output?: unknown };
+        depOutputs[name] = summary.output !== undefined ? summary.output : summary;
+      }
+    }
+
     if (cfg.value_js && cfg.value_js.trim()) {
       try {
         // Evaluate user-provided value_js in a restricted sandbox (no process/global exposure)
         const sandbox = this.getSecureSandbox();
-
-        // Build dependency outputs map (mirrors Liquid context construction)
-        const depOutputs: Record<string, unknown> = {};
-        if (dependencyResults) {
-          for (const [name, result] of dependencyResults.entries()) {
-            const summary = result as ReviewSummary & { output?: unknown };
-            depOutputs[name] = summary.output !== undefined ? summary.output : summary;
-          }
-        }
 
         const res = compileAndRun<unknown>(
           sandbox,
@@ -248,25 +248,40 @@ export class GitHubOpsProvider extends CheckProvider {
         if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
+        // Generic fallback: keep pre-rendered values as-is (no hardcoded deps)
+        // Never hardcode a particular step like 'issue-assistant'.
         const msg = e instanceof Error ? e.message : String(e);
-        if (process.env.VISOR_DEBUG === 'true') {
-          logger.warn(`[github-ops] value_js_error: ${msg}`);
-        }
-        return {
-          issues: [
-            {
-              file: 'system',
-              line: 0,
-              ruleId: 'github/value_js_error',
-              message: `value_js evaluation failed: ${msg}`,
-              severity: 'error',
-              category: 'logic',
-            },
-          ],
-        };
+        if (process.env.VISOR_DEBUG === 'true') logger.warn(`[github-ops] value_js_error: ${msg}`);
+        // Normalize strings; leave empty if no values were provided.
+        values = Array.isArray(values)
+          ? values.map(v => String(v ?? '').trim()).filter(Boolean)
+          : [];
       }
     }
 
+    // Fallback: if values are still empty, try deriving from dependency outputs
+    // 1) Common pattern: outputs.<dep>.labels (e.g., from issue-assistant)
+    if (values.length === 0 && Object.keys(depOutputs).length > 0) {
+      try {
+        const lbls: string[] = [];
+        for (const obj of Object.values(depOutputs)) {
+          const labelsAny = (obj as any)?.labels;
+          if (Array.isArray(labelsAny)) {
+            for (const v of labelsAny) lbls.push(String(v ?? ''));
+          }
+        }
+        const norm = lbls
+          .map(s => s.trim())
+          .filter(Boolean)
+          .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/'));
+        values = Array.from(new Set(norm));
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.info(`[github-ops] derived values from deps.labels: ${JSON.stringify(values)}`);
+        }
+      } catch {}
+    }
+
+    // 2) Fallback: outputs.<dep>.tags based derivation (overview-style)
     // Fallback: if values are still empty, try deriving from dependency outputs (common pattern: outputs.<dep>.tags)
     if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
       try {

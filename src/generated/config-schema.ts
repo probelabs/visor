@@ -117,6 +117,10 @@ export const configSchema = {
           $ref: '#/definitions/RoutingDefaults',
           description: 'Optional routing defaults for retry/goto/run policies',
         },
+        limits: {
+          $ref: '#/definitions/LimitsConfig',
+          description: 'Global execution limits',
+        },
       },
       required: ['output', 'version'],
       patternProperties: {
@@ -327,6 +331,22 @@ export const configSchema = {
           type: 'string',
           description: 'AI provider to use for this check - overrides global setting',
         },
+        ai_persona: {
+          type: 'string',
+          description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'",
+        },
+        ai_prompt_type: {
+          type: 'string',
+          description: 'Probe promptType for this check (underscore style)',
+        },
+        ai_system_prompt: {
+          type: 'string',
+          description: 'System prompt for this check (underscore style)',
+        },
+        ai_custom_prompt: {
+          type: 'string',
+          description: 'Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt',
+        },
         ai_mcp_servers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers for this AI check - overrides global setting',
@@ -403,6 +423,11 @@ export const configSchema = {
           description:
             'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])',
         },
+        continue_on_failure: {
+          type: 'boolean',
+          description:
+            "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.",
+        },
         forEach: {
           type: 'boolean',
           description: 'Process output as array and run dependent checks for each item',
@@ -430,6 +455,11 @@ export const configSchema = {
           $ref: '#/definitions/OnFinishConfig',
           description:
             'Finish routing configuration for forEach checks (runs after ALL iterations complete)',
+        },
+        max_runs: {
+          type: 'number',
+          description:
+            'Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.',
         },
         message: {
           type: 'string',
@@ -622,6 +652,19 @@ export const configSchema = {
         debug: {
           type: 'boolean',
           description: 'Enable debug mode',
+        },
+        prompt_type: {
+          type: 'string',
+          description: 'Probe promptType to use (e.g., engineer, code-review, architect)',
+        },
+        system_prompt: {
+          type: 'string',
+          description: 'System prompt (baseline preamble). Replaces legacy custom_prompt.',
+        },
+        custom_prompt: {
+          type: 'string',
+          description:
+            'Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt',
         },
         skip_code_context: {
           type: 'boolean',
@@ -1488,6 +1531,21 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Global routing defaults',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    LimitsConfig: {
+      type: 'object',
+      properties: {
+        max_runs_per_check: {
+          type: 'number',
+          description:
+            'Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.',
+        },
+      },
+      additionalProperties: false,
+      description: 'Global engine limits',
       patternProperties: {
         '^x-': {},
       },

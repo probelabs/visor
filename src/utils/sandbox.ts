@@ -24,12 +24,24 @@ export function createSecureSandbox(): Sandbox {
     ...Sandbox.SAFE_GLOBALS,
     Math,
     JSON,
-    // Provide console with limited surface. Calls are harmless in CI logs and
-    // help with debugging value_js / transform_js expressions.
+    // Provide console with limited surface. Use trampolines so that any test
+    // spies (e.g., jest.spyOn(console, 'log')) see calls made inside the sandbox.
     console: {
-      log: console.log,
-      warn: console.warn,
-      error: console.error,
+      log: (...args: unknown[]) => {
+        try {
+          (console as any).log(...args);
+        } catch {}
+      },
+      warn: (...args: unknown[]) => {
+        try {
+          (console as any).warn(...args);
+        } catch {}
+      },
+      error: (...args: unknown[]) => {
+        try {
+          (console as any).error(...args);
+        } catch {}
+      },
     },
   } as Record<string, unknown>;
 
@@ -185,9 +197,27 @@ export function compileAndRun<T = unknown>(
   const header = inject
     ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`
     : '';
+  // When wrapping, execute user code inside an IIFE and return its value.
+  // This reliably captures the value of the last expression or any explicit
+  // return statements inside the script, without requiring the caller to
+  // manually `return` at top level.
+  // Wrapper heuristic:
+  // - If the snippet contains an explicit `return`, semicolons or newlines (likely a block),
+  //   run it inside an IIFE so `return` works:  (() => { code })()
+  // - Otherwise treat it as a pure expression and return its value directly.
+  const src = String(userCode);
+  const looksLikeBlock = /\breturn\b/.test(src) || /;/.test(src) || /\n/.test(src);
+  // Heuristic: if the snippet itself looks like an IIFE/callable expression
+  // (e.g., `(() => { ... })()` or `(function(){ ... })()`), return its value
+  // directly to avoid swallowing the result by nesting it inside another block.
+  const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(src.trim());
   const body = opts.wrapFunction
-    ? `const __fn = () => {\n${userCode}\n};\nreturn __fn();\n`
-    : `${userCode}`;
+    ? looksLikeBlock
+      ? looksLikeIife
+        ? `return (\n${src}\n);\n`
+        : `return (() => {\n${src}\n})();\n`
+      : `return (\n${src}\n);\n`
+    : `${src}`;
   const code = `${header}${body}`;
   let exec: ReturnType<typeof sandbox.compile>;
   try {

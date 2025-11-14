@@ -318,20 +318,21 @@ export class GitHubCheckService {
       const passedConditions = failureResults.filter(result => !result.failed);
 
       if (failedConditions.length > 0) {
-        sections.push('### ❌ Failed Conditions');
+        sections.push('### Failed Conditions');
         failedConditions.forEach(condition => {
           sections.push(
             `- **${condition.conditionName}**: ${condition.message || condition.expression}`
           );
-          if (condition.severity === 'error') {
-            sections.push(`  - ⚠️ **Severity:** Error`);
+          if (condition.severity) {
+            const icon = this.getSeverityEmoji(condition.severity);
+            sections.push(`  - Severity: ${icon} ${condition.severity}`);
           }
         });
         sections.push('');
       }
 
       if (passedConditions.length > 0) {
-        sections.push('### ✅ Passed Conditions');
+        sections.push('### Passed Conditions');
         passedConditions.forEach(condition => {
           sections.push(
             `- **${condition.conditionName}**: ${condition.message || 'Condition passed'}`
@@ -344,18 +345,18 @@ export class GitHubCheckService {
     // Issues by category section
     if (reviewIssues.length > 0) {
       const issuesByCategory = this.groupIssuesByCategory(reviewIssues);
-      sections.push('## 🐛 Issues by Category');
+      sections.push('## Issues by Category');
 
       Object.entries(issuesByCategory).forEach(([category, issues]) => {
         if (issues.length > 0) {
           sections.push(
-            `### ${this.getCategoryEmoji(category)} ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
+            `### ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
           );
 
           // Show only first 5 issues per category to keep the summary concise
           const displayIssues = issues.slice(0, 5);
           displayIssues.forEach(issue => {
-            const severityIcon = this.getSeverityIcon(issue.severity);
+            const severityIcon = this.getSeverityEmoji(issue.severity);
             sections.push(`- ${severityIcon} **${issue.file}:${issue.line}** - ${issue.message}`);
           });
 
@@ -425,32 +426,16 @@ export class GitHubCheckService {
   }
 
   /**
-   * Get emoji for issue category
+   * Get emoji for issue severity (allowed; step/category emojis are removed)
    */
-  private getCategoryEmoji(category: string): string {
-    const emojiMap: Record<string, string> = {
-      security: '🔐',
-      performance: '⚡',
-      style: '🎨',
-      logic: '🧠',
-      architecture: '🏗️',
-      documentation: '📚',
-      general: '📝',
-    };
-    return emojiMap[category.toLowerCase()] || '📝';
-  }
-
-  /**
-   * Get icon for issue severity
-   */
-  private getSeverityIcon(severity: string): string {
+  private getSeverityEmoji(severity: string): string {
     const iconMap: Record<string, string> = {
       critical: '🚨',
       error: '❌',
       warning: '⚠️',
       info: 'ℹ️',
     };
-    return iconMap[severity.toLowerCase()] || 'ℹ️';
+    return iconMap[String(severity || '').toLowerCase()] || '';
   }
 
   /**

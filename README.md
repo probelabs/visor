@@ -124,6 +124,7 @@ Additional guides:
 - forEach behavior and dependent propagation (including outputs_raw and history precedence): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
 - Failure routing and `on_finish` (with outputs_raw in routing JS): [docs/failure-routing.md](docs/failure-routing.md)
 - timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
+- execution limits (run caps for safety): [docs/limits.md](docs/limits.md)
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 - live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
 

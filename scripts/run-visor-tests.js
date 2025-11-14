@@ -14,22 +14,23 @@ function main() {
   const repoRoot = path.resolve(__dirname, '..');
   const distCli = path.join(repoRoot, 'dist', 'index.js');
   const srcCli = path.join(repoRoot, 'src', 'index.ts');
-  // Prefer new non-dot tests filename; test runner still discovers legacy name
-  const testsPath = process.env.VISOR_TESTS_PATH || path.join(repoRoot, 'defaults', 'visor.tests.yaml');
+  // Prefer new non-dot tests filename; allow multiple suites
+  const primarySuite = process.env.VISOR_TESTS_PATH || path.join(repoRoot, 'defaults', 'visor.tests.yaml');
+  const refinementSuite = path.join(repoRoot, 'defaults', 'task-refinement.yaml');
   const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
   let nodeArgs = [];
-  let argv = [];
+  const baseArgs = [];
   if (!isCI) {
     // Prefer TypeScript source in local/dev for correctness
     try {
       require.resolve('ts-node/register');
       nodeArgs = ['-r', 'ts-node/register'];
-      argv = [srcCli, 'test', '--config', testsPath, '--progress', 'compact'];
+      baseArgs.push(srcCli);
     } catch (_) {
       // Fallback to dist if ts-node is not installed
       if (fs.existsSync(distCli)) {
-        argv = [distCli, 'test', '--config', testsPath, '--progress', 'compact'];
+        baseArgs.push(distCli);
       } else {
         console.error('Neither ts-node nor dist/index.js found. Run `npm run build:cli` first.');
         process.exit(2);
@@ -39,12 +40,12 @@ function main() {
     // In CI we always use the freshly built dist
     // Fall back to ts-node
     if (fs.existsSync(distCli)) {
-      argv = [distCli, 'test', '--config', testsPath, '--progress', 'compact'];
+      baseArgs.push(distCli);
     } else {
       try {
         require.resolve('ts-node/register');
         nodeArgs = ['-r', 'ts-node/register'];
-        argv = [srcCli, 'test', '--config', testsPath, '--progress', 'compact'];
+        baseArgs.push(srcCli);
       } catch (e) {
         console.error('Build artifacts missing and ts-node not available.');
         process.exit(2);
@@ -52,29 +53,39 @@ function main() {
     }
   }
 
-  if (isCI) {
-    const outDir = path.join(repoRoot, 'output');
-    try { fs.mkdirSync(outDir, { recursive: true }); } catch {}
-    argv.push('--json', path.join(outDir, 'visor-tests.json'));
-    argv.push('--report', `junit:${path.join(outDir, 'visor-tests.xml')}`);
-    argv.push('--summary', `md:${path.join(outDir, 'visor-tests.md')}`);
-  }
-
   // Ensure VISOR_DEBUG is not noisy in CI
   const env = { ...process.env };
   if (isCI && env.VISOR_DEBUG === 'true') delete env.VISOR_DEBUG;
 
-  const res = spawnSync(process.execPath, [...nodeArgs, ...argv], {
-    stdio: 'inherit',
-    env,
-    cwd: repoRoot,
-  });
-  if (typeof res.status === 'number') process.exit(res.status);
-  if (res.error) {
-    console.error(res.error);
-    process.exit(1);
+  const suites = [primarySuite];
+  if (fs.existsSync(refinementSuite)) suites.push(refinementSuite);
+
+  let exitCode = 0;
+  const outDir = path.join(repoRoot, 'output');
+  if (isCI) { try { fs.mkdirSync(outDir, { recursive: true }); } catch {}
   }
-  process.exit(0);
+
+  for (const suite of suites) {
+    const label = path.basename(suite).replace(/\.[^.]+$/, '');
+    const args = [...baseArgs, 'test', '--config', suite, '--progress', 'compact'];
+    if (isCI) {
+      args.push('--json', path.join(outDir, `${label}.json`));
+      args.push('--report', `junit:${path.join(outDir, `${label}.xml`)}`);
+      args.push('--summary', `md:${path.join(outDir, `${label}.md`)}`);
+    }
+    const res = spawnSync(process.execPath, [...nodeArgs, ...args], {
+      stdio: 'inherit',
+      env,
+      cwd: repoRoot,
+    });
+    if (typeof res.status === 'number' && res.status !== 0) exitCode = res.status;
+    if (res.error) {
+      console.error(res.error);
+      exitCode = 1;
+    }
+  }
+
+  process.exit(exitCode);
 }
 
 main();
