@@ -225,15 +225,16 @@ export class GitHubOpsProvider extends CheckProvider {
 
     let values: string[] = await renderValues(valuesRaw);
 
-    if (cfg.value_js && cfg.value_js.trim()) {
-      // Build dependency outputs map (used by value_js and fallback path)
-      const depOutputs: Record<string, unknown> = {};
-      if (dependencyResults) {
-        for (const [name, result] of dependencyResults.entries()) {
-          const summary = result as ReviewSummary & { output?: unknown };
-          depOutputs[name] = summary.output !== undefined ? summary.output : summary;
-        }
+    // Expose dependency outputs to value_js for convenience (generic map)
+    const depOutputs: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [name, result] of dependencyResults.entries()) {
+        const summary = result as ReviewSummary & { output?: unknown };
+        depOutputs[name] = summary.output !== undefined ? summary.output : summary;
       }
+    }
+
+    if (cfg.value_js && cfg.value_js.trim()) {
       try {
         // Evaluate user-provided value_js in a restricted sandbox (no process/global exposure)
         const sandbox = this.getSecureSandbox();
@@ -247,30 +248,14 @@ export class GitHubOpsProvider extends CheckProvider {
         if (typeof res === 'string') values = [res];
         else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
       } catch (e) {
-        // If value_js fails, attempt a deterministic fallback from dependency outputs
-        // so label application continues in flows (especially on_finish reruns).
+        // Generic fallback: keep pre-rendered values as-is (no hardcoded deps)
+        // Never hardcode a particular step like 'issue-assistant'.
         const msg = e instanceof Error ? e.message : String(e);
         if (process.env.VISOR_DEBUG === 'true') logger.warn(`[github-ops] value_js_error: ${msg}`);
-        try {
-          const out = depOutputs['issue-assistant'] as any;
-          const lbls = Array.isArray(out?.labels) ? out.labels : [];
-          const sanitize = (arr: unknown[]): string[] => {
-            const uniq = new Set<string>();
-            for (const v of arr) {
-              let s = String(v ?? '');
-              s = s
-                .replace(/[^A-Za-z0-9:\/\- ]/g, '')
-                .replace(/\/+?/g, '/')
-                .trim();
-              if (s) uniq.add(s);
-            }
-            return Array.from(uniq);
-          };
-          const derived = sanitize(lbls);
-          values = derived; // may be empty => no-op add, but not an error
-        } catch {
-          values = [];
-        }
+        // Normalize strings; leave empty if no values were provided.
+        values = Array.isArray(values)
+          ? values.map(v => String(v ?? '').trim()).filter(Boolean)
+          : [];
       }
     }
 
