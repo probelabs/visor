@@ -194,7 +194,8 @@ export type ConfigCheckType =
   | 'github'
   | 'claude-code'
   | 'mcp'
-  | 'human-input';
+  | 'human-input'
+  | 'workflow';
 
 /**
  * Valid event triggers for checks
@@ -552,7 +553,7 @@ export interface CheckConfig {
   /** Session ID for HTTP transport (optional, server may generate one) */
   sessionId?: string;
   /** Command arguments (for stdio transport in MCP checks) */
-  args?: string[];
+  command_args?: string[];
   /** Working directory (for stdio transport in MCP checks) */
   workingDirectory?: string;
   /**
@@ -566,6 +567,17 @@ export interface CheckConfig {
   multiline?: boolean;
   /** Default value if timeout occurs or empty input when allow_empty is true */
   default?: string;
+  /**
+   * Workflow provider specific options (optional, only used when type === 'workflow').
+   */
+  /** Workflow ID or path to workflow file */
+  workflow?: string;
+  /** Arguments/inputs for the workflow */
+  args?: Record<string, unknown>;
+  /** Override specific step configurations in the workflow */
+  overrides?: Record<string, Partial<CheckConfig>>;
+  /** Map workflow outputs to check outputs */
+  output_mapping?: Record<string, string>;
 }
 
 /**
@@ -898,8 +910,12 @@ export interface VisorConfig {
   version: string;
   /** Extends from other configurations - can be file path, HTTP(S) URL, or "default" */
   extends?: string | string[];
+  /** Alias for extends - include from other configurations (backward compatibility) */
+  include?: string | string[];
   /** Custom tool definitions that can be used in MCP blocks */
   tools?: Record<string, CustomToolDefinition>;
+  /** Import workflow definitions from external files or URLs */
+  imports?: string[];
   /** Step configurations (recommended) */
   steps?: Record<string, CheckConfig>;
   /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */

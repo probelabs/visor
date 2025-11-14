@@ -136,6 +136,7 @@ export class FailureConditionEvaluator {
       environment?: Record<string, string>;
       previousResults?: Map<string, ReviewSummary>;
       authorAssociation?: string;
+      workflowInputs?: Record<string, unknown>;
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -172,6 +173,9 @@ export class FailureConditionEvaluator {
             return outputs;
           })()
         : {},
+
+      // Workflow inputs (for workflows)
+      inputs: contextData?.workflowInputs || {},
 
       // Required output property (empty for if conditions)
       output: {

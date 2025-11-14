@@ -30,9 +30,31 @@ export const configSchema = {
           description:
             'Extends from other configurations - can be file path, HTTP(S) URL, or "default"',
         },
+        include: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            'Alias for extends - include from other configurations (backward compatibility)',
+        },
         tools: {
           $ref: '#/definitions/Record%3Cstring%2CCustomToolDefinition%3E',
           description: 'Custom tool definitions that can be used in MCP blocks',
+        },
+        imports: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Import workflow definitions from external files or URLs',
         },
         steps: {
           $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
@@ -523,7 +545,7 @@ export const configSchema = {
           type: 'string',
           description: 'Session ID for HTTP transport (optional, server may generate one)',
         },
-        args: {
+        command_args: {
           type: 'array',
           items: {
             type: 'string',
@@ -550,6 +572,22 @@ export const configSchema = {
           type: 'string',
           description: 'Default value if timeout occurs or empty input when allow_empty is true',
         },
+        workflow: {
+          type: 'string',
+          description: 'Workflow ID or path to workflow file',
+        },
+        args: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Arguments/inputs for the workflow',
+        },
+        overrides: {
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E%3E',
+          description: 'Override specific step configurations in the workflow',
+        },
+        output_mapping: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'Map workflow outputs to check outputs',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single check',
@@ -573,6 +611,7 @@ export const configSchema = {
         'claude-code',
         'mcp',
         'human-input',
+        'workflow',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1133,6 +1172,17 @@ export const configSchema = {
       patternProperties: {
         '^x-': {},
       },
+    },
+    'Record<string,Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>>':
+      {
+        type: 'object',
+        additionalProperties: {
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E',
+        },
+      },
+    'Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>': {
+      type: 'object',
+      additionalProperties: false,
     },
     OutputConfig: {
       type: 'object',

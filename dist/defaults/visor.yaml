@@ -64,8 +64,6 @@ steps:
     group: overview
     schema: overview
     prompt: |
-        PR Title: {{ pr.title }}
-
         You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
 
         ## Files Changed Analysis
@@ -405,9 +403,6 @@ steps:
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
 
-        Latest comment (verbatim):
-        {{ event.comment.body | default: "" }}
-
         {%- liquid
           # Correction context from the last validation wave (filtered)
           assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
@@ -473,13 +468,19 @@ steps:
     on: [issue_opened]
     op: labels.add
     value_js: |
-      const raw = (outputs && outputs['issue-assistant'] && outputs['issue-assistant'].labels) || [];
-      const labels = Array.isArray(raw) ? raw : [];
-      // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
-      return labels
-        .map(v => String(v ?? ''))
-        .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
-        .filter(Boolean);
+      try {
+        var ai = outputs && outputs['issue-assistant'] ? outputs['issue-assistant'] : {};
+        var labels = Array.isArray(ai && ai.labels) ? ai.labels : [];
+        // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
+        return labels
+          .map(function(v) { return String(v == null ? '' : v); })
+          .map(function(s) { return s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim(); })
+          .filter(Boolean);
+      } catch (e) {
+        // Avoid shadowing/resolution quirks with identifier name "error" in sandboxed environments
+        log('Error processing issue labels:', e);
+        return [];
+      }
 
   # External origin labelling for PRs and Issues
   external-label:
@@ -544,7 +545,7 @@ steps:
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
       skip_code_context: true
-      disableTools: true
+      disable_tools: true
     prompt: |
       Your task is to EXTRACT factual claims from the assistant's response below.
 
@@ -605,16 +606,17 @@ steps:
 
     forEach: true
 
-    # After one validation wave completes, route back to the appropriate assistant
-    # using goto_js so the engine forward-runs dependents (assistant → extract-facts → validate-fact).
-    # This replaces the older run_js-only approach which didn’t forward-run the chain.
+    # After facts are validated, run the aggregator; it decides about corrections in its on_success
     on_finish:
-      goto_js: |
-        // Route back for a correction pass when any recent fact validation failed.
-        // Be permissive here: some runners omit the `last_loop` marker; rely on is_valid when present.
-        const hist = (outputs_history['validate-fact'] || []);
-        const hasInvalid = hist.some(v => v && (v.is_valid === false || v.valid === false));
-        return hasInvalid ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant') : null;
+      run_js: |
+        // ES2023 style: use at() and concise arrows; inspect only the last wave
+        const facts = (outputs_history['extract-facts'] || []).at(-1) || [];
+        const ids = facts.map(f => String(f.id || '')).filter(Boolean);
+        const vf = outputs_history['validate-fact'] || [];
+        const lastItems = vf.filter(v => ids.includes(String((v && v.fact_id) || '')));
+        const hasProblems = lastItems.some(v => v.is_valid !== true || v.confidence !== 'high');
+        if (!hasProblems) return [];
+        return (event && event.name) === 'issue_opened' ? ['issue-assistant'] : ['comment-assistant'];
 
   # Validate each extracted fact
   validate-fact:
@@ -686,6 +688,5 @@ steps:
 output:
   pr_comment:
     format: markdown
-    # Grouping is determined solely by each check's `group` field.
-    # The renderer ignores any global group_by; keep comments compact.
+    group_by: check
     collapse: true
