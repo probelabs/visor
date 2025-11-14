@@ -88,6 +88,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/RoutingDefaults";
                     readonly description: "Optional routing defaults for retry/goto/run policies";
                 };
+                readonly limits: {
+                    readonly $ref: "#/definitions/LimitsConfig";
+                    readonly description: "Global execution limits";
+                };
             };
             readonly required: readonly ["output", "version"];
             readonly patternProperties: {
@@ -291,6 +295,22 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "AI provider to use for this check - overrides global setting";
                 };
+                readonly ai_persona: {
+                    readonly type: "string";
+                    readonly description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'";
+                };
+                readonly ai_prompt_type: {
+                    readonly type: "string";
+                    readonly description: "Probe promptType for this check (underscore style)";
+                };
+                readonly ai_system_prompt: {
+                    readonly type: "string";
+                    readonly description: "System prompt for this check (underscore style)";
+                };
+                readonly ai_custom_prompt: {
+                    readonly type: "string";
+                    readonly description: "Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt";
+                };
                 readonly ai_mcp_servers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers for this AI check - overrides global setting";
@@ -358,6 +378,10 @@ export declare const configSchema: {
                     };
                     readonly description: "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])";
                 };
+                readonly continue_on_failure: {
+                    readonly type: "boolean";
+                    readonly description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.";
+                };
                 readonly forEach: {
                     readonly type: "boolean";
                     readonly description: "Process output as array and run dependent checks for each item";
@@ -382,6 +406,10 @@ export declare const configSchema: {
                 readonly on_finish: {
                     readonly $ref: "#/definitions/OnFinishConfig";
                     readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
+                };
+                readonly max_runs: {
+                    readonly type: "number";
+                    readonly description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.";
                 };
                 readonly message: {
                     readonly type: "string";
@@ -528,6 +556,18 @@ export declare const configSchema: {
                 readonly debug: {
                     readonly type: "boolean";
                     readonly description: "Enable debug mode";
+                };
+                readonly prompt_type: {
+                    readonly type: "string";
+                    readonly description: "Probe promptType to use (e.g., engineer, code-review, architect)";
+                };
+                readonly system_prompt: {
+                    readonly type: "string";
+                    readonly description: "System prompt (baseline preamble). Replaces legacy custom_prompt.";
+                };
+                readonly custom_prompt: {
+                    readonly type: "string";
+                    readonly description: "Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt";
                 };
                 readonly skip_code_context: {
                     readonly type: "boolean";
@@ -1369,6 +1409,20 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Global routing defaults";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly LimitsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly max_runs_per_check: {
+                    readonly type: "number";
+                    readonly description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Global engine limits";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
