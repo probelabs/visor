@@ -259,6 +259,29 @@ export class GitHubOpsProvider extends CheckProvider {
       }
     }
 
+    // Fallback: if values are still empty, try deriving from dependency outputs
+    // 1) Common pattern: outputs.<dep>.labels (e.g., from issue-assistant)
+    if (values.length === 0 && Object.keys(depOutputs).length > 0) {
+      try {
+        const lbls: string[] = [];
+        for (const obj of Object.values(depOutputs)) {
+          const labelsAny = (obj as any)?.labels;
+          if (Array.isArray(labelsAny)) {
+            for (const v of labelsAny) lbls.push(String(v ?? ''));
+          }
+        }
+        const norm = lbls
+          .map(s => s.trim())
+          .filter(Boolean)
+          .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/'));
+        values = Array.from(new Set(norm));
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.info(`[github-ops] derived values from deps.labels: ${JSON.stringify(values)}`);
+        }
+      } catch {}
+    }
+
+    // 2) Fallback: outputs.<dep>.tags based derivation (overview-style)
     // Fallback: if values are still empty, try deriving from dependency outputs (common pattern: outputs.<dep>.tags)
     if (values.length === 0 && dependencyResults && dependencyResults.size > 0) {
       try {
