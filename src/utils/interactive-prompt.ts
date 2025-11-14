@@ -1,8 +1,31 @@
 /**
- * Interactive terminal prompting with beautiful UI
+ * Interactive terminal prompting (minimal TTY UI)
  */
 
 import * as readline from 'readline';
+
+// Global, process-wide guard to ensure we never open two readline prompts at once.
+// This is crucial because the engine may (due to routing) attempt to schedule
+// a second human-input step while the first is still waiting. Two concurrent
+// readline instances on the same TTY cause duplicated keystrokes and other
+// erratic behavior. We serialize prompts with a tiny async mutex.
+let activePrompt = false;
+const waiters: Array<() => void> = [];
+
+async function acquirePromptLock(): Promise<void> {
+  if (!activePrompt) {
+    activePrompt = true;
+    return;
+  }
+  await new Promise<void>(resolve => waiters.push(resolve));
+  activePrompt = true;
+}
+
+function releasePromptLock(): void {
+  activePrompt = false;
+  const next = waiters.shift();
+  if (next) next();
+}
 
 export interface PromptOptions {
   /** The prompt text to display */
@@ -18,252 +41,236 @@ export interface PromptOptions {
   /** Allow empty input */
   allowEmpty?: boolean;
 }
-
-// ANSI color codes
-const colors = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  cyan: '\x1b[36m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  gray: '\x1b[90m',
-};
-
-// Box drawing characters (with ASCII fallback)
-const supportsUnicode = process.env.LANG?.includes('UTF-8') || process.platform === 'darwin';
-
-const box = supportsUnicode
-  ? {
-      topLeft: '┌',
-      topRight: '┐',
-      bottomLeft: '└',
-      bottomRight: '┘',
-      horizontal: '─',
-      vertical: '│',
-      leftT: '├',
-      rightT: '┤',
-    }
-  : {
-      topLeft: '+',
-      topRight: '+',
-      bottomLeft: '+',
-      bottomRight: '+',
-      horizontal: '-',
-      vertical: '|',
-      leftT: '+',
-      rightT: '+',
-    };
-
-/**
- * Format time in mm:ss
- */
-function formatTime(ms: number): string {
-  const seconds = Math.ceil(ms / 1000);
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
-/**
- * Draw a horizontal line
- */
-function drawLine(char: string, width: number): string {
-  return char.repeat(width);
-}
-
-/**
- * Wrap text to fit within a given width
- */
-function wrapText(text: string, width: number): string[] {
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let currentLine = '';
-
-  for (const word of words) {
-    if (currentLine.length + word.length + 1 <= width) {
-      currentLine += (currentLine ? ' ' : '') + word;
-    } else {
-      if (currentLine) lines.push(currentLine);
-      currentLine = word;
-    }
-  }
-  if (currentLine) lines.push(currentLine);
-
-  return lines;
-}
-
-/**
- * Display the prompt UI
- */
-function displayPromptUI(options: PromptOptions, remainingMs?: number): void {
-  const width = Math.min(process.stdout.columns || 80, 80) - 4;
-  const icon = supportsUnicode ? '💬' : '>';
-
-  console.log('\n'); // Add some spacing
-
-  // Top border
-  console.log(`${box.topLeft}${drawLine(box.horizontal, width + 2)}${box.topRight}`);
-
-  // Title
-  console.log(
-    `${box.vertical} ${colors.bold}${icon} Human Input Required${colors.reset}${' '.repeat(
-      width - 22
-    )} ${box.vertical}`
-  );
-
-  // Separator
-  console.log(`${box.leftT}${drawLine(box.horizontal, width + 2)}${box.rightT}`);
-
-  // Empty line
-  console.log(`${box.vertical} ${' '.repeat(width)} ${box.vertical}`);
-
-  // Prompt text (wrapped)
-  const promptLines = wrapText(options.prompt, width - 2);
-  for (const line of promptLines) {
-    console.log(
-      `${box.vertical} ${colors.cyan}${line}${colors.reset}${' '.repeat(
-        width - line.length
-      )} ${box.vertical}`
-    );
-  }
-
-  // Empty line
-  console.log(`${box.vertical} ${' '.repeat(width)} ${box.vertical}`);
-
-  // Instructions
-  const instruction = options.multiline
-    ? '(Type your response, press Ctrl+D when done)'
-    : '(Type your response and press Enter)';
-  console.log(
-    `${box.vertical} ${colors.dim}${instruction}${colors.reset}${' '.repeat(
-      width - instruction.length
-    )} ${box.vertical}`
-  );
-
-  // Placeholder if provided
-  if (options.placeholder && !options.multiline) {
-    console.log(
-      `${box.vertical} ${colors.dim}${options.placeholder}${colors.reset}${' '.repeat(
-        width - options.placeholder.length
-      )} ${box.vertical}`
-    );
-  }
-
-  // Empty line
-  console.log(`${box.vertical} ${' '.repeat(width)} ${box.vertical}`);
-
-  // Timeout indicator
-  if (remainingMs !== undefined && options.timeout) {
-    const timeIcon = supportsUnicode ? '⏱ ' : 'Time: ';
-    const timeStr = `${timeIcon} ${formatTime(remainingMs)} remaining`;
-    console.log(
-      `${box.vertical} ${colors.yellow}${timeStr}${colors.reset}${' '.repeat(
-        width - timeStr.length
-      )} ${box.vertical}`
-    );
-  }
-
-  // Bottom border
-  console.log(`${box.bottomLeft}${drawLine(box.horizontal, width + 2)}${box.bottomRight}`);
-
-  console.log(''); // Empty line before input
-  process.stdout.write(`${colors.green}>${colors.reset} `);
-}
-
 /**
  * Prompt user for input with a beautiful interactive UI
  */
 export async function interactivePrompt(options: PromptOptions): Promise<string> {
+  await acquirePromptLock();
   return new Promise((resolve, reject) => {
-    let input = '';
+    const dbg = process.env.VISOR_DEBUG === 'true';
+    try {
+      if (dbg) {
+        const counts: Record<string, number> = {
+          data: process.stdin.listenerCount('data'),
+          end: process.stdin.listenerCount('end'),
+          error: process.stdin.listenerCount('error'),
+          readable: process.stdin.listenerCount('readable'),
+          close: process.stdin.listenerCount('close'),
+        } as any;
+        console.error(
+          `[human-input] starting prompt: isTTY=${!!process.stdin.isTTY} active=${activePrompt} waiters=${waiters.length} listeners=${JSON.stringify(counts)}`
+        );
+      }
+    } catch {}
+    // Ensure stdin is in a sane state for a fresh interactive session
+    try {
+      if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+        // We use line-based input; disable raw mode just in case
+        (process.stdin as any).setRawMode(false);
+      }
+      // Always resume stdin before creating the interface
+      process.stdin.resume();
+    } catch {}
+
+    // Ensure encoding is set for predictable behavior
+    try {
+      process.stdin.setEncoding('utf8');
+    } catch {}
+
+    let rl: readline.Interface | undefined;
+
+    const allowEmpty = options.allowEmpty ?? false;
+    const multiline = options.multiline ?? false;
+    const defaultValue = options.defaultValue;
+
     let timeoutId: NodeJS.Timeout | undefined;
-    let countdownInterval: NodeJS.Timeout | undefined;
-    let remainingMs = options.timeout;
-
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: true,
-    });
-
-    // Display initial UI
-    displayPromptUI(options, remainingMs);
-
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (countdownInterval) clearInterval(countdownInterval);
-      rl.close();
+      try {
+        rl?.removeAllListeners();
+      } catch {}
+      try {
+        rl?.close();
+      } catch {}
+      // Hardening: make sure no stray listeners remain on stdin between loops
+      // Do not blanket-remove listeners from process.stdin; a fresh readline
+      // instance will manage its own listeners. Over-removing here can leave
+      // the next interface in a bad state (no keypress events).
+      try {
+        if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+          (process.stdin as any).setRawMode(false);
+        }
+      } catch {}
+      try {
+        process.stdin.pause();
+      } catch {}
+      // Release the global lock so a queued prompt (if any) may proceed
+      try {
+        releasePromptLock();
+      } catch {}
+      // If stdout/stderr were temporarily wrapped by the question handler, restore them now
+      try {
+        if ((process.stdout as any).__restoreWrites) {
+          (process.stdout as any).__restoreWrites();
+        }
+      } catch {}
+      try {
+        if ((process.stderr as any).__restoreWrites) {
+          (process.stderr as any).__restoreWrites();
+        }
+      } catch {}
+      try {
+        if (dbg) {
+          const counts: Record<string, number> = {
+            data: process.stdin.listenerCount('data'),
+            end: process.stdin.listenerCount('end'),
+            error: process.stdin.listenerCount('error'),
+            readable: process.stdin.listenerCount('readable'),
+            close: process.stdin.listenerCount('close'),
+          } as any;
+          console.error(
+            `[human-input] cleanup: isTTY=${!!process.stdin.isTTY} active=false waiters=${waiters.length} listeners=${JSON.stringify(counts)}`
+          );
+        }
+      } catch {}
     };
-
     const finish = (value: string) => {
       cleanup();
-      console.log(''); // New line after input
       resolve(value);
     };
 
-    // Setup timeout if specified
-    if (options.timeout) {
+    // Optional timeout (no default)
+    if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        console.log(`\n${colors.yellow}⏱  Timeout reached${colors.reset}`);
-        if (options.defaultValue !== undefined) {
-          console.log(
-            `${colors.gray}Using default value: ${options.defaultValue}${colors.reset}\n`
-          );
-          resolve(options.defaultValue);
-        } else {
-          reject(new Error('Input timeout'));
-        }
+        if (defaultValue !== undefined) return resolve(defaultValue);
+        return reject(new Error('Input timeout'));
       }, options.timeout);
-
-      // Update countdown every second
-      if (remainingMs) {
-        countdownInterval = setInterval(() => {
-          remainingMs = remainingMs! - 1000;
-          if (remainingMs <= 0) {
-            if (countdownInterval) clearInterval(countdownInterval);
-          }
-        }, 1000);
-      }
     }
 
-    if (options.multiline) {
-      // Multiline mode: collect lines until EOF (Ctrl+D)
-      rl.on('line', line => {
-        input += (input ? '\n' : '') + line;
-      });
+    // Print minimal header with dashed separators
+    const header: string[] = [];
+    if (options.prompt && options.prompt.trim()) header.push(options.prompt.trim());
+    if (multiline) header.push('(Ctrl+D to submit)');
+    if (options.placeholder && !multiline) header.push(options.placeholder);
+    const width = Math.max(
+      20,
+      Math.min((process.stdout && (process.stdout as any).columns) || 80, 100)
+    );
+    const dash = '-'.repeat(width);
+    try {
+      console.log('\n' + dash);
+      if (header.length) console.log(header.join('\n'));
+      console.log(dash);
+    } catch {}
 
+    // No echo-suppression hacks — we fix the root cause below by using raw-mode
+    // input for single-line prompts, so the terminal never replays the line.
+
+    if (multiline) {
+      rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: true,
+      });
+      let buf = '';
+      process.stdout.write('> ');
+      rl.on('line', line => {
+        buf += (buf ? '\n' : '') + line;
+        process.stdout.write('> ');
+      });
       rl.on('close', () => {
-        cleanup();
-        const trimmed = input.trim();
-        if (!trimmed && !options.allowEmpty) {
-          console.log(`${colors.yellow}⚠  Empty input not allowed${colors.reset}`);
-          reject(new Error('Empty input not allowed'));
-        } else {
-          finish(trimmed);
+        const trimmed = buf.trim();
+        if (!trimmed && !allowEmpty && defaultValue === undefined) {
+          return reject(new Error('Empty input not allowed'));
         }
+        return finish(trimmed || defaultValue || '');
+      });
+      rl.on('SIGINT', () => {
+        try {
+          // Print a clean newline and exit immediately with 130 (SIGINT)
+          process.stdout.write('\n');
+        } catch {}
+        cleanup();
+        process.exit(130);
       });
     } else {
-      // Single line mode
-      rl.question('', answer => {
-        const trimmed = answer.trim();
-        if (!trimmed && !options.allowEmpty && !options.defaultValue) {
+      // Root cause fix: raw-mode single-line input without readline echo.
+      const readLineRaw = async (): Promise<string> => {
+        return new Promise<string>(resolveRaw => {
+          let buf = '';
+          const onData = (chunk: Buffer) => {
+            const s = chunk.toString('utf8');
+            for (let i = 0; i < s.length; i++) {
+              const ch = s[i];
+              const code = s.charCodeAt(i);
+              if (ch === '\n' || ch === '\r') {
+                try {
+                  process.stdout.write('\n');
+                } catch {}
+                teardown();
+                resolveRaw(buf);
+                return;
+              }
+              if (ch === '\b' || code === 127) {
+                if (buf.length > 0) {
+                  buf = buf.slice(0, -1);
+                  try {
+                    process.stdout.write('\b \b');
+                  } catch {}
+                }
+                continue;
+              }
+              if (code === 3) {
+                // Ctrl+C
+                try {
+                  process.stdout.write('\n');
+                } catch {}
+                teardown();
+                process.exit(130);
+              }
+              if (code >= 32) {
+                buf += ch;
+                try {
+                  process.stdout.write(ch);
+                } catch {}
+              }
+            }
+          };
+          const teardown = () => {
+            try {
+              process.stdin.off('data', onData);
+            } catch {}
+            try {
+              if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+                (process.stdin as any).setRawMode(false);
+              }
+            } catch {}
+          };
+          try {
+            if (process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function') {
+              (process.stdin as any).setRawMode(true);
+            }
+          } catch {}
+          process.stdin.on('data', onData);
+          try {
+            process.stdout.write('> ');
+          } catch {}
+        });
+      };
+      (async () => {
+        const answer = await readLineRaw();
+        const trimmed = (answer || '').trim();
+        if (!trimmed && !allowEmpty && defaultValue === undefined) {
           cleanup();
-          console.log(`${colors.yellow}⚠  Empty input not allowed${colors.reset}`);
-          reject(new Error('Empty input not allowed'));
-        } else {
-          finish(trimmed || options.defaultValue || '');
+          return reject(new Error('Empty input not allowed'));
         }
+        return finish(trimmed || defaultValue || '');
+      })().catch(err => {
+        cleanup();
+        reject(err);
       });
     }
-
-    // Handle Ctrl+C
-    rl.on('SIGINT', () => {
-      cleanup();
-      console.log('\n\n' + colors.yellow + '⚠  Cancelled by user' + colors.reset);
-      reject(new Error('Cancelled by user'));
-    });
   });
 }
 
@@ -275,6 +282,14 @@ export async function simplePrompt(prompt: string): Promise<string> {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
+    });
+
+    rl.on('SIGINT', () => {
+      try {
+        process.stdout.write('\n');
+      } catch {}
+      rl.close();
+      process.exit(130);
     });
 
     rl.question(`${prompt}\n> `, answer => {

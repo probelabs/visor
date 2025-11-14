@@ -17,9 +17,38 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
 
-      - name: Install deps
-        run: npm ci
+      - name: Configure npm (retries, timeouts)
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-maxtimeout 120000
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-timeout 120000
+
+      - name: Install deps (retry up to 3x)
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          npm_config_audit: 'false'
+          npm_config_fund: 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          attempts=0
+          until [ $attempts -ge 3 ]; do
+            if npm ci --no-audit --no-fund; then
+              break
+            fi
+            attempts=$((attempts+1))
+            echo "npm ci failed (attempt $attempts); retrying in $((attempts*10))s..." >&2
+            sleep $((attempts*10))
+          done
+          if [ $attempts -ge 3 ]; then
+            echo "npm ci failed after 3 attempts" >&2
+            exit 1
+          fi
 
       - name: Build (CLI + SDK)
         run: npm run build
@@ -29,4 +58,3 @@ jobs:
 
       - name: Run CJS example
         run: node examples/sdk-cjs.cjs
-

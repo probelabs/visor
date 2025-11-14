@@ -45,18 +45,11 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   if (!enabled || sdk) return;
 
   try {
-    // IMPORTANT: Set up AsyncHooksContextManager as the global context manager FIRST
-    // This must happen before any OpenTelemetry operations
-    const otelApi = (function (name: string) {
+    // Let NodeSDK manage global context manager registration to avoid duplicate API registration errors.
+    // Ensure @opentelemetry/api is available; defer other global registration to NodeSDK
+    (function (name: string) {
       return require(name);
     })('@opentelemetry/api');
-    const { AsyncHooksContextManager } = (function (name: string) {
-      return require(name);
-    })('@opentelemetry/context-async-hooks');
-    const contextManager = new AsyncHooksContextManager();
-    contextManager.enable();
-    otelApi.context.setGlobalContextManager(contextManager);
-    // console.debug('[telemetry] AsyncHooksContextManager enabled and set as global');
 
     const { NodeSDK } = (function (name: string) {
       return require(name);

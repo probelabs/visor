@@ -36,7 +36,16 @@ function mapGithubOp(op: string): string {
 function buildExecutedMap(stats: ExecStats): Record<string, number> {
   const executed: Record<string, number> = {};
   for (const s of stats.checks) {
-    if (!s.skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
+    const name = (s as any)?.checkName;
+    if (
+      !s.skipped &&
+      (s.totalRuns || 0) > 0 &&
+      typeof name === 'string' &&
+      name.trim().length > 0 &&
+      name !== 'undefined'
+    ) {
+      executed[name] = s.totalRuns || 0;
+    }
   }
   return executed;
 }
@@ -231,7 +240,16 @@ export function evaluateOutputs(
         }
       }
       if (chosen === undefined) {
-        errors.push(`No output matched where selector for ${o.step}`);
+        let hint = '';
+        try {
+          const arr = hist as any[];
+          const sample = (arr && arr[0]) || {};
+          const keys = sample && typeof sample === 'object' ? Object.keys(sample).slice(0, 6) : [];
+          hint = keys.length
+            ? ` (had ${arr.length} item(s); sample keys: ${keys.join(', ')})`
+            : ` (had ${arr.length} item(s))`;
+        } catch {}
+        errors.push(`No output matched where selector for ${o.step}${hint}`);
         continue;
       }
     } else {

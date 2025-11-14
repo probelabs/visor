@@ -6,6 +6,7 @@ import { ConfigManager } from '../config';
 import { CheckExecutionEngine } from '../check-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
+import { MemoryStore } from '../memory-store';
 import { setGlobalRecorder } from './recorders/global-recorder';
 // import { FixtureLoader } from './fixture-loader';
 import { type ExpectBlock } from './assertions';
@@ -128,6 +129,10 @@ export class VisorTestRunner {
       rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
     );
     setGlobalRecorder(recorder);
+    // Always clear in-memory store between cases to prevent cross-case leakage
+    try {
+      MemoryStore.resetInstance();
+    } catch {}
     const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
 
     // Prompts and mocks setup
@@ -171,6 +176,12 @@ export class VisorTestRunner {
           prompts[k].push(p);
         },
         mockForStep: (step: string) => mockMgr.get(step),
+        // Ensure human-input never blocks tests: prefer case mock, then default value
+        onHumanInput: async (req: { checkId: string; default?: string }) => {
+          const m = mockMgr.get(req.checkId);
+          if (m !== undefined && m !== null) return String(m);
+          return (req.default ?? '').toString();
+        },
       },
     } as any);
 
@@ -415,6 +426,31 @@ export class VisorTestRunner {
         configFileToLoad = resolved;
       }
     }
+
+    // If the tests file is also a full Visor config (co-located tests),
+    // sanitize it by stripping the top-level `tests` key into a temp file
+    // before loading via ConfigManager (which validates against config schema).
+    if (configFileToLoad === testsPath) {
+      try {
+        const rawCfg = fs.readFileSync(testsPath, 'utf8');
+        const docAny = yaml.load(rawCfg) as any;
+        if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
+          const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
+          delete (cfgObj as Record<string, unknown>)['tests'];
+          const tmpDir = path.join(process.cwd(), 'tmp');
+          try {
+            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+          } catch {}
+          const tmpPath = path.join(
+            tmpDir,
+            `visor-config-sanitized-${Date.now()}-${Math.random().toString(36).slice(2)}.yaml`
+          );
+          fs.writeFileSync(tmpPath, yaml.dump(cfgObj), 'utf8');
+          configFileToLoad = tmpPath;
+        }
+      } catch {}
+    }
+
     const config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
     if (!config.checks) {
       throw new Error('Loaded config has no checks; cannot run tests');
@@ -457,13 +493,25 @@ export class VisorTestRunner {
 
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
     const cfg = JSON.parse(JSON.stringify(config));
+    const allowCtxEnv =
+      String(process.env.VISOR_TEST_ALLOW_CODE_CONTEXT || '').toLowerCase() === 'true';
+    const forceNoCtxEnv =
+      String(process.env.VISOR_TEST_FORCE_NO_CODE_CONTEXT || '').toLowerCase() === 'true';
     for (const name of Object.keys(cfg.checks || {})) {
       const chk = cfg.checks[name] || {};
       if ((chk.type || 'ai') === 'ai') {
         const prev = (chk.ai || {}) as Record<string, unknown>;
+        // Respect existing per-check setting by default.
+        // Only tweak when explicitly requested by env flags.
+        const skipCtx = forceNoCtxEnv
+          ? true
+          : allowCtxEnv
+            ? false
+            : (prev.skip_code_context as boolean | undefined);
         chk.ai = {
           ...prev,
           provider: aiProviderDefault,
+          ...(skipCtx === undefined ? {} : { skip_code_context: skipCtx }),
           disable_tools: true,
           timeout: Math.min(15000, (prev.timeout as number) || 15000),
         } as any;
@@ -602,7 +650,13 @@ export class VisorTestRunner {
           return { name: _case.name, failed: 1 };
         }
       } catch (err) {
-        console.log(`❌ ERROR ${_case.name}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`❌ ERROR ${_case.name}: ${msg}`);
+        try {
+          if (process.env.VISOR_DEBUG === 'true' && err && (err as any).stack) {
+            console.error(`[stack] case ${_case.name}: ${(err as any).stack}`);
+          }
+        } catch {}
         caseResults.push({
           name: _case.name,
           passed: false,
@@ -638,64 +692,70 @@ export class VisorTestRunner {
       await Promise.all(Array.from({ length: workers }, runWorker));
     }
 
-    // Summary
+    // Summary (suppressible for embedded runs)
     const passedCount = caseResults.filter(r => r.passed).length;
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
     {
-      const fsSync = require('fs');
-      const write = (s: string) => {
-        try {
-          fsSync.writeSync(2, s + '\n');
-        } catch {
+      const silentSummary =
+        String(process.env.VISOR_TEST_SUMMARY_SILENT || '')
+          .toLowerCase()
+          .trim() === 'true';
+      if (!silentSummary) {
+        const fsSync = require('fs');
+        const write = (s: string) => {
           try {
-            console.log(s);
-          } catch {}
-        }
-      };
-      const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
-      write('\n' + this.line('Summary'));
-      write(
-        `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
-      );
-      if (passedCases.length > 0) {
-        const names = passedCases.map(r => r.name).join(', ');
-        write(`   • ${names}`);
-      }
-      write(`  Failed: ${failedCases.length}/${selected.length}`);
-      if (failedCases.length > 0) {
-        const maxErrs = Math.max(
-          1,
-          parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
-        );
-        for (const fc of failedCases) {
-          write(`   • ${fc.name}`);
-          // If flow case, print failing stages with their first errors
-          if (Array.isArray(fc.stages) && fc.stages.length > 0) {
-            const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
-            for (const st of bad) {
-              write(`     - ${st.name}`);
-              const errs = (st.errors || []).slice(0, maxErrs);
-              for (const e of errs) write(`       • ${e}`);
-              const more = (st.errors?.length || 0) - errs.length;
-              if (more > 0) write(`       • … and ${more} more`);
-            }
-            if (bad.length === 0) {
-              // No per-stage errors captured; print names for context
-              const names = fc.stages.map(s => s.name).join(', ');
-              write(`     stages: ${names}`);
-            }
+            fsSync.writeSync(2, s + '\n');
+          } catch {
+            try {
+              console.log(s);
+            } catch {}
           }
-          // Non-flow case errors
-          if (
-            (!fc.stages || fc.stages.length === 0) &&
-            Array.isArray(fc.errors) &&
-            fc.errors.length > 0
-          ) {
-            const errs = fc.errors.slice(0, maxErrs);
-            for (const e of errs) write(`     • ${e}`);
-            const more = fc.errors.length - errs.length;
-            if (more > 0) write(`     • … and ${more} more`);
+        };
+        const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
+        write('\n' + this.line('Summary'));
+        write(
+          `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
+        );
+        if (passedCases.length > 0) {
+          const names = passedCases.map(r => r.name).join(', ');
+          write(`   • ${names}`);
+        }
+        write(`  Failed: ${failedCases.length}/${selected.length}`);
+        if (failedCases.length > 0) {
+          const maxErrs = Math.max(
+            1,
+            parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
+          );
+          for (const fc of failedCases) {
+            write(`   • ${fc.name}`);
+            // If flow case, print failing stages with their first errors
+            if (Array.isArray(fc.stages) && fc.stages.length > 0) {
+              const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
+              for (const st of bad) {
+                write(`     - ${st.name}`);
+                const errs = (st.errors || []).slice(0, maxErrs);
+                for (const e of errs) write(`       • ${e}`);
+                const more = (st.errors?.length || 0) - errs.length;
+                if (more > 0) write(`       • … and ${more} more`);
+              }
+              if (bad.length === 0) {
+                // No per-stage errors captured; print names for context
+                const names = fc.stages.map(s => s.name).join(', ');
+                write(`     stages: ${names}`);
+              }
+            }
+            // Non-flow case errors
+            if (
+              (!fc.stages || fc.stages.length === 0) &&
+              Array.isArray(fc.errors) &&
+              fc.errors.length > 0
+            ) {
+              const errs = fc.errors.slice(0, maxErrs);
+              for (const e of errs) write(`     • ${e}`);
+              const more = fc.errors.length - errs.length;
+              if (more > 0) write(`     • … and ${more} more`);
+            }
           }
         }
       }
@@ -760,6 +820,10 @@ export class VisorTestRunner {
       ) as boolean;
 
       try {
+        // Clear in-memory store before each stage to avoid leakage across stages
+        try {
+          MemoryStore.resetInstance();
+        } catch {}
         // Prepare default tag filters for this flow (inherit suite defaults)
         const parseTags = (v: unknown): string[] | undefined => {
           if (!v) return undefined;
@@ -816,7 +880,13 @@ export class VisorTestRunner {
       } catch (err) {
         failures += 1;
         const name = `${flowName}#${stage.name || `stage-${i + 1}`}`;
-        console.log(`❌ ERROR ${name}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`❌ ERROR ${name}: ${msg}`);
+        try {
+          if (process.env.VISOR_DEBUG === 'true' && err && (err as any).stack) {
+            console.error(`[stack] ${name}: ${(err as any).stack}`);
+          }
+        } catch {}
         stagesSummary.push({ name, errors: [err instanceof Error ? err.message : String(err)] });
         if (bail) break;
       }
@@ -852,14 +922,19 @@ export class VisorTestRunner {
     try {
       const executed = stats.checks
         .filter(s => !s.skipped && (s.totalRuns || 0) > 0)
-        .map(s => s.checkName);
+        .map(s => (s as any)?.checkName)
+        .filter(name => typeof name === 'string' && name.trim().length > 0 && name !== 'undefined');
       for (const name of executed) {
+        // Only consider configured checks for warnings
+        if (!((cfg.checks || {}) as Record<string, unknown>)[name]) continue;
         const chk = (cfg.checks || {})[name] || {};
         const t = chk.type || 'ai';
         // Suppress warnings for AI steps explicitly running under the mock provider
         const aiProv = (chk.ai && (chk.ai as any).provider) || undefined;
         if (t === 'ai' && aiProv === 'mock') continue;
-        if ((t === 'ai' || t === 'command') && mocks[name] === undefined) {
+        const listKey = `${name}[]`;
+        const hasList = Array.isArray((mocks as any)[listKey]);
+        if ((t === 'ai' || t === 'command') && mocks[name] === undefined && !hasList) {
           console.warn(
             `⚠️  Unmocked ${t} step executed: ${name} (add mocks:\n  ${name}: <mock content>)`
           );

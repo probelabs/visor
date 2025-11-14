@@ -1,1 +1,0 @@
-{"version":"2.0","checks":{"overview":{"type":"log","message":"overview ran","on":["pr_updated"],"group":"overview"}},"output":{"pr_comment":{"format":"markdown","group_by":"check","collapse":false}}}

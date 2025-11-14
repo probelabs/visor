@@ -197,7 +197,7 @@ export class FlowStage {
       };
 
       const wrapper = new TestExecutionWrapper(this.engine);
-      const { res } = await wrapper.execute(
+      const { res, outHistory } = await wrapper.execute(
         prInfo,
         checksToRun,
         this.cfg,
@@ -214,11 +214,12 @@ export class FlowStage {
         const start = promptBase[k] || 0;
         stagePrompts[k] = (arr as string[]).slice(start);
       }
-      const outSnap = this.engine.getOutputHistorySnapshot();
+      // Use the snapshot captured immediately after the grouped run.
+      // The engine resets outputHistory at stage start, so deltas vs. histBase
+      // are not meaningful; stageHist is exactly the run snapshot.
       const stageHist: Record<string, unknown[]> = {};
-      for (const [k, arr] of Object.entries(outSnap)) {
-        const start = histBase[k] || 0;
-        stageHist[k] = (arr as unknown[]).slice(start);
+      for (const [k, arr] of Object.entries(outHistory || {})) {
+        stageHist[k] = Array.isArray(arr) ? (arr as unknown[]) : [];
       }
       try {
         if (process.env.VISOR_DEBUG === 'true') {
@@ -298,6 +299,15 @@ export class FlowStage {
           if (isRealCheck) presentInResults.add(k);
         }
       } catch {}
+      // Prefer authoritative counts from res.statistics when available, then fall back to deltas/inferred
+      const fromResStats: Record<string, number> = {};
+      try {
+        for (const s of (res.statistics?.checks || []) as any[]) {
+          const n = (s && s.checkName) || '';
+          if (typeof n === 'string' && n) fromResStats[n] = (s.totalRuns || 0) as number;
+        }
+      } catch {}
+
       const checks = Array.from(names).map(name => {
         const histArr = Array.isArray(stageHist[name]) ? (stageHist[name] as unknown[]) : [];
         const histRuns = histArr.length;
@@ -330,12 +340,49 @@ export class FlowStage {
             if (nonArrays.length > 0 && arrays.length > 0) histPerItemRuns = nonArrays.length;
           }
         } catch {}
-        // Prefer authoritative engine executionStats delta when available; otherwise use inferred
-        let runs = deltaMap[name] !== undefined ? deltaMap[name] : inferred;
+        // Prefer res.statistics delta if present, else engine.executionStats delta, else inferred
+        let runs: number;
+        const resTotal = fromResStats[name];
+        if (typeof resTotal === 'number') {
+          // If the wrapper reset per-run state, res.statistics totals are stage-only.
+          // In that case, ignore baseline.
+          const ctx: any = (this.engine as any).executionContext || {};
+          const stageOnly = !!(ctx.mode && ctx.mode.resetPerRunState);
+          const base = stageOnly ? 0 : statBase[name] || 0;
+          const d = Math.max(0, resTotal - base);
+          runs = d > 0 ? d : 0;
+        } else {
+          runs = deltaMap[name] !== undefined ? deltaMap[name] : inferred;
+        }
         if (runs === 0 && presentInResults.has(name)) runs = 1;
         if (!isForEachLike && histRuns > 0) runs = histRuns;
         if (histPerItemRuns > 0) runs = histPerItemRuns;
         if (depWaveSize > 0) runs = depWaveSize;
+        // Generic dependent alignment: if a check has direct parents that executed
+        // more times in this stage (per statistics delta), align to the max parent delta.
+        try {
+          let parentMax = 0;
+          const depList = ((this.cfg.checks || {})[name] || {}).depends_on || [];
+          const parents: string[] = Array.isArray(depList)
+            ? (depList as any[]).flatMap((t: any) =>
+                typeof t === 'string' && t.includes('|')
+                  ? t.split('|').map((s: string) => s.trim())
+                  : [String(t)]
+              )
+            : [];
+          for (const p of parents) {
+            if (!p) continue;
+            const baseP = statBase[p] || 0;
+            const resTotP = fromResStats[p];
+            const dP =
+              typeof resTotP === 'number' ? Math.max(0, resTotP - baseP) : deltaMap[p] || 0;
+            parentMax = Math.max(parentMax, dP);
+          }
+          // Apply only for non-forEach checks with no observable history in this stage
+          if (!isForEachLike && histRuns === 0 && histPerItemRuns === 0 && parentMax > 0) {
+            runs = Math.max(runs, parentMax);
+          }
+        } catch {}
         return {
           checkName: name,
           totalRuns: runs,
@@ -357,6 +404,26 @@ export class FlowStage {
         totalDuration: 0,
         checks,
       } as any;
+
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          const totals: Record<string, number> = {};
+          for (const c of checks as any[]) totals[(c as any).checkName] = (c as any).totalRuns || 0;
+          const resTotals: Record<string, number> = {};
+          try {
+            for (const s of (res.statistics?.checks || []) as any[]) {
+              const n = (s && s.checkName) || '';
+              if (typeof n === 'string' && n) resTotals[n] = (s.totalRuns || 0) as number;
+            }
+          } catch {}
+          const baseTotals: Record<string, number> = {};
+          for (const [n, b] of Object.entries(statBase)) baseTotals[n] = b || 0;
+
+          console.error(
+            `[stage-counts] ${stageName} totals=${JSON.stringify(totals)} resTotals=${JSON.stringify(resTotals)} base=${JSON.stringify(baseTotals)}`
+          );
+        }
+      } catch {}
 
       // Evaluate stage
       const expect: ExpectBlock = stage.expect || {};

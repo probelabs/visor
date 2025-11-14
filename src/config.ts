@@ -45,6 +45,7 @@ export class ConfigManager {
     'claude-code',
     'mcp',
     'command',
+    'script',
     'http',
     'http_input',
     'http_client',

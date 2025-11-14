@@ -5,6 +5,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+.tmp*
+.*out
+.*json
+
 # Build outputs
 dist/
 # Do not keep legacy ncc bundle
@@ -142,3 +146,4 @@ dist/output/**/*.ndjson
 # Local schema temp and scratch
 scripts/.schema-tmp/
 tmp/
+.visor-agent-files.json

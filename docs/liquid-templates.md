@@ -198,6 +198,8 @@ echo '{{ pr | json }}' | jq .
 {{ files | map: "filename" }}   # Array of filenames
 ```
 
+<!-- Removed merge_sort_by example: filter no longer provided -->
+
 ## Examples
 
 ### Debugging Outputs
