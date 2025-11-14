@@ -107,10 +107,10 @@ This note captures the current execution flow of the Visor engine, the surfaces 
 Events flowing between states include: `PlanBuilt`, `WaveRequested`, `LevelDepleted`, `CheckComplete`, `CheckErrored`, `ForwardRunRequested`, `OnFinishLoop`, and `Shutdown`.
 
 ### 3.3 Runtime data model
-- `EngineContext` struct holding: immutable config snapshot, dependency graph, check metadata (tags, triggers, session provider, fan-out mode), `ExecutionJournal`, output/memory stores, and telemetry sinks.
-- `RunState` struct capturing: current engine mode, pending events queue, active wave number, active levels, outstanding tasks, global flags (e.g., `failFastTriggered`), GitHub check bookkeeping, and debug server hooks.
+- `EngineContext` struct holding: immutable config snapshot, dependency graph, check metadata (tags, triggers, session provider, fan-out mode), `ExecutionJournal`, output/memory stores, telemetry sinks, and persistence hooks.
+- `RunState` struct capturing: current engine mode, pending events queue, active wave number, active levels, outstanding tasks, global flags (e.g., `failFastTriggered`), GitHub check bookkeeping, and debug server hooks. The struct is designed to be serializable so we can persist/resume executions.
 - `DispatchRecord` capturing per-check data (scope path, provider id, start ts, attempts, forEach item index) to tie stats/telemetry to state transitions.
-- Event queue implementation (simple array or deque) so routing can push `ForwardRun`/`GotoEvent` events instead of toggling booleans.
+- Event queue implementation (simple array or deque) so routing can push `ForwardRun`/`GotoEvent` events instead of toggling booleans. The queue doubles as the source for a structured event log, enabling time-travel debugging.
 
 TypeScript sketch:
 
@@ -133,6 +133,10 @@ interface EngineContext {
   memory: MemoryStore;
   telemetry: TelemetrySink;
   gitHubChecks?: GitHubCheckService;
+  persistence?: {
+    saveState: (state: SerializedRunState) => Promise<void>;
+    loadState?: () => Promise<SerializedRunState | null>;
+  };
 }
 
 interface RunState {
@@ -145,13 +149,17 @@ interface RunState {
     forwardRunRequested: boolean;
   };
   stats: Map<string, CheckExecutionStats>;
+  historyLog: EngineEvent[]; // append-only log for time-travel debugging
 }
 
 type EngineEvent =
   | { type: 'ForwardRunRequested'; target: string; gotoEvent?: EventTrigger; scope?: ScopePath }
   | { type: 'WaveRetry'; reason: 'on_fail' | 'on_finish' | 'external' }
+  | { type: 'CheckScheduled'; checkId: string; scope: ScopePath }
   | { type: 'CheckCompleted'; checkId: string; scope: ScopePath; result: ReviewSummary }
-  | { type: 'Shutdown'; error?: Error };
+  | { type: 'CheckErrored'; checkId: string; scope: ScopePath; error: SerializedError }
+  | { type: 'StateTransition'; from: EngineStateId; to: EngineStateId }
+  | { type: 'Shutdown'; error?: SerializedError };
 
 interface DispatchRecord {
   id: string;
@@ -162,9 +170,20 @@ interface DispatchRecord {
   foreachIndex?: number;
   sessionInfo?: { parent?: string; reuse?: boolean };
 }
+
+type SerializedRunState = {
+  wave: number;
+  levelQueue: ExecutionGroup[];
+  eventQueue: EngineEvent[];
+  flags: RunState['flags'];
+  stats: CheckExecutionStats[];
+  historyLog: EngineEvent[];
+};
 ```
 
-These structs give us a single source of truth for logging and telemetry; `EngineEvent`s can be streamed verbatim to the debug visualizer instead of scattering ad-hoc `console.log` calls throughout the engine.
+Persistence/time-travel strategy:
+- After every state-transition the engine appends to `historyLog`, streams the event over the debug-server WebSocket, mirrors it to `output/debug-events/<session>.jsonl`, and (optionally) flushes the minimal `SerializedRunState` via `persistence.saveState`. By default we persist under `tmp/visor-state/<session>.json` (override via config/env if needed). This gives us crash recovery plus offline time-travel logs.
+- When resuming, the engine loads the last serialized state, reconstructs in-memory maps, and continues dequeuing events, ensuring retries and routing decisions survive restarts.
 
 ### 3.4 Migration strategy
 1. **Scaffolding:** introduce `EngineMode` flag plus a skeleton `StateMachineExecutionEngine` that simply proxies to the legacy runner; wire the flag through CLI/Action/SDK/tests.
@@ -233,7 +252,7 @@ on_finish:
 ```
 
 Plan:
-1. Extend the config schema with `transitions[]` entries (fields: `when`, `to`, optional metadata). During the `Routing` state, the engine evaluates `when` expressions in priority order and enqueues the resulting transition.
+1. Extend the config schema with optional `transitions[]` entries (fields: `when`, `to`, optional metadata). During the `Routing` state, the engine evaluates `when` expressions in priority order and enqueues the resulting transition.
 2. Build a static validator that ensures each `to` refers to an existing check (or `null`), expressions only use approved helpers (`wave`, `event`, `outputs`, `memory`, etc.), and that transitions either cover all cases or explicitly fall back to `null`.
 3. When both `goto`/`goto_js` and `transitions` are present, the state machine honors `transitions` first (still executing the others as a fallback) and logs a warning so we can gradually migrate built-in configs away from dynamic `goto_js` without breaking existing flows.
 
@@ -253,7 +272,7 @@ validate-fact:
 ```
 
 Execution steps:
-1. Extend `CheckConfig` with `assume[]` and `guarantee[]` arrays. Before executing a provider, the state machine evaluates `assume` expressions using dependency outputs (and forEach item context); failures short-circuit execution with a structured issue referencing the violated assumption. After execution, it evaluates `guarantee` expressions against the check’s output and records fatal issues if they fail.
+1. Extend `CheckConfig` with optional `assume[]` and `guarantee[]` arrays. Before executing a provider, the state machine evaluates `assume` expressions using dependency outputs (and forEach item context); failures short-circuit execution with a structured issue referencing the violated assumption. After execution, it evaluates `guarantee` expressions against the check’s output and records fatal issues if they fail.
 2. Add compile-time validation: parse each expression and ensure it only references known symbols. For example, `assume` can read `dependencyName.output`, `dependencyName.item`, or `memory` but cannot mutate state; `guarantee` can read outputs but not future steps.
 3. Emit telemetry (`engine.contract.assume_failed`, `engine.contract.guarantee_failed`) so CI and runtime monitoring can flag contract regressions.
 
