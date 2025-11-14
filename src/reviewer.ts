@@ -276,7 +276,12 @@ export class PRReviewer {
     repo: string,
     prNumber: number,
     groupedResults: GroupedCheckResults,
-    options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
+    options: ReviewOptions & {
+      commentId?: string;
+      triggeredBy?: string;
+      commitSha?: string;
+      octokitOverride?: Octokit;
+    } = {}
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
@@ -330,7 +335,10 @@ export class PRReviewer {
       // Do not post empty comments (possible if content is blank after fallbacks)
       if (!comment || !comment.trim()) continue;
 
-      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+      const manager = options.octokitOverride
+        ? new CommentManager(options.octokitOverride)
+        : this.commentManager;
+      await manager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId,
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,

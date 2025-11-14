@@ -36,6 +36,7 @@ import {
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from './telemetry/fallback-ndjson';
+import { generateFooter } from './footer';
 import { addEvent, withActiveSpan } from './telemetry/trace-helpers';
 import { addFailIfTriggered } from './telemetry/metrics';
 
@@ -195,7 +196,14 @@ export class CheckExecutionEngine {
   // Keyed by `${event}:${target}`.
   private forwardRunGuards: Set<string> = new Set();
   // Guard dependents scheduled via forward-run to avoid races with level tasks
-  private forwardDependentsScheduled: Set<string> = new Set();
+  // Store per-target scopes to support forEach item-specific routing (JSON-encoded ScopePath)
+  private forwardDependentsScheduled: Map<string, Set<string>> = new Map();
+  private forwardEventOverrides: Map<string, import('./types/config').EventTrigger> = new Map();
+  // Forward-run planning hints per routed target
+  // - includeDependents: whether to include DAG dependents for the next wave
+  // - excludeForEachDependents: when true, filter out dependents that are forEach parents
+  private forwardIncludeDependents: Map<string, boolean> = new Map();
+  private forwardExcludeForEachDependents: Map<string, boolean> = new Map();
   // Marker for grouped wave rescheduling when on_fail forward-run occurred
   private onFailForwardRunSeen: boolean = false;
   // Marker for grouped wave rescheduling when on_finish routing occurred
@@ -203,6 +211,9 @@ export class CheckExecutionEngine {
   // Track per-grouped-run scheduling of specific steps we want to allow only once.
   // Currently used to ensure 'validate-fact' is scheduled at most once per stage.
   private oncePerRunScheduleGuards: Set<string> = new Set();
+  // Suppress on_success.goto for checks that are re-run only to satisfy
+  // dependency requirements in a forward-run planned wave
+  private gotoSuppressedChecks: Set<string> = new Set();
   // Event override to simulate alternate event (used during routing goto)
   private routingEventOverride?: import('./types/config').EventTrigger;
   // Execution context for providers (CLI message, hooks, etc.)
@@ -264,10 +275,15 @@ export class CheckExecutionEngine {
     try {
       // Fully reset stage-scoped state so flows don't leak across stages.
       this['executionStats'].clear();
-      // Do NOT clear outputHistory here; multi-turn flows (e.g., ask→refine→ask)
-      // rely on outputs_history across waves within a single run.
+      // Clear outputs history at the start of each grouped run to ensure
+      // per-stage coverage is isolated in flows. Intra-stage waves still
+      // have access to history because it accumulates during the run.
+      this.outputHistory.clear();
       this.postOnFinishGuards.clear();
       this.forwardDependentsScheduled.clear();
+      this.forwardIncludeDependents.clear();
+      this.gotoSuppressedChecks.clear();
+      this.forwardExcludeForEachDependents.clear();
       this.runCounters.clear();
       this.routingEventOverride = undefined;
       // Start a fresh journal for snapshot-based dependency views
@@ -289,14 +305,18 @@ export class CheckExecutionEngine {
   /** Resolve effective max runs for a check (step override > global default). */
   private resolveMaxRuns(config: VisorConfig, checkId: string): number {
     try {
-      const step = (config.checks || (config as any).steps || {})[checkId] as
-        | import('./types/config').CheckConfig
-        | undefined;
+      const steps = (config.checks || (config as any).steps || {}) as Record<
+        string,
+        import('./types/config').CheckConfig
+      >;
+      const step = steps[checkId];
       const perStep = (step as any)?.max_runs;
       if (typeof perStep === 'number') return perStep;
+      // Default: cap forEach parents to 1 execution per grouped run unless overridden
+      if (step && step.forEach === true) return 1;
     } catch {}
     const global = (config.limits && (config.limits as any).max_runs_per_check) ?? 50;
-    return typeof global === 'number' ? global : 50;
+    return typeof global === 'number' && global > 0 ? Math.floor(global) : 50;
   }
 
   private commitJournal(
@@ -537,7 +557,8 @@ export class CheckExecutionEngine {
       // Mark target as forward-scheduled AFTER inline execution so grouped
       // runner can skip duplicates in subsequent waves without blocking inline.
       try {
-        this.forwardDependentsScheduled.add(target);
+        this.addForwardTarget(target, scopeForRun);
+        if (gotoEvent) this.forwardEventOverrides.set(target, gotoEvent);
       } catch {}
       return res;
     };
@@ -562,12 +583,7 @@ export class CheckExecutionEngine {
 
     if (gotoEvent) this.routingEventOverride = gotoEvent;
 
-    // In test/grouped mode, suppress inline execution for on_success-originated
-    // routing to avoid double-running targets (once inline and again in the
-    // grouped wave). Allow the grouped runner to pick it up naturally.
-    // Unified forward-run semantics: do not inline-run dependents for any origin.
-    // Always schedule the target for the next wave and let the DAG handle children.
-    // Wave scheduling below accounts for on_success/on_fail/on_finish flags.
+    // Unified forward-run semantics header
 
     // Do not execute target inline for on_fail-originated routing.
     // Mark that a correction wave is needed; enqueue ONLY the target and allow
@@ -578,7 +594,8 @@ export class CheckExecutionEngine {
         // Only mark the target for forward scheduling. Let the DAG naturally
         // re-run transitive dependents in the next wave to preserve dependency
         // gating semantics.
-        this.forwardDependentsScheduled.add(target);
+        this.addForwardTarget(target, foreachScope);
+        this.forwardIncludeDependents.set(target, true);
         const dependentsOnly = order.filter(n => n !== target);
         const fwd = Array.from(forwardSet || []).join(', ');
         const deps = dependentsOnly.join(', ');
@@ -592,12 +609,30 @@ export class CheckExecutionEngine {
     // on_finish: schedule target for the next wave and return.
     if (origin === 'on_finish') {
       try {
-        this.forwardDependentsScheduled.add(target);
+        this.addForwardTarget(target, foreachScope);
+        if (gotoEvent) this.forwardEventOverrides.set(target, gotoEvent);
+        // For on_finish correction waves, include non-forEach dependents only
+        // so lightweight actions (e.g., label application) can run again
+        // while heavy per-item validators are excluded.
+        this.forwardIncludeDependents.set(target, true);
+        this.forwardExcludeForEachDependents.set(target, true);
       } catch {}
       (this as any).onFinishForwardRunSeen = true;
       return; // defer to next wave
     }
-    // on_success: fall through (inline-dependent path below handles running dependents)
+    // on_success: if dependencies of the routed target are already available,
+    // execute it inline now and do NOT schedule a new wave. Otherwise, schedule
+    // the target for the next wave and return.
+    if (origin === 'on_success') {
+      try {
+        this.addForwardTarget(target, foreachScope);
+      } catch {}
+      if (gotoEvent) this.forwardEventOverrides.set(target, gotoEvent);
+      try {
+        (this as any).onSuccessForwardRunSeen = true;
+      } catch {}
+      return;
+    }
     try {
       // Determine mapping mode for the target step
       const tcfg = cfgChecks[target];
@@ -659,29 +694,9 @@ export class CheckExecutionEngine {
             return;
           }
         } catch {}
-        // Inline dependent execution for on_success so routed children appear in stats
+        // Do not inline-run dependents for forward-run; DAG handles subsequent steps in next wave
         try {
-          if (origin === 'on_success') {
-            const dependentsOnly = order.filter(n => n !== target);
-            for (const dep of dependentsOnly) {
-              try {
-                const depCfg = cfgChecks[dep];
-                if (!depCfg) continue;
-                const resDep = await this.runNamedCheck(dep, foreachScope || [], {
-                  origin: 'on_success',
-                  config,
-                  dependencyGraph,
-                  prInfo,
-                  resultsMap,
-                  debug,
-                  eventOverride: gotoEvent,
-                });
-                try {
-                  resultsMap.set(dep, resDep);
-                } catch {}
-              } catch {}
-            }
-          }
+          /* intentionally no-op */
         } catch {}
       };
 
@@ -869,6 +884,19 @@ export class CheckExecutionEngine {
     for (let i = 0; i < seedStr.length; i++) h = (h ^ seedStr.charCodeAt(i)) * 16777619;
     const frac = ((h >>> 0) % 1000) / 1000; // 0..1
     return Math.floor(baseMs * 0.15 * frac); // up to 15% jitter
+  }
+
+  /** Add a forward-run target with an optional item scope (forEach). */
+  private addForwardTarget(target: string, scope?: ScopePath): void {
+    try {
+      const key = JSON.stringify(scope && scope.length > 0 ? scope : []);
+      let set = this.forwardDependentsScheduled.get(target);
+      if (!set) {
+        set = new Set<string>();
+        this.forwardDependentsScheduled.set(target, set);
+      }
+      set.add(key);
+    } catch {}
   }
 
   // === on_finish helpers (extracted to reduce handleOnFinishHooks complexity) ===
@@ -1771,7 +1799,7 @@ export class CheckExecutionEngine {
         //    increment a memory counter), but we must NOT follow goto to avoid immediate loops.
         const originTag = opts.origin || 'inline';
         const suppressAllOnSuccess = originTag === 'on_success';
-        const suppressGotoOnly = originTag === 'on_fail';
+        const suppressGotoOnly = originTag === 'on_fail' || this.gotoSuppressedChecks.has(target);
         if (onSucc && !postFailTriggered && !suppressAllOnSuccess) {
           // Compute run list (static + dynamic)
           const dynamicRun = await (async () => {
@@ -1844,6 +1872,139 @@ export class CheckExecutionEngine {
           } catch {}
           if (!suppressGotoOnly && !succTarget && onSucc.goto) succTarget = onSucc.goto;
           if (!suppressGotoOnly && succTarget) {
+            // If this is comment-assistant retriggering overview, proactively
+            // post the assistant reply so flows record a createComment before
+            // we jump to overview.
+            try {
+              // Generic: when an assistant-style check (schema contains a 'text' field)
+              // triggers a goto to a different event (e.g., pr_updated), proactively post
+              // the assistant reply so flows record a createComment before jumping.
+              const isAssistantSchema = async () => {
+                try {
+                  const sc = (config.checks as any)[target]?.schema;
+                  if (!sc) return false;
+                  if (typeof sc === 'string') {
+                    const name = String(sc);
+                    const builtins = new Set([
+                      'issue-assistant',
+                      'overview',
+                      'plain',
+                      'text',
+                      'code-review',
+                    ]);
+                    if (builtins.has(name)) return true;
+                    try {
+                      const fs = require('fs');
+                      const path = require('path');
+                      const candidates = [
+                        path.join(__dirname, 'output', name, 'schema.json'),
+                        path.join(process.cwd(), 'output', name, 'schema.json'),
+                      ];
+                      for (const p of candidates) {
+                        try {
+                          const txt = fs.readFileSync(p, 'utf8');
+                          const obj = JSON.parse(txt);
+                          const props = obj && obj.properties;
+                          if (props && Object.prototype.hasOwnProperty.call(props, 'text'))
+                            return true;
+                        } catch {}
+                      }
+                    } catch {}
+                    return false;
+                  }
+                  const props = (sc && (sc as any).properties) || {};
+                  return Boolean(props && Object.prototype.hasOwnProperty.call(props, 'text'));
+                } catch {
+                  return false;
+                }
+              };
+              const shouldProactivelyPost = await isAssistantSchema();
+              if (shouldProactivelyPost && (onSucc.goto || onSucc.goto_event)) {
+                const out = (res as any)?.output;
+                const hasText =
+                  out &&
+                  typeof out === 'object' &&
+                  typeof out.text === 'string' &&
+                  out.text.trim().length > 0;
+                if (hasText) {
+                  // One-shot guard: post once per run per target
+                  try {
+                    const key = `post:${target}`;
+                    if (this.oncePerRunScheduleGuards.has(key)) {
+                      // already posted
+                    } else {
+                      this.oncePerRunScheduleGuards.add(key);
+                    }
+                  } catch {}
+                  const miniSummary: any = {
+                    issues: [],
+                    __outputs: { [target]: out },
+                    __contents: {},
+                    __executed: [target],
+                  };
+                  // Resolve owner/repo
+                  let owner: string | undefined = this.actionContext?.owner;
+                  let repo: string | undefined = this.actionContext?.repo;
+                  if (!owner || !repo) {
+                    try {
+                      const anyInfo = prInfo as any;
+                      owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
+                      repo = anyInfo?.eventContext?.repository?.name || repo;
+                    } catch {}
+                  }
+                  owner = owner || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[0];
+                  repo = repo || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[1];
+                  try {
+                    const oc = (prInfo as any)?.eventContext?.octokit;
+                    if (oc && owner && repo && prInfo.number) {
+                      // Render minimal content via template for consistent formatting
+                      let rendered: string | undefined = undefined;
+                      try {
+                        rendered = await this.renderCheckContent(
+                          target,
+                          { issues: [], output: out } as any,
+                          (config.checks as any)[target],
+                          prInfo
+                        );
+                      } catch {}
+                      const body = `${(rendered && rendered.trim()) || String(out.text || '')}\n\n${generateFooter()}`;
+                      const api: any =
+                        (oc as any).rest?.issues?.createComment ||
+                        (oc as any).issues?.createComment;
+                      if (typeof api === 'function') {
+                        await api({ owner, repo, issue_number: prInfo.number, body });
+                      } else if (this.reviewer) {
+                        const grouped = await this.convertReviewSummaryToGroupedResults(
+                          miniSummary,
+                          [target],
+                          config,
+                          prInfo
+                        );
+                        await this.reviewer.postReviewComment(owner, repo, prInfo.number, grouped, {
+                          config: config as any,
+                          triggeredBy: prInfo.eventType || 'manual',
+                          octokitOverride: oc as any,
+                        });
+                      }
+                    } else if (this.reviewer && owner && repo && prInfo.number) {
+                      // Fallback to grouped posting path if recorder is not available
+                      const grouped = await this.convertReviewSummaryToGroupedResults(
+                        miniSummary,
+                        ['comment-assistant'],
+                        config,
+                        prInfo
+                      );
+                      await this.reviewer.postReviewComment(owner, repo, prInfo.number, grouped, {
+                        config: config as any,
+                        triggeredBy: prInfo.eventType || 'manual',
+                        octokitOverride: (prInfo as any)?.eventContext?.octokit,
+                      });
+                    }
+                  } catch {}
+                }
+              }
+            } catch {}
+
             await this.scheduleForwardRun(succTarget, {
               origin: 'on_success',
               gotoEvent: onSucc.goto_event,
@@ -1853,6 +2014,41 @@ export class CheckExecutionEngine {
               resultsMap,
               debug,
             });
+            // Opportunistic inline execution: if the routed target has its
+            // dependencies satisfied by current results, run it once now so
+            // simple producer→consumer chains complete without another wave.
+            try {
+              const childCfg = (config.checks || {})[succTarget] as
+                | import('./types/config').CheckConfig
+                | undefined;
+              const deps = Array.isArray(childCfg?.depends_on)
+                ? (childCfg!.depends_on as string[])
+                : childCfg?.depends_on
+                  ? [String(childCfg.depends_on)]
+                  : [];
+              const depsSatisfied = deps.every(d => resultsMap.has(d));
+              if (depsSatisfied) {
+                // Suppress further goto on dependencies during this opportunistic run
+                try {
+                  for (const d of deps) this.gotoSuppressedChecks.add(d);
+                } catch {}
+                try {
+                  if (!this.executionStats.has(succTarget)) this.initializeCheckStats(succTarget);
+                } catch {}
+                await this.runNamedCheck(succTarget, scope || [], {
+                  config,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap,
+                  debug,
+                  overlay: resultsMap,
+                });
+                // Clear scheduled marker for this target to avoid redundant next-wave run
+                try {
+                  this.forwardDependentsScheduled.delete(succTarget);
+                } catch {}
+              }
+            } catch {}
           }
         }
       } catch {}
@@ -2010,6 +2206,21 @@ export class CheckExecutionEngine {
                   (historySnapshot[depId] as unknown[]).push(outVal);
                 } catch {}
               }
+            }
+          }
+        } catch {}
+
+        // If the forEach parent didn't carry forEachItems on the result object,
+        // recover the last wave array length from history (if present).
+        try {
+          if (Array.isArray((historySnapshot as any)[checkName]) && forEachItems.length === 0) {
+            const parentHist = ((historySnapshot as any)[checkName] as unknown[]).filter(
+              Array.isArray
+            );
+            const lastArr =
+              parentHist.length > 0 ? (parentHist[parentHist.length - 1] as unknown[]) : [];
+            if (Array.isArray(lastArr) && lastArr.length > 0) {
+              forEachItems.splice(0, forEachItems.length, ...lastArr);
             }
           }
         } catch {}
@@ -2219,6 +2430,16 @@ export class CheckExecutionEngine {
             );
           }
         } catch {}
+        // If the parent produced no items in the last wave, do not route.
+        // This prevents non-converging loops when validation is disabled or
+        // extraction yielded nothing in this stage.
+        if (forEachItems.length === 0) {
+          try {
+            logger.info(`⏭ on_finish: no items; skipping routing for "${checkName}"`);
+          } catch {}
+          continue;
+        }
+
         // Evaluate on_finish.goto_js for routing decision
         let gotoTarget: string | null = ofDecide(
           checkName,
@@ -2279,6 +2500,16 @@ export class CheckExecutionEngine {
 
         // Execute routing if we have a target
         if (gotoTarget) {
+          // Guard: do not re-route the same parent->target pair more than once per grouped run.
+          try {
+            const pairKey = `${checkName}->${gotoTarget}`;
+            if (this.postOnFinishGuards.has(pairKey)) {
+              logger.info(`⏭ on_finish: already routed '${pairKey}' in this run; skipping`);
+              gotoTarget = null as any;
+            } else {
+              this.postOnFinishGuards.add(pairKey);
+            }
+          } catch {}
           // If we’re routing back to the forEach parent but the latest wave
           // verdict (computed from outputs_history) is all valid, skip routing.
           try {
@@ -2392,7 +2623,7 @@ export class CheckExecutionEngine {
             // post-on_finish wave loop sees a non-empty forward set even if
             // scheduleForwardRun exits early for this origin.
             try {
-              this.forwardDependentsScheduled.add(gotoTarget);
+              this.addForwardTarget(gotoTarget, []);
             } catch {}
             try {
               (this as any).onFinishForwardRunSeen = true;
@@ -2400,6 +2631,13 @@ export class CheckExecutionEngine {
             const tcfg = config.checks?.[gotoTarget as string];
             const mode =
               tcfg?.fanout === 'map' ? 'map' : tcfg?.reduce ? 'reduce' : tcfg?.fanout || 'default';
+            // For on_finish correction waves, include non-forEach dependents only
+            // so lightweight actions (e.g., label application) can run again
+            // while heavy per-item validators are excluded.
+            try {
+              this.forwardIncludeDependents.set(gotoTarget, true);
+              this.forwardExcludeForEachDependents.set(gotoTarget, true);
+            } catch {}
             if (mode === 'map' && forEachItems.length > 0) {
               for (let i = 0; i < forEachItems.length; i++) {
                 const itemScope: ScopePath = [{ check: checkName, index: i }];
@@ -3010,16 +3248,8 @@ export class CheckExecutionEngine {
                 );
               }
             } catch {}
-            // Dedup within this call and apply once-per-run guards for certain steps
-            const oncePerRun = new Set<string>(['validate-fact', 'extract-facts']);
-            runList = Array.from(new Set(runList)).filter(step => {
-              if (oncePerRun.has(step)) {
-                if (this.oncePerRunScheduleGuards.has(step)) return false;
-                this.oncePerRunScheduleGuards.add(step);
-                return true;
-              }
-              return true;
-            });
+            // Deduplicate requested steps; rely on per-step max_runs/one_shot tags instead of hardcoded names
+            runList = Array.from(new Set(runList));
             if (runList.length > 0) {
               try {
                 require('./logger').logger.info(
@@ -3625,12 +3855,19 @@ export class CheckExecutionEngine {
     maxParallelism: number,
     failFast?: boolean
   ): Promise<PromiseSettledResult<T>[]> {
-    if (maxParallelism <= 0) {
-      throw new Error('Max parallelism must be greater than 0');
-    }
-
+    // If there is nothing to do, return early before validating parallelism.
+    // This avoids spuriously throwing when the caller computed 0 parallelism
+    // for an empty task set (which is a valid no-op scenario).
     if (tasks.length === 0) {
       return [];
+    }
+
+    // Validate pool size only when there is work to run.
+    if (maxParallelism <= 0) {
+      // Be forgiving and default to 1 instead of throwing — callers may
+      // derive parallelism from dynamic level sizes that occasionally
+      // evaluate to 0. With tasks present, we need at least one worker.
+      maxParallelism = 1;
     }
 
     const results: PromiseSettledResult<T>[] = new Array(tasks.length);
@@ -3877,9 +4114,11 @@ export class CheckExecutionEngine {
     tagFilter?: import('./types/config').TagFilter,
     _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
-    // Allow caller to request per-run guard reset via execution context mode
+    // Always reset per-run state at the beginning of a grouped execution to ensure
+    // stage-local accounting in flows. This prevents leakage of executionStats and
+    // forward-run guards across test stages (e.g., pr-review-e2e-flow).
     try {
-      if (this.executionContext?.mode?.resetPerRunState) this.resetPerRunState();
+      this.resetPerRunState();
     } catch {}
     // Determine where to send log messages based on output format
     const logFn =
@@ -4022,6 +4261,7 @@ export class CheckExecutionEngine {
               config: config as any,
               triggeredBy: prInfo.eventType || 'manual',
               commentId: 'visor-review',
+              octokitOverride: (prInfo as any)?.eventContext?.octokit,
             });
           }
         }
@@ -4074,6 +4314,7 @@ export class CheckExecutionEngine {
               config: config as any,
               triggeredBy: prInfo.eventType || 'manual',
               commentId: 'visor-review',
+              octokitOverride: (prInfo as any)?.eventContext?.octokit,
             });
           }
         }
@@ -4920,7 +5161,7 @@ export class CheckExecutionEngine {
     }
 
     // Build dependency graph and check for session reuse requirements
-    const dependencies: Record<string, string[]> = {};
+    let dependencies: Record<string, string[]> = {};
     const sessionReuseChecks = new Set<string>();
     const sessionProviders = new Map<string, string>(); // checkName -> parent session provider
 
@@ -5092,7 +5333,7 @@ export class CheckExecutionEngine {
     }
 
     // Build dependency graph
-    const dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
+    let dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
 
     if (dependencyGraph.hasCycles) {
       return {
@@ -5119,7 +5360,7 @@ export class CheckExecutionEngine {
     }
 
     // Log execution plan
-    const stats = DependencyResolver.getExecutionStats(dependencyGraph);
+    let stats = DependencyResolver.getExecutionStats(dependencyGraph);
     if (debug) {
       log(
         `🔧 Debug: Execution plan - ${stats.totalChecks} checks in ${stats.parallelLevels} levels, max parallelism: ${stats.maxParallelism}`
@@ -5144,6 +5385,7 @@ export class CheckExecutionEngine {
       // Clear forward-run markers
       (this as any).onFailForwardRunSeen = false;
       (this as any).onFinishForwardRunSeen = false;
+      (this as any).onSuccessForwardRunSeen = false;
     };
     await runWave();
     const sessionRegistry = require('./session-registry').SessionRegistry.getInstance();
@@ -5151,7 +5393,7 @@ export class CheckExecutionEngine {
     const sessionIds = new Map<string, string>(); // checkName -> sessionId
     let shouldStopExecution = false;
     let completedChecksCount = 0;
-    const totalChecksCount = stats.totalChecks;
+    let totalChecksCount = stats.totalChecks;
 
     // Initialize execution statistics for all checks
     for (const checkName of checks) {
@@ -5175,6 +5417,7 @@ export class CheckExecutionEngine {
         const checksInLevel = Array.isArray((executionGroup as any).parallel)
           ? (executionGroup as any).parallel
           : [];
+        // In correction waves, planning excludes dependents already; no ad-hoc suppression here.
 
         // Group checks by their session parent
         const sessionReuseGroups = new Map<string, string[]>();
@@ -5223,13 +5466,55 @@ export class CheckExecutionEngine {
         // Create task functions for checks in this level. Do not pre-filter by
         // results.has(name) because forEach parents may satisfy dependents inline
         // during their execution. Each task will re-check and skip at run time.
-        const levelChecks = checksInLevel;
+        let levelChecks = checksInLevel;
+        // Guard: during correction waves (on_finish), do not re-run forEach parents
+        // that already executed earlier in this grouped run.
+        try {
+          const inCorrection = Boolean((this as any).onFinishForwardRunSeen);
+          if (inCorrection) {
+            levelChecks = levelChecks.filter((name: string) => {
+              const cfg = (config.checks || {})[name] as any;
+              if (!cfg || cfg.forEach !== true) return true;
+              const st = this.executionStats.get(name);
+              return !st || (st.totalRuns || 0) === 0;
+            });
+          }
+        } catch {}
         try {
           if (process.env.VISOR_DEBUG === 'true') {
             console.error('  [engine] levelChecks = [', levelChecks.join(', '), ']');
           }
         } catch {}
         const levelTaskFunctions = levelChecks.map((checkName: string) => async () => {
+          // Generic per-run cap: respect per-step max_runs/global limits
+          try {
+            const cap = this.resolveMaxRuns(config, checkName);
+            if (typeof cap === 'number' && cap > 0) {
+              const k = this.buildRunKey(checkName, undefined);
+              const soFar = this.runCounters.get(k) || 0;
+              if (soFar >= cap) {
+                if (debug) log(`🔧 Debug: Skipping ${checkName} due to max_runs cap (${cap})`);
+                this.recordSkip(checkName, 'fail_fast', 'max_runs');
+                return {
+                  checkName,
+                  error: null,
+                  result: {
+                    issues: [
+                      {
+                        file: '',
+                        line: 0,
+                        ruleId: `${checkName}/limits/max_runs_exceeded`,
+                        message: `Run limit exceeded for '${checkName}' (attempt ${soFar + 1} > ${cap}).`,
+                        severity: 'error',
+                        category: 'logic',
+                      },
+                    ],
+                  },
+                } as any;
+              }
+              this.runCounters.set(k, soFar + 1);
+            }
+          } catch {}
           // Skip if this check was already completed by item-level branch scheduler
           if (results.has(checkName)) {
             if (debug) log(`🔧 Debug: Skipping ${checkName} (already satisfied earlier)`);
@@ -7293,7 +7578,8 @@ export class CheckExecutionEngine {
       await executeLevels();
       const sawFail = Boolean((this as any).onFailForwardRunSeen);
       const sawFinish = Boolean((this as any).onFinishForwardRunSeen);
-      const saw = sawFail || sawFinish;
+      const sawSuccess = Boolean((this as any).onSuccessForwardRunSeen);
+      const saw = sawFail || sawFinish || sawSuccess;
       const pending = (() => {
         try {
           return this.forwardDependentsScheduled && this.forwardDependentsScheduled.size > 0;
@@ -7308,6 +7594,179 @@ export class CheckExecutionEngine {
       // Only schedule another wave if a correction was signaled AND at least one target was
       // marked for forward execution. This prevents unnecessary extra waves after success.
       if (!(saw && pending)) break;
+      // New wave planning; reset per-wave suppression list
+      try {
+        this.gotoSuppressedChecks.clear();
+      } catch {}
+      // Merge forward-scheduled targets into a fresh planned checks set and rebuild the
+      // dependency graph for the next wave so routed children execute via the DAG.
+      // IMPORTANT: start from an empty set rather than the previous wave's
+      // full set. Keeping the previous set causes unrelated, event-matching
+      // roots (e.g., comment-assistant) to persist across waves and re-run
+      // indefinitely whenever any forward-run occurs. Next waves must contain
+      // only the routed target(s) and, for success/fail-originated routing,
+      // their DAG dependents that match the effective event.
+      try {
+        const forwardTargets = Array.from(
+          (this.forwardDependentsScheduled || new Map<string, Set<string>>()).keys()
+        );
+        if (forwardTargets.length > 0) {
+          const nextSet = new Set<string>();
+          const allChecks = Object.keys(config?.checks || {});
+          const expandTokFwd = (tok: any): string[] =>
+            typeof tok === 'string' && tok.includes('|')
+              ? tok
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : tok
+                ? [String(tok)]
+                : [];
+          const dependsOn = (
+            candidate: string,
+            root: string,
+            seen = new Set<string>()
+          ): boolean => {
+            if (seen.has(candidate)) return false;
+            seen.add(candidate);
+            const cfg = (config?.checks || {})[candidate];
+            const depTokens: any[] = Array.isArray(cfg?.depends_on)
+              ? (cfg!.depends_on as any[])
+              : cfg?.depends_on
+                ? [cfg.depends_on]
+                : [];
+            const deps = depTokens.flatMap(expandTokFwd);
+            if (deps.includes(root)) return true;
+            return deps.some(d => dependsOn(d, root, seen));
+          };
+          // Seed next wave with forward targets
+          for (const t of forwardTargets) {
+            nextSet.add(t);
+            const includeDeps = this.forwardIncludeDependents.get(t);
+            const shouldInclude = includeDeps !== false; // default true
+            if (!shouldInclude) continue;
+            const effEvent =
+              this.forwardEventOverrides.get(t) || (prInfo.eventType as any) || 'manual';
+            for (const cand of allChecks) {
+              if (cand === t) continue;
+              if (!dependsOn(cand, t)) continue;
+              const cCfg = (config.checks || {})[cand];
+              // Optional filter: for correction waves we may exclude forEach parents
+              const excludeForEach = this.forwardExcludeForEachDependents.get(t) === true;
+              if (excludeForEach && (cCfg as any)?.forEach) continue;
+              const trig = ((cCfg && (cCfg as any).on) || []) as any[];
+              const allow =
+                !trig || (Array.isArray(trig) && (trig.length === 0 || trig.includes(effEvent)));
+              if (allow) nextSet.add(cand);
+            }
+          }
+
+          // Ensure ancestors (dependencies) of all planned checks are present so
+          // the rebuilt dependency graph is valid and complete. This fixes the
+          // case where a forward target (e.g., 'consumer') depends on an
+          // ancestor (e.g., 'producer') that wasn't part of the initial run.
+          const expandOr = (tok: unknown): string[] => {
+            const s = String(tok ?? '').trim();
+            if (!s) return [];
+            if (s.includes('|'))
+              return s
+                .split('|')
+                .map(x => x.trim())
+                .filter(Boolean);
+            return [s];
+          };
+          const collectAncestors = (name: string, seen = new Set<string>()) => {
+            if (seen.has(name)) return;
+            seen.add(name);
+            const cfg = (config.checks || {})[name];
+            if (!cfg) return;
+            const raw = (cfg as any).depends_on || [];
+            for (const tok of raw) {
+              for (const d of expandOr(tok)) {
+                if (!d || !(config.checks || {})[d]) continue;
+                nextSet.add(d);
+                collectAncestors(d, seen);
+              }
+            }
+          };
+          for (const name of Array.from(nextSet)) collectAncestors(name);
+          // Add missing ancestors for all planned checks to build a valid graph
+          const expandOr2 = (tok: unknown): string[] => {
+            const s = String(tok ?? '').trim();
+            if (!s) return [];
+            if (s.includes('|'))
+              return s
+                .split('|')
+                .map(x => x.trim())
+                .filter(Boolean);
+            return [s];
+          };
+          const addAncestors2 = (name: string, seen = new Set<string>()) => {
+            if (seen.has(name)) return;
+            seen.add(name);
+            const cfg = (config.checks || {})[name];
+            if (!cfg) return;
+            const raw = (cfg as any).depends_on || [];
+            for (const tok of raw) {
+              for (const d of expandOr2(tok)) {
+                if (!d || !(config.checks || {})[d]) continue;
+                nextSet.add(d);
+                addAncestors2(d, seen);
+              }
+            }
+          };
+          for (const nm of Array.from(nextSet)) addAncestors2(nm);
+          checks = Array.from(nextSet);
+          if (sawFinish) {
+            try {
+              checks = checks.filter(n => !((config.checks || {})[n] as any)?.forEach);
+            } catch {}
+          }
+          // Recompute dependencies for the expanded set (expand OR-groups);
+          // skip event pruning here so goto_event can elevate children.
+          const expandTok = (tok: any): string[] =>
+            typeof tok === 'string' && tok.includes('|')
+              ? tok
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : tok
+                ? [String(tok)]
+                : [];
+          const newDeps: Record<string, string[]> = {};
+          for (const name of checks) {
+            const cfg = (config.checks || {})[name];
+            if (!cfg) continue;
+            const depTokens: any[] = Array.isArray(cfg.depends_on)
+              ? (cfg.depends_on as any[])
+              : cfg.depends_on
+                ? [cfg.depends_on]
+                : [];
+            newDeps[name] = depTokens.flatMap(expandTok);
+          }
+          // Suppress goto for checks that are only dependencies (not forward targets)
+          try {
+            const fset = new Set(forwardTargets);
+            for (const [child, deps] of Object.entries(newDeps)) {
+              if (fset.has(child)) continue;
+              for (const d of deps || []) this.gotoSuppressedChecks.add(d);
+            }
+          } catch {}
+          dependencies = newDeps;
+          dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
+          stats = DependencyResolver.getExecutionStats(dependencyGraph);
+          totalChecksCount = stats.totalChecks;
+          // Ensure execution statistics exist for any newly planned checks so
+          // their runs are counted in this.engine statistics (used by tests)
+          try {
+            for (const c of checks) if (!this.executionStats.has(c)) this.initializeCheckStats(c);
+          } catch {}
+        }
+        // Clear overrides after applying for the next wave
+        try {
+          this.forwardEventOverrides.clear();
+        } catch {}
+      } catch {}
       try {
         logger.info(`🔁 Wave ${wave} completed with forward-run; scheduling next wave...`);
       } catch {}
@@ -7335,6 +7794,214 @@ export class CheckExecutionEngine {
       // If on_finish scheduled forward targets (via goto/goto_js), execute additional
       // correction wave(s) until no pending targets remain or wave budget is reached.
       for (; wave <= maxWaves && this.forwardDependentsScheduled.size > 0; wave++) {
+        // Build the next wave plan from the pending on_finish targets BEFORE resetting per-wave guards.
+        try {
+          const fwdMap = this.forwardDependentsScheduled || new Map<string, Set<string>>();
+          const forwardTargetsRaw = Array.from(fwdMap.keys());
+          // Filter out targets that are not allowed for the effective event; if none remain, stop.
+          const allowedTargets = forwardTargetsRaw.filter(t => {
+            try {
+              const effEvent =
+                this.forwardEventOverrides.get(t) || (prInfo.eventType as any) || 'manual';
+              const cCfg = (config.checks || {})[t];
+              const trig = ((cCfg && (cCfg as any).on) || []) as any[];
+              const allow =
+                !trig || (Array.isArray(trig) && (trig.length === 0 || trig.includes(effEvent)));
+              return allow;
+            } catch {
+              return true;
+            }
+          });
+          if (allowedTargets.length === 0) {
+            // Nothing actionable for the next wave; clear and exit the loop
+            try {
+              this.forwardDependentsScheduled.clear();
+              this.forwardEventOverrides.clear();
+            } catch {}
+            break;
+          }
+          // Execute any per-item scoped runs immediately for allowed targets,
+          // then keep only unscoped (root) entries for DAG planning.
+          const executedScopedChildren = new Set<string>();
+          try {
+            for (const t of allowedTargets) {
+              const scopeSet = fwdMap.get(t);
+              if (!scopeSet || scopeSet.size === 0) continue;
+              const effEvent =
+                this.forwardEventOverrides.get(t) || (prInfo.eventType as any) || 'manual';
+              const toRemove: string[] = [];
+              for (const s of Array.from(scopeSet)) {
+                // s is JSON-encoded ScopePath; '[]' means unscoped
+                if (s === '[]') continue;
+                let scope: ScopePath = [];
+                try {
+                  scope = JSON.parse(s);
+                } catch {
+                  scope = [];
+                }
+                await this.runNamedCheck(t, scope, {
+                  origin: 'on_finish',
+                  config: config!,
+                  dependencyGraph,
+                  prInfo,
+                  resultsMap: results,
+                  debug: !!debug,
+                  eventOverride: effEvent,
+                });
+                toRemove.push(s);
+              }
+              // Remove executed per-item scopes from the scheduled map
+              for (const s of toRemove) scopeSet.delete(s);
+              if (scopeSet.size === 0) {
+                fwdMap.delete(t);
+              }
+
+              // If t is a forEach parent, proactively execute its immediate
+              // dependents that declare fanout: 'map' for each item scope.
+              try {
+                const tCfg = (config.checks || {})[t] as any;
+                if (tCfg && tCfg.forEach === true) {
+                  const hist = this.outputHistory.get(t);
+                  const arrays = Array.isArray(hist) ? (hist as unknown[]) : [];
+                  const lastArr = arrays.filter(Array.isArray).slice(-1)[0] as
+                    | unknown[]
+                    | undefined;
+                  const itemsLen = Array.isArray(lastArr) ? lastArr.length : 0;
+                  if (itemsLen > 0) {
+                    for (const [cand, candCfgAny] of Object.entries(config.checks || {})) {
+                      const candCfg = candCfgAny as any;
+                      const depsRaw = Array.isArray(candCfg?.depends_on)
+                        ? (candCfg.depends_on as any[])
+                        : candCfg?.depends_on
+                          ? [candCfg.depends_on]
+                          : [];
+                      const deps = depsRaw
+                        .flatMap((x: any) =>
+                          String(x ?? '')
+                            .split('|')
+                            .map((s: string) => s.trim())
+                            .filter(Boolean)
+                        )
+                        .filter(Boolean);
+                      const isChild = deps.includes(t);
+                      const isMap = candCfg?.fanout === 'map';
+                      if (isChild && isMap) {
+                        for (let i = 0; i < itemsLen; i++) {
+                          const itemScope: ScopePath = [{ check: t, index: i }];
+                          await this.runNamedCheck(cand, itemScope, {
+                            origin: 'on_finish',
+                            config: config!,
+                            dependencyGraph,
+                            prInfo,
+                            resultsMap: results,
+                            debug: !!debug,
+                            eventOverride: effEvent,
+                          });
+                        }
+                        executedScopedChildren.add(cand);
+                      }
+                    }
+                  }
+                }
+              } catch {}
+            }
+          } catch {}
+          // Construct a fresh checks set consisting only of the allowed targets and their dependents for the effective event
+          const nextSet = new Set<string>();
+          const allChecks = Object.keys(config?.checks || {});
+          const expandTok = (tok: any): string[] =>
+            typeof tok === 'string' && tok.includes('|')
+              ? tok
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : tok
+                ? [String(tok)]
+                : [];
+          const dependsOn = (
+            candidate: string,
+            root: string,
+            seen = new Set<string>()
+          ): boolean => {
+            if (seen.has(candidate)) return false;
+            seen.add(candidate);
+            const cfg = (config?.checks || {})[candidate];
+            const depTokens: any[] = Array.isArray(cfg?.depends_on)
+              ? (cfg!.depends_on as any[])
+              : cfg?.depends_on
+                ? [cfg.depends_on]
+                : [];
+            const deps = depTokens.flatMap(expandTok);
+            if (deps.includes(root)) return true;
+            return deps.some(d => dependsOn(d, root, seen));
+          };
+          for (const t of allowedTargets) {
+            const scopeSet = fwdMap.get(t);
+            // If only per-item scopes were scheduled and all executed above, skip adding this target
+            if (scopeSet && scopeSet.size > 0 && !scopeSet.has('[]')) {
+              continue;
+            }
+            nextSet.add(t);
+            const includeDeps = this.forwardIncludeDependents.get(t);
+            const shouldInclude = includeDeps !== false; // default true
+            if (!shouldInclude) continue; // on_finish correction waves: only targets
+            const effEvent =
+              this.forwardEventOverrides.get(t) || (prInfo.eventType as any) || 'manual';
+            for (const cand of allChecks) {
+              if (cand === t) continue;
+              if (!dependsOn(cand, t)) continue;
+              const cCfg = (config.checks || {})[cand];
+              // Skip children we have already executed per-item above
+              try {
+                if ((executedScopedChildren as any)?.has?.(cand)) continue;
+              } catch {}
+              const excludeForEach = this.forwardExcludeForEachDependents.get(t) === true;
+              if (excludeForEach && (cCfg as any)?.forEach) continue;
+              const trig = ((cCfg && (cCfg as any).on) || []) as any[];
+              const allow =
+                !trig || (Array.isArray(trig) && (trig.length === 0 || trig.includes(effEvent)));
+              if (allow) nextSet.add(cand);
+            }
+          }
+          checks = Array.from(nextSet);
+          // In correction waves triggered by on_finish, avoid re-running forEach parents
+          try {
+            checks = checks.filter(n => !((config.checks || {})[n] as any)?.forEach);
+          } catch {}
+          // Recompute dependencies for the planned set (tokens expanded), then rebuild the graph
+          const newDeps: Record<string, string[]> = {};
+          for (const name of checks) {
+            const cfg = (config.checks || {})[name];
+            if (!cfg) continue;
+            const depTokens: any[] = Array.isArray((cfg as any).depends_on)
+              ? ((cfg as any).depends_on as any[])
+              : (cfg as any).depends_on
+                ? [(cfg as any).depends_on]
+                : [];
+            newDeps[name] = depTokens.flatMap(expandTok);
+          }
+          // Suppress goto for checks that are only dependencies in this correction wave
+          try {
+            const tset = new Set(allowedTargets);
+            for (const [child, deps] of Object.entries(newDeps)) {
+              if (tset.has(child)) continue;
+              for (const d of deps || []) this.gotoSuppressedChecks.add(d);
+            }
+          } catch {}
+          dependencies = newDeps;
+          dependencyGraph = DependencyResolver.buildDependencyGraph(dependencies);
+          stats = DependencyResolver.getExecutionStats(dependencyGraph);
+          totalChecksCount = stats.totalChecks;
+          // Ensure statistics are initialized for any newly added checks
+          try {
+            for (const c of checks) if (!this.executionStats.has(c)) this.initializeCheckStats(c);
+          } catch {}
+          // Clear overrides and pending list now that the plan is materialized
+          try {
+            this.forwardDependentsScheduled.clear();
+            this.forwardEventOverrides.clear();
+          } catch {}
+        } catch {}
         try {
           logger.info(`🔁 Wave ${wave} scheduled from on_finish; executing...`);
         } catch {}

@@ -240,7 +240,16 @@ export function evaluateOutputs(
         }
       }
       if (chosen === undefined) {
-        errors.push(`No output matched where selector for ${o.step}`);
+        let hint = '';
+        try {
+          const arr = hist as any[];
+          const sample = (arr && arr[0]) || {};
+          const keys = sample && typeof sample === 'object' ? Object.keys(sample).slice(0, 6) : [];
+          hint = keys.length
+            ? ` (had ${arr.length} item(s); sample keys: ${keys.join(', ')})`
+            : ` (had ${arr.length} item(s))`;
+        } catch {}
+        errors.push(`No output matched where selector for ${o.step}${hint}`);
         continue;
       }
     } else {
