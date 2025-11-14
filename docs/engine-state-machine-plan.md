@@ -181,9 +181,9 @@ type SerializedRunState = {
 };
 ```
 
-Persistence/time-travel strategy:
-- After every state-transition the engine appends to `historyLog`, streams the event over the debug-server WebSocket, mirrors it to `output/debug-events/<session>.jsonl`, and (optionally) flushes the minimal `SerializedRunState` via `persistence.saveState`. By default we persist under `tmp/visor-state/<session>.json` (override via config/env if needed). This gives us crash recovery plus offline time-travel logs.
-- When resuming, the engine loads the last serialized state, reconstructs in-memory maps, and continues dequeuing events, ensuring retries and routing decisions survive restarts.
+Persistence/time-travel strategy (debugger-only for now):
+- When the debug visualizer is enabled, after every state transition the engine appends to `historyLog`, streams the event over the WebSocket, mirrors it to `output/debug-events/<session>.jsonl`, and (optionally) flushes the minimal `SerializedRunState` via `persistence.saveState`. By default we persist under `tmp/visor-state/<session>.json` (override via config/env if needed). Outside of debugger mode we skip persistence/log mirroring to avoid overhead.
+- During a debug resume, the engine loads the last serialized state, reconstructs in-memory maps, and continues dequeuing events, ensuring retries and routing decisions survive restarts within the debugging session.
 
 ### 3.4 Migration strategy
 1. **Scaffolding:** introduce `EngineMode` flag plus a skeleton `StateMachineExecutionEngine` that simply proxies to the legacy runner; wire the flag through CLI/Action/SDK/tests.
