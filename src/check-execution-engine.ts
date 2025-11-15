@@ -927,6 +927,7 @@ export class CheckExecutionEngine {
     files: PRInfo['files'];
     env: Record<string, string>;
     event: { name: string };
+    bot?: import('./types/bot').BotSessionContext;
   } {
     const memoryStore = MemoryStore.getInstance(this.config?.memory);
     const memoryHelpers = {
@@ -982,6 +983,7 @@ export class CheckExecutionEngine {
       files: prInfo.files,
       env: getSafeEnvironmentVariables(),
       event: { name: prInfo.eventType || 'manual' },
+      bot: this.executionContext?.botSession || undefined,
     };
   }
 
@@ -999,7 +1001,7 @@ export class CheckExecutionEngine {
         const sandbox = this.getRoutingSandbox();
         const scope = onFinishContext;
         const code = `
-          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const log = (...a)=> console.log('🔍 Debug:',...a);
+          const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const forEach = scope.forEach; const memory = scope.memory; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const bot = scope.bot; const log = (...a)=> console.log('🔍 Debug:',...a);
           const __fn = () => {\n${onFinish.goto_js}\n};
           const __res = __fn();
           return (typeof __res === 'string' && __res) ? __res : null;
@@ -2879,8 +2881,9 @@ export class CheckExecutionEngine {
             detectLocalMode()
           ),
           event: eventObj,
+          bot: this.executionContext?.botSession || undefined,
         };
-        const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
+        const prelude = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const bot = scope.bot; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code = `${prelude}\n${expr}`;
         const result = compileAndRun<unknown>(
           sandbox,
@@ -2964,8 +2967,9 @@ export class CheckExecutionEngine {
             detectLocalMode()
           ),
           event: eventObj,
+          bot: this.executionContext?.botSession || undefined,
         };
-        const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
+        const prelude2 = `const step = scope.step; const attempt = scope.attempt; const loop = scope.loop; const error = scope.error; const foreach = scope.foreach; const outputs = scope.outputs; const outputs_history = scope.outputs_history; const outputs_raw = scope.outputs_raw; const output = scope.output; const pr = scope.pr; const files = scope.files; const env = scope.env; const event = scope.event; const bot = scope.bot; const hasMinPermission = scope.permissions.hasMinPermission; const isOwner = scope.permissions.isOwner; const isMember = scope.permissions.isMember; const isCollaborator = scope.permissions.isCollaborator; const isContributor = scope.permissions.isContributor; const isFirstTimer = scope.permissions.isFirstTimer;`;
         const code2 = `${prelude2}\n${expr}`;
         const res = compileAndRun<string | null>(
           sandbox,

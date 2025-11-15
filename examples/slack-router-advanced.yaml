@@ -1,0 +1,518 @@
+# Advanced Router Workflow Example
+#
+# This example demonstrates complex workflow composition patterns:
+# - Multi-stage workflows with conditional execution
+# - Human-input integration with context-aware prompts
+# - Error handling and fallback workflows
+# - State management across workflow stages
+# - Combining routing dimensions (user + channel + content)
+# - Approval workflows and audit logging
+
+version: '1.0'
+
+http_server:
+  enabled: true
+  port: 8080
+
+slack:
+  endpoint: "/slack/events"
+  signing_secret: "${SLACK_SIGNING_SECRET}"
+  bot_token: "${SLACK_BOT_TOKEN}"
+  fetch:
+    scope: thread
+    max_messages: 40
+    cache:
+      ttl_seconds: 600
+      max_threads: 200
+
+checks:
+  # ============================================================================
+  # INITIAL REQUEST LOGGING
+  # ============================================================================
+  # Log all incoming requests for audit trail
+
+  log-request:
+    type: log
+    message: |
+      📝 Request Received
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+      Thread: {{ bot.thread.id }}
+      History: {{ bot.history | size }} messages
+    if: 'bot'
+
+  # ============================================================================
+  # PRODUCTION DEPLOYMENT WORKFLOW
+  # ============================================================================
+  # Multi-stage workflow with approval, validation, and execution
+
+  # Step 1: Detect production deployment requests
+  detect-prod-deployment:
+    type: log
+    message: "🔍 Production deployment request detected"
+    if: |
+      bot &&
+      bot.attributes.channel == "C123PROD" &&
+      contains(bot.currentMessage.text, "deploy")
+
+  # Step 2: Check permissions
+  check-prod-permissions:
+    type: log
+    message: "✅ User has production deployment permissions"
+    depends_on: [detect-prod-deployment]
+    if: |
+      bot && (
+        bot.attributes.user == "U001ADMIN" ||
+        bot.attributes.user == "U002ADMIN"
+      )
+    on_success:
+      run: [request-deployment-details]
+
+  # Alternative: Deny if no permissions
+  deny-prod-deployment:
+    type: log
+    message: |
+      ❌ Production Deployment Denied
+
+      User {{ bot.attributes.user }} does not have permission to deploy to production.
+
+      Required permissions:
+      - Admin role (U001ADMIN, U002ADMIN)
+      - Production channel access (C123PROD)
+
+      To request access, contact your manager.
+    depends_on: [detect-prod-deployment]
+    if: |
+      bot && !(
+        bot.attributes.user == "U001ADMIN" ||
+        bot.attributes.user == "U002ADMIN"
+      )
+
+  # Step 3: Request deployment details
+  request-deployment-details:
+    type: human-input
+    prompt: |
+      🚀 Production Deployment Request
+
+      Please provide the following details:
+      - Service name
+      - Version/tag to deploy
+      - Rollback plan
+
+      Example: "api-service v2.1.0 - rollback to v2.0.5"
+    allow_empty: false
+
+  # Step 4: Validate deployment details
+  validate-deployment-details:
+    type: log
+    message: "✅ Deployment details validated"
+    depends_on: [request-deployment-details]
+    if: 'outputs["request-deployment-details"]'
+    on_success:
+      run: [request-deployment-approval]
+
+  # Step 5: Request approval
+  request-deployment-approval:
+    type: human-input
+    prompt: |
+      🔍 Production Deployment Approval Required
+
+      Details: {{ outputs["request-deployment-details"] }}
+      Requested by: {{ bot.attributes.user }}
+      Time: {{ bot.currentMessage.timestamp }}
+
+      Type "APPROVE" to proceed or "CANCEL" to abort.
+    validation: |
+      input == "APPROVE" || input == "CANCEL"
+
+  # Step 6: Execute deployment if approved
+  deploy-to-production:
+    type: log
+    message: |
+      ✅ Production Deployment Executing
+
+      Details: {{ outputs["request-deployment-details"] }}
+      Approved by: Last approver in thread
+      Status: In Progress
+
+      This would trigger actual deployment via:
+      - kubectl apply -f deployment.yaml
+      - helm upgrade --install
+      - terraform apply
+      - Custom deployment script
+    depends_on: [request-deployment-approval]
+    if: 'outputs["request-deployment-approval"] == "APPROVE"'
+    on_success:
+      run: [audit-deployment]
+
+  # Step 7: Audit logging
+  audit-deployment:
+    type: log
+    message: |
+      📋 Audit Log Entry
+
+      Action: Production Deployment
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Details: {{ outputs["request-deployment-details"] }}
+      Approval: {{ outputs["request-deployment-approval"] }}
+      Timestamp: {{ bot.currentMessage.timestamp }}
+      Thread: {{ bot.thread.id }}
+
+  # Alternative: Handle cancellation
+  cancel-deployment:
+    type: log
+    message: |
+      🚫 Deployment Cancelled
+
+      The deployment was cancelled by the approver.
+      No changes were made to production.
+    depends_on: [request-deployment-approval]
+    if: 'outputs["request-deployment-approval"] == "CANCEL"'
+
+  # ============================================================================
+  # STAGING DEPLOYMENT WORKFLOW
+  # ============================================================================
+  # Simplified workflow for staging (no approval needed)
+
+  execute-staging-deployment:
+    type: log
+    message: |
+      🟡 Staging Deployment
+
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      Deploying to staging environment...
+      No approval required for staging.
+
+      Steps:
+      1. Build container image
+      2. Push to registry
+      3. Update staging cluster
+      4. Run smoke tests
+      5. Report status
+    if: |
+      bot &&
+      bot.attributes.channel == "C456STAGE" &&
+      contains(bot.currentMessage.text, "deploy")
+
+  # ============================================================================
+  # INCIDENT RESPONSE WORKFLOW
+  # ============================================================================
+  # Multi-stage incident handling with escalation
+
+  # Step 1: Detect incident reports
+  detect-incident:
+    type: log
+    message: "🚨 Incident report detected"
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "incident") ||
+        contains(bot.currentMessage.text, "outage") ||
+        contains(bot.currentMessage.text, "down")
+      )
+
+  # Step 2: Gather incident details
+  gather-incident-details:
+    type: human-input
+    prompt: |
+      🚨 Incident Report
+
+      Please provide:
+      1. Affected service(s)
+      2. Severity (P0/P1/P2/P3)
+      3. Impact description
+      4. When did it start?
+
+      Example: "api-service P1 - 500 errors on checkout - started 10 min ago"
+    allow_empty: false
+    depends_on: [detect-incident]
+
+  # Step 3: Handle P0 incidents
+  handle-p0-incident:
+    type: log
+    message: |
+      🔴 P0 INCIDENT - CRITICAL
+
+      Details: {{ outputs["gather-incident-details"] }}
+      Reported by: {{ bot.attributes.user }}
+      Time: {{ bot.currentMessage.timestamp }}
+
+      IMMEDIATE ACTIONS:
+      1. ✅ Incident channel created: #incident-{{ bot.currentMessage.timestamp }}
+      2. ✅ On-call team notified via PagerDuty
+      3. ✅ Status page updated: "Investigating"
+      4. ✅ Executive team notified
+      5. ⏳ War room joining link sent
+
+      Next steps:
+      - Join war room
+      - Start incident timeline
+      - Begin investigation
+      - Update status page every 15 min
+    depends_on: [gather-incident-details]
+    if: 'contains(outputs["gather-incident-details"], "P0")'
+
+  # Step 4: Handle P1 incidents
+  handle-p1-incident:
+    type: log
+    message: |
+      🟠 P1 INCIDENT - HIGH PRIORITY
+
+      Details: {{ outputs["gather-incident-details"] }}
+      Reported by: {{ bot.attributes.user }}
+
+      ACTIONS TAKEN:
+      1. ✅ Incident ticket created
+      2. ✅ On-call engineer notified
+      3. ✅ Monitoring dashboards linked
+      4. ⏳ Response team assembling
+
+      SLA: 30 minute response time
+    depends_on: [gather-incident-details]
+    if: 'contains(outputs["gather-incident-details"], "P1")'
+
+  # Step 5: Handle lower priority incidents
+  handle-lower-priority-incident:
+    type: log
+    message: |
+      🟡 Lower Priority Incident
+
+      Details: {{ outputs["gather-incident-details"] }}
+      Reported by: {{ bot.attributes.user }}
+
+      ACTIONS:
+      1. Incident ticket created
+      2. Added to team backlog
+      3. Will be triaged in next standup
+    depends_on: [gather-incident-details]
+    if: |
+      contains(outputs["gather-incident-details"], "P2") ||
+      contains(outputs["gather-incident-details"], "P3")
+
+  # ============================================================================
+  # CODE REVIEW WORKFLOW
+  # ============================================================================
+  # Automated code review with AI assistance
+
+  # Step 1: Detect code review requests
+  detect-code-review:
+    type: log
+    message: "🔍 Code review request detected"
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "review") ||
+        contains(bot.currentMessage.text, "PR") ||
+        contains(bot.currentMessage.text, "pull request")
+      )
+
+  # Step 2: Check for GitHub URL
+  check-github-url:
+    type: log
+    message: "✅ GitHub URL found in message"
+    depends_on: [detect-code-review]
+    if: 'contains(bot.currentMessage.text, "github.com")'
+    on_success:
+      run: [fetch-pr-details]
+
+  # Alternative: Request PR URL if not provided
+  request-pr-url:
+    type: human-input
+    prompt: |
+      🔍 Code Review Request
+
+      Please provide the GitHub Pull Request URL.
+
+      Example: https://github.com/owner/repo/pull/123
+    validation: |
+      contains(input, "github.com") && contains(input, "/pull/")
+    depends_on: [detect-code-review]
+    if: '!contains(bot.currentMessage.text, "github.com")'
+
+  # Step 3: Fetch PR details
+  fetch-pr-details:
+    type: log
+    message: |
+      📥 Fetching PR Details
+
+      URL detected in message: {{ bot.currentMessage.text }}
+
+      This would:
+      1. Parse PR URL
+      2. Fetch PR metadata via GitHub API
+      3. Download diff/patch
+      4. Prepare for analysis
+    on_success:
+      run: [analyze-pr]
+
+  # Step 4: Analyze PR
+  analyze-pr:
+    type: log
+    message: |
+      🤖 Analyzing Pull Request
+
+      Analysis steps:
+      1. ✅ Static analysis (ESLint, TypeScript)
+      2. ✅ Security scan (CodeQL, Snyk)
+      3. ✅ Test coverage check
+      4. ✅ Performance impact analysis
+      5. ✅ Breaking changes detection
+      6. ⏳ AI review in progress...
+
+      Results will be posted to this thread.
+
+  # ============================================================================
+  # GENERAL QUERY WORKFLOW
+  # ============================================================================
+  # Default handler for general questions
+
+  handle-general-query:
+    type: log
+    message: |
+      💬 General Query
+
+      Message: {{ bot.currentMessage.text }}
+
+      I can help with:
+      - Production deployments (use in #production channel)
+      - Staging deployments (use in #staging channel)
+      - Incident reporting (mention "incident" or "outage")
+      - Code reviews (provide PR URL)
+
+      For other questions, try asking in #general or #help channels.
+    # Only run if no other route matched
+    if: |
+      bot && !(
+        (bot.attributes.channel == "C123PROD" && contains(bot.currentMessage.text, "deploy")) ||
+        (bot.attributes.channel == "C456STAGE" && contains(bot.currentMessage.text, "deploy")) ||
+        contains(bot.currentMessage.text, "incident") ||
+        contains(bot.currentMessage.text, "outage") ||
+        contains(bot.currentMessage.text, "down") ||
+        contains(bot.currentMessage.text, "review") ||
+        contains(bot.currentMessage.text, "PR") ||
+        contains(bot.currentMessage.text, "pull request")
+      )
+
+# ============================================================================
+# WORKFLOW COMPOSITION PATTERNS
+# ============================================================================
+#
+# 1. PARALLEL EXECUTION WITH AGGREGATION
+#    Run multiple checks in parallel and aggregate results:
+#
+#    run-parallel-checks:
+#      type: log
+#      message: "Starting parallel checks"
+#      if: 'bot'
+#      on_success:
+#        run: [check-security, check-performance, check-style]
+#
+#    check-security:
+#      type: log
+#      message: "Security check passed"
+#
+#    check-performance:
+#      type: log
+#      message: "Performance check passed"
+#
+#    check-style:
+#      type: log
+#      message: "Style check passed"
+#
+#    aggregate-results:
+#      type: log
+#      message: "All checks completed"
+#      depends_on: [check-security, check-performance, check-style]
+#
+# 2. CONDITIONAL BRANCHING WITH FALLBACK
+#    Try primary path, fall back to secondary:
+#
+#    try-primary:
+#      type: http
+#      url: "https://primary.api.example.com/data"
+#      on_fail:
+#        run: [try-secondary]
+#
+#    try-secondary:
+#      type: http
+#      url: "https://secondary.api.example.com/data"
+#      on_fail:
+#        run: [use-cached-data]
+#
+# 3. MULTI-DIMENSIONAL ROUTING
+#    Combine user + channel + content for fine-grained control:
+#
+#    handle-admin-prod-deploy:
+#      type: log
+#      message: "Admin production deployment - authorized"
+#      if: |
+#        bot &&
+#        (bot.attributes.user == "U001ADMIN" || bot.attributes.user == "U002ADMIN") &&
+#        bot.attributes.channel == "C123PROD" &&
+#        contains(bot.currentMessage.text, "deploy") &&
+#        !contains(bot.currentMessage.text, "rollback")
+#
+# 4. WORKFLOW ORCHESTRATION WITH depends_on
+#    Create complex dependency graphs:
+#
+#    step-1:
+#      type: log
+#      message: "Step 1"
+#      if: 'bot'
+#
+#    step-2a:
+#      type: log
+#      message: "Step 2A"
+#      depends_on: [step-1]
+#
+#    step-2b:
+#      type: log
+#      message: "Step 2B"
+#      depends_on: [step-1]
+#
+#    step-3:
+#      type: log
+#      message: "Step 3 - all previous steps complete"
+#      depends_on: [step-2a, step-2b]
+#
+# 5. ERROR HANDLING AND RECOVERY
+#    Use on_fail to handle errors gracefully:
+#
+#    risky-operation:
+#      type: command
+#      command: ./risky-script.sh
+#      continue_on_failure: true
+#      on_fail:
+#        run: [log-error, notify-team]
+#
+#    log-error:
+#      type: log
+#      message: "Error occurred in risky operation"
+#
+#    notify-team:
+#      type: http
+#      url: "https://hooks.slack.com/services/..."
+#      method: POST
+#      body: |
+#        {
+#          "text": "⚠️ Risky operation failed"
+#        }
+#
+# 6. CONDITIONAL POST-PROCESSING
+#    Use on_success to run checks after successful execution:
+#
+#    main-task:
+#      type: command
+#      command: ./main-task.sh
+#      on_success:
+#        run: [cleanup, send-notification]
+#
+#    cleanup:
+#      type: command
+#      command: ./cleanup.sh
+#
+#    send-notification:
+#      type: log
+#      message: "Task completed successfully"

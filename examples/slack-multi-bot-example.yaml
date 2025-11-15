@@ -1,0 +1,221 @@
+version: '1.0'
+
+# Multi-Bot Configuration Example
+# This example shows how to run multiple Slack bots from a single Visor instance.
+# Each bot has its own endpoint, credentials, and configuration.
+
+http_server:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+
+# Multi-bot Slack configuration
+slack:
+  # Define multiple bots with separate configurations
+  bots:
+    # Production bot - responds to engineering team
+    - id: production-bot
+      endpoint: "/bots/slack/production"
+      signing_secret: "${SLACK_SIGNING_SECRET_PROD}"
+      bot_token: "${SLACK_BOT_TOKEN_PROD}"
+      mentions: direct
+      threads: required
+
+      # Production bot settings
+      fetch:
+        scope: thread
+        max_messages: 50
+        cache:
+          ttl_seconds: 900  # 15 minutes
+          max_threads: 500
+
+      # Limit to engineering channels
+      channel_allowlist:
+        - "CENG*"
+        - "C_PROD_*"
+
+      # Production bot uses larger worker pool
+      worker_pool:
+        queue_capacity: 200
+        task_timeout: 600000  # 10 minutes
+
+      # Enable cache observability for production
+      cache_observability:
+        enable_cache_endpoints: true
+        cache_admin_token: "${CACHE_ADMIN_TOKEN_PROD}"
+
+      # Prewarm cache with recent threads from engineering channels
+      cache_prewarming:
+        enabled: true
+        channels:
+          - "CENG_DEPLOYS"
+          - "CENG_INCIDENTS"
+        max_threads_per_channel: 30
+        concurrency: 5
+        rate_limit_ms: 100
+
+      # Production bot runs the production workflow
+      workflow: production-workflow
+
+    # Staging bot - responds to staging environment
+    - id: staging-bot
+      endpoint: "/bots/slack/staging"
+      signing_secret: "${SLACK_SIGNING_SECRET_STAGE}"
+      bot_token: "${SLACK_BOT_TOKEN_STAGE}"
+      mentions: direct
+      threads: required
+
+      # Staging bot settings (smaller limits)
+      fetch:
+        scope: thread
+        max_messages: 30
+        cache:
+          ttl_seconds: 600  # 10 minutes
+          max_threads: 200
+
+      # Limit to staging channels
+      channel_allowlist:
+        - "C_STAGING_*"
+        - "C_TEST_*"
+
+      # Staging bot uses smaller worker pool
+      worker_pool:
+        queue_capacity: 100
+        task_timeout: 300000  # 5 minutes
+
+      # Staging bot runs the staging workflow
+      workflow: staging-workflow
+
+    # Support bot - responds to support team
+    - id: support-bot
+      endpoint: "/bots/slack/support"
+      signing_secret: "${SLACK_SIGNING_SECRET_SUPPORT}"
+      bot_token: "${SLACK_BOT_TOKEN_SUPPORT}"
+      mentions: direct
+      threads: required
+
+      # Support bot settings
+      fetch:
+        scope: thread
+        max_messages: 40
+        cache:
+          ttl_seconds: 600  # 10 minutes
+          max_threads: 300
+
+      # Allow support and general channels
+      channel_allowlist:
+        - "C_SUPPORT_*"
+        - "C_GENERAL"
+
+      # Support bot uses default worker pool
+      worker_pool:
+        queue_capacity: 150
+        task_timeout: 300000  # 5 minutes
+
+      # Support bot runs the support workflow
+      workflow: support-workflow
+
+# Workflows for each bot
+checks:
+  # Production workflow - handles deployments and incidents
+  production-workflow:
+    type: workflow
+    steps:
+      - check: validate-production-access
+        type: noop
+        if: 'bot && bot.botId == "production-bot"'
+        description: "Ensure this is the production bot"
+
+      - check: log-production-request
+        type: log
+        message: |
+          Production Bot Request
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: route-production-request
+        type: noop
+        description: "Route to appropriate production handler based on message content"
+        # This would delegate to deployment or incident workflows
+
+  # Staging workflow - handles testing and validation
+  staging-workflow:
+    type: workflow
+    steps:
+      - check: validate-staging-access
+        type: noop
+        if: 'bot && bot.botId == "staging-bot"'
+        description: "Ensure this is the staging bot"
+
+      - check: log-staging-request
+        type: log
+        message: |
+          Staging Bot Request
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: route-staging-request
+        type: noop
+        description: "Route to appropriate staging handler based on message content"
+
+  # Support workflow - handles support tickets and questions
+  support-workflow:
+    type: workflow
+    steps:
+      - check: validate-support-access
+        type: noop
+        if: 'bot && bot.botId == "support-bot"'
+        description: "Ensure this is the support bot"
+
+      - check: log-support-request
+        type: log
+        message: |
+          Support Bot Request
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: route-support-request
+        type: noop
+        description: "Route to appropriate support handler based on message content"
+
+# How to use:
+#
+# 1. Set up three Slack apps in your workspace:
+#    - Production bot (for engineering channels)
+#    - Staging bot (for staging/test channels)
+#    - Support bot (for support channels)
+#
+# 2. Set environment variables for each bot:
+#    export SLACK_SIGNING_SECRET_PROD="..."
+#    export SLACK_BOT_TOKEN_PROD="xoxb-..."
+#    export SLACK_SIGNING_SECRET_STAGE="..."
+#    export SLACK_BOT_TOKEN_STAGE="xoxb-..."
+#    export SLACK_SIGNING_SECRET_SUPPORT="..."
+#    export SLACK_BOT_TOKEN_SUPPORT="xoxb-..."
+#    export CACHE_ADMIN_TOKEN_PROD="..."
+#
+# 3. Start Visor with HTTP server enabled:
+#    visor --config examples/slack-multi-bot-example.yaml --http
+#
+# 4. Configure Slack Event Subscriptions for each app:
+#    Production bot: https://your-server:8080/bots/slack/production
+#    Staging bot: https://your-server:8080/bots/slack/staging
+#    Support bot: https://your-server:8080/bots/slack/support
+#
+# 5. Subscribe to events: app_mention, message.channels
+#
+# 6. Mention the bot in a channel to trigger the workflow:
+#    @production-bot deploy frontend to prod
+#    @staging-bot run tests
+#    @support-bot how do I reset my password?
+#
+# Benefits of multi-bot configuration:
+# - Separate credentials and permissions per environment/team
+# - Independent worker pools and resource limits
+# - Bot-specific workflow routing
+# - Environment-specific cache settings
+# - Isolated monitoring and observability
+# - Different channel access controls per bot

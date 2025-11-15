@@ -1,0 +1,150 @@
+version: "1.0"
+
+# Example Slack bot workflow for testing
+checks:
+  slack-greeter:
+    type: logger
+    message: |
+      Hello from Slack bot!
+      {% if bot %}
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+      Thread: {{ bot.thread.id }}
+      {% endif %}
+
+  slack-echo:
+    type: logger
+    message: |
+      {% if bot %}
+      You said: {{ bot.currentMessage.text }}
+      {% endif %}
+
+  slack-history:
+    type: logger
+    message: |
+      {% if bot %}
+      Conversation has {{ bot.history | size }} messages
+      {% for msg in bot.history %}
+      - [{{ msg.role }}] {{ msg.text | slice: 0, 50 }}
+      {% endfor %}
+      {% endif %}
+
+tests:
+  defaults:
+    strict: false
+    ai_provider: mock
+
+  cases:
+    - name: simple-slack-mention
+      description: Test basic Slack bot mention with no history
+      mode: slack
+      slack_fixture:
+        name: simple-mention
+        bot_user_id: U_BOT_12345
+        event:
+          type: app_mention
+          event_id: Ev01234567
+          event_ts: "1700000000.000001"
+          channel: C01234567
+          user: U_USER_001
+          text: "<@U_BOT_12345> Hello!"
+          ts: "1700000000.000001"
+      workflow: slack-greeter
+      expect:
+        calls:
+          - step: slack-greeter
+            exactly: 1
+      expect_slack:
+        reactions:
+          - name: eyes
+            channel: C01234567
+            timestamp: "1700000000.000001"
+            added: true
+
+    - name: slack-thread-conversation
+      description: Test Slack bot with existing thread history
+      mode: slack
+      slack_fixture:
+        name: thread-conversation
+        bot_user_id: U_BOT_12345
+        thread:
+          channel: C01234567
+          thread_ts: "1699999900.000001"
+          messages:
+            - ts: "1699999900.000001"
+              user: U_USER_001
+              text: "I need help"
+            - ts: "1699999910.000002"
+              user: U_BOT_12345
+              bot_id: B_BOT_001
+              text: "I can help!"
+              thread_ts: "1699999900.000001"
+        event:
+          type: app_mention
+          event_id: Ev01234568
+          event_ts: "1699999920.000003"
+          channel: C01234567
+          user: U_USER_001
+          text: "<@U_BOT_12345> Please check PR #123"
+          ts: "1699999920.000003"
+          thread_ts: "1699999900.000001"
+      workflow: slack-history
+      expect:
+        calls:
+          - step: slack-history
+            exactly: 1
+      expect_slack:
+        reaction_sequence:
+          - eyes
+
+    - name: slack-echo-test
+      description: Test bot echoing user message
+      mode: slack
+      slack_fixture:
+        name: echo-test
+        bot_user_id: U_BOT_12345
+        event:
+          type: app_mention
+          event_id: Ev01234569
+          event_ts: "1700000100.000001"
+          channel: C01234567
+          user: U_USER_001
+          text: "<@U_BOT_12345> Test message"
+          ts: "1700000100.000001"
+      workflow: slack-echo
+      expect:
+        calls:
+          - step: slack-echo
+            exactly: 1
+
+    - name: slack-multi-check
+      description: Test multiple checks in Slack mode
+      mode: slack
+      slack_fixture:
+        name: multi-check
+        bot_user_id: U_BOT_12345
+        event:
+          type: app_mention
+          event_id: Ev01234570
+          event_ts: "1700000200.000001"
+          channel: C01234567
+          user: U_USER_001
+          text: "<@U_BOT_12345> Run all checks"
+          ts: "1700000200.000001"
+      expect:
+        calls:
+          - step: slack-greeter
+            exactly: 1
+          - step: slack-echo
+            exactly: 1
+          - step: slack-history
+            exactly: 1
+      expect_slack:
+        reactions:
+          - name: eyes
+            channel: C01234567
+            timestamp: "1700000200.000001"
+            added: true
+        final_reactions:
+          - white_check_mark

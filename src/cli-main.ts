@@ -405,6 +405,36 @@ export async function main(): Promise<void> {
       HumanInputCheckProvider.setCLIMessage(options.message);
     }
 
+    // Load bot context from file if provided
+    if (options.botContextFile) {
+      try {
+        const botContextPath = path.resolve(options.botContextFile);
+        const botContextContent = fs.readFileSync(botContextPath, 'utf-8');
+        const botContext = JSON.parse(botContextContent);
+
+        // Validate that it has the expected structure
+        if (
+          botContext &&
+          typeof botContext === 'object' &&
+          'id' in botContext &&
+          'transport' in botContext
+        ) {
+          executionContext.botSession = botContext as import('./types/bot').BotSessionContext;
+          logger.info(
+            `Loaded bot context from ${botContextPath}: transport=${botContext.transport}, id=${botContext.id}`
+          );
+        } else {
+          logger.warn(
+            `Bot context file ${botContextPath} does not have expected structure (missing id or transport)`
+          );
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        logger.error(`Failed to load bot context file: ${errorMsg}`);
+        process.exit(1);
+      }
+    }
+
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
@@ -785,6 +815,52 @@ export async function main(): Promise<void> {
 
     // Set execution context on engine
     engine.setExecutionContext(executionContext);
+
+    // Start HTTP server if --http flag is present
+    let webhookServer: import('./webhook-server').WebhookServer | undefined;
+    if (options.http) {
+      const { WebhookServer } = await import('./webhook-server');
+
+      // Ensure http_server config exists
+      const httpConfig = config.http_server || {
+        enabled: true,
+        port: 8080,
+        host: '0.0.0.0',
+      };
+
+      webhookServer = new WebhookServer(httpConfig, config);
+      webhookServer.setExecutionEngine(engine);
+
+      try {
+        await webhookServer.start();
+        logger.info('HTTP server started successfully');
+
+        // Keep process alive for webhook handling
+        logger.info('Press Ctrl+C to stop the server');
+
+        // Set up graceful shutdown
+        const shutdownHandler = async () => {
+          logger.info('Shutting down HTTP server...');
+          if (webhookServer) {
+            await webhookServer.stop();
+          }
+          process.exit(0);
+        };
+
+        process.on('SIGINT', shutdownHandler);
+        process.on('SIGTERM', shutdownHandler);
+
+        // Wait indefinitely for webhooks
+        await new Promise(() => {
+          /* Keep process alive */
+        });
+      } catch (error) {
+        logger.error(
+          `Failed to start HTTP server: ${error instanceof Error ? error.message : String(error)}`
+        );
+        process.exit(1);
+      }
+    }
 
     // Build tag filter from CLI options
     const tagFilter: import('./types/config').TagFilter | undefined =

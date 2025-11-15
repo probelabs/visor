@@ -1,0 +1,33 @@
+{
+  "name": "thread-conversation",
+  "description": "Bot mention in an existing thread with conversation history",
+  "bot_user_id": "U_BOT_12345",
+  "thread": {
+    "channel": "C01234567",
+    "thread_ts": "1699999900.000001",
+    "messages": [
+      {
+        "ts": "1699999900.000001",
+        "user": "U_USER_001",
+        "text": "I need help with my code review"
+      },
+      {
+        "ts": "1699999910.000002",
+        "user": "U_BOT_12345",
+        "bot_id": "B_BOT_001",
+        "text": "I can help with that! What would you like me to review?",
+        "thread_ts": "1699999900.000001"
+      }
+    ]
+  },
+  "event": {
+    "type": "app_mention",
+    "event_id": "Ev01234568",
+    "event_ts": "1699999920.000003",
+    "channel": "C01234567",
+    "user": "U_USER_001",
+    "text": "<@U_BOT_12345> Please check the PR #123",
+    "ts": "1699999920.000003",
+    "thread_ts": "1699999900.000001"
+  }
+}

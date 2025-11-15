@@ -1,0 +1,596 @@
+# Slack Router Pattern Tests
+#
+# Test cases for router workflow patterns
+
+version: '1.0'
+
+# ============================================================================
+# CONTENT-BASED ROUTING WORKFLOWS
+# ============================================================================
+
+workflows:
+  content-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [route-deploy, route-help, route-default]
+
+      route-deploy:
+        type: noop
+        if: 'bot && contains(bot.currentMessage.text, "deploy")'
+        on_success:
+          run: [handle-deploy]
+
+      handle-deploy:
+        type: logger
+        message: "Deploying service..."
+
+      route-help:
+        type: noop
+        if: 'bot && contains(bot.currentMessage.text, "help")'
+        on_success:
+          run: [handle-help]
+
+      handle-help:
+        type: logger
+        message: "Available commands: deploy, help"
+
+      route-default:
+        type: noop
+        if: |
+          bot && !(
+            contains(bot.currentMessage.text, "deploy") ||
+            contains(bot.currentMessage.text, "help")
+          )
+        on_success:
+          run: [handle-default]
+
+      handle-default:
+        type: logger
+        message: "Unknown command. Try 'help'"
+
+  # ============================================================================
+  # CHANNEL-BASED ROUTING WORKFLOWS
+  # ============================================================================
+
+  channel-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [route-production, route-staging, route-dm]
+
+      route-production:
+        type: noop
+        if: 'bot && bot.attributes.channel == "C123PROD"'
+        on_success:
+          run: [handle-production]
+
+      handle-production:
+        type: logger
+        message: "Production workflow triggered"
+
+      route-staging:
+        type: noop
+        if: 'bot && bot.attributes.channel == "C456STAGE"'
+        on_success:
+          run: [handle-staging]
+
+      handle-staging:
+        type: logger
+        message: "Staging workflow triggered"
+
+      route-dm:
+        type: noop
+        if: 'bot && startsWith(bot.attributes.channel, "D")'
+        on_success:
+          run: [handle-dm]
+
+      handle-dm:
+        type: logger
+        message: "Direct message workflow triggered"
+
+  # ============================================================================
+  # USER-BASED ROUTING WORKFLOWS
+  # ============================================================================
+
+  user-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [route-admin, route-engineer, route-regular]
+
+      route-admin:
+        type: noop
+        if: |
+          bot && (
+            bot.attributes.user == "U001ADMIN" ||
+            bot.attributes.user == "U002ADMIN"
+          )
+        on_success:
+          run: [handle-admin]
+
+      handle-admin:
+        type: logger
+        message: "Admin workflow triggered"
+
+      route-engineer:
+        type: noop
+        if: 'bot && startsWith(bot.attributes.user, "U10")'
+        on_success:
+          run: [handle-engineer]
+
+      handle-engineer:
+        type: logger
+        message: "Engineer workflow triggered"
+
+      route-regular:
+        type: noop
+        if: |
+          bot && !(
+            bot.attributes.user == "U001ADMIN" ||
+            bot.attributes.user == "U002ADMIN" ||
+            startsWith(bot.attributes.user, "U10")
+          )
+        on_success:
+          run: [handle-regular]
+
+      handle-regular:
+        type: logger
+        message: "Regular user workflow triggered"
+
+  # ============================================================================
+  # MULTI-DIMENSIONAL ROUTING WORKFLOWS
+  # ============================================================================
+
+  multi-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [route-prod-deploy, route-stage-deploy, route-other]
+
+      route-prod-deploy:
+        type: noop
+        if: |
+          bot &&
+          bot.attributes.user == "U001ADMIN" &&
+          bot.attributes.channel == "C123PROD" &&
+          contains(bot.currentMessage.text, "deploy")
+        on_success:
+          run: [handle-prod-deploy]
+
+      handle-prod-deploy:
+        type: logger
+        message: "Production deployment by admin"
+
+      route-stage-deploy:
+        type: noop
+        if: |
+          bot &&
+          startsWith(bot.attributes.user, "U10") &&
+          bot.attributes.channel == "C456STAGE" &&
+          contains(bot.currentMessage.text, "deploy")
+        on_success:
+          run: [handle-stage-deploy]
+
+      handle-stage-deploy:
+        type: logger
+        message: "Staging deployment by engineer"
+
+      route-other:
+        type: noop
+        if: |
+          bot && !(
+            (bot.attributes.user == "U001ADMIN" && bot.attributes.channel == "C123PROD" && contains(bot.currentMessage.text, "deploy")) ||
+            (startsWith(bot.attributes.user, "U10") && bot.attributes.channel == "C456STAGE" && contains(bot.currentMessage.text, "deploy"))
+          )
+        on_success:
+          run: [handle-other]
+
+      handle-other:
+        type: logger
+        message: "Other workflow triggered"
+
+# ============================================================================
+# TEST CASES
+# ============================================================================
+
+tests:
+  # --------------------------------------------------------------------------
+  # Content-Based Routing Tests
+  # --------------------------------------------------------------------------
+
+  - name: content-route-deploy
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U456
+        text: "<@U_BOT_12345> deploy api-service"
+        ts: "1234567890.000001"
+    workflow: content-router
+    expect:
+      calls:
+        - route-deploy
+        - handle-deploy
+      outputs:
+        handle-deploy: "Deploying service..."
+    expect_slack:
+      reactions:
+        - name: eyes
+          channel: C123
+          timestamp: "1234567890.000001"
+      messages:
+        - channel: C123
+          contains: "Deploying service"
+
+  - name: content-route-help
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U456
+        text: "<@U_BOT_12345> help"
+        ts: "1234567890.000002"
+    workflow: content-router
+    expect:
+      calls:
+        - route-help
+        - handle-help
+      outputs:
+        handle-help: "Available commands: deploy, help"
+    expect_slack:
+      messages:
+        - contains: "Available commands"
+
+  - name: content-route-default
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U456
+        text: "<@U_BOT_12345> unknown command"
+        ts: "1234567890.000003"
+    workflow: content-router
+    expect:
+      calls:
+        - route-default
+        - handle-default
+      outputs:
+        handle-default: "Unknown command. Try 'help'"
+    expect_slack:
+      messages:
+        - contains: "Unknown command"
+
+  # --------------------------------------------------------------------------
+  # Channel-Based Routing Tests
+  # --------------------------------------------------------------------------
+
+  - name: channel-route-production
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123PROD
+        user: U456
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000004"
+    workflow: channel-router
+    expect:
+      calls:
+        - route-production
+        - handle-production
+      outputs:
+        handle-production: "Production workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Production workflow"
+
+  - name: channel-route-staging
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C456STAGE
+        user: U456
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000005"
+    workflow: channel-router
+    expect:
+      calls:
+        - route-staging
+        - handle-staging
+      outputs:
+        handle-staging: "Staging workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Staging workflow"
+
+  - name: channel-route-dm
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: D789DM
+        user: U456
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000006"
+    workflow: channel-router
+    expect:
+      calls:
+        - route-dm
+        - handle-dm
+      outputs:
+        handle-dm: "Direct message workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Direct message workflow"
+
+  # --------------------------------------------------------------------------
+  # User-Based Routing Tests
+  # --------------------------------------------------------------------------
+
+  - name: user-route-admin
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U001ADMIN
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000007"
+    workflow: user-router
+    expect:
+      calls:
+        - route-admin
+        - handle-admin
+      outputs:
+        handle-admin: "Admin workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Admin workflow"
+
+  - name: user-route-engineer
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U101ENG
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000008"
+    workflow: user-router
+    expect:
+      calls:
+        - route-engineer
+        - handle-engineer
+      outputs:
+        handle-engineer: "Engineer workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Engineer workflow"
+
+  - name: user-route-regular
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U999USER
+        text: "<@U_BOT_12345> status"
+        ts: "1234567890.000009"
+    workflow: user-router
+    expect:
+      calls:
+        - route-regular
+        - handle-regular
+      outputs:
+        handle-regular: "Regular user workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Regular user workflow"
+
+  # --------------------------------------------------------------------------
+  # Multi-Dimensional Routing Tests
+  # --------------------------------------------------------------------------
+
+  - name: multi-route-prod-deploy
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123PROD
+        user: U001ADMIN
+        text: "<@U_BOT_12345> deploy api-service"
+        ts: "1234567890.000010"
+    workflow: multi-router
+    expect:
+      calls:
+        - route-prod-deploy
+        - handle-prod-deploy
+      outputs:
+        handle-prod-deploy: "Production deployment by admin"
+    expect_slack:
+      messages:
+        - contains: "Production deployment by admin"
+
+  - name: multi-route-stage-deploy
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C456STAGE
+        user: U101ENG
+        text: "<@U_BOT_12345> deploy api-service"
+        ts: "1234567890.000011"
+    workflow: multi-router
+    expect:
+      calls:
+        - route-stage-deploy
+        - handle-stage-deploy
+      outputs:
+        handle-stage-deploy: "Staging deployment by engineer"
+    expect_slack:
+      messages:
+        - contains: "Staging deployment by engineer"
+
+  - name: multi-route-other
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C789OTHER
+        user: U999USER
+        text: "<@U_BOT_12345> help"
+        ts: "1234567890.000012"
+    workflow: multi-router
+    expect:
+      calls:
+        - route-other
+        - handle-other
+      outputs:
+        handle-other: "Other workflow triggered"
+    expect_slack:
+      messages:
+        - contains: "Other workflow"
+
+  # --------------------------------------------------------------------------
+  # History-Aware Routing Tests
+  # --------------------------------------------------------------------------
+
+  - name: history-aware-followup
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U456
+        text: "<@U_BOT_12345> yes, proceed"
+        ts: "1234567890.000013"
+        thread_ts: "1234567890.000001"
+      thread:
+        channel: C123
+        ts: "1234567890.000001"
+        messages:
+          - user: U456
+            text: "<@U_BOT_12345> deploy api-service"
+            ts: "1234567890.000001"
+          - bot_id: B_BOT_12345
+            text: "Do you want to proceed with deployment?"
+            ts: "1234567890.000002"
+    workflow: content-router
+    expect:
+      # Should have conversation history
+      assertions:
+        - 'bot.history.length > 1'
+        - 'bot.history[0].role == "user"'
+        - 'bot.history[1].role == "bot"'
+
+  # --------------------------------------------------------------------------
+  # Regex Pattern Matching Tests
+  # --------------------------------------------------------------------------
+
+  - name: regex-pr-url-detection
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123
+        user: U456
+        text: "<@U_BOT_12345> review https://github.com/owner/repo/pull/123"
+        ts: "1234567890.000014"
+    workflow: regex-router
+    expect:
+      outputs:
+        handle-pr: "Reviewing PR #123"
+
+  # --------------------------------------------------------------------------
+  # Error Handling Tests
+  # --------------------------------------------------------------------------
+
+  - name: route-permission-denied
+    mode: slack
+    slack_fixture:
+      bot_user_id: U_BOT_12345
+      event:
+        type: app_mention
+        channel: C123PROD
+        user: U999USER  # Not an admin
+        text: "<@U_BOT_12345> deploy production"
+        ts: "1234567890.000015"
+    workflow: permission-router
+    expect:
+      outputs:
+        deny-deployment: "Permission denied"
+    expect_slack:
+      messages:
+        - contains: "Permission denied"
+
+# ============================================================================
+# Additional Test Workflows
+# ============================================================================
+
+workflows:
+  regex-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [route-pr]
+
+      route-pr:
+        type: noop
+        if: 'bot && /https:\/\/github\.com\/.*\/pull\/\d+/.test(bot.currentMessage.text)'
+        on_success:
+          run: [handle-pr]
+
+      handle-pr:
+        type: logger
+        message: "Reviewing PR #123"
+
+  permission-router:
+    checks:
+      router:
+        type: noop
+        always_run: true
+        on_success:
+          run: [check-permission]
+
+      check-permission:
+        type: noop
+        if: |
+          bot &&
+          bot.attributes.channel == "C123PROD" &&
+          contains(bot.currentMessage.text, "deploy") &&
+          bot.attributes.user != "U001ADMIN"
+        on_success:
+          run: [deny-deployment]
+
+      deny-deployment:
+        type: logger
+        message: "Permission denied"

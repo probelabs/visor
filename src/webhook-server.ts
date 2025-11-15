@@ -6,6 +6,12 @@ import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from './liquid-extensions';
 import { CheckExecutionEngine } from './check-execution-engine';
+import { SlackWebhookHandler } from './slack/webhook-handler';
+import { CacheEndpointHandler } from './slack/cache-endpoints';
+import { CachePrewarmer } from './slack/cache-prewarmer';
+import { normalizeSlackConfig, validateMultiBotConfig } from './slack/config-normalizer';
+import { SlackBotConfig } from './types/bot';
+import { logger } from './logger';
 
 export interface WebhookPayload {
   endpoint: string;
@@ -29,6 +35,9 @@ export class WebhookServer {
   private executionEngine?: CheckExecutionEngine;
   private visorConfig?: VisorConfig;
   private isGitHubActions: boolean;
+  private slackHandlers: Map<string, SlackWebhookHandler> = new Map();
+  private slackBotConfigs: SlackBotConfig[] = [];
+  private cacheEndpointHandler?: CacheEndpointHandler;
 
   constructor(config: HttpServerConfig, visorConfig?: VisorConfig) {
     this.config = config;
@@ -37,6 +46,118 @@ export class WebhookServer {
 
     // Detect GitHub Actions environment
     this.isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
+
+    // Initialize Slack handlers if config is present
+    if (visorConfig?.slack) {
+      try {
+        // Normalize configuration to support both single and multi-bot formats
+        this.slackBotConfigs = normalizeSlackConfig(visorConfig.slack);
+
+        // Validate multi-bot configuration
+        validateMultiBotConfig(this.slackBotConfigs);
+
+        // Initialize a handler for each bot
+        for (const botConfig of this.slackBotConfigs) {
+          const handler = new SlackWebhookHandler(botConfig, visorConfig, botConfig.id);
+          this.slackHandlers.set(botConfig.id, handler);
+          logger.info(`Slack webhook handler initialized for bot: ${botConfig.id}`);
+        }
+
+        // Initialize cache endpoint handler if any bot has it enabled
+        // Use the first bot's adapter for now (could be extended to support per-bot cache endpoints)
+        const firstHandler = this.slackHandlers.values().next().value;
+        if (firstHandler) {
+          const adapter = firstHandler.getAdapter();
+          const firstBotConfig = this.slackBotConfigs[0];
+          this.cacheEndpointHandler = new CacheEndpointHandler(
+            adapter,
+            firstBotConfig.cache_observability
+          );
+
+          if (this.cacheEndpointHandler.isEnabled()) {
+            logger.info('Cache observability endpoints enabled');
+          }
+        }
+      } catch (error) {
+        logger.error(
+          `Failed to initialize Slack handlers: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
+
+  /**
+   * Prewarm the cache if configured
+   */
+  private async prewarmCache(): Promise<void> {
+    // Prewarm cache for each bot that has it configured
+    for (const botConfig of this.slackBotConfigs) {
+      if (!botConfig.cache_prewarming?.enabled) {
+        continue;
+      }
+
+      const handler = this.slackHandlers.get(botConfig.id);
+      if (!handler) {
+        logger.warn(`Bot ${botConfig.id}: Cannot prewarm cache: handler not initialized`);
+        continue;
+      }
+
+      try {
+        const adapter = handler.getAdapter();
+        const client = adapter.getClient();
+        const config = botConfig.cache_prewarming;
+
+        logger.info(`Bot ${botConfig.id}: Starting cache prewarming...`);
+        const prewarmer = new CachePrewarmer(client, adapter, config);
+
+        // Run prewarming asynchronously (don't block server startup)
+        prewarmer
+          .prewarm()
+          .then(result => {
+            logger.info(
+              `Bot ${botConfig.id}: Cache prewarming completed: ${result.totalThreads} threads in ${result.durationMs}ms`
+            );
+
+            if (result.errors.length > 0) {
+              logger.warn(
+                `Bot ${botConfig.id}: Cache prewarming encountered ${result.errors.length} errors`
+              );
+            }
+
+            // Log detailed results
+            for (const channelResult of result.channels) {
+              logger.info(
+                `Bot ${botConfig.id}: Channel ${channelResult.channel}: ${channelResult.threadsPrewarmed} threads prewarmed`
+              );
+              if (channelResult.errors.length > 0) {
+                logger.warn(
+                  `Bot ${botConfig.id}: Channel ${channelResult.channel} errors: ${channelResult.errors.join(', ')}`
+                );
+              }
+            }
+
+            for (const userResult of result.users) {
+              logger.info(
+                `Bot ${botConfig.id}: User ${userResult.user}: ${userResult.threadsPrewarmed} threads prewarmed`
+              );
+              if (userResult.errors.length > 0) {
+                logger.warn(
+                  `Bot ${botConfig.id}: User ${userResult.user} errors: ${userResult.errors.join(', ')}`
+                );
+              }
+            }
+          })
+          .catch(error => {
+            logger.error(
+              `Bot ${botConfig.id}: Cache prewarming failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+      } catch (error) {
+        logger.error(
+          `Bot ${botConfig.id}: Failed to start cache prewarming: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
   }
 
   /**
@@ -83,12 +204,36 @@ export class WebhookServer {
           `🔌 ${protocol.toUpperCase()} server listening on ${protocol}://${host}:${port}`
         );
 
+        // Health check endpoint
+        console.log('📍 Registered endpoints:');
+        console.log(`   - GET / (health check)`);
+
         if (this.config.endpoints && this.config.endpoints.length > 0) {
-          console.log('📍 Registered endpoints:');
           for (const endpoint of this.config.endpoints) {
             console.log(`   - ${endpoint.path}${endpoint.name ? ` (${endpoint.name})` : ''}`);
           }
         }
+
+        // Slack endpoints (one per bot)
+        if (this.slackBotConfigs.length > 0) {
+          for (const botConfig of this.slackBotConfigs) {
+            console.log(`   - POST ${botConfig.endpoint} (Slack webhook - bot: ${botConfig.id})`);
+          }
+        }
+
+        // Cache endpoints
+        if (this.cacheEndpointHandler && this.cacheEndpointHandler.isEnabled()) {
+          console.log(`   - GET  /_visor/cache/stats (cache statistics)`);
+          console.log(`   - GET  /_visor/cache/threads (list cached threads)`);
+          console.log(`   - GET  /_visor/cache/threads/:id (thread details)`);
+          console.log(`   - POST /_visor/cache/clear (clear cache - admin)`);
+          console.log(`   - DELETE /_visor/cache/threads/:id (evict thread - admin)`);
+        }
+
+        // Prewarm cache (async, don't block)
+        this.prewarmCache().catch(error => {
+          logger.error(`Failed to prewarm cache: ${error}`);
+        });
 
         resolve();
       });
@@ -183,6 +328,12 @@ export class WebhookServer {
       return;
     }
 
+    // Shutdown all Slack handlers first (wait for workers to complete)
+    for (const [botId, handler] of this.slackHandlers.entries()) {
+      logger.info(`Shutting down Slack handler for bot: ${botId}`);
+      await handler.shutdown();
+    }
+
     return new Promise(resolve => {
       this.server!.close(() => {
         console.log('🛑 HTTP server stopped');
@@ -196,7 +347,44 @@ export class WebhookServer {
    */
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
-      // Only accept POST requests
+      const url = req.url || '/';
+      const path = url.split('?')[0];
+
+      // Health check endpoint
+      if (req.method === 'GET' && path === '/') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'ok',
+            service: 'visor-webhook-server',
+            timestamp: new Date().toISOString(),
+          })
+        );
+        return;
+      }
+
+      // Cache endpoints (before Slack webhook to avoid conflicts)
+      if (this.cacheEndpointHandler && path.startsWith('/_visor/cache/')) {
+        const handled = await this.cacheEndpointHandler.handleRequest(req, res);
+        if (handled) {
+          return;
+        }
+      }
+
+      // Slack webhook endpoints (check all bots)
+      if (req.method === 'POST' && this.slackBotConfigs.length > 0) {
+        for (const botConfig of this.slackBotConfigs) {
+          if (path === botConfig.endpoint) {
+            const handler = this.slackHandlers.get(botConfig.id);
+            if (handler) {
+              await handler.handleWebhook(req, res);
+              return;
+            }
+          }
+        }
+      }
+
+      // Only accept POST requests for other endpoints
       if (req.method !== 'POST') {
         res.writeHead(405, { 'Content-Type': 'text/plain' });
         res.end('Method Not Allowed');

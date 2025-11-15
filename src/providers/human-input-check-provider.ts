@@ -6,17 +6,35 @@ import { interactivePrompt, simplePrompt } from '../utils/interactive-prompt';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { tryReadStdin } from '../utils/stdin-reader';
+import { getPromptStateManager } from '../slack/prompt-state';
+import { SlackClient } from '../slack/client';
+import { logger } from '../logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
 /**
+ * Special error type to signal that workflow is awaiting user reply in Slack
+ */
+export class AwaitingReplyError extends Error {
+  constructor(
+    message: string,
+    public readonly threadId: string,
+    public readonly checkName: string
+  ) {
+    super(message);
+    this.name = 'AwaitingReplyError';
+  }
+}
+
+/**
  * Human input check provider that pauses workflow to request user input.
  *
- * Supports four modes:
- * 1. CLI with --message argument (inline or file path)
- * 2. CLI with piped stdin
- * 3. CLI interactive mode (beautiful terminal UI)
- * 4. SDK mode with onHumanInput hook
+ * Supports five modes:
+ * 1. Slack bot mode (when botSession context is present)
+ * 2. CLI with --message argument (inline or file path)
+ * 3. CLI with piped stdin
+ * 4. CLI interactive mode (beautiful terminal UI)
+ * 5. SDK mode with onHumanInput hook
  *
  * Example config:
  * ```yaml
@@ -71,7 +89,7 @@ export class HumanInputCheckProvider extends CheckProvider {
   }
 
   getDescription(): string {
-    return 'Prompts for human input during workflow execution (CLI interactive or SDK hook)';
+    return 'Prompts for human input during workflow execution (Slack bot, CLI interactive, or SDK hook)';
   }
 
   async validateConfig(config: unknown): Promise<boolean> {
@@ -266,6 +284,18 @@ export class HumanInputCheckProvider extends CheckProvider {
   }
 
   /**
+   * Check if a message looks like it's answering a prompt
+   * Simple heuristic: non-empty text that's not just a mention
+   */
+  private looksLikeAnswer(text: string): boolean {
+    // Remove bot mentions
+    const cleanText = text.replace(/<@[A-Z0-9]+>/gi, '').trim();
+
+    // Must have some content beyond the mention
+    return cleanText.length > 0;
+  }
+
+  /**
    * Get user input through various methods
    */
   private async getUserInput(
@@ -287,6 +317,99 @@ export class HumanInputCheckProvider extends CheckProvider {
     const multiline = (config.multiline as boolean | undefined) ?? false;
     const timeout = config.timeout ? config.timeout * 1000 : undefined; // Convert to ms
     const defaultValue = config.default as string | undefined;
+
+    // Priority 0: Slack bot mode (when botSession context is present)
+    if (context?.botSession) {
+      logger.info(`Human-input in Slack mode for check: ${checkName}`);
+
+      const botSession = context.botSession;
+      const threadId = botSession.id;
+      const promptState = getPromptStateManager();
+
+      // Check if we're already waiting for a response in this thread
+      const waitingInfo = promptState.getWaiting(threadId);
+
+      if (waitingInfo && waitingInfo.checkName === checkName) {
+        // We were waiting for input and got a new message
+        // Use the current message as the answer
+        const currentText = botSession.currentMessage.text;
+        logger.info(`Resuming workflow with user response: "${currentText.substring(0, 50)}..."`);
+
+        // Clear waiting state
+        promptState.clearWaiting(threadId);
+
+        // Extract answer (remove bot mentions)
+        const answer = currentText.replace(/<@[A-Z0-9]+>/gi, '').trim();
+
+        if (!answer && !allowEmpty && !defaultValue) {
+          throw new Error('Empty input not allowed');
+        }
+
+        return answer || defaultValue || '';
+      }
+
+      // Check if current message already looks like an answer
+      // This handles the case where user provides the answer in their first message
+      if (this.looksLikeAnswer(botSession.currentMessage.text)) {
+        const currentText = botSession.currentMessage.text;
+        const answer = currentText.replace(/<@[A-Z0-9]+>/gi, '').trim();
+
+        // Only use current message as answer if it's not the very first interaction
+        // or if it clearly looks like it's trying to provide information
+        if (botSession.history.length > 1 || answer.length > 10) {
+          logger.info(`Using current message as answer: "${answer.substring(0, 50)}..."`);
+          return answer;
+        }
+      }
+
+      // Need to prompt user in Slack thread
+      // Post prompt to Slack and mark as waiting
+      try {
+        const channel = botSession.attributes.channel as string;
+        const threadTs = (botSession.state?.threadTs as string) || botSession.id.split(':')[1];
+
+        // Get Slack bot token from environment or config
+        const botToken = process.env.SLACK_BOT_TOKEN;
+        if (!botToken) {
+          logger.warn('SLACK_BOT_TOKEN not found, falling back to CLI mode');
+          // Fall through to CLI mode
+        } else {
+          const slackClient = new SlackClient(botToken);
+
+          // Post prompt to thread
+          const response = await slackClient.postMessage(channel, prompt, threadTs);
+
+          logger.info(`Posted prompt to Slack thread ${threadId}: "${prompt.substring(0, 50)}..."`);
+
+          // Mark thread as waiting for input
+          promptState.setWaiting(threadId, {
+            checkName,
+            prompt,
+            timestamp: Date.now(),
+            channel,
+            threadTs,
+            promptMessageTs: response.ts,
+          });
+
+          // Throw special error to signal we're waiting for reply
+          throw new AwaitingReplyError(
+            `Posted prompt to Slack thread ${threadId}, awaiting user response`,
+            threadId,
+            checkName
+          );
+        }
+      } catch (error) {
+        if (error instanceof AwaitingReplyError) {
+          throw error; // Re-throw our special error
+        }
+
+        logger.error(
+          `Failed to post prompt to Slack: ${error instanceof Error ? error.message : String(error)}`
+        );
+        logger.warn('Falling back to CLI mode due to Slack error');
+        // Fall through to CLI mode
+      }
+    }
 
     // In test/CI modes, never block for input. Use default or empty string.
     const testMode = String(process.env.VISOR_TEST_MODE || '').toLowerCase() === 'true';
@@ -513,8 +636,9 @@ export class HumanInputCheckProvider extends CheckProvider {
   getRequirements(): string[] {
     return [
       'No external dependencies required',
-      'Works in CLI mode with --message argument, piped stdin, or interactive prompts',
-      'SDK mode requires onHumanInput hook to be configured',
+      'Slack mode: Requires SLACK_BOT_TOKEN environment variable and botSession context',
+      'CLI mode: Works with --message argument, piped stdin, or interactive prompts',
+      'SDK mode: Requires onHumanInput hook to be configured',
     ];
   }
 }

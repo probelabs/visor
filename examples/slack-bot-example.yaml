@@ -1,0 +1,313 @@
+version: '1.0'
+
+# Example Slack bot configuration for Visor
+# This demonstrates how to create a Slack bot that responds to mentions
+# and can access conversation history and context
+#
+# NOTE: This is the legacy single bot format (still fully supported for backward compatibility)
+# For multi-bot deployments, see:
+#   - examples/slack-multi-bot-example.yaml (multi-environment setup)
+#   - examples/slack-multi-team-example.yaml (multi-team setup)
+
+# HTTP server configuration (required for webhook handling)
+http_server:
+  enabled: true
+  port: 8080
+
+# Slack bot configuration
+slack:
+  # Webhook endpoint path (defaults to /bots/slack if omitted)
+  endpoint: "/bots/slack/support"
+
+  # Slack signing secret for request verification (use environment variable)
+  signing_secret: "${SLACK_SIGNING_SECRET}"
+
+  # Slack bot token for API calls (use environment variable)
+  bot_token: "${SLACK_BOT_TOKEN}"
+
+  # Only respond to direct mentions (@bot)
+  mentions: direct
+
+  # Only work in threads (required for conversation tracking)
+  threads: required
+
+  # Conversation history settings
+  fetch:
+    scope: thread          # Fetch entire thread history
+    max_messages: 40       # Limit conversation history to last 40 messages
+
+    # In-memory LRU cache for thread history
+    cache:
+      ttl_seconds: 600     # Cache entries expire after 10 minutes
+      max_threads: 200     # Maximum number of threads to cache
+
+  # Optional: restrict bot to specific channels
+  # Supports wildcards (e.g., "CENG*" matches all channels starting with CENG)
+  channel_allowlist:
+    - "CENG*"              # Engineering channels
+    - "CSUPPORT"           # Support channel
+
+  # Error handling
+  response:
+    fallback: "Sorry, I encountered an error processing your request. Please try again."
+
+  # Optional: Cache prewarming on startup
+  # Populates the cache with recent threads before handling requests
+  cache_prewarming:
+    enabled: false         # Set to true to enable prewarming
+    channels:              # Channels to prewarm (fetch recent threads)
+      - "C01234567"
+      - "C98765432"
+    users: []              # Users to prewarm (fetch recent DMs)
+    max_threads_per_channel: 20  # Max threads to fetch per channel
+    concurrency: 5         # Number of concurrent prewarm operations
+    rate_limit_ms: 100     # Delay between API calls (ms)
+
+# Define the workflow that runs when the bot is mentioned
+checks:
+  # Router: Main entry point that routes to specialized workflows
+  router:
+    type: noop
+    description: "Route to appropriate workflow based on message content"
+    always_run: true
+    on_success:
+      run:
+        - route-help
+        - route-deploy
+        - route-incident
+        - route-support
+
+  # ROUTE: Help requests
+  route-help:
+    type: noop
+    if: 'bot && contains(bot.currentMessage.text, "help")'
+    on_success:
+      run: [handle-help]
+
+  handle-help:
+    type: log
+    message: |
+      🤖 Slack Bot Help
+
+      Available commands:
+      • **help** - Show this help message
+      • **deploy [service]** - Deploy a service (engineering channels only)
+      • **incident [description]** - Report an incident
+      • **[any question]** - Ask a support question
+
+      For more information, see our documentation or contact support.
+
+  # ROUTE: Deployment requests (engineering channels only)
+  route-deploy:
+    type: noop
+    if: |
+      bot &&
+      contains(bot.currentMessage.text, "deploy") &&
+      startsWith(bot.attributes.channel, "CENG")
+    on_success:
+      run: [handle-deploy]
+
+  handle-deploy:
+    type: log
+    message: |
+      🚀 Deployment Request Detected
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      This would trigger deployment workflow.
+      In a real implementation, this would:
+      1. Validate deployment request
+      2. Check user permissions
+      3. Execute deployment
+      4. Report status back to thread
+
+  # ROUTE: Incident reports
+  route-incident:
+    type: noop
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "incident") ||
+        contains(bot.currentMessage.text, "outage") ||
+        contains(bot.currentMessage.text, "down")
+      )
+    on_success:
+      run: [handle-incident]
+
+  handle-incident:
+    type: log
+    message: |
+      🚨 Incident Report Received
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+      Timestamp: {{ bot.currentMessage.timestamp }}
+
+      This would trigger incident response workflow.
+      In a real implementation, this would:
+      1. Create incident ticket
+      2. Notify on-call team
+      3. Create incident channel
+      4. Track resolution progress
+
+  # ROUTE: Support questions (default)
+  route-support:
+    type: noop
+    if: |
+      bot && !(
+        contains(bot.currentMessage.text, "help") ||
+        contains(bot.currentMessage.text, "deploy") ||
+        contains(bot.currentMessage.text, "incident")
+      )
+    on_success:
+      run: [support-bot]
+
+  # WORKFLOW: Support bot (AI-powered assistance)
+  support-bot:
+    type: workflow
+    steps:
+      # Step 1: Log the incoming message
+      - name: log-message
+        type: log
+        message: |
+          Received Slack message:
+          Thread ID: {{ bot.thread.id }}
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Current message: {{ bot.currentMessage.text }}
+          History length: {{ bot.history | size }}
+
+      # Step 2: Analyze message with AI (example using bot context)
+      - name: analyze-message
+        type: ai
+        prompt: |
+          You are a helpful support bot. A user has sent the following message:
+
+          "{{ bot.currentMessage.text }}"
+
+          {% if bot.history | size > 1 %}
+          Previous conversation history:
+          {% for msg in bot.history %}
+          {% if msg.role == 'user' %}
+          User: {{ msg.text }}
+          {% elsif msg.role == 'bot' %}
+          Bot: {{ msg.text }}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+
+          Provide a helpful response addressing the user's question or concern.
+          Keep your response concise and friendly.
+
+        # Output structured response
+        transform_js: |
+          return {
+            response: output.trim(),
+            needs_escalation: output.toLowerCase().includes('escalate'),
+            sentiment: output.toLowerCase().includes('thank') ? 'positive' : 'neutral'
+          };
+
+      # Step 3: Log the analysis result
+      - name: log-analysis
+        type: log
+        depends_on: [analyze-message]
+        message: |
+          Analysis complete:
+          Response: {{ outputs.analyze-message.response }}
+          Needs escalation: {{ outputs.analyze-message.needs_escalation }}
+          Sentiment: {{ outputs.analyze-message.sentiment }}
+
+      # Step 4: Format response for Slack
+      - name: format-response
+        type: log
+        depends_on: [analyze-message]
+        message: |
+          {{ outputs.analyze-message.response }}
+
+# Example usage:
+# 1. Set environment variables:
+#    export SLACK_SIGNING_SECRET="your-signing-secret"
+#    export SLACK_BOT_TOKEN="xoxb-your-bot-token"
+#    export GOOGLE_API_KEY="your-google-api-key"  # Or other AI provider
+#
+# 2. Start the bot server:
+#    visor --config examples/slack-bot-example.yaml --http
+#
+# 3. Configure your Slack app:
+#    - Event Subscriptions: Enable and set Request URL to http://your-server:8080/bots/slack/support
+#    - Subscribe to bot events: app_mention, message.channels
+#    - OAuth Scopes: chat:write, reactions:write, channels:history, groups:history, im:history, mpim:history
+#
+# 4. Mention your bot in a Slack channel:
+#    @yourbot What's the status of the deployment?
+#
+# The bot will:
+# - Fetch the conversation history (cached for 10 minutes)
+# - Pass the current message and history to the workflow
+# - Run the AI analysis step with full conversation context
+# - Log results (in a real implementation, this would post back to Slack)
+
+# Advanced patterns:
+
+# Access specific parts of bot context in templates:
+# - {{ bot.thread.id }} - Thread identifier
+# - {{ bot.thread.url }} - Thread URL (if available)
+# - {{ bot.currentMessage.text }} - Current user message text
+# - {{ bot.currentMessage.timestamp }} - Message timestamp
+# - {{ bot.currentMessage.user }} - User ID who sent the message
+# - {{ bot.history }} - Array of all messages in conversation
+# - {{ bot.history | size }} - Number of messages in history
+# - {{ bot.attributes.channel }} - Slack channel ID
+# - {{ bot.attributes.user }} - User ID from attributes
+# - {{ bot.transport }} - Transport type (always "slack" for Slack bots)
+
+# Access bot context in JavaScript expressions:
+# - context.bot.currentMessage.text - Current message text
+# - context.bot.history.length - History length
+# - context.bot.history.filter(m => m.role === 'user') - Filter user messages
+# - context.bot.attributes.channel - Channel ID
+
+# Guard templates for CLI execution (when bot context is not available):
+# {% if bot %}
+#   Thread: {{ bot.thread.id }}
+# {% else %}
+#   Running in CLI mode (no bot context)
+# {% endif %}
+
+# Example: Count user messages in history
+# - name: count-user-messages
+#   type: log
+#   message: |
+#     {% if bot %}
+#     User messages: {{ bot.history | where: "role", "user" | size }}
+#     Bot messages: {{ bot.history | where: "role", "bot" | size }}
+#     {% endif %}
+
+# Example: Check if this is the first message in thread
+# - name: check-first-message
+#   type: log
+#   message: |
+#     {% if bot.history | size == 1 %}
+#     This is the first message in the thread!
+#     {% else %}
+#     This is message #{{ bot.history | size }} in the thread.
+#     {% endif %}
+
+# Router Workflow Patterns:
+# This example demonstrates a simple router that routes based on message content.
+# For more advanced routing patterns, see:
+#
+# - examples/slack-router-content.yaml - Content-based routing with keywords and regex
+# - examples/slack-router-channel.yaml - Channel-based routing for different environments
+# - examples/slack-router-user.yaml - User-based routing with permissions
+# - examples/slack-router-advanced.yaml - Complex multi-stage workflows with approvals
+# - docs/slack-router-patterns.md - Comprehensive router patterns documentation
+#
+# Key routing techniques:
+# 1. Content-based: Route by message keywords, regex patterns, or AI intent
+# 2. Channel-based: Route by Slack channel ID (production vs staging vs support)
+# 3. User-based: Route by user ID or role (admin vs engineer vs regular user)
+# 4. Multi-dimensional: Combine user + channel + content for fine-grained control
+# 5. History-aware: Route based on conversation history and context

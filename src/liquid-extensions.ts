@@ -271,6 +271,37 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
   });
 
   // Removed: merge_sort_by filter (unused)
+
+  // Register bot context filters for accessing bot session data
+  // These provide safe access to bot context when available, returning undefined when not in bot mode
+  liquid.registerFilter('bot_thread_id', (bot: unknown) => {
+    if (bot && typeof bot === 'object' && 'thread' in bot) {
+      const thread = (bot as any).thread;
+      return thread?.id;
+    }
+    return undefined;
+  });
+
+  liquid.registerFilter('bot_current_message', (bot: unknown) => {
+    if (bot && typeof bot === 'object' && 'currentMessage' in bot) {
+      return (bot as any).currentMessage;
+    }
+    return undefined;
+  });
+
+  liquid.registerFilter('bot_history', (bot: unknown) => {
+    if (bot && typeof bot === 'object' && 'history' in bot) {
+      return (bot as any).history;
+    }
+    return [];
+  });
+
+  liquid.registerFilter('bot_attributes', (bot: unknown) => {
+    if (bot && typeof bot === 'object' && 'attributes' in bot) {
+      return (bot as any).attributes;
+    }
+    return {};
+  });
 }
 
 /**
