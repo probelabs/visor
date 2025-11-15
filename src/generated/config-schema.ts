@@ -73,6 +73,10 @@ export const configSchema = {
           $ref: '#/definitions/HttpServerConfig',
           description: 'HTTP server configuration for receiving webhooks',
         },
+        slack: {
+          $ref: '#/definitions/SlackConfig',
+          description: 'Slack bot configuration',
+        },
         memory: {
           $ref: '#/definitions/MemoryConfig',
           description: 'Memory storage configuration',
@@ -581,7 +585,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11005-19723-src_types_config.ts-0-31882%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1173,14 +1177,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>>':
+    'Record<string,Partial<interface-src_types_config.ts-11005-19723-src_types_config.ts-0-31882>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11005-19723-src_types_config.ts-0-31882%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>': {
+    'Partial<interface-src_types_config.ts-11005-19723-src_types_config.ts-0-31882>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1444,6 +1448,409 @@ export const configSchema = {
       required: ['path'],
       additionalProperties: false,
       description: 'HTTP server endpoint configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackConfig: {
+      type: 'object',
+      properties: {
+        bots: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/SlackBotConfig',
+          },
+          description: 'Multi-bot configuration (new format)',
+        },
+        endpoint: {
+          type: 'string',
+          description: 'HTTP endpoint path (auto-generated if omitted)',
+        },
+        signing_secret: {
+          type: 'string',
+          description: 'Slack signing secret for request verification',
+        },
+        bot_token: {
+          type: 'string',
+          description: 'Slack bot token for API calls',
+        },
+        mentions: {
+          type: 'string',
+          const: 'direct',
+          description: "Mention handling: 'direct' (only supported option for now)",
+        },
+        threads: {
+          type: 'string',
+          const: 'required',
+          description: "Thread handling: 'required' (only supported option for now)",
+        },
+        fetch: {
+          $ref: '#/definitions/SlackFetchConfig',
+          description: 'Fetch configuration for conversation history',
+        },
+        channel_allowlist: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Channel allowlist (glob patterns, e.g., ["CENG*", "CSUPPORT"])',
+        },
+        response: {
+          $ref: '#/definitions/SlackResponseConfig',
+          description: 'Response configuration',
+        },
+        worker_pool: {
+          $ref: '#/definitions/SlackWorkerPoolConfig',
+          description: 'Worker pool configuration for concurrent workflow execution',
+        },
+        cache_observability: {
+          $ref: '#/definitions/SlackCacheObservabilityConfig',
+          description: 'Cache observability configuration',
+        },
+        cache_prewarming: {
+          $ref: '#/definitions/SlackCachePrewarmingConfig',
+          description: 'Cache prewarming configuration',
+        },
+        rate_limiting: {
+          $ref: '#/definitions/SlackRateLimitConfig',
+          description: 'Rate limiting configuration',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run for this bot (overrides global workflow selection)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack bot configuration (supports both single bot and multi-bot formats)',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackBotConfig: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Unique bot identifier (DNS-safe: lowercase, alphanumeric, hyphens)',
+        },
+        endpoint: {
+          type: 'string',
+          description: 'HTTP endpoint path (must be unique across all bots)',
+        },
+        signing_secret: {
+          type: 'string',
+          description: 'Slack signing secret for request verification',
+        },
+        bot_token: {
+          type: 'string',
+          description: 'Slack bot token for API calls',
+        },
+        mentions: {
+          type: 'string',
+          const: 'direct',
+          description: "Mention handling: 'direct' (only supported option for now)",
+        },
+        threads: {
+          type: 'string',
+          const: 'required',
+          description: "Thread handling: 'required' (only supported option for now)",
+        },
+        fetch: {
+          $ref: '#/definitions/SlackFetchConfig',
+          description: 'Fetch configuration for conversation history',
+        },
+        channel_allowlist: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Channel allowlist (glob patterns, e.g., ["CENG*", "CSUPPORT"])',
+        },
+        response: {
+          $ref: '#/definitions/SlackResponseConfig',
+          description: 'Response configuration',
+        },
+        worker_pool: {
+          $ref: '#/definitions/SlackWorkerPoolConfig',
+          description: 'Worker pool configuration for concurrent workflow execution',
+        },
+        cache_observability: {
+          $ref: '#/definitions/SlackCacheObservabilityConfig',
+          description: 'Cache observability configuration',
+        },
+        cache_prewarming: {
+          $ref: '#/definitions/SlackCachePrewarmingConfig',
+          description: 'Cache prewarming configuration',
+        },
+        rate_limiting: {
+          $ref: '#/definitions/SlackRateLimitConfig',
+          description: 'Rate limiting configuration',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run for this bot (overrides global workflow selection)',
+        },
+      },
+      required: ['id', 'endpoint', 'signing_secret', 'bot_token'],
+      additionalProperties: false,
+      description: 'Individual Slack bot configuration (for multi-bot deployments)',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackFetchConfig: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          const: 'thread',
+          description: "Fetch scope: 'thread' (only supported option for now)",
+        },
+        max_messages: {
+          type: 'number',
+          description: 'Maximum number of messages to fetch (default: 40)',
+        },
+        cache: {
+          $ref: '#/definitions/SlackCacheConfig',
+          description: 'Cache configuration',
+        },
+      },
+      required: ['scope'],
+      additionalProperties: false,
+      description: 'Slack fetch configuration for retrieving conversation history',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackCacheConfig: {
+      type: 'object',
+      properties: {
+        ttl_seconds: {
+          type: 'number',
+          description: 'Cache TTL in seconds (default: 600)',
+        },
+        max_threads: {
+          type: 'number',
+          description: 'Maximum number of threads to cache (default: 200)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack-specific cache configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackResponseConfig: {
+      type: 'object',
+      properties: {
+        fallback: {
+          type: 'string',
+          description: 'Fallback message on errors',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack response configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackWorkerPoolConfig: {
+      type: 'object',
+      properties: {
+        queue_capacity: {
+          type: 'number',
+          description:
+            'Maximum queue size (default: 100). When full, new tasks are rejected with 503',
+        },
+        task_timeout: {
+          type: 'number',
+          description: 'Task timeout in milliseconds (default: 5 minutes)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack worker pool configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackCacheObservabilityConfig: {
+      type: 'object',
+      properties: {
+        enable_cache_endpoints: {
+          type: 'boolean',
+          description: 'Enable cache monitoring endpoints (default: false for security)',
+        },
+        cache_admin_token: {
+          type: 'string',
+          description: 'Optional bearer token for admin endpoints (POST/DELETE operations)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack cache observability configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackCachePrewarmingConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable cache prewarming on bot startup (default: false)',
+        },
+        channels: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Channels to prewarm (fetch recent threads from these channels)',
+        },
+        users: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Users to prewarm (fetch recent DMs/threads with these users)',
+        },
+        max_threads_per_channel: {
+          type: 'number',
+          description: 'Maximum number of threads to fetch per channel (default: 20)',
+        },
+        concurrency: {
+          type: 'number',
+          description: 'Concurrency for prewarming operations (default: 5)',
+        },
+        rate_limit_ms: {
+          type: 'number',
+          description: 'Rate limit delay between API calls in milliseconds (default: 100)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Cache prewarming configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackRateLimitConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable rate limiting (default: false)',
+        },
+        bot: {
+          $ref: '#/definitions/SlackRateLimitDimensionConfig',
+          description: 'Per-bot limits (all requests to this bot)',
+        },
+        user: {
+          $ref: '#/definitions/SlackRateLimitDimensionConfig',
+          description: 'Per-user limits (per Slack user)',
+        },
+        channel: {
+          $ref: '#/definitions/SlackRateLimitDimensionConfig',
+          description: 'Per-channel limits (per Slack channel)',
+        },
+        global: {
+          $ref: '#/definitions/SlackRateLimitDimensionConfig',
+          description: 'Global limits (across all dimensions)',
+        },
+        actions: {
+          $ref: '#/definitions/SlackRateLimitActionsConfig',
+          description: 'Actions when rate limited',
+        },
+        storage: {
+          $ref: '#/definitions/SlackRateLimitStorageConfig',
+          description: 'Storage backend configuration',
+        },
+      },
+      additionalProperties: false,
+      description: 'Complete rate limiting configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackRateLimitDimensionConfig: {
+      type: 'object',
+      properties: {
+        requests_per_minute: {
+          type: 'number',
+          description: 'Maximum requests per minute (0 or undefined = unlimited)',
+        },
+        requests_per_hour: {
+          type: 'number',
+          description: 'Maximum requests per hour (0 or undefined = unlimited)',
+        },
+        concurrent_requests: {
+          type: 'number',
+          description: 'Maximum concurrent requests (0 or undefined = unlimited)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Rate limit configuration for a single dimension',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackRateLimitActionsConfig: {
+      type: 'object',
+      properties: {
+        send_ephemeral_message: {
+          type: 'boolean',
+          description: 'Send ephemeral message to user when rate limited (default: true)',
+        },
+        ephemeral_message: {
+          type: 'string',
+          description: 'Ephemeral message text',
+        },
+        queue_when_near_limit: {
+          type: 'boolean',
+          description: 'Queue requests when near limit threshold (default: false)',
+        },
+        queue_threshold: {
+          type: 'number',
+          description: 'Queue threshold as percentage (0.0-1.0, default: 0.8)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Actions to take when rate limited',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackRateLimitStorageConfig: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['memory', 'redis'],
+          description: "Storage type (default: 'memory')",
+        },
+        redis: {
+          $ref: '#/definitions/SlackRateLimitRedisConfig',
+          description: "Redis configuration (required if type is 'redis')",
+        },
+      },
+      additionalProperties: false,
+      description: 'Rate limit storage configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackRateLimitRedisConfig: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Redis connection URL (e.g., redis://localhost:6379)',
+        },
+        key_prefix: {
+          type: 'string',
+          description: 'Key prefix for Redis keys (default: "visor:ratelimit:")',
+        },
+      },
+      required: ['url'],
+      additionalProperties: false,
+      description: 'Redis storage configuration for rate limiting',
       patternProperties: {
         '^x-': {},
       },

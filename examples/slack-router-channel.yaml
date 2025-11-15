@@ -1,0 +1,305 @@
+# Channel-Based Routing Example
+#
+# This example demonstrates how to route Slack bot messages to different
+# workflows based on the channel where the message was posted.
+#
+# Use Cases:
+# - Production channel triggers production workflows
+# - Staging channel triggers staging workflows
+# - Support channels route to support workflows
+# - Engineering channels route to developer tools
+
+version: '1.0'
+
+http_server:
+  enabled: true
+  port: 8080
+
+slack:
+  endpoint: "/slack/events"
+  signing_secret: "${SLACK_SIGNING_SECRET}"
+  bot_token: "${SLACK_BOT_TOKEN}"
+  fetch:
+    scope: thread
+    max_messages: 40
+    cache:
+      ttl_seconds: 600
+      max_threads: 200
+  # Optional: Restrict bot to specific channels at the transport level
+  # channel_allowlist: ["C123PROD", "C456STAGE", "C789SUPPORT"]
+
+checks:
+  # ============================================================================
+  # PRODUCTION CHANNEL
+  # ============================================================================
+  # Route messages from production channel
+
+  handle-production:
+    type: log
+    message: |
+      🔴 Production Channel Request
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      PRODUCTION WORKFLOW TRIGGERED
+      - All operations require elevated permissions
+      - Deployment confirmations required
+      - Audit logging enabled
+      - Notifications sent to on-call team
+
+      Safety checks:
+      {% if contains(bot.currentMessage.text, "deploy") %}
+      ⚠️  DEPLOYMENT REQUEST - Requires approval
+      {% elsif contains(bot.currentMessage.text, "rollback") %}
+      🔄 ROLLBACK REQUEST - Immediate action
+      {% else %}
+      ✅ Safe operation
+      {% endif %}
+    # Replace C123PROD with your actual production channel ID
+    if: 'bot && bot.attributes.channel == "C123PROD"'
+
+  # ============================================================================
+  # STAGING CHANNEL
+  # ============================================================================
+  # Route messages from staging channel
+
+  handle-staging:
+    type: log
+    message: |
+      🟡 Staging Channel Request
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      STAGING WORKFLOW TRIGGERED
+      - Relaxed permissions compared to production
+      - Automated deployments allowed
+      - Testing and validation enabled
+      - No notifications to on-call
+
+      Available commands:
+      - deploy [branch] - Deploy branch to staging
+      - test [suite] - Run test suite
+      - reset - Reset staging environment
+    # Replace C456STAGE with your actual staging channel ID
+    if: 'bot && bot.attributes.channel == "C456STAGE"'
+
+  # ============================================================================
+  # SUPPORT CHANNEL
+  # ============================================================================
+  # Route messages from support channel
+
+  handle-support:
+    type: log
+    message: |
+      💬 Support Channel Request
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      SUPPORT WORKFLOW TRIGGERED
+      - Create support ticket
+      - Route to appropriate team
+      - Track conversation history
+      - SLA tracking enabled
+
+      Conversation history:
+      {% for msg in bot.history %}
+      - [{{ msg.role }}] {{ msg.text | truncate: 50 }}
+      {% endfor %}
+    # Replace C789SUPPORT with your actual support channel ID
+    if: 'bot && bot.attributes.channel == "C789SUPPORT"'
+
+  # ============================================================================
+  # ENGINEERING CHANNELS
+  # ============================================================================
+  # Route messages from engineering channels
+
+  handle-engineering:
+    type: log
+    message: |
+      🛠️ Engineering Channel Request
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      ENGINEERING WORKFLOW TRIGGERED
+      - Code review assistance
+      - Architecture discussions
+      - Technical documentation
+      - Build and CI/CD support
+
+      Developer tools:
+      - review [PR URL] - Review pull request
+      - build [project] - Trigger build
+      - docs [topic] - Search documentation
+    # Use wildcard pattern to match multiple engineering channels
+    if: |
+      bot && (
+        bot.attributes.channel == "C111ENG" ||
+        bot.attributes.channel == "C222DEV" ||
+        bot.attributes.channel == "C333ARCH"
+      )
+
+  # ============================================================================
+  # DIRECT MESSAGES
+  # ============================================================================
+  # Route direct messages to private workflow
+
+  handle-direct-message:
+    type: log
+    message: |
+      📩 Direct Message Received
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      PRIVATE WORKFLOW TRIGGERED
+      - Confidential information handling
+      - Personal assistance
+      - Sensitive operations allowed
+      - No public logging
+
+      Private commands:
+      - status - Check your permissions
+      - whoami - Display your user info
+      - help - Show available commands
+    # Direct messages have channel IDs starting with 'D'
+    if: 'bot && startsWith(bot.attributes.channel, "D")'
+
+  # ============================================================================
+  # UNKNOWN CHANNEL HANDLER
+  # ============================================================================
+  # Handle messages from channels not configured above
+
+  handle-unknown-channel:
+    type: log
+    message: |
+      ❓ Unknown Channel
+
+      Channel: {{ bot.attributes.channel }}
+      User: {{ bot.attributes.user }}
+      Message: {{ bot.currentMessage.text }}
+
+      This channel is not configured for bot operations.
+
+      To enable this channel:
+      1. Add channel ID to channel_allowlist in Slack config
+      2. Add routing logic in your workflow
+      3. Restart the bot
+
+      Supported channels:
+      - C123PROD (production)
+      - C456STAGE (staging)
+      - C789SUPPORT (support)
+      - C111ENG, C222DEV, C333ARCH (engineering)
+      - Direct messages
+    # Only run if no other route matched
+    if: |
+      bot && !(
+        bot.attributes.channel == "C123PROD" ||
+        bot.attributes.channel == "C456STAGE" ||
+        bot.attributes.channel == "C789SUPPORT" ||
+        bot.attributes.channel == "C111ENG" ||
+        bot.attributes.channel == "C222DEV" ||
+        bot.attributes.channel == "C333ARCH" ||
+        startsWith(bot.attributes.channel, "D")
+      )
+
+# ============================================================================
+# ADVANCED CHANNEL ROUTING TECHNIQUES
+# ============================================================================
+#
+# 1. CHANNEL PATTERN MATCHING
+#    Match channels by prefix or pattern:
+#
+#    handle-prod-channels:
+#      type: log
+#      message: "Production channel family detected"
+#      if: 'bot && startsWith(bot.attributes.channel, "C123")'
+#
+# 2. CHANNEL ALLOWLIST/DENYLIST
+#    Use arrays to manage multiple channels:
+#
+#    handle-allowed-channels:
+#      type: log
+#      message: "Allowed channel detected"
+#      if: |
+#        bot && (
+#          ["C123", "C456", "C789"].includes(bot.attributes.channel)
+#        )
+#
+#    reject-denied-channels:
+#      type: log
+#      message: "Access denied - channel not allowed"
+#      if: |
+#        bot && (
+#          ["C999", "C888"].includes(bot.attributes.channel)
+#        )
+#
+# 3. CHANNEL TYPE DETECTION
+#    Different handling for public vs private channels:
+#
+#    handle-public-channel:
+#      type: log
+#      message: "Public channel detected"
+#      # Public channels start with 'C'
+#      if: 'bot && startsWith(bot.attributes.channel, "C")'
+#
+#    handle-private-channel:
+#      type: log
+#      message: "Private channel detected"
+#      # Private channels start with 'G'
+#      if: 'bot && startsWith(bot.attributes.channel, "G")'
+#
+# 4. COMBINING CHANNEL + CONTENT ROUTING
+#    Route based on both channel and message content:
+#
+#    handle-prod-deployment:
+#      type: log
+#      message: "Production deployment request"
+#      if: |
+#        bot &&
+#        bot.attributes.channel == "C123PROD" &&
+#        contains(bot.currentMessage.text, "deploy")
+#
+# 5. MULTI-CHANNEL WORKFLOWS
+#    Route to workflow that handles multiple related channels:
+#
+#    handle-deployment-channels:
+#      type: log
+#      message: |
+#        Environment: {% if bot.attributes.channel == "C123PROD" %}production{% elsif bot.attributes.channel == "C456STAGE" %}staging{% else %}development{% endif %}
+#      if: |
+#        bot && (
+#          bot.attributes.channel == "C123PROD" ||
+#          bot.attributes.channel == "C456STAGE" ||
+#          bot.attributes.channel == "C789DEV"
+#        )
+#
+# 6. CHANNEL METADATA ENRICHMENT
+#    Fetch channel information from Slack API:
+#
+#    fetch-channel-info:
+#      type: http
+#      url: "https://slack.com/api/conversations.info"
+#      method: POST
+#      headers:
+#        Authorization: "Bearer ${SLACK_BOT_TOKEN}"
+#        Content-Type: "application/json"
+#      body: |
+#        {
+#          "channel": "{{ bot.attributes.channel }}"
+#        }
+#
+#    route-by-channel-name:
+#      type: log
+#      message: "Incident channel detected"
+#      depends_on: [fetch-channel-info]
+#      if: 'contains(outputs["fetch-channel-info"].channel.name, "incident")'

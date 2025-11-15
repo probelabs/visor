@@ -1,0 +1,31 @@
+{
+  "name": "human-input-flow",
+  "description": "Multi-turn conversation with human-input provider waiting for response",
+  "bot_user_id": "U_BOT_12345",
+  "event": {
+    "type": "app_mention",
+    "event_id": "Ev01234569",
+    "event_ts": "1700000100.000001",
+    "channel": "C01234567",
+    "user": "U_USER_001",
+    "text": "<@U_BOT_12345> Start the review process",
+    "ts": "1700000100.000001",
+    "thread_ts": "1700000100.000001"
+  },
+  "workflow_messages": [
+    {
+      "ts": "1700000120.000002",
+      "channel": "C01234567",
+      "thread_ts": "1700000100.000001",
+      "user": "U_USER_001",
+      "text": "Yes, please proceed with security checks"
+    },
+    {
+      "ts": "1700000140.000003",
+      "channel": "C01234567",
+      "thread_ts": "1700000100.000001",
+      "user": "U_USER_001",
+      "text": "PR #456"
+    }
+  ]
+}

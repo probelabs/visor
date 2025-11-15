@@ -1,6 +1,7 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { EnvConfig, HumanInputRequest } from '../types/config';
+import { BotSessionContext } from '../types/bot';
 
 /**
  * Configuration for a check provider
@@ -76,6 +77,12 @@ export interface ExecutionContext {
     /** reset per-run guard state before grouped execution */
     resetPerRunState?: boolean;
   };
+  /**
+   * Bot session context - available when execution is triggered by a bot transport (Slack, email, etc.)
+   * Contains normalized conversation history and current message.
+   * Undefined when not running in bot mode.
+   */
+  botSession?: BotSessionContext;
 }
 
 /**

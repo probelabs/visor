@@ -4,9 +4,24 @@
 
 // Import types from reviewer
 import type { ReviewIssue } from '../reviewer';
+// Import bot types
+import type { SlackConfig } from './bot';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
+
+// Re-export bot types for convenience
+export type {
+  BotTransportType,
+  NormalizedMessage,
+  BotSessionContext,
+  ConversationContext,
+  SlackConfig,
+  SlackBotConfig,
+  SlackFetchConfig,
+  SlackCacheConfig,
+  SlackResponseConfig,
+} from './bot';
 
 /**
  * Failure condition severity levels
@@ -924,6 +939,8 @@ export interface VisorConfig {
   output: OutputConfig;
   /** HTTP server configuration for receiving webhooks */
   http_server?: HttpServerConfig;
+  /** Slack bot configuration */
+  slack?: SlackConfig;
   /** Memory storage configuration */
   memory?: MemoryConfig;
   /** Runtime hooks for SDK integration */

@@ -1,0 +1,356 @@
+# User-Based Routing Example
+#
+# This example demonstrates how to route Slack bot messages to different
+# workflows based on the user who sent the message.
+#
+# Use Cases:
+# - Admin users get elevated permissions
+# - Different teams route to different workflows
+# - User roles determine available commands
+# - Permission-based access control
+
+version: '1.0'
+
+http_server:
+  enabled: true
+  port: 8080
+
+slack:
+  endpoint: "/slack/events"
+  signing_secret: "${SLACK_SIGNING_SECRET}"
+  bot_token: "${SLACK_BOT_TOKEN}"
+  fetch:
+    scope: thread
+    max_messages: 40
+    cache:
+      ttl_seconds: 600
+      max_threads: 200
+
+checks:
+  # ============================================================================
+  # ADMIN USERS
+  # ============================================================================
+  # Handle requests from admin users
+
+  handle-admin:
+    type: log
+    message: |
+      👑 Admin User Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      ADMIN WORKFLOW TRIGGERED
+      - Full system access granted
+      - All commands available
+      - Audit logging enabled
+      - Elevated permissions
+
+      Admin Commands:
+      - deploy [environment] [service] - Deploy to any environment
+      - rollback [environment] [service] - Rollback any deployment
+      - config set [key] [value] - Modify configuration
+      - user add [user] [role] - Add user permissions
+      - user remove [user] - Remove user permissions
+      - system restart - Restart services
+      - logs [service] - View service logs
+      - metrics [service] - View service metrics
+    # Replace with your actual admin user IDs
+    if: |
+      bot && (
+        bot.attributes.user == "U001ADMIN" ||
+        bot.attributes.user == "U002ADMIN" ||
+        bot.attributes.user == "U003ADMIN"
+      )
+
+  # ============================================================================
+  # ENGINEERING TEAM
+  # ============================================================================
+  # Handle requests from engineering team members
+
+  handle-engineering:
+    type: log
+    message: |
+      🛠️ Engineering Team Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      ENGINEERING WORKFLOW TRIGGERED
+      - Code deployment allowed to staging/dev
+      - Code review tools available
+      - Build system access
+      - Development environment access
+
+      Engineering Commands:
+      - deploy staging [service] - Deploy to staging
+      - deploy dev [service] - Deploy to dev
+      - review [PR URL] - Review pull request
+      - build [project] - Trigger build
+      - test [suite] - Run test suite
+      - docs [topic] - Search documentation
+    # Use user ID prefix or list of engineering user IDs
+    if: |
+      bot && (
+        bot.attributes.user == "U101ENG" ||
+        bot.attributes.user == "U102ENG" ||
+        bot.attributes.user == "U103ENG" ||
+        startsWith(bot.attributes.user, "U10")
+      )
+
+  # ============================================================================
+  # SUPPORT TEAM
+  # ============================================================================
+  # Handle requests from support team members
+
+  handle-support:
+    type: log
+    message: |
+      💬 Support Team Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      SUPPORT WORKFLOW TRIGGERED
+      - Customer data access (read-only)
+      - Ticket management
+      - Knowledge base access
+      - Escalation workflows
+
+      Support Commands:
+      - ticket create [customer] [issue] - Create support ticket
+      - ticket status [id] - Check ticket status
+      - customer lookup [email] - Look up customer
+      - knowledge search [query] - Search knowledge base
+      - escalate [ticket] [reason] - Escalate to engineering
+    if: |
+      bot && (
+        bot.attributes.user == "U201SUP" ||
+        bot.attributes.user == "U202SUP" ||
+        bot.attributes.user == "U203SUP" ||
+        startsWith(bot.attributes.user, "U20")
+      )
+
+  # ============================================================================
+  # MANAGER USERS
+  # ============================================================================
+  # Handle requests from managers
+
+  handle-manager:
+    type: log
+    message: |
+      📊 Manager Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      MANAGER WORKFLOW TRIGGERED
+      - Reporting and analytics access
+      - Approval workflows
+      - Team management
+      - Budget and resource management
+
+      Manager Commands:
+      - report [type] - Generate report
+      - approve [request] - Approve request
+      - reject [request] [reason] - Reject request
+      - team status - View team status
+      - metrics [team] - View team metrics
+    if: |
+      bot && (
+        bot.attributes.user == "U301MGR" ||
+        bot.attributes.user == "U302MGR" ||
+        startsWith(bot.attributes.user, "U30")
+      )
+
+  # ============================================================================
+  # RESTRICTED USERS
+  # ============================================================================
+  # Handle requests from restricted users
+
+  handle-restricted:
+    type: log
+    message: |
+      ⚠️ Restricted User Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      LIMITED ACCESS
+      - Read-only access
+      - No deployment permissions
+      - No configuration changes
+      - Audit logging enabled
+
+      Your access is currently restricted. Contact an administrator
+      for more information.
+
+      Available commands:
+      - status - Check system status
+      - help - View help documentation
+    # Users who are restricted or on probation
+    if: |
+      bot && (
+        bot.attributes.user == "U999REST" ||
+        bot.attributes.user == "U998REST"
+      )
+
+  # ============================================================================
+  # REGULAR USERS
+  # ============================================================================
+  # Handle requests from regular users (default)
+
+  handle-regular-user:
+    type: log
+    message: |
+      👤 Regular User Request
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      STANDARD WORKFLOW TRIGGERED
+      - Read-only access to most resources
+      - Basic commands available
+      - Request-based permissions
+
+      Available Commands:
+      - status - Check system status
+      - help - View help documentation
+      - request [resource] - Request access to resource
+      - docs [topic] - Search documentation
+
+      To request elevated permissions, contact your manager or an administrator.
+    # Only run if none of the above routes matched
+    if: |
+      bot && !(
+        bot.attributes.user == "U001ADMIN" ||
+        bot.attributes.user == "U002ADMIN" ||
+        bot.attributes.user == "U003ADMIN" ||
+        startsWith(bot.attributes.user, "U10") ||
+        startsWith(bot.attributes.user, "U20") ||
+        startsWith(bot.attributes.user, "U30") ||
+        bot.attributes.user == "U999REST" ||
+        bot.attributes.user == "U998REST"
+      )
+
+# ============================================================================
+# ADVANCED USER ROUTING TECHNIQUES
+# ============================================================================
+#
+# 1. EXTERNAL PERMISSION SYSTEM
+#    Check permissions from external API:
+#
+#    check-permissions:
+#      type: http
+#      url: "https://api.example.com/permissions/{{ bot.attributes.user }}"
+#      method: GET
+#      headers:
+#        Authorization: "Bearer ${API_TOKEN}"
+#
+#    route-by-permission:
+#      type: log
+#      message: "Deployment permission verified"
+#      depends_on: [check-permissions]
+#      if: 'outputs["check-permissions"].permissions.includes("deploy")'
+#
+# 2. ROLE-BASED ACCESS CONTROL (RBAC)
+#    Store user roles in memory provider and check them:
+#
+#    load-user-role:
+#      type: memory
+#      operation: get
+#      key: "user_role_{{ bot.attributes.user }}"
+#      default_value: "user"
+#
+#    route-by-role:
+#      type: log
+#      message: "Privileged operation granted"
+#      depends_on: [load-user-role]
+#      if: |
+#        outputs["load-user-role"] == "admin" ||
+#        outputs["load-user-role"] == "operator"
+#
+# 3. CONTEXT-AWARE PERMISSIONS
+#    Combine user and channel/content for fine-grained control:
+#
+#    handle-prod-deploy:
+#      type: log
+#      message: "Production deployment authorized"
+#      if: |
+#        bot &&
+#        (bot.attributes.user == "U001ADMIN" || bot.attributes.user == "U002ADMIN") &&
+#        bot.attributes.channel == "C123PROD" &&
+#        contains(bot.currentMessage.text, "deploy")
+#
+# 4. TIME-BASED PERMISSIONS
+#    Allow certain operations only during business hours:
+#
+#    handle-business-hours-deploy:
+#      type: log
+#      message: "Deployment during business hours"
+#      if: |
+#        bot &&
+#        (bot.attributes.user == "U101ENG" || bot.attributes.user == "U102ENG") &&
+#        contains(bot.currentMessage.text, "deploy") &&
+#        new Date().getHours() >= 9 &&
+#        new Date().getHours() < 17 &&
+#        new Date().getDay() >= 1 &&
+#        new Date().getDay() <= 5
+#
+#    reject-after-hours-deploy:
+#      type: log
+#      message: |
+#        ⚠️ Production deployments are only allowed during business hours
+#        (Monday-Friday, 9 AM - 5 PM)
+#
+#        For emergency deployments, contact an admin.
+#      if: |
+#        bot &&
+#        contains(bot.currentMessage.text, "deploy") &&
+#        !(
+#          new Date().getHours() >= 9 &&
+#          new Date().getHours() < 17 &&
+#          new Date().getDay() >= 1 &&
+#          new Date().getDay() <= 5
+#        )
+#
+# 5. USER METADATA ENRICHMENT
+#    Fetch user profile from Slack for additional context:
+#
+#    fetch-user-profile:
+#      type: http
+#      url: "https://slack.com/api/users.info"
+#      method: GET
+#      headers:
+#        Authorization: "Bearer ${SLACK_BOT_TOKEN}"
+#      body: |
+#        {
+#          "user": "{{ bot.attributes.user }}"
+#        }
+#
+#    route-by-profile:
+#      type: log
+#      message: "Engineering team member detected via profile"
+#      depends_on: [fetch-user-profile]
+#      if: |
+#        outputs["fetch-user-profile"].user.profile.title &&
+#        contains(outputs["fetch-user-profile"].user.profile.title, "Engineer")
+#
+# 6. COMBINING USER + CHANNEL + CONTENT ROUTING
+#    Multi-dimensional routing for complex scenarios:
+#
+#    handle-admin-prod-deploy:
+#      type: log
+#      message: "Admin production deployment - all checks passed"
+#      if: |
+#        bot &&
+#        (bot.attributes.user == "U001ADMIN" || bot.attributes.user == "U002ADMIN") &&
+#        bot.attributes.channel == "C123PROD" &&
+#        contains(bot.currentMessage.text, "deploy") &&
+#        !contains(bot.currentMessage.text, "rollback")

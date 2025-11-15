@@ -57,6 +57,10 @@ export interface CliOptions {
   debugPort?: number;
   /** Message for human-input checks (inline string or file path) */
   message?: string;
+  /** Start HTTP server for webhooks and bot transports */
+  http?: boolean;
+  /** Path to JSON file containing bot context (conversation history, current message, etc.) */
+  botContextFile?: string;
 }
 
 /**

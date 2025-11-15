@@ -1,0 +1,278 @@
+version: '1.0'
+
+# Slack Bot Rate Limiting Example
+# This example demonstrates comprehensive rate limiting configuration
+# for Slack bots to prevent API abuse and manage resource usage.
+
+http_server:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+
+# Slack configuration with rate limiting
+slack:
+  bots:
+    # Production bot with comprehensive rate limiting
+    - id: production-bot
+      endpoint: "/bots/slack/production"
+      signing_secret: "${SLACK_SIGNING_SECRET}"
+      bot_token: "${SLACK_BOT_TOKEN}"
+      mentions: direct
+      threads: required
+
+      # Rate limiting configuration
+      rate_limiting:
+        # Enable rate limiting (default: false)
+        enabled: true
+
+        # Per-bot limits (all requests to this bot)
+        bot:
+          # Maximum 60 requests per minute from all sources
+          requests_per_minute: 60
+          # Maximum 1000 requests per hour from all sources
+          requests_per_hour: 1000
+          # Maximum 10 concurrent workflow executions
+          concurrent_requests: 10
+
+        # Per-user limits (per Slack user)
+        user:
+          # Maximum 10 requests per minute per user
+          requests_per_minute: 10
+          # Maximum 100 requests per hour per user
+          requests_per_hour: 100
+          # Maximum 2 concurrent requests per user
+          concurrent_requests: 2
+
+        # Per-channel limits (per Slack channel)
+        channel:
+          # Maximum 20 requests per minute per channel
+          requests_per_minute: 20
+          # Maximum 500 requests per hour per channel
+          requests_per_hour: 500
+          # Maximum 5 concurrent requests per channel
+          concurrent_requests: 5
+
+        # Actions when rate limited
+        actions:
+          # Send ephemeral message to user when rate limited (default: true)
+          send_ephemeral_message: true
+          # Custom ephemeral message
+          ephemeral_message: "You've exceeded the rate limit. Please wait before trying again."
+          # Queue requests when near limit threshold (default: false)
+          queue_when_near_limit: false
+          # Queue threshold as percentage (0.0-1.0, default: 0.8)
+          # When remaining capacity falls below this, requests may be queued
+          queue_threshold: 0.8
+
+        # Storage backend configuration
+        storage:
+          # Storage type: 'memory' (default) or 'redis'
+          type: memory
+          # Redis configuration (required if type is 'redis')
+          # redis:
+          #   url: "${REDIS_URL}"
+          #   key_prefix: "visor:ratelimit:"
+
+      # Workflow to run
+      workflow: production-workflow
+
+    # Staging bot with relaxed rate limiting
+    - id: staging-bot
+      endpoint: "/bots/slack/staging"
+      signing_secret: "${SLACK_SIGNING_SECRET_STAGE}"
+      bot_token: "${SLACK_BOT_TOKEN_STAGE}"
+
+      rate_limiting:
+        enabled: true
+        # Only bot-level limits for staging
+        bot:
+          requests_per_minute: 120
+          concurrent_requests: 20
+
+      workflow: staging-workflow
+
+    # High-traffic bot with Redis-backed rate limiting
+    - id: high-traffic-bot
+      endpoint: "/bots/slack/high-traffic"
+      signing_secret: "${SLACK_SIGNING_SECRET_HIGH}"
+      bot_token: "${SLACK_BOT_TOKEN_HIGH}"
+
+      rate_limiting:
+        enabled: true
+
+        # Higher limits for high-traffic bot
+        bot:
+          requests_per_minute: 300
+          requests_per_hour: 10000
+          concurrent_requests: 50
+
+        user:
+          requests_per_minute: 20
+          requests_per_hour: 500
+          concurrent_requests: 5
+
+        # Use Redis for distributed rate limiting (multi-instance support)
+        storage:
+          type: redis
+          redis:
+            url: "${REDIS_URL}"
+            key_prefix: "visor:ratelimit:high-traffic:"
+
+      workflow: high-traffic-workflow
+
+    # Support bot with strict user limits
+    - id: support-bot
+      endpoint: "/bots/slack/support"
+      signing_secret: "${SLACK_SIGNING_SECRET_SUPPORT}"
+      bot_token: "${SLACK_BOT_TOKEN_SUPPORT}"
+
+      rate_limiting:
+        enabled: true
+
+        # Strict per-user limits to prevent spam
+        user:
+          requests_per_minute: 5
+          requests_per_hour: 50
+          concurrent_requests: 1
+
+        # More lenient channel limits
+        channel:
+          requests_per_minute: 30
+          requests_per_hour: 1000
+          concurrent_requests: 10
+
+        actions:
+          send_ephemeral_message: true
+          ephemeral_message: "Please wait before sending another request. Support bot has rate limits to ensure fair usage."
+
+      workflow: support-workflow
+
+    # Testing bot with queueing enabled
+    - id: test-bot
+      endpoint: "/bots/slack/test"
+      signing_secret: "${SLACK_SIGNING_SECRET_TEST}"
+      bot_token: "${SLACK_BOT_TOKEN_TEST}"
+
+      rate_limiting:
+        enabled: true
+
+        bot:
+          requests_per_minute: 30
+          concurrent_requests: 5
+
+        # Enable request queueing when near limit
+        actions:
+          send_ephemeral_message: true
+          queue_when_near_limit: true
+          queue_threshold: 0.7  # Queue when 70% of capacity used
+
+      workflow: test-workflow
+
+# Workflow definitions
+checks:
+  # Production workflow
+  production-workflow:
+    type: command
+    command: echo
+    args:
+      - "Production workflow executed"
+    transforms:
+      # Access bot context in transformations
+      slack_output: |
+        {% if bot %}
+        Production Bot Response:
+
+        User: {{ bot.attributes.user }}
+        Channel: {{ bot.attributes.channel }}
+        Message: {{ bot.currentMessage.text }}
+
+        Processing your request...
+        {% endif %}
+
+  # Staging workflow
+  staging-workflow:
+    type: command
+    command: echo
+    args:
+      - "Staging workflow executed"
+    transforms:
+      slack_output: "Staging environment response"
+
+  # High-traffic workflow (optimized for performance)
+  high-traffic-workflow:
+    type: command
+    command: echo
+    args:
+      - "High-traffic workflow"
+    transforms:
+      slack_output: "Processed by high-traffic bot"
+
+  # Support workflow
+  support-workflow:
+    type: command
+    command: echo
+    args:
+      - "Support workflow executed"
+    transforms:
+      slack_output: |
+        {% if bot %}
+        Support Bot:
+
+        Thank you for contacting support!
+        We'll process your request: "{{ bot.currentMessage.text }}"
+        {% endif %}
+
+  # Test workflow
+  test-workflow:
+    type: command
+    command: echo
+    args:
+      - "Test workflow executed"
+    transforms:
+      slack_output: "Test bot response (with queueing enabled)"
+
+# Notes:
+#
+# 1. Rate limiting is optional and disabled by default for backward compatibility
+#
+# 2. Sliding window algorithm is used for accurate rate limiting:
+#    - Requests are tracked within rolling time windows
+#    - More accurate than fixed windows
+#    - Prevents burst traffic at window boundaries
+#
+# 3. Multiple dimensions can be combined:
+#    - Bot-level: Prevents overall API abuse
+#    - User-level: Prevents individual user spam
+#    - Channel-level: Prevents channel flooding
+#    - Global-level: Cross-bot limits (use Redis for multi-instance)
+#
+# 4. Concurrent request limits:
+#    - Limits active workflow executions
+#    - Helps manage resource usage
+#    - Separate from request rate limits
+#
+# 5. Storage options:
+#    - Memory (default): Fast, single-instance only
+#    - Redis: Distributed, supports multi-instance deployments
+#
+# 6. Rate limit responses include headers:
+#    - X-RateLimit-Limit: Maximum requests allowed
+#    - X-RateLimit-Remaining: Requests remaining in window
+#    - X-RateLimit-Reset: Unix timestamp when limit resets
+#    - Retry-After: Seconds to wait before retrying
+#
+# 7. Ephemeral messages:
+#    - Only visible to the rate-limited user
+#    - Can be customized per bot
+#    - Can be disabled if not needed
+#
+# 8. Request queueing:
+#    - Optional feature to queue instead of reject
+#    - Useful for handling bursts
+#    - Configurable threshold
+#
+# 9. Best Practices:
+#    - Set limits based on expected usage patterns
+#    - Monitor rate limit violations in logs
+#    - Use Redis for multi-instance deployments
+#    - Test limits under load before production

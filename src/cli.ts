@@ -75,6 +75,11 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+      .option('--http', 'Start HTTP server for webhooks and bot transports')
+      .option(
+        '--bot-context-file <path>',
+        'Path to JSON file containing bot context (conversation history, current message, etc.)'
+      )
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -152,6 +157,11 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+        .option('--http', 'Start HTTP server for webhooks and bot transports')
+        .option(
+          '--bot-context-file <path>',
+          'Path to JSON file containing bot context (conversation history, current message, etc.)'
+        )
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -220,6 +230,8 @@ export class CLI {
         analyzeBranchDiff: options.analyzeBranchDiff,
         event: options.event,
         message: options.message,
+        http: options.http || false,
+        botContextFile: options.botContextFile,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -408,7 +420,15 @@ Examples:
   visor --check all --fail-fast --output json                # Stop on first failure
   visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
   visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
-  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones`;
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones
+
+Bot Commands:
+  visor bot validate                                          # Validate Slack bot configuration
+  visor bot validate --config ./.visor.yaml                   # Validate specific config file
+  visor bot validate --check-api                              # Test Slack API connectivity
+  visor --http                                                # Start HTTP server for Slack bot
+
+For bot setup instructions, see: docs/slack-bot-setup.md`;
   }
 
   /**

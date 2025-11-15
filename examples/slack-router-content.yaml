@@ -1,0 +1,278 @@
+# Content-Based Routing Example
+#
+# This example demonstrates how to route Slack bot messages to different
+# workflows based on message content, keywords, and patterns.
+#
+# Use Cases:
+# - Route deployment requests to deployment workflow
+# - Route code review requests to review workflow
+# - Route questions to help/documentation workflow
+# - Route incident reports to incident response workflow
+
+version: '1.0'
+
+http_server:
+  enabled: true
+  port: 8080
+
+slack:
+  endpoint: "/slack/events"
+  signing_secret: "${SLACK_SIGNING_SECRET}"
+  bot_token: "${SLACK_BOT_TOKEN}"
+  fetch:
+    scope: thread
+    max_messages: 40
+    cache:
+      ttl_seconds: 600
+      max_threads: 200
+
+checks:
+  # ============================================================================
+  # DEPLOYMENT REQUESTS
+  # ============================================================================
+  # Handle deployment-related keywords
+
+  handle-deployment:
+    type: log
+    message: |
+      🚀 Deployment Request Detected
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      This would trigger the deployment workflow.
+
+      Typical deployment steps:
+      1. Validate deployment request
+      2. Check permissions
+      3. Run pre-deployment checks
+      4. Execute deployment
+      5. Post-deployment verification
+      6. Send status updates
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "deploy") ||
+        contains(bot.currentMessage.text, "release") ||
+        contains(bot.currentMessage.text, "ship") ||
+        contains(bot.currentMessage.text, "rollout")
+      )
+
+  # ============================================================================
+  # CODE REVIEW REQUESTS
+  # ============================================================================
+  # Handle code review keywords
+
+  handle-code-review:
+    type: log
+    message: |
+      🔍 Code Review Request Detected
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      This would trigger the code review workflow.
+
+      Typical code review steps:
+      1. Extract repository and PR information
+      2. Fetch code changes
+      3. Run static analysis
+      4. Run security scans
+      5. Generate review comments
+      6. Post results to thread
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "review") ||
+        contains(bot.currentMessage.text, "check") ||
+        contains(bot.currentMessage.text, "analyze") ||
+        contains(bot.currentMessage.text, "audit")
+      )
+
+  # ============================================================================
+  # HELP REQUESTS
+  # ============================================================================
+  # Handle help/documentation keywords
+
+  handle-help-request:
+    type: log
+    message: |
+      📚 Help Request Detected
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      Available Commands:
+      - "deploy [service]" - Deploy a service
+      - "review [PR URL]" - Review a pull request
+      - "incident [description]" - Report an incident
+      - "help" - Show this help message
+
+      For more information, see our documentation at https://example.com/docs
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "help") ||
+        contains(bot.currentMessage.text, "how") ||
+        contains(bot.currentMessage.text, "what") ||
+        contains(bot.currentMessage.text, "documentation") ||
+        contains(bot.currentMessage.text, "docs")
+      )
+
+  # ============================================================================
+  # INCIDENT REPORTS
+  # ============================================================================
+  # Handle incident-related keywords
+
+  handle-incident:
+    type: log
+    message: |
+      🚨 Incident Report Detected
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+      Timestamp: {{ bot.currentMessage.timestamp }}
+
+      This would trigger the incident response workflow.
+
+      Typical incident response steps:
+      1. Create incident ticket
+      2. Notify on-call team
+      3. Gather system diagnostics
+      4. Create incident channel
+      5. Track resolution progress
+      6. Post-mortem documentation
+    if: |
+      bot && (
+        contains(bot.currentMessage.text, "incident") ||
+        contains(bot.currentMessage.text, "outage") ||
+        contains(bot.currentMessage.text, "down") ||
+        contains(bot.currentMessage.text, "error") ||
+        contains(bot.currentMessage.text, "alert")
+      )
+
+  # ============================================================================
+  # DEFAULT HANDLER
+  # ============================================================================
+  # Handle messages that don't match specific patterns
+
+  handle-default:
+    type: log
+    message: |
+      💬 General Message Received
+
+      User: {{ bot.attributes.user }}
+      Channel: {{ bot.attributes.channel }}
+      Message: {{ bot.currentMessage.text }}
+
+      I'm not sure what you're asking for. Try one of these commands:
+      - "deploy [service]" - Deploy a service
+      - "review [PR URL]" - Review a pull request
+      - "incident [description]" - Report an incident
+      - "help" - Show help message
+    if: |
+      bot && !(
+        contains(bot.currentMessage.text, "deploy") ||
+        contains(bot.currentMessage.text, "release") ||
+        contains(bot.currentMessage.text, "ship") ||
+        contains(bot.currentMessage.text, "rollout") ||
+        contains(bot.currentMessage.text, "review") ||
+        contains(bot.currentMessage.text, "check") ||
+        contains(bot.currentMessage.text, "analyze") ||
+        contains(bot.currentMessage.text, "audit") ||
+        contains(bot.currentMessage.text, "help") ||
+        contains(bot.currentMessage.text, "how") ||
+        contains(bot.currentMessage.text, "what") ||
+        contains(bot.currentMessage.text, "documentation") ||
+        contains(bot.currentMessage.text, "docs") ||
+        contains(bot.currentMessage.text, "incident") ||
+        contains(bot.currentMessage.text, "outage") ||
+        contains(bot.currentMessage.text, "down") ||
+        contains(bot.currentMessage.text, "error") ||
+        contains(bot.currentMessage.text, "alert")
+      )
+
+# ============================================================================
+# ADVANCED ROUTING TECHNIQUES
+# ============================================================================
+#
+# 1. REGEX PATTERN MATCHING
+#    Use JavaScript regex in the 'if' condition for complex pattern matching:
+#
+#    handle-pr-url:
+#      type: log
+#      message: "Processing GitHub PR URL..."
+#      if: |
+#        bot && /https:\/\/github\.com\/.*\/pull\/\d+/.test(bot.currentMessage.text)
+#
+# 2. MULTI-WORD KEYWORD MATCHING
+#    Check for multiple keywords that must all be present:
+#
+#    handle-production-deployment:
+#      type: log
+#      message: "Production deployment request detected"
+#      if: |
+#        bot &&
+#        contains(bot.currentMessage.text, "deploy") &&
+#        contains(bot.currentMessage.text, "production")
+#
+# 3. CASE-INSENSITIVE MATCHING
+#    Convert to lowercase before matching:
+#
+#    handle-deploy-case-insensitive:
+#      type: log
+#      message: "Deployment request (case-insensitive match)"
+#      if: |
+#        bot && contains(bot.currentMessage.text.toLowerCase(), "deploy")
+#
+# 4. MULTI-STAGE WORKFLOWS
+#    Use depends_on to chain checks together:
+#
+#    parse-request:
+#      type: command
+#      command: echo
+#      args: ["Parsing request"]
+#      if: 'bot'
+#
+#    handle-deployment:
+#      type: command
+#      command: ./deploy.sh
+#      depends_on: [parse-request]
+#      if: 'contains(bot.currentMessage.text, "deploy")'
+#
+# 5. INTENT-BASED ROUTING (with AI)
+#    Use AI check provider to classify intent:
+#
+#    classify-intent:
+#      type: ai
+#      provider: claude
+#      prompt: |
+#        Classify the following message intent as one of:
+#        - deployment
+#        - code_review
+#        - help
+#        - incident
+#        - other
+#
+#        Message: {{ bot.currentMessage.text }}
+#
+#        Return only the intent name, nothing else.
+#
+#    route-by-intent:
+#      type: log
+#      message: "Routing based on AI classification..."
+#      depends_on: [classify-intent]
+#      if: 'outputs["classify-intent"] == "deployment"'
+#
+# 6. HISTORY-AWARE ROUTING
+#    Route based on conversation history:
+#
+#    handle-followup:
+#      type: log
+#      message: "Handling deployment follow-up question"
+#      if: |
+#        bot &&
+#        bot.history.length > 1 &&
+#        bot.history[bot.history.length - 2].role == "bot" &&
+#        contains(bot.history[bot.history.length - 2].text, "deployment")

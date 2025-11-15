@@ -1,0 +1,292 @@
+version: '1.0'
+
+# Multi-Team Configuration Example
+# This example shows how to run separate bots for different teams within an organization.
+# Each team has its own bot with team-specific workflows and permissions.
+
+http_server:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+
+# Multi-team Slack configuration
+slack:
+  bots:
+    # Engineering team bot - handles code reviews, deployments, incidents
+    - id: engineering-bot
+      endpoint: "/bots/slack/engineering"
+      signing_secret: "${SLACK_SIGNING_SECRET_ENG}"
+      bot_token: "${SLACK_BOT_TOKEN_ENG}"
+      mentions: direct
+      threads: required
+
+      fetch:
+        scope: thread
+        max_messages: 50
+        cache:
+          ttl_seconds: 900  # 15 minutes for active engineering conversations
+          max_threads: 500
+
+      # Engineering channels only
+      channel_allowlist:
+        - "CENG*"
+        - "C_DEV_*"
+        - "C_CODE_REVIEW"
+
+      worker_pool:
+        queue_capacity: 200
+        task_timeout: 600000  # 10 minutes for long-running tasks
+
+      workflow: engineering-router
+
+    # Product team bot - handles feature requests, roadmap questions
+    - id: product-bot
+      endpoint: "/bots/slack/product"
+      signing_secret: "${SLACK_SIGNING_SECRET_PRODUCT}"
+      bot_token: "${SLACK_BOT_TOKEN_PRODUCT}"
+      mentions: direct
+      threads: required
+
+      fetch:
+        scope: thread
+        max_messages: 40
+        cache:
+          ttl_seconds: 600  # 10 minutes
+          max_threads: 300
+
+      # Product channels only
+      channel_allowlist:
+        - "C_PRODUCT_*"
+        - "C_ROADMAP"
+        - "C_FEATURES"
+
+      worker_pool:
+        queue_capacity: 100
+        task_timeout: 300000  # 5 minutes
+
+      workflow: product-router
+
+    # Support team bot - handles customer issues, tickets, FAQs
+    - id: support-bot
+      endpoint: "/bots/slack/support"
+      signing_secret: "${SLACK_SIGNING_SECRET_SUPPORT}"
+      bot_token: "${SLACK_BOT_TOKEN_SUPPORT}"
+      mentions: direct
+      threads: required
+
+      fetch:
+        scope: thread
+        max_messages: 30  # Support threads can be long, limit history
+        cache:
+          ttl_seconds: 600  # 10 minutes
+          max_threads: 400  # High volume of support threads
+
+      # Support channels
+      channel_allowlist:
+        - "C_SUPPORT_*"
+        - "C_HELP"
+        - "C_ESCALATIONS"
+
+      worker_pool:
+        queue_capacity: 150
+        task_timeout: 300000  # 5 minutes
+
+      # Prewarm support channels for faster response
+      cache_prewarming:
+        enabled: true
+        channels:
+          - "C_SUPPORT_TIER1"
+          - "C_SUPPORT_TIER2"
+        max_threads_per_channel: 20
+        concurrency: 3
+        rate_limit_ms: 150
+
+      workflow: support-router
+
+    # Operations team bot - handles infrastructure, monitoring, alerts
+    - id: ops-bot
+      endpoint: "/bots/slack/ops"
+      signing_secret: "${SLACK_SIGNING_SECRET_OPS}"
+      bot_token: "${SLACK_BOT_TOKEN_OPS}"
+      mentions: direct
+      threads: required
+
+      fetch:
+        scope: thread
+        max_messages: 50
+        cache:
+          ttl_seconds: 900  # 15 minutes for incident conversations
+          max_threads: 500
+
+      # Operations channels
+      channel_allowlist:
+        - "C_OPS_*"
+        - "C_INCIDENTS"
+        - "C_MONITORING"
+        - "C_ALERTS"
+
+      worker_pool:
+        queue_capacity: 200
+        task_timeout: 600000  # 10 minutes for complex operations
+
+      # Enable cache observability for ops team
+      cache_observability:
+        enable_cache_endpoints: true
+        cache_admin_token: "${CACHE_ADMIN_TOKEN_OPS}"
+
+      workflow: ops-router
+
+# Team-specific workflows
+checks:
+  # Engineering team router - routes to code review, deployment, or incident workflows
+  engineering-router:
+    type: workflow
+    steps:
+      - check: eng-log-request
+        type: log
+        message: |
+          Engineering Bot ({{ bot.botId }})
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: eng-route-code-review
+        type: noop
+        if: 'bot && /review|pr|pull request/i.test(bot.currentMessage.text)'
+        description: "Route to code review workflow"
+        # Would delegate to code review workflow
+
+      - check: eng-route-deployment
+        type: noop
+        if: 'bot && /deploy|release/i.test(bot.currentMessage.text)'
+        description: "Route to deployment workflow"
+        # Would delegate to deployment workflow
+
+      - check: eng-route-incident
+        type: noop
+        if: 'bot && /incident|outage|down/i.test(bot.currentMessage.text)'
+        description: "Route to incident response workflow"
+        # Would delegate to incident workflow
+
+  # Product team router - routes to feature requests, roadmap, or analytics
+  product-router:
+    type: workflow
+    steps:
+      - check: product-log-request
+        type: log
+        message: |
+          Product Bot ({{ bot.botId }})
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: product-route-feature
+        type: noop
+        if: 'bot && /feature|request|idea/i.test(bot.currentMessage.text)'
+        description: "Route to feature request workflow"
+
+      - check: product-route-roadmap
+        type: noop
+        if: 'bot && /roadmap|timeline|when/i.test(bot.currentMessage.text)'
+        description: "Route to roadmap workflow"
+
+      - check: product-route-metrics
+        type: noop
+        if: 'bot && /metrics|analytics|data/i.test(bot.currentMessage.text)'
+        description: "Route to analytics workflow"
+
+  # Support team router - routes to ticket creation, FAQ, or escalation
+  support-router:
+    type: workflow
+    steps:
+      - check: support-log-request
+        type: log
+        message: |
+          Support Bot ({{ bot.botId }})
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: support-route-ticket
+        type: noop
+        if: 'bot && /ticket|issue|bug/i.test(bot.currentMessage.text)'
+        description: "Route to ticket creation workflow"
+
+      - check: support-route-faq
+        type: noop
+        if: 'bot && /how|what|why|faq/i.test(bot.currentMessage.text)'
+        description: "Route to FAQ workflow"
+
+      - check: support-route-escalate
+        type: noop
+        if: 'bot && /urgent|escalate|critical/i.test(bot.currentMessage.text)'
+        description: "Route to escalation workflow"
+
+  # Operations team router - routes to infrastructure, monitoring, or incident workflows
+  ops-router:
+    type: workflow
+    steps:
+      - check: ops-log-request
+        type: log
+        message: |
+          Operations Bot ({{ bot.botId }})
+          User: {{ bot.attributes.user }}
+          Channel: {{ bot.attributes.channel }}
+          Message: {{ bot.currentMessage.text }}
+
+      - check: ops-route-infra
+        type: noop
+        if: 'bot && /server|instance|node|scale/i.test(bot.currentMessage.text)'
+        description: "Route to infrastructure management workflow"
+
+      - check: ops-route-monitor
+        type: noop
+        if: 'bot && /monitor|check|health|status/i.test(bot.currentMessage.text)'
+        description: "Route to monitoring workflow"
+
+      - check: ops-route-incident
+        type: noop
+        if: 'bot && /incident|alert|down|outage/i.test(bot.currentMessage.text)'
+        description: "Route to incident response workflow"
+
+# How to use:
+#
+# 1. Create four Slack apps (one per team):
+#    - Engineering bot
+#    - Product bot
+#    - Support bot
+#    - Operations bot
+#
+# 2. Set environment variables for each bot:
+#    export SLACK_SIGNING_SECRET_ENG="..."
+#    export SLACK_BOT_TOKEN_ENG="xoxb-..."
+#    export SLACK_SIGNING_SECRET_PRODUCT="..."
+#    export SLACK_BOT_TOKEN_PRODUCT="xoxb-..."
+#    export SLACK_SIGNING_SECRET_SUPPORT="..."
+#    export SLACK_BOT_TOKEN_SUPPORT="xoxb-..."
+#    export SLACK_SIGNING_SECRET_OPS="..."
+#    export SLACK_BOT_TOKEN_OPS="xoxb-..."
+#    export CACHE_ADMIN_TOKEN_OPS="..."
+#
+# 3. Start Visor:
+#    visor --config examples/slack-multi-team-example.yaml --http
+#
+# 4. Configure Event Subscriptions:
+#    Engineering bot: https://your-server:8080/bots/slack/engineering
+#    Product bot: https://your-server:8080/bots/slack/product
+#    Support bot: https://your-server:8080/bots/slack/support
+#    Operations bot: https://your-server:8080/bots/slack/ops
+#
+# 5. Use cases:
+#    @engineering-bot review PR #123
+#    @product-bot when is dark mode launching?
+#    @support-bot user can't login
+#    @ops-bot scale up production
+#
+# Benefits:
+# - Team-specific bots with appropriate permissions
+# - Isolated workflows and resource pools per team
+# - Team-specific cache and persistence settings
+# - Clear separation of concerns
+# - Independent scaling per team
+# - Team-specific monitoring and observability

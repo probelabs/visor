@@ -1,0 +1,14 @@
+{
+  "name": "simple-mention",
+  "description": "Simple bot mention in a channel with no prior history",
+  "bot_user_id": "U_BOT_12345",
+  "event": {
+    "type": "app_mention",
+    "event_id": "Ev01234567",
+    "event_ts": "1700000000.000001",
+    "channel": "C01234567",
+    "user": "U_USER_001",
+    "text": "<@U_BOT_12345> Hello! Can you help me?",
+    "ts": "1700000000.000001"
+  }
+}

@@ -17,12 +17,16 @@ import { EnvironmentManager } from './core/environment';
 import { MockManager } from './core/mocks';
 import { buildPrInfoFromFixture } from './core/fixture';
 import { validateTestsDoc } from './validator';
+import { SlackTestDriver } from './drivers/slack-test-driver';
 
 export type TestCase = {
   name: string;
   description?: string;
   event?: string;
   flow?: Array<{ name: string }>;
+  mode?: 'default' | 'slack';
+  slack_fixture?: any;
+  expect_slack?: any;
 };
 
 export type TestSuite = {
@@ -236,7 +240,7 @@ export class VisorTestRunner {
     return { res, outHistory };
   }
 
-  private printCaseHeader(name: string, kind: 'flow' | 'single', event?: string): void {
+  private printCaseHeader(name: string, kind: 'flow' | 'single' | 'slack', event?: string): void {
     console.log('\n' + this.line(`${this.bold('Case')}: ${name}`));
     const meta: string[] = [`type=${kind}`];
     if (event) meta.push(`event=${event}`);
@@ -541,16 +545,23 @@ export class VisorTestRunner {
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
       // Case header for clarity
       const isFlow = Array.isArray((_case as any).flow) && (_case as any).flow.length > 0;
+      const isSlackMode = (_case as any).mode === 'slack';
       const caseEvent = (_case as any).event as string | undefined;
       this.printCaseHeader(
         (_case as any).name || '(unnamed)',
-        isFlow ? 'flow' : 'single',
+        isSlackMode ? 'slack' : isFlow ? 'flow' : 'single',
         caseEvent
       );
       if ((_case as any).skip) {
         console.log(`⏭ SKIP ${(_case as any).name}`);
         caseResults.push({ name: _case.name, passed: true });
         return { name: _case.name, failed: 0 };
+      }
+      if (isSlackMode) {
+        const slackRes = await this.runSlackCase(_case, cfg, defaultStrict, ghRec);
+        const failed = slackRes.failures;
+        caseResults.push({ name: _case.name, passed: failed === 0, errors: slackRes.errors });
+        return { name: _case.name, failed };
       }
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
         const flowRes = await this.runFlowCase(
@@ -770,6 +781,164 @@ export class VisorTestRunner {
     } catch {}
     clearInterval(__keepAlive);
     return { failures, results: caseResults };
+  }
+
+  private async runSlackCase(
+    slackCase: any,
+    cfg: any,
+    defaultStrict: boolean,
+    ghRec?: { error_code?: number; timeout_ms?: number }
+  ): Promise<{ failures: number; errors?: string[] }> {
+    const name = slackCase.name || '(unnamed)';
+    const strict = (
+      typeof slackCase.strict === 'boolean' ? slackCase.strict : defaultStrict
+    ) as boolean;
+
+    // Clear memory store
+    try {
+      MemoryStore.resetInstance();
+    } catch {}
+
+    // Setup environment
+    const envMgr = new EnvironmentManager();
+    const envOverrides =
+      typeof slackCase.env === 'object' && slackCase.env
+        ? (slackCase.env as Record<string, string>)
+        : undefined;
+    envMgr.apply(envOverrides);
+
+    // Setup recorder
+    const ghRecCase =
+      typeof slackCase.github_recorder === 'object' && slackCase.github_recorder
+        ? (slackCase.github_recorder as { error_code?: number; timeout_ms?: number })
+        : undefined;
+    const rcOpts = ghRecCase || ghRec;
+    const recorder = new RecordingOctokit(
+      rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
+    );
+    setGlobalRecorder(recorder);
+
+    // Create engine
+    const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
+
+    // Setup mocks
+    const mocks =
+      typeof slackCase.mocks === 'object' && slackCase.mocks
+        ? (slackCase.mocks as Record<string, unknown>)
+        : {};
+    const mockMgr = new MockManager(mocks);
+
+    // Prompts tracking
+    const prompts: Record<string, string[]> = {};
+
+    // Setup engine context with mocks
+    engine.setExecutionContext({
+      hooks: {
+        onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
+          const k = info.step;
+          if (!prompts[k]) prompts[k] = [];
+          prompts[k].push(info.prompt);
+        },
+        mockForStep: (step: string) => mockMgr.get(step),
+        onHumanInput: async (req: { checkId: string; default?: string }) => {
+          const m = mockMgr.get(req.checkId);
+          if (m !== undefined && m !== null) return String(m);
+          return (req.default ?? '').toString();
+        },
+      },
+    } as any);
+
+    try {
+      // Get Slack fixture
+      const fixture = slackCase.slack_fixture;
+      if (!fixture) {
+        throw new Error('Slack mode test requires slack_fixture field');
+      }
+
+      // Create Slack test driver
+      const driver = new SlackTestDriver(fixture, engine);
+
+      // Determine workflow to run
+      const workflow = slackCase.workflow;
+      let checksToRun: string[] = [];
+
+      if (workflow) {
+        // Run specific workflow
+        checksToRun = [workflow];
+      } else {
+        // Run all checks (default behavior)
+        checksToRun = Object.keys(cfg.checks || {});
+      }
+
+      console.log(`  Slack test: ${name}`);
+      console.log(`  Checks: ${checksToRun.join(', ')}`);
+
+      // Execute workflow with Slack context
+      const { res, outHistory } = await driver.execute(cfg, checksToRun);
+
+      // Validate Slack assertions
+      const errors: string[] = [];
+      const expectSlack = slackCase.expect_slack;
+
+      if (expectSlack) {
+        const slackErrors = driver.validate(expectSlack);
+        errors.push(...slackErrors);
+      }
+
+      // Validate regular assertions (if any)
+      const expect = slackCase.expect || {};
+      if (expect.calls || expect.outputs || expect.prompts) {
+        const caseFailures = require('./evaluators').evaluateCase(
+          name,
+          res.statistics,
+          recorder,
+          expect,
+          strict,
+          prompts,
+          res.results,
+          outHistory
+        );
+        errors.push(...caseFailures);
+      }
+
+      // Print results
+      if (errors.length === 0) {
+        const __suiteRel = (this as any).__suiteRel || 'tests';
+        console.log(
+          `${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${__suiteRel} › ${name}`
+        );
+      } else {
+        const __suiteRel = (this as any).__suiteRel || 'tests';
+        console.log(
+          `${(this as any).tagFail ? (this as any).tagFail() : '❌ FAIL'} ${__suiteRel} › ${name}`
+        );
+        for (const e of errors) {
+          console.log(`   - ${e}`);
+        }
+      }
+
+      // Cleanup
+      driver.cleanup();
+      envMgr.restore();
+
+      return {
+        failures: errors.length > 0 ? 1 : 0,
+        errors: errors.length > 0 ? errors : undefined,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`❌ ERROR ${name}: ${msg}`);
+      try {
+        if (process.env.VISOR_DEBUG === 'true' && err && (err as any).stack) {
+          console.error(`[stack] ${name}: ${(err as any).stack}`);
+        }
+      } catch {}
+      envMgr.restore();
+      return {
+        failures: 1,
+        errors: [err instanceof Error ? err.message : String(err)],
+      };
+    }
   }
 
   private async runFlowCase(
