@@ -494,6 +494,17 @@ export interface CheckConfig {
   /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
   on_finish?: OnFinishConfig;
   /**
+   * Preconditions that must hold before executing the check. If any expression
+   * evaluates to false, the check is skipped (skipReason='assume').
+   */
+  assume?: string | string[];
+  /**
+   * Postconditions that should hold after executing the check. Expressions are
+   * evaluated against the produced result/output; violations are recorded as
+   * error issues with ruleId "contract/guarantee_failed".
+   */
+  guarantee?: string | string[];
+  /**
    * Hard cap on how many times this check may execute within a single engine run.
    * Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.
    */
@@ -616,6 +627,12 @@ export interface OnFailConfig {
   goto_js?: string;
   /** Dynamic remediation list: JS expression returning string[] */
   run_js?: string;
+  /**
+   * Declarative transitions. Evaluated in order; first matching rule wins.
+   * If a rule's `to` is null, no goto occurs. When omitted or none match,
+   * the engine falls back to goto_js/goto for backward compatibility.
+   */
+  transitions?: TransitionRule[];
 }
 
 /**
@@ -632,6 +649,8 @@ export interface OnSuccessConfig {
   goto_js?: string;
   /** Dynamic post-success steps: JS expression returning string[] */
   run_js?: string;
+  /** Declarative transitions (see OnFailConfig.transitions). */
+  transitions?: TransitionRule[];
 }
 
 /**
@@ -649,6 +668,20 @@ export interface OnFinishConfig {
   goto_js?: string;
   /** Dynamic post-finish steps: JS expression returning string[] */
   run_js?: string;
+  /** Declarative transitions (see OnFailConfig.transitions). */
+  transitions?: TransitionRule[];
+}
+
+/**
+ * Declarative transition rule for on_* blocks.
+ */
+export interface TransitionRule {
+  /** JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule. */
+  when: string;
+  /** Target step ID, or null to explicitly prevent goto. */
+  to?: string | null;
+  /** Optional event override when performing goto. */
+  goto_event?: EventTrigger;
 }
 
 /**

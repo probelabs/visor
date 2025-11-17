@@ -665,6 +665,36 @@ async function executeCheckWithForEachItems(
         _parentState: state,
       };
 
+      // Evaluate assume contract for this iteration (design-by-contract)
+      try {
+        const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
+        if (assumeExpr) {
+          const evaluator = new FailureConditionEvaluator();
+          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          let ok = true;
+          for (const ex of exprs) {
+            const res = await evaluator.evaluateIfCondition(checkId, ex, {
+              event: context.event || 'manual',
+              previousResults: dependencyResults as any,
+            } as any);
+            if (!res) {
+              ok = false;
+              break;
+            }
+          }
+          if (!ok) {
+            logger.info(
+              `⏭  Skipped (assume: ${String(Array.isArray(assumeExpr) ? assumeExpr[0] : assumeExpr).substring(0, 40)}${String(Array.isArray(assumeExpr) ? assumeExpr[0] : assumeExpr).length > 40 ? '...' : ''})`
+            );
+            const iterationDurationMs = Date.now() - iterationStartMs;
+            perIterationDurations.push(iterationDurationMs);
+            perItemResults.push({ issues: [] });
+            allOutputs.push({ __skip: true });
+            continue;
+          }
+        }
+      } catch {}
+
       // Emit provider telemetry
       try {
         emitNdjsonFallback('visor.provider', {
@@ -742,6 +772,37 @@ async function executeCheckWithForEachItems(
         issues: enrichedIssues,
         ...(content ? { content } : {}),
       };
+
+      // Evaluate guarantee contract (non-fatal): append error issues on violation
+      try {
+        const guaranteeExpr = (checkConfig as any)?.guarantee as string | string[] | undefined;
+        if (guaranteeExpr) {
+          const evaluator = new FailureConditionEvaluator();
+          const exprs = Array.isArray(guaranteeExpr) ? guaranteeExpr : [guaranteeExpr];
+          for (const ex of exprs) {
+            const holds = await evaluator.evaluateIfCondition(checkId, ex, {
+              previousResults: dependencyResults as any,
+              event: context.event || 'manual',
+            } as any);
+            if (!holds) {
+              const issue: ReviewIssue = {
+                file: 'contract',
+                line: 0,
+                ruleId: `contract/guarantee_failed`,
+                message: `Guarantee failed: ${ex}`,
+                severity: 'error',
+                category: 'logic',
+                checkName: checkId,
+                group: checkConfig.group,
+                schema:
+                  typeof checkConfig.schema === 'object' ? 'custom' : (checkConfig.schema as any),
+                timestamp: Date.now(),
+              } as any;
+              enrichedResult.issues = [...(enrichedResult.issues || []), issue];
+            }
+          }
+        }
+      } catch {}
 
       // Evaluate fail_if for this forEach iteration
       if (checkConfig.fail_if) {
@@ -1650,6 +1711,64 @@ async function executeSingleCheck(
       _parentState: state,
     };
 
+    // Evaluate assume contract (design-by-contract) before executing
+    try {
+      const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
+      if (assumeExpr) {
+        const evaluator = new FailureConditionEvaluator();
+        const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+        let ok = true;
+        for (const ex of exprs) {
+          const res = await evaluator.evaluateIfCondition(checkId, ex, {
+            event: context.event || 'manual',
+            previousResults: dependencyResults as any,
+          } as any);
+          if (!res) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) {
+          logger.info(
+            `⏭  Skipped (assume: ${String(Array.isArray(assumeExpr) ? assumeExpr[0] : assumeExpr).substring(0, 40)}${String(Array.isArray(assumeExpr) ? assumeExpr[0] : assumeExpr).length > 40 ? '...' : ''})`
+          );
+          // Mark as completed and record skip stats
+          state.completedChecks.add(checkId);
+          const stats: CheckExecutionStats = {
+            checkName: checkId,
+            totalRuns: 0,
+            successfulRuns: 0,
+            failedRuns: 0,
+            skippedRuns: 0,
+            skipped: true,
+            skipReason: 'assume',
+            totalDuration: 0,
+            issuesFound: 0,
+            issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+          };
+          state.stats.set(checkId, stats);
+          const emptyResult: ReviewSummary = { issues: [] };
+          try {
+            Object.defineProperty(emptyResult as any, '__skipped', {
+              value: 'assume',
+              enumerable: false,
+            });
+          } catch {}
+          try {
+            context.journal.commitEntry({
+              sessionId: context.sessionId,
+              checkId,
+              result: emptyResult as any,
+              event: context.event || 'manual',
+              scope,
+            });
+          } catch {}
+          emitEvent({ type: 'CheckCompleted', checkId, scope, result: emptyResult });
+          return emptyResult;
+        }
+      }
+    } catch {}
+
     // Emit provider telemetry
     try {
       emitNdjsonFallback('visor.provider', {
@@ -1680,6 +1799,37 @@ async function executeSingleCheck(
       ...result,
       issues: enrichedIssues,
     };
+
+    // Evaluate guarantee contract after execution (non-fatal)
+    try {
+      const guaranteeExpr = (checkConfig as any)?.guarantee as string | string[] | undefined;
+      if (guaranteeExpr) {
+        const evaluator = new FailureConditionEvaluator();
+        const exprs = Array.isArray(guaranteeExpr) ? guaranteeExpr : [guaranteeExpr];
+        for (const ex of exprs) {
+          const holds = await evaluator.evaluateIfCondition(checkId, ex, {
+            previousResults: dependencyResults as any,
+            event: context.event || 'manual',
+          } as any);
+          if (!holds) {
+            const issue: ReviewIssue = {
+              file: 'contract',
+              line: 0,
+              ruleId: `contract/guarantee_failed`,
+              message: `Guarantee failed: ${ex}`,
+              severity: 'error',
+              category: 'logic',
+              checkName: checkId,
+              group: checkConfig.group,
+              schema:
+                typeof checkConfig.schema === 'object' ? 'custom' : (checkConfig.schema as any),
+              timestamp: Date.now(),
+            } as any;
+            enrichedResult.issues = [...(enrichedResult.issues || []), issue];
+          }
+        }
+      }
+    } catch {}
 
     // Handle forEach: true checks - convert output array to forEachItems
     let isForEach = (result as any).isForEach;

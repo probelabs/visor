@@ -456,6 +456,36 @@ export const configSchema = {
           description:
             'Finish routing configuration for forEach checks (runs after ALL iterations complete)',
         },
+        assume: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume').",
+        },
+        guarantee: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            'Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId "contract/guarantee_failed".',
+        },
         max_runs: {
           type: 'number',
           description:
@@ -581,7 +611,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1062,6 +1092,14 @@ export const configSchema = {
           type: 'string',
           description: 'Dynamic remediation list: JS expression returning string[]',
         },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description:
+            "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility.",
+        },
       },
       additionalProperties: false,
       description: 'Failure routing configuration per check',
@@ -1106,6 +1144,30 @@ export const configSchema = {
         '^x-': {},
       },
     },
+    TransitionRule: {
+      type: 'object',
+      properties: {
+        when: {
+          type: 'string',
+          description:
+            'JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.',
+        },
+        to: {
+          type: ['string', 'null'],
+          description: 'Target step ID, or null to explicitly prevent goto.',
+        },
+        goto_event: {
+          $ref: '#/definitions/EventTrigger',
+          description: 'Optional event override when performing goto.',
+        },
+      },
+      required: ['when'],
+      additionalProperties: false,
+      description: 'Declarative transition rule for on_* blocks.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     OnSuccessConfig: {
       type: 'object',
       properties: {
@@ -1131,6 +1193,13 @@ export const configSchema = {
         run_js: {
           type: 'string',
           description: 'Dynamic post-success steps: JS expression returning string[]',
+        },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description: 'Declarative transitions (see OnFailConfig.transitions).',
         },
       },
       additionalProperties: false,
@@ -1165,6 +1234,13 @@ export const configSchema = {
           type: 'string',
           description: 'Dynamic post-finish steps: JS expression returning string[]',
         },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description: 'Declarative transitions (see OnFailConfig.transitions).',
+        },
       },
       additionalProperties: false,
       description:
@@ -1173,14 +1249,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763>': {
+    'Partial<interface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056>': {
       type: 'object',
       additionalProperties: false,
     },

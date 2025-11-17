@@ -13,7 +13,7 @@
 
 import type { EngineContext, RunState, EngineState, EngineEvent } from '../../types/engine';
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
-import type { CheckConfig, OnFailConfig } from '../../types/config';
+import type { CheckConfig, OnFailConfig, TransitionRule } from '../../types/config';
 import { logger } from '../../logger';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
@@ -302,6 +302,41 @@ async function processOnFinish(
       });
       queuedForward = true;
     }
+  }
+
+  // Declarative transitions (override goto/goto_js when present)
+  const finishTransTarget = await evaluateTransitions(
+    onFinish.transitions,
+    checkId,
+    checkConfig,
+    result,
+    context,
+    state
+  );
+  if (finishTransTarget !== undefined) {
+    if (finishTransTarget) {
+      if (checkLoopBudget(context, state, 'on_finish', 'goto')) {
+        const errorIssue: ReviewIssue = {
+          file: 'system',
+          line: 0,
+          ruleId: `${checkId}/routing/loop_budget_exceeded`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_finish goto`,
+          severity: 'error',
+          category: 'logic',
+        };
+        result.issues = [...(result.issues || []), errorIssue];
+        return;
+      }
+      state.routingLoopCount++;
+      emitEvent({
+        type: 'ForwardRunRequested',
+        target: finishTransTarget.to,
+        scope,
+        origin: 'goto_js',
+        gotoEvent: finishTransTarget.goto_event,
+      });
+    }
+    return; // transitions override goto/goto_js
   }
 
   // Process on_finish.goto / goto_js
@@ -630,6 +665,42 @@ async function processOnSuccess(
     }
   }
 
+  // Declarative transitions for on_success (override goto/goto_js when present)
+  const successTransTarget = await evaluateTransitions(
+    onSuccess.transitions,
+    checkId,
+    checkConfig,
+    result,
+    context,
+    state
+  );
+  if (successTransTarget !== undefined) {
+    if (successTransTarget) {
+      if (checkLoopBudget(context, state, 'on_success', 'goto')) {
+        const errorIssue: ReviewIssue = {
+          file: 'system',
+          line: 0,
+          ruleId: `${checkId}/routing/loop_budget_exceeded`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_success goto`,
+          severity: 'error',
+          category: 'logic',
+        };
+        result.issues = [...(result.issues || []), errorIssue];
+        return;
+      }
+      state.routingLoopCount++;
+      emitEvent({
+        type: 'ForwardRunRequested',
+        target: successTransTarget.to,
+        scope,
+        origin: 'goto_js',
+        gotoEvent: successTransTarget.goto_event,
+      });
+      state.flags.forwardRunRequested = true;
+    }
+    return;
+  }
+
   // Process on_success.goto / goto_js
   const gotoTarget = await evaluateGoto(
     onSuccess.goto_js,
@@ -864,6 +935,42 @@ async function processOnFail(
     // Note: backoff.delay_ms and mode are intentionally not awaited here; the
     // state-machine processes retries as subsequent waves. If needed later, we
     // can insert a timed wait in the orchestrator layer.
+  }
+
+  // Declarative transitions for on_fail (override goto/goto_js when present)
+  const failTransTarget = await evaluateTransitions(
+    onFail.transitions,
+    checkId,
+    checkConfig,
+    result,
+    context,
+    state
+  );
+  if (failTransTarget !== undefined) {
+    if (failTransTarget) {
+      if (checkLoopBudget(context, state, 'on_fail', 'goto')) {
+        const errorIssue: ReviewIssue = {
+          file: 'system',
+          line: 0,
+          ruleId: `${checkId}/routing/loop_budget_exceeded`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_fail goto`,
+          severity: 'error',
+          category: 'logic',
+        };
+        result.issues = [...(result.issues || []), errorIssue];
+        return;
+      }
+      state.routingLoopCount++;
+      emitEvent({
+        type: 'ForwardRunRequested',
+        target: failTransTarget.to,
+        scope,
+        origin: 'goto_js',
+        gotoEvent: failTransTarget.goto_event,
+      });
+      state.flags.forwardRunRequested = true;
+    }
+    return;
   }
 
   // Process on_fail.goto / goto_js
@@ -1192,3 +1299,89 @@ export async function evaluateGoto(
 }
 // Default values (used only when config is absent)
 const DEFAULT_MAX_LOOPS = 10;
+
+/**
+ * Evaluate declarative transitions. Returns:
+ *  - { to, goto_event } when a rule matches,
+ *  - null (explicit) when a rule matches with to=null,
+ *  - undefined when no rule matched or transitions is empty.
+ */
+async function evaluateTransitions(
+  transitions: TransitionRule[] | undefined,
+  checkId: string,
+  checkConfig: CheckConfig,
+  result: ReviewSummary,
+  context: EngineContext,
+  _state: RunState
+): Promise<
+  { to: string; goto_event?: import('../../types/config').EventTrigger } | null | undefined
+> {
+  if (!transitions || transitions.length === 0) return undefined;
+  try {
+    const sandbox = createSecureSandbox();
+
+    // Build outputs record and outputs_history from the full session snapshot
+    const snapshotId = context.journal.beginSnapshot();
+    const ContextView = (require('../../snapshot-store') as any).ContextView;
+    const view = new ContextView(context.journal, context.sessionId, snapshotId, [], undefined);
+
+    const outputsRecord: Record<string, any> = {};
+    const outputsHistory: Record<string, any[]> = {};
+    const allEntries = context.journal.readVisible(context.sessionId, snapshotId, undefined);
+    const uniqueCheckIds = new Set(allEntries.map((e: any) => e.checkId));
+    for (const cid of uniqueCheckIds) {
+      try {
+        const jr = view.get(cid);
+        if (jr) outputsRecord[cid] = jr.output !== undefined ? jr.output : jr;
+      } catch {}
+      try {
+        const hist = view.getHistory(cid);
+        if (hist && hist.length > 0) {
+          outputsHistory[cid] = hist.map((r: any) => (r.output !== undefined ? r.output : r));
+        }
+      } catch {}
+    }
+    outputsRecord.history = outputsHistory;
+
+    const scopeObj: any = {
+      step: { id: checkId, tags: checkConfig.tags || [], group: checkConfig.group },
+      outputs: outputsRecord,
+      outputs_history: outputsHistory,
+      output: (result as any)?.output,
+      memory: createMemoryHelpers(),
+      event: { name: context.event || 'manual' },
+    };
+
+    for (const rule of transitions) {
+      const helpers = `
+        const any = (arr, pred) => Array.isArray(arr) && arr.some(x => pred(x));
+        const all = (arr, pred) => Array.isArray(arr) && arr.every(x => pred(x));
+        const none = (arr, pred) => Array.isArray(arr) && !arr.some(x => pred(x));
+        const count = (arr, pred) => Array.isArray(arr) ? arr.filter(x => pred(x)).length : 0;
+      `;
+      const code = `${helpers}\n${rule.when}`;
+      const matched = compileAndRun<boolean>(
+        sandbox,
+        code,
+        { scope: scopeObj },
+        {
+          injectLog: false,
+          wrapFunction: true,
+        }
+      );
+      if (matched) {
+        if (rule.to === null) return null;
+        if (typeof rule.to === 'string' && rule.to.length > 0) {
+          return { to: rule.to, goto_event: (rule as any).goto_event };
+        }
+        return null;
+      }
+    }
+    return undefined;
+  } catch (err) {
+    logger.error(
+      `[Routing] Error evaluating transitions: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return undefined;
+  }
+}

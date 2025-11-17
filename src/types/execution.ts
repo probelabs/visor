@@ -10,7 +10,7 @@ export interface CheckExecutionStats {
   failedRuns: number;
   skippedRuns: number; // Number of runs that were skipped (for forEach iterations)
   skipped: boolean;
-  skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed' | 'forEach_empty';
+  skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed' | 'forEach_empty' | 'assume';
   skipCondition?: string; // The actual if condition text
   totalDuration: number; // Total duration in milliseconds
   // Provider/self time (excludes time spent running routed children/descendants)

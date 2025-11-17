@@ -19,6 +19,7 @@ export class StateMachineExecutionEngine {
   private executionContext?: import('./providers/check-provider.interface').ExecutionContext;
   private debugServer?: DebugVisualizerServer;
   private _lastContext?: EngineContext;
+  private _lastRunner?: StateMachineRunner;
 
   constructor(
     workingDirectory?: string,
@@ -262,6 +263,7 @@ export class StateMachineExecutionEngine {
 
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
+    this._lastRunner = runner;
     const result = await runner.run();
 
     if (debug) {
@@ -389,6 +391,43 @@ export class StateMachineExecutionEngine {
     }
 
     return outputHistory;
+  }
+
+  /**
+   * Save a JSON snapshot of the last run's state and journal to a file (experimental).
+   * Does not include secrets. Intended for debugging and future resume support.
+   */
+  public async saveSnapshotToFile(filePath: string): Promise<void> {
+    const fs = await import('fs/promises');
+    const ctx = this._lastContext;
+    const runner = this._lastRunner;
+    if (!ctx || !runner) {
+      throw new Error('No prior execution context to snapshot');
+    }
+    const journal = (ctx as any).journal as ExecutionJournal;
+    const snapshotId = journal.beginSnapshot();
+    const entries = journal.readVisible(ctx.sessionId, snapshotId, undefined);
+    const state = runner.getState();
+    const serializableState = serializeRunState(state);
+    const payload = {
+      version: 1,
+      sessionId: ctx.sessionId,
+      event: ctx.event,
+      wave: state.wave,
+      state: serializableState,
+      journal: entries,
+      requestedChecks: (ctx as any).requestedChecks || [],
+    } as const;
+    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  }
+
+  /**
+   * Load a snapshot JSON from file and return it. Resume support can build on this.
+   */
+  public async loadSnapshotFromFile<T = unknown>(filePath: string): Promise<T> {
+    const fs = await import('fs/promises');
+    const raw = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(raw) as T;
   }
 
   /**
@@ -887,4 +926,23 @@ export class StateMachineExecutionEngine {
     }
     return str.substring(0, maxLength - 3) + '...';
   }
+}
+
+/** Convert RunState with Maps/Sets into a JSON-safe form */
+function serializeRunState(state: import('./types/engine').RunState) {
+  return {
+    ...state,
+    levelQueue: state.levelQueue,
+    eventQueue: state.eventQueue,
+    activeDispatches: Array.from(state.activeDispatches.entries()),
+    completedChecks: Array.from(state.completedChecks.values()),
+    stats: Array.from(state.stats.entries()),
+    historyLog: state.historyLog,
+    forwardRunGuards: Array.from(state.forwardRunGuards.values()),
+    currentLevelChecks: Array.from(state.currentLevelChecks.values()),
+    pendingRunScopes: Array.from((state.pendingRunScopes || new Map()).entries()).map(([k, v]) => [
+      k,
+      v,
+    ]),
+  };
 }
