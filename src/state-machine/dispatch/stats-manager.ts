@@ -45,10 +45,12 @@ export function updateStats(
     };
 
     // If this check was previously marked as skipped and now executed,
-    // clear the skipped flag and count this as a run.
-    if (stats.skipped && !isForEachIteration) {
+    // clear the skipped flag and any skip counters to ensure the run is visible.
+    if (stats.skipped) {
       stats.skipped = false;
-      stats.skippedRuns = 0; // Clear skipped runs count when a real run happens
+      stats.skippedRuns = 0;
+      (stats as any).skipReason = undefined;
+      (stats as any).skipCondition = undefined;
     }
 
     stats.totalRuns++;

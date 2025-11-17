@@ -53,7 +53,9 @@ export async function executeCheckWithForEachItems(
     }
   } catch (e) {
     if (context.debug) {
-      logger.warn(`[LevelDispatch] Failed to refresh forEachItems from journal for ${forEachParent}: ${e}`);
+      logger.warn(
+        `[LevelDispatch] Failed to refresh forEachItems from journal for ${forEachParent}: ${e}`
+      );
     }
   }
 
@@ -65,7 +67,9 @@ export async function executeCheckWithForEachItems(
   logger.info(
     `[LevelDispatch][DEBUG] executeCheckWithForEachItems: checkId=${checkId}, forEachParent=${forEachParent}, items=${forEachItems.length}`
   );
-  logger.info(`[LevelDispatch][DEBUG] forEachItems: ${JSON.stringify(forEachItems).substring(0, 200)}`);
+  logger.info(
+    `[LevelDispatch][DEBUG] forEachItems: ${JSON.stringify(forEachItems).substring(0, 200)}`
+  );
 
   const allIssues: ReviewIssue[] = [];
   const perItemResults: ReviewSummary[] = [];
@@ -75,16 +79,21 @@ export async function executeCheckWithForEachItems(
 
   for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
     const iterationStartMs = Date.now();
-    const scope: Array<{ check: string; index: number }> = [{ check: forEachParent, index: itemIndex }];
+    const scope: Array<{ check: string; index: number }> = [
+      { check: forEachParent, index: itemIndex },
+    ];
 
     const forEachItem = forEachItems[itemIndex];
     logger.info(
       `[LevelDispatch][DEBUG] Starting iteration ${itemIndex} of ${checkId}, parent=${forEachParent}, item=${JSON.stringify(forEachItem)?.substring(0, 100)}`
     );
 
-    const shouldSkipDueToParentFailure = (forEachItem as any)?.__failed === true || (forEachItem as any)?.__skip === true;
+    const shouldSkipDueToParentFailure =
+      (forEachItem as any)?.__failed === true || (forEachItem as any)?.__skip === true;
     if (shouldSkipDueToParentFailure) {
-      logger.info(`⏭  Skipped ${checkId} iteration ${itemIndex} (forEach parent "${forEachParent}" iteration ${itemIndex} marked as failed)`);
+      logger.info(
+        `⏭  Skipped ${checkId} iteration ${itemIndex} (forEach parent "${forEachParent}" iteration ${itemIndex} marked as failed)`
+      );
       const iterationDurationMs = Date.now() - iterationStartMs;
       perIterationDurations.push(iterationDurationMs);
       perItemResults.push({ issues: [] });
@@ -93,11 +102,15 @@ export async function executeCheckWithForEachItems(
     }
 
     try {
-      emitNdjsonSpanWithEvents('visor.foreach.item', {
-        'visor.check.id': checkId,
-        'visor.foreach.index': itemIndex,
-        'visor.foreach.total': forEachItems.length,
-      }, []);
+      emitNdjsonSpanWithEvents(
+        'visor.foreach.item',
+        {
+          'visor.check.id': checkId,
+          'visor.foreach.index': itemIndex,
+          'visor.foreach.total': forEachItems.length,
+        },
+        []
+      );
     } catch (error) {
       logger.warn(`[LevelDispatch] Failed to emit foreach.item span: ${error}`);
     }
@@ -117,7 +130,8 @@ export async function executeCheckWithForEachItems(
 
     try {
       const providerType = checkConfig.type || 'ai';
-      const providerRegistry = require('../../providers/check-provider-registry').CheckProviderRegistry.getInstance();
+      const providerRegistry =
+        require('../../providers/check-provider-registry').CheckProviderRegistry.getInstance();
       const provider = providerRegistry.getProviderOrThrow(providerType);
 
       const outputHistory = buildOutputHistoryFromJournal(context);
@@ -129,10 +143,17 @@ export async function executeCheckWithForEachItems(
         exec: checkConfig.exec,
         schema: checkConfig.schema,
         group: checkConfig.group,
-        focus: checkConfig.focus || ((): string => {
-          const focusMap: Record<string, string> = { security: 'security', performance: 'performance', style: 'style', architecture: 'architecture' };
-          return focusMap[checkId] || 'all';
-        })(),
+        focus:
+          checkConfig.focus ||
+          ((): string => {
+            const focusMap: Record<string, string> = {
+              security: 'security',
+              performance: 'performance',
+              style: 'style',
+              architecture: 'architecture',
+            };
+            return focusMap[checkId] || 'all';
+          })(),
         transform: checkConfig.transform,
         transform_js: checkConfig.transform_js,
         env: checkConfig.env,
@@ -147,7 +168,12 @@ export async function executeCheckWithForEachItems(
         },
       };
 
-      const dependencyResults = buildDependencyResultsWithScope(checkId, checkConfig, context, scope);
+      const dependencyResults = buildDependencyResultsWithScope(
+        checkId,
+        checkConfig,
+        context,
+        scope
+      );
 
       // Per-item dependency gating for map fanout
       try {
@@ -156,7 +182,12 @@ export async function executeCheckWithForEachItems(
         if (depList.length > 0) {
           const groupSatisfied = (token: string): boolean => {
             if (typeof token !== 'string') return true;
-            const orOptions = token.includes('|') ? token.split('|').map(s => s.trim()).filter(Boolean) : [token];
+            const orOptions = token.includes('|')
+              ? token
+                  .split('|')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+              : [token];
             for (const opt of orOptions) {
               const dr = dependencyResults.get(opt) as ReviewSummary | undefined;
               const depCfg = context.config.checks?.[opt];
@@ -178,12 +209,17 @@ export async function executeCheckWithForEachItems(
 
           let allSatisfied = true;
           for (const token of depList) {
-            if (!groupSatisfied(token as any)) { allSatisfied = false; break; }
+            if (!groupSatisfied(token as any)) {
+              allSatisfied = false;
+              break;
+            }
           }
 
           if (!allSatisfied) {
             if (context.debug) {
-              logger.info(`[LevelDispatch] Skipping ${checkId} iteration ${itemIndex} due to unsatisfied dependency group(s)`);
+              logger.info(
+                `[LevelDispatch] Skipping ${checkId} iteration ${itemIndex} due to unsatisfied dependency group(s)`
+              );
             }
             const iterationDurationMs = Date.now() - iterationStartMs;
             perIterationDurations.push(iterationDurationMs);
@@ -194,10 +230,27 @@ export async function executeCheckWithForEachItems(
         }
       } catch {}
 
-      const prInfo: any = context.prInfo || { number: 1, title: 'State Machine Execution', author: 'system', eventType: context.event || 'manual', eventContext: {}, files: [], commits: [] };
-      const executionContext = { ...context.executionContext, _engineMode: context.mode, _parentContext: context, _parentState: state };
+      const prInfo: any = context.prInfo || {
+        number: 1,
+        title: 'State Machine Execution',
+        author: 'system',
+        eventType: context.event || 'manual',
+        eventContext: {},
+        files: [],
+        commits: [],
+      };
+      const executionContext = {
+        ...context.executionContext,
+        _engineMode: context.mode,
+        _parentContext: context,
+        _parentState: state,
+      };
 
-      const result = await withActiveSpan(`visor.check.${checkId}`, { 'visor.check.id': checkId, 'visor.check.type': providerType }, async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext));
+      const result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        { 'visor.check.id': checkId, 'visor.check.type': providerType },
+        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      );
 
       const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({
         ...issue,
@@ -214,20 +267,34 @@ export async function executeCheckWithForEachItems(
       // Update stats for this iteration
       const iterationDurationMs = Date.now() - iterationStartMs;
       perIterationDurations.push(iterationDurationMs);
-      updateStats([{ checkId, result: enrichedResult as any, duration: iterationDurationMs }], state, true);
+      updateStats(
+        [{ checkId, result: enrichedResult as any, duration: iterationDurationMs }],
+        state,
+        true
+      );
 
       // Commit per-iteration journal result (scoped)
       try {
-        context.journal.commitEntry({ sessionId: context.sessionId, checkId, result: enrichedResult as any, event: context.event || 'manual', scope });
-        logger.info(`[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${enrichedResult.output !== undefined}`);
+        context.journal.commitEntry({
+          sessionId: context.sessionId,
+          checkId,
+          result: enrichedResult as any,
+          event: context.event || 'manual',
+          scope,
+        });
+        logger.info(
+          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${enrichedResult.output !== undefined}`
+        );
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit per-iteration result to journal: ${error}`);
       }
 
       // Record per-item summary and aggregate outputs/contents
       perItemResults.push(enrichedResult);
-      if ((enrichedResult as any).content) allContents.push(String((enrichedResult as any).content));
-      if ((enrichedResult as any).output !== undefined) allOutputs.push((enrichedResult as any).output);
+      if ((enrichedResult as any).content)
+        allContents.push(String((enrichedResult as any).content));
+      if ((enrichedResult as any).output !== undefined)
+        allOutputs.push((enrichedResult as any).output);
       allIssues.push(...(enrichedResult.issues || []));
 
       // Emit completion for iteration
@@ -236,11 +303,53 @@ export async function executeCheckWithForEachItems(
       const iterationDurationMs = Date.now() - iterationStartMs;
       perIterationDurations.push(iterationDurationMs);
       const err = error instanceof Error ? error : new Error(String(error));
-      logger.error(`[LevelDispatch] Error executing ${checkId} iteration ${itemIndex}: ${err.message}`);
-      updateStats([{ checkId, result: { issues: [{ severity: 'error', category: 'logic', ruleId: `${checkId}/error`, file: 'system', line: 0, message: err.message, timestamp: Date.now() } as any] } as any, error: err, duration: iterationDurationMs }], state, true);
+      logger.error(
+        `[LevelDispatch] Error executing ${checkId} iteration ${itemIndex}: ${err.message}`
+      );
+      updateStats(
+        [
+          {
+            checkId,
+            result: {
+              issues: [
+                {
+                  severity: 'error',
+                  category: 'logic',
+                  ruleId: `${checkId}/error`,
+                  file: 'system',
+                  line: 0,
+                  message: err.message,
+                  timestamp: Date.now(),
+                } as any,
+              ],
+            } as any,
+            error: err,
+            duration: iterationDurationMs,
+          },
+        ],
+        state,
+        true
+      );
       allOutputs.push({ __failed: true });
-      perItemResults.push({ issues: [{ severity: 'error', category: 'logic', ruleId: `${checkId}/error`, file: 'system', line: 0, message: err.message, timestamp: Date.now() } as any] });
-      emitEvent({ type: 'CheckErrored', checkId, scope, error: { message: err.message, stack: err.stack, name: err.name } });
+      perItemResults.push({
+        issues: [
+          {
+            severity: 'error',
+            category: 'logic',
+            ruleId: `${checkId}/error`,
+            file: 'system',
+            line: 0,
+            message: err.message,
+            timestamp: Date.now(),
+          } as any,
+        ],
+      });
+      emitEvent({
+        type: 'CheckErrored',
+        checkId,
+        scope,
+        error: { message: err.message, stack: err.stack, name: err.name },
+      });
     } finally {
       state.activeDispatches.delete(`${checkId}-${itemIndex}`);
     }
@@ -255,10 +364,13 @@ export async function executeCheckWithForEachItems(
       const str = typeof item === 'string' ? item : (JSON.stringify(item) ?? 'undefined');
       return str.length > 50 ? str.substring(0, 50) + '...' : str;
     });
-    checkStats.forEachPreview = allOutputs.length > 3 ? [...previewItems, `...${allOutputs.length - 3} more`] : previewItems;
+    checkStats.forEachPreview =
+      allOutputs.length > 3 ? [...previewItems, `...${allOutputs.length - 3} more`] : previewItems;
     state.stats.set(checkId, checkStats);
     if (checkStats.totalRuns > 0 && checkStats.failedRuns === checkStats.totalRuns) {
-      logger.info(`[LevelDispatch] forEach check ${checkId} failed completely (${checkStats.failedRuns}/${checkStats.totalRuns} iterations failed)`);
+      logger.info(
+        `[LevelDispatch] forEach check ${checkId} failed completely (${checkStats.failedRuns}/${checkStats.totalRuns} iterations failed)`
+      );
       (state as any).failedChecks = (state as any).failedChecks || new Set<string>();
       (state as any).failedChecks.add(checkId);
     }
@@ -279,7 +391,9 @@ export async function executeCheckWithForEachItems(
   logger.info(`[LevelDispatch][DEBUG] allOutputs: ${JSON.stringify(allOutputs).substring(0, 200)}`);
 
   // Route aggregated child before commit
-  try { logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`); } catch {}
+  try {
+    logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
+  } catch {}
   try {
     state.completedChecks.add(checkId);
     const currentWaveCompletions = (state as any).currentWaveCompletions as Set<string> | undefined;
@@ -297,7 +411,13 @@ export async function executeCheckWithForEachItems(
   }
 
   try {
-    context.journal.commitEntry({ sessionId: context.sessionId, checkId, result: aggregatedResult as any, event: context.event || 'manual', scope: [] });
+    context.journal.commitEntry({
+      sessionId: context.sessionId,
+      checkId,
+      result: aggregatedResult as any,
+      event: context.event || 'manual',
+      scope: [],
+    });
     logger.info(`[LevelDispatch][DEBUG] Committed aggregated result to journal with scope=[]`);
   } catch (error) {
     logger.warn(`[LevelDispatch] Failed to commit aggregated forEach result to journal: ${error}`);
@@ -312,20 +432,32 @@ export async function executeCheckWithForEachItems(
   );
 
   if (parentCheckConfig?.on_finish && parentCheckConfig.forEach) {
-    logger.info(`[LevelDispatch] Processing on_finish for forEach parent ${forEachParent} after children complete`);
+    logger.info(
+      `[LevelDispatch] Processing on_finish for forEach parent ${forEachParent} after children complete`
+    );
     try {
       const snapshotId = context.journal.beginSnapshot();
       const { ContextView } = require('../../snapshot-store');
-      const contextView = new ContextView(context.journal, context.sessionId, snapshotId, [], context.event);
+      const contextView = new ContextView(
+        context.journal,
+        context.sessionId,
+        snapshotId,
+        [],
+        context.event
+      );
       const parentResult = contextView.get(forEachParent);
 
       if (parentResult) {
-        logger.info(`[LevelDispatch] Found parent result for ${forEachParent}, evaluating on_finish`);
+        logger.info(
+          `[LevelDispatch] Found parent result for ${forEachParent}, evaluating on_finish`
+        );
 
         const onFinish = parentCheckConfig.on_finish;
 
         let queuedForward = false;
-        logger.info(`[LevelDispatch] on_finish.run: ${onFinish.run?.length || 0} targets, targets=${JSON.stringify(onFinish.run || [])}`);
+        logger.info(
+          `[LevelDispatch] on_finish.run: ${onFinish.run?.length || 0} targets, targets=${JSON.stringify(onFinish.run || [])}`
+        );
         if (onFinish.run && onFinish.run.length > 0) {
           for (const targetCheck of onFinish.run) {
             logger.info(`[LevelDispatch] Processing on_finish.run target: ${targetCheck}`);
@@ -334,25 +466,47 @@ export async function executeCheckWithForEachItems(
             );
             if (checkLoopBudget(context, state, 'on_finish', 'run')) {
               const errorIssue: ReviewIssue = {
-                file: 'system', line: 0, ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
-                message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish run`, severity: 'error', category: 'logic',
+                file: 'system',
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish run`,
+                severity: 'error',
+                category: 'logic',
               };
               parentResult.issues = [...(parentResult.issues || []), errorIssue];
-              try { context.journal.commitEntry({ sessionId: context.sessionId, checkId: forEachParent, result: parentResult as any, event: context.event || 'manual', scope: [] }); } catch (err) {
-                logger.warn(`[LevelDispatch] Failed to commit parent result with loop budget error: ${err}`);
+              try {
+                context.journal.commitEntry({
+                  sessionId: context.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult as any,
+                  event: context.event || 'manual',
+                  scope: [],
+                });
+              } catch (err) {
+                logger.warn(
+                  `[LevelDispatch] Failed to commit parent result with loop budget error: ${err}`
+                );
               }
               return aggregatedResult;
             }
             state.routingLoopCount++;
-            emitEvent({ type: 'ForwardRunRequested', target: targetCheck, scope: [], origin: 'run' });
+            emitEvent({
+              type: 'ForwardRunRequested',
+              target: targetCheck,
+              scope: [],
+              origin: 'run',
+            });
             queuedForward = true;
           }
         }
 
         // Debug for goto_js
         if (context.debug || true) {
-          logger.info(`[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`);
-          if (onFinish.goto_js) logger.info(`[LevelDispatch] goto_js code: ${onFinish.goto_js.substring(0, 200)}`);
+          logger.info(
+            `[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`
+          );
+          if (onFinish.goto_js)
+            logger.info(`[LevelDispatch] goto_js code: ${onFinish.goto_js.substring(0, 200)}`);
           try {
             const snapshotId2 = context.journal.beginSnapshot();
             const { ContextView: CV } = require('../../snapshot-store');
@@ -365,21 +519,44 @@ export async function executeCheckWithForEachItems(
           } catch {}
         }
 
-        const gotoTarget = await (evaluateGoto as any)(onFinish.goto_js, onFinish.goto, forEachParent, parentCheckConfig, parentResult, context, state);
-        if (context.debug || true) logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || 'null'}`);
+        const gotoTarget = await (evaluateGoto as any)(
+          onFinish.goto_js,
+          onFinish.goto,
+          forEachParent,
+          parentCheckConfig,
+          parentResult,
+          context,
+          state
+        );
+        if (context.debug || true)
+          logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || 'null'}`);
 
         if (gotoTarget) {
           if (queuedForward && gotoTarget === forEachParent) {
-            logger.info(`[LevelDispatch] on_finish.goto to self (${gotoTarget}) deferred, will process after WaveRetry`);
+            logger.info(
+              `[LevelDispatch] on_finish.goto to self (${gotoTarget}) deferred, will process after WaveRetry`
+            );
             emitEvent({ type: 'WaveRetry', reason: 'on_finish' });
           } else {
             if (checkLoopBudget(context, state, 'on_finish', 'goto')) {
               const errorIssue: ReviewIssue = {
-                file: 'system', line: 0, ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
-                message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish goto`, severity: 'error', category: 'logic',
+                file: 'system',
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish goto`,
+                severity: 'error',
+                category: 'logic',
               };
               parentResult.issues = [...(parentResult.issues || []), errorIssue];
-              try { context.journal.commitEntry({ sessionId: context.sessionId, checkId: forEachParent, result: parentResult as any, event: context.event || 'manual', scope: [] }); } catch {}
+              try {
+                context.journal.commitEntry({
+                  sessionId: context.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult as any,
+                  event: context.event || 'manual',
+                  scope: [],
+                });
+              } catch {}
               return aggregatedResult;
             }
             state.routingLoopCount++;

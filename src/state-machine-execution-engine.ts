@@ -331,11 +331,14 @@ export class StateMachineExecutionEngine {
     failFast?: boolean,
     requestedChecks?: string[]
   ): EngineContext {
+    // Deep clone provided config to avoid cross-run mutations between tests/runs
+    const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
+
     // Build check metadata
     const checks: Record<string, CheckMetadata> = {};
 
     // If config has checks, use them
-    for (const [checkId, checkConfig] of Object.entries(config.checks || {})) {
+    for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
       checks[checkId] = {
         tags: checkConfig.tags || [],
         triggers: (Array.isArray(checkConfig.on) ? checkConfig.on : [checkConfig.on]).filter(
@@ -351,15 +354,15 @@ export class StateMachineExecutionEngine {
     // that don't exist in the config (e.g., legacy test mode with empty config)
     if (requestedChecks && requestedChecks.length > 0) {
       for (const checkName of requestedChecks) {
-        if (!checks[checkName] && !config.checks?.[checkName]) {
+        if (!checks[checkName] && !clonedConfig.checks?.[checkName]) {
           // Synthesize a minimal check config for this legacy check name
           logger.debug(`[StateMachine] Synthesizing minimal config for legacy check: ${checkName}`);
 
           // Add to config.checks so providers can find it
-          if (!config.checks) {
-            config.checks = {};
+          if (!clonedConfig.checks) {
+            clonedConfig.checks = {};
           }
-          config.checks[checkName] = {
+          clonedConfig.checks[checkName] = {
             type: 'ai',
             prompt: `Perform ${checkName} analysis`,
           };
@@ -378,11 +381,11 @@ export class StateMachineExecutionEngine {
 
     // Initialize journal and memory
     const journal = new ExecutionJournal();
-    const memory = MemoryStore.getInstance(config.memory);
+    const memory = MemoryStore.getInstance(clonedConfig.memory);
 
     return {
       mode: 'state-machine',
-      config,
+      config: clonedConfig,
       checks,
       journal,
       memory,
