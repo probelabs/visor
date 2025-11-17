@@ -3,7 +3,7 @@ import path from 'path';
 import * as yaml from 'js-yaml';
 
 import { ConfigManager } from '../config';
-import { CheckExecutionEngine } from '../check-execution-engine';
+import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
 import { MemoryStore } from '../memory-store';
@@ -89,7 +89,7 @@ export class VisorTestRunner {
     strict: boolean;
     expect: ExpectBlock;
     prInfo: PRInfo;
-    engine: CheckExecutionEngine;
+    engine: StateMachineExecutionEngine;
     recorder: RecordingOctokit;
     prompts: Record<string, string[]>;
     mocks: Record<string, unknown>;
@@ -133,7 +133,8 @@ export class VisorTestRunner {
     try {
       MemoryStore.resetInstance();
     } catch {}
-    const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
+    // Always use StateMachineExecutionEngine
+    const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
 
     // Prompts and mocks setup
     const prompts: Record<string, string[]> = {};
@@ -793,7 +794,7 @@ export class VisorTestRunner {
       rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
     );
     setGlobalRecorder(recorder);
-    const engine = new CheckExecutionEngine(undefined as any, recorder as unknown as any);
+    const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
     const flowName = flowCase.name || 'flow';
     let failures = 0;
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
@@ -915,7 +916,7 @@ export class VisorTestRunner {
 
   // Print warnings when AI or command steps execute without mocks in tests
   private warnUnmockedProviders(
-    stats: import('../check-execution-engine').ExecutionStatistics,
+    stats: import('../types/execution').ExecutionStatistics,
     cfg: any,
     mocks: Record<string, unknown>
   ): void {
@@ -1005,7 +1006,7 @@ export class VisorTestRunner {
 
   private printCoverage(
     label: string,
-    stats: import('../check-execution-engine').ExecutionStatistics,
+    stats: import('../types/execution').ExecutionStatistics,
     expect: ExpectBlock
   ): void {
     const executed: Record<string, number> = {};

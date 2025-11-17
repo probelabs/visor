@@ -2,7 +2,7 @@ import { RecordingOctokit } from './recorders/github-recorder';
 import { validateCounts, type ExpectBlock, deepEqual, containsUnordered } from './assertions';
 import { deepGet } from './utils/selectors';
 
-type ExecStats = import('../check-execution-engine').ExecutionStatistics;
+type ExecStats = import('../types/execution').ExecutionStatistics;
 type GroupedResults = import('../reviewer').GroupedCheckResults;
 
 function parseRegex(raw: string): RegExp {

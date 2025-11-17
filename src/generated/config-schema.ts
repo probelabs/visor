@@ -581,7 +581,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1173,14 +1173,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>': {
+    'Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>': {
       type: 'object',
       additionalProperties: false,
     },

@@ -22,7 +22,7 @@ module.exports = [
       'no-var': 'error',
       
       // TypeScript rules
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
       // Older engine files intentionally use narrow 'any' in a few places.
       // Treat as disabled to keep CI and pre-commit green; we can re-enable
       // per-file with explicit types in a follow-up.

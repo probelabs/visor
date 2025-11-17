@@ -16,7 +16,7 @@ export interface AnalysisResult {
   executionTime: number;
   timestamp: string;
   checksExecuted: string[];
-  executionStatistics?: import('./check-execution-engine').ExecutionStatistics; // Detailed execution statistics
+  executionStatistics?: import('./types/execution').ExecutionStatistics; // Detailed execution statistics
   debug?: DebugInfo; // Optional debug information when debug mode is enabled
   failureConditions?: FailureConditionResult[]; // Optional failure condition results
   isCodeReview?: boolean; // Whether this is a code review context (affects output formatting)

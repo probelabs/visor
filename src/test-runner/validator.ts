@@ -155,6 +155,13 @@ const schema: any = {
           type: 'object',
           additionalProperties: { type: 'string' },
         },
+        routing: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            max_loops: { type: 'number' },
+          },
+        },
         mocks: {
           type: 'object',
           additionalProperties: {
@@ -334,6 +341,7 @@ const knownKeys = new Set([
   'event',
   'fixture',
   'env',
+  'routing',
   'mocks',
   'expect',
   'flow',
@@ -363,6 +371,8 @@ const knownKeys = new Set([
   'equalsDeep',
   'where',
   'contains_unordered',
+  // routing
+  'max_loops',
 ]);
 
 function hintForAdditionalProperty(err: ErrorObject): string | undefined {

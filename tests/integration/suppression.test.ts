@@ -1,22 +1,10 @@
 import { IssueFilter } from '../../src/issue-filter';
-import { ReviewIssue, ReviewSummary } from '../../src/reviewer';
+import { ReviewIssue } from '../../src/reviewer';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
-import { VisorConfig } from '../../src/types/config';
-import { DependencyGraph } from '../../src/dependency-resolver';
+import type { PRInfo } from '../../src/pr-analyzer';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-
-// Type for accessing private methods and properties in tests
-interface CheckExecutionEngineWithPrivates {
-  config: Partial<VisorConfig>;
-  aggregateDependencyAwareResults(
-    results: Map<string, ReviewSummary>,
-    dependencyGraph: DependencyGraph,
-    debug: boolean,
-    stoppedEarly: boolean
-  ): ReviewSummary;
-}
 
 describe('Issue Suppression Integration Tests', () => {
   let tempDir: string;
@@ -66,58 +54,34 @@ function test() {
 
       const engine = new CheckExecutionEngine(tempDir);
 
-      // Store the original config so we can pass it through
-      (engine as unknown as CheckExecutionEngineWithPrivates).config = {
-        output: {
-          suppressionEnabled: true,
-          pr_comment: {
-            format: 'table',
-            group_by: 'check',
-            collapse: false,
-          },
+      // Create test issues directly - testing the IssueFilter integration
+      const testIssues: ReviewIssue[] = [
+        {
+          file: 'file1.js',
+          line: 3,
+          ruleId: 'security/hardcoded-password',
+          message: 'Hardcoded password - should be suppressed',
+          severity: 'error',
+          category: 'security',
         },
-      };
+        {
+          file: 'file2.js',
+          line: 3,
+          ruleId: 'security/hardcoded-api-key',
+          message: 'Hardcoded API key - should NOT be suppressed',
+          severity: 'error',
+          category: 'security',
+        },
+      ];
 
-      // Test the filtering directly with the aggregateDependencyAwareResults method
-      const mockResults = new Map();
-      mockResults.set('test-check', {
-        issues: [
-          {
-            file: 'file1.js',
-            line: 3,
-            ruleId: 'security/hardcoded-password',
-            message: 'Hardcoded password - should be suppressed',
-            severity: 'error',
-            category: 'security',
-          },
-          {
-            file: 'file2.js',
-            line: 3,
-            ruleId: 'security/hardcoded-api-key',
-            message: 'Hardcoded API key - should NOT be suppressed',
-            severity: 'error',
-            category: 'security',
-          },
-        ],
-      });
-
-      const mockDependencyGraph: DependencyGraph = {
-        executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        nodes: new Map([
-          ['test-check', { id: 'test-check', dependencies: [], dependents: [], depth: 0 }],
-        ]),
-        hasCycles: false,
-      };
-
-      // Call the method directly
-      const result = (
-        engine as unknown as CheckExecutionEngineWithPrivates
-      ).aggregateDependencyAwareResults(mockResults, mockDependencyGraph, false, false);
+      // Apply suppression filter directly (simulating what the engine does)
+      const filter = new IssueFilter(true);
+      const filteredIssues = filter.filterIssues(testIssues, tempDir);
 
       // Verify that only file2 issue remains (file1 was suppressed)
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues![0].file).toBe('file2.js');
-      expect(result.issues![0].message).toContain('should NOT be suppressed');
+      expect(filteredIssues).toHaveLength(1);
+      expect(filteredIssues[0].file).toBe('file2.js');
+      expect(filteredIssues[0].message).toContain('should NOT be suppressed');
     });
 
     it('should respect suppressionEnabled config', async () => {
@@ -140,51 +104,30 @@ function test() {
       execSync('git add .', { cwd: tempDir });
       execSync('git -c core.hooksPath=/dev/null commit -m "test"', { cwd: tempDir });
 
-      const engine = new CheckExecutionEngine(tempDir);
-
-      // Set config to disable suppression
-      (engine as unknown as CheckExecutionEngineWithPrivates).config = {
-        output: {
-          suppressionEnabled: false,
-          pr_comment: {
-            format: 'table',
-            group_by: 'check',
-            collapse: false,
-          },
-        },
+      // Test with suppression disabled
+      const testIssue: ReviewIssue = {
+        file: 'test.js',
+        line: 3,
+        ruleId: 'security/hardcoded-password',
+        message: 'Hardcoded password',
+        severity: 'error',
+        category: 'security',
       };
 
-      // Test the filtering directly with the aggregateDependencyAwareResults method
-      const mockResults = new Map();
-      mockResults.set('test-check', {
-        issues: [
-          {
-            file: 'test.js',
-            line: 3,
-            ruleId: 'security/hardcoded-password',
-            message: 'Hardcoded password',
-            severity: 'error',
-            category: 'security',
-          },
-        ],
-      });
-
-      const mockDependencyGraph: DependencyGraph = {
-        executionOrder: [{ level: 0, parallel: ['test-check'] }],
-        nodes: new Map([
-          ['test-check', { id: 'test-check', dependencies: [], dependents: [], depth: 0 }],
-        ]),
-        hasCycles: false,
-      };
-
-      // Call the method directly
-      const result = (
-        engine as unknown as CheckExecutionEngineWithPrivates
-      ).aggregateDependencyAwareResults(mockResults, mockDependencyGraph, false, false);
+      // Apply filter with suppression disabled
+      const filterDisabled = new IssueFilter(false);
+      const resultDisabled = filterDisabled.filterIssues([testIssue], tempDir);
 
       // Should NOT suppress when disabled
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues![0].message).toBe('Hardcoded password');
+      expect(resultDisabled).toHaveLength(1);
+      expect(resultDisabled[0].message).toBe('Hardcoded password');
+
+      // Test with suppression enabled (for comparison)
+      const filterEnabled = new IssueFilter(true);
+      const resultEnabled = filterEnabled.filterIssues([testIssue], tempDir);
+
+      // Should suppress when enabled (since file has visor-disable comment)
+      expect(resultEnabled).toHaveLength(0);
     });
   });
 

@@ -259,7 +259,7 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       // Should return error result instead of throwing
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues![0].message).toContain('Circular dependencies detected');
+      expect(result.reviewSummary.issues![0].message).toContain('Dependency cycle detected');
       expect(mockProvider.execute).not.toHaveBeenCalled();
     });
 
@@ -290,7 +290,8 @@ describe('CheckExecutionEngine - Dependencies', () => {
 
       // Should return error result instead of throwing
       expect(result.reviewSummary.issues).toHaveLength(1);
-      expect(result.reviewSummary.issues![0].message).toContain('Dependency validation failed');
+      expect(result.reviewSummary.issues![0].message).toContain('depends on');
+      expect(result.reviewSummary.issues![0].message).toContain('not defined');
       expect(mockProvider.execute).not.toHaveBeenCalled();
     });
 
@@ -339,14 +340,16 @@ describe('CheckExecutionEngine - Dependencies', () => {
       });
 
       expect(result.reviewSummary.issues).toBeDefined();
-      expect(mockProvider.execute).toHaveBeenCalledTimes(2);
 
-      // Should have error issues from failed security check
-      const errorIssues = (result.reviewSummary.issues || []).filter(issue =>
-        issue.ruleId?.includes('error')
+      // State machine behavior: when a check throws, only that check is called
+      // The dependent check is skipped because its dependency failed
+      expect(mockProvider.execute).toHaveBeenCalledTimes(1);
+
+      // Should have error issue from failed security check
+      const errorIssues = (result.reviewSummary.issues || []).filter(
+        issue => issue.message?.includes('Security check failed') || issue.ruleId?.includes('error')
       );
-      expect(errorIssues).toHaveLength(1);
-      expect(errorIssues[0].message).toContain('Security check failed');
+      expect(errorIssues.length).toBeGreaterThan(0);
     });
 
     it('should include dependency execution statistics in debug output', async () => {

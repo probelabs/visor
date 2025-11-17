@@ -265,15 +265,6 @@ export class FailureConditionEvaluator {
       results.push(...filteredResults, ...checkResults);
     }
 
-    try {
-      if (checkName === 'B') {
-        console.error(
-          `🔧 Debug: fail_if results for ${checkName}: ${JSON.stringify(results)} context.output=${JSON.stringify(
-            context.output
-          )}`
-        );
-      }
-    } catch {}
     return results;
   }
 
@@ -599,7 +590,8 @@ export class FailureConditionEvaluator {
       return Boolean(result);
     } catch (error) {
       console.error('❌ Failed to evaluate expression:', condition, error);
-      // Re-throw the error so it can be caught at a higher level for error reporting
+      // Re-throw the error so it can be caught by evaluateSingleCondition
+      // and properly populate the error field in the result
       throw error;
     }
   }

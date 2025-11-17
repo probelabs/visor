@@ -349,6 +349,17 @@ export class CommandCheckProvider extends CheckProvider {
             finalOutput = rendered.trim();
             logger.verbose(`✓ Applied Liquid transform successfully (string output)`);
           }
+
+          // Capture Liquid transform in telemetry
+          try {
+            const span = trace.getSpan(otContext.active());
+            if (span) {
+              const { captureLiquidEvaluation } = require('../telemetry/state-capture');
+              captureLiquidEvaluation(span, transform, transformContext, rendered);
+            }
+          } catch {
+            // Ignore telemetry errors
+          }
         } catch (error) {
           logger.error(
             `✗ Failed to apply Liquid transform: ${error instanceof Error ? error.message : 'Unknown error'}`

@@ -70,7 +70,8 @@ export function buildProviderTemplateContext(
         const name = checkName.slice(0, -4);
         outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
       } else {
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        const extracted = summary.output !== undefined ? summary.output : summary;
+        outputs[checkName] = extracted;
       }
     }
   }

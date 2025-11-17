@@ -21,7 +21,9 @@ describe('Telemetry E2E — Mermaid diagram telemetry (full code)', () => {
   beforeAll(() => {
     fs.mkdirSync(tempDir, { recursive: true });
     fs.mkdirSync(tracesDir, { recursive: true });
+  });
 
+  beforeEach(() => {
     // Build a check that renders a template containing a mermaid block
     const cfg = {
       version: '1.0',
@@ -38,9 +40,7 @@ describe('Telemetry E2E — Mermaid diagram telemetry (full code)', () => {
     } as const;
 
     fs.writeFileSync(configPath, yaml.dump(cfg), 'utf8');
-  });
 
-  beforeEach(() => {
     mockConsoleLog = jest.fn();
     mockConsoleError = jest.fn();
     mockProcessExit = jest.fn();

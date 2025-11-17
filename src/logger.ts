@@ -28,6 +28,7 @@ class Logger {
   private level: LogLevel = 'info';
   private isJsonLike: boolean = false;
   private isTTY: boolean = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
+  private showTimestamps: boolean = true; // default: always show timestamps
 
   configure(
     opts: {
@@ -78,42 +79,49 @@ class Logger {
     return true;
   }
 
-  private write(msg: string): void {
+  private write(msg: string, level?: LogLevel): void {
     // Always route to stderr to keep stdout clean for results
     try {
-      process.stderr.write(msg + '\n');
+      if (this.showTimestamps) {
+        const ts = new Date().toISOString();
+        const lvl = level ? level : undefined;
+        const prefix = lvl ? `[${ts}] [${lvl}]` : `[${ts}]`;
+        process.stderr.write(`${prefix} ${msg}\n`);
+      } else {
+        process.stderr.write(msg + '\n');
+      }
     } catch {
       // Ignore write errors
     }
   }
 
   info(msg: string): void {
-    if (this.shouldLog('info')) this.write(msg);
+    if (this.shouldLog('info')) this.write(msg, 'info');
   }
 
   warn(msg: string): void {
-    if (this.shouldLog('warn')) this.write(msg);
+    if (this.shouldLog('warn')) this.write(msg, 'warn');
   }
 
   error(msg: string): void {
-    if (this.shouldLog('error')) this.write(msg);
+    if (this.shouldLog('error')) this.write(msg, 'error');
   }
 
   verbose(msg: string): void {
-    if (this.shouldLog('verbose')) this.write(msg);
+    if (this.shouldLog('verbose')) this.write(msg, 'verbose');
   }
 
   debug(msg: string): void {
-    if (this.shouldLog('debug')) this.write(msg);
+    if (this.shouldLog('debug')) this.write(msg, 'debug');
   }
 
   step(msg: string): void {
     // High-level phase indicator
-    if (this.shouldLog('info')) this.write(`▶ ${msg}`);
+    if (this.shouldLog('info')) this.write(`▶ ${msg}`, 'info');
   }
 
   success(msg: string): void {
-    if (this.shouldLog('info')) this.write(`✔ ${msg}`);
+    if (this.shouldLog('info')) this.write(`✔ ${msg}`, 'info');
   }
 }
 

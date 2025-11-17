@@ -65,6 +65,11 @@ checks:
       run: [child-log]
       goto: other-log
 
+  process-item:
+    type: log
+    message: Processing item
+    depends_on: [parent]
+
   child-log:
     type: log
     message: CHILD

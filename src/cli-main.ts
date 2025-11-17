@@ -5,7 +5,7 @@ import 'dotenv/config';
 
 import { CLI } from './cli';
 import { ConfigManager } from './config';
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
@@ -120,7 +120,17 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   };
   const hasFlag = (name: string): boolean => argv.includes(name);
 
-  const testsPath = getArg('--config');
+  // Support both --config flag and positional argument for tests path
+  let testsPath = getArg('--config');
+  if (!testsPath) {
+    // Look for first positional argument (non-flag) after the command
+    // argv is [node, script, 'test', ...rest]
+    const rest = argv.slice(3); // Skip node, script, and 'test' command
+    const positional = rest.find(arg => !arg.startsWith('--') && !arg.startsWith('-'));
+    if (positional) {
+      testsPath = positional;
+    }
+  }
   const only = getArg('--only');
   const bail = hasFlag('--bail');
   const listOnly = hasFlag('--list');
@@ -161,7 +171,13 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     const runner = new (VisorTestRunner as any)();
     const tpath = runner.resolveTestsPath(testsPath);
     const suite = runner.loadSuite(tpath);
-    const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
+    const runRes = await runner.runCases(tpath, suite, {
+      only,
+      bail,
+      maxParallel,
+      promptMaxChars,
+      engineMode: 'state-machine',
+    });
     const failures = runRes.failures;
     // Fallback: If for any reason the runner didn't print its own summary
     // (e.g., natural early exit in some environments), print a concise one here.
@@ -613,6 +629,29 @@ export async function main(): Promise<void> {
     // Determine checks to run and validate check types early
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
+    // Generic: remove checks that are meant to be scheduled via routing (on_*.run)
+    // from the initial root set unless the user explicitly requested them.
+    if (options.checks.length === 0) {
+      const routingRunTargets = new Set<string>();
+      for (const [, cfg] of Object.entries(config.checks || {})) {
+        const onFinish: any = (cfg as any).on_finish || {};
+        const onSuccess: any = (cfg as any).on_success || {};
+        const onFail: any = (cfg as any).on_fail || {};
+        const collect = (arr?: string[]) => {
+          if (Array.isArray(arr))
+            for (const t of arr) if (typeof t === 'string' && t) routingRunTargets.add(t);
+        };
+        collect(onFinish.run);
+        collect(onSuccess.run);
+        collect(onFail.run);
+      }
+      const before = checksToRun.length;
+      checksToRun = checksToRun.filter(chk => !routingRunTargets.has(chk));
+      if (before !== checksToRun.length) {
+        logger.verbose(`Pruned ${before - checksToRun.length} routing-run target(s) from roots`);
+      }
+    }
+
     // Validate that all requested checks exist in the configuration
     const availableChecks = Object.keys(config.checks || {});
     const invalidChecks = checksToRun.filter(check => !availableChecks.includes(check));
@@ -780,8 +819,8 @@ export async function main(): Promise<void> {
     logger.step(`Executing ${checksToRun.length} check(s)`);
     logger.verbose(`Checks: ${checksToRun.join(', ')}`);
 
-    // Create CheckExecutionEngine for running checks
-    const engine = new CheckExecutionEngine();
+    // Create StateMachineExecutionEngine for running checks
+    const engine = new StateMachineExecutionEngine(undefined, undefined, debugServer || undefined);
 
     // Set execution context on engine
     engine.setExecutionContext(executionContext);
@@ -1023,8 +1062,17 @@ export async function main(): Promise<void> {
       { total: 0, critical: 0, error: 0, warning: 0, info: 0 }
     );
 
+    // Build execution summary for display
+    // For user-facing readability, count distinct checks that produced a result
+    // (ignores forEach per-item iterations and multi-wave re-executions).
+    // Keep detailed per-run counts in executionStatistics for programmatic use.
+    const distinctExecuted = new Set(allResults.map((r: any) => r.checkName).filter(Boolean)).size;
+    const executionSummary = executionStatistics
+      ? `Checks: ${executionStatistics.totalChecksConfigured} configured → ${distinctExecuted} executions`
+      : `Completed ${distinctExecuted} check(s)`;
+
     logger.success(
-      `Completed ${executedCheckNames.length} check(s): ${counts.total} issues (${counts.critical} critical, ${counts.error} error, ${counts.warning} warning)`
+      `${executionSummary}: ${counts.total} issues (${counts.critical} critical, ${counts.error} error, ${counts.warning} warning)`
     );
     logger.verbose(`Checks executed: ${executedCheckNames.join(', ')}`);
 

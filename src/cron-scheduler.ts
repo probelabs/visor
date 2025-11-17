@@ -1,6 +1,6 @@
 import * as cron from 'node-cron';
 import { VisorConfig, CheckConfig } from './types/config';
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 
 export interface ScheduledCheck {
   checkName: string;
@@ -14,11 +14,11 @@ export interface ScheduledCheck {
  */
 export class CronScheduler {
   private scheduledChecks: Map<string, ScheduledCheck> = new Map();
-  private executionEngine: CheckExecutionEngine;
+  private executionEngine: StateMachineExecutionEngine;
   private config: VisorConfig;
   private isRunning = false;
 
-  constructor(config: VisorConfig, executionEngine: CheckExecutionEngine) {
+  constructor(config: VisorConfig, executionEngine: StateMachineExecutionEngine) {
     this.config = config;
     this.executionEngine = executionEngine;
   }
@@ -228,7 +228,7 @@ export class CronScheduler {
  */
 export function createCronScheduler(
   config: VisorConfig,
-  executionEngine: CheckExecutionEngine
+  executionEngine: StateMachineExecutionEngine
 ): CronScheduler {
   const scheduler = new CronScheduler(config, executionEngine);
   scheduler.initialize();
