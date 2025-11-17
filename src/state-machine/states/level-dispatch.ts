@@ -29,6 +29,13 @@ import { handleRouting, checkLoopBudget } from './routing';
 import { withActiveSpan } from '../../telemetry/trace-helpers';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
+import { buildOutputHistoryFromJournal } from '../dispatch/history-snapshot';
+import { renderTemplateContent } from '../dispatch/template-renderer';
+import { updateStats, shouldFailFast, hasFatalIssues } from '../dispatch/stats-manager';
+import {
+  buildDependencyResultsWithScope,
+  buildDependencyResults,
+} from '../dispatch/dependency-gating';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 
 /**
@@ -46,35 +53,7 @@ function mapCheckNameToFocus(checkName: string): string {
   return focusMap[checkName] || 'all';
 }
 
-/**
- * Build output history Map from journal for template rendering
- * This matches the format expected by AI providers
- */
-function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unknown[]> {
-  const outputHistory = new Map<string, unknown[]>();
-
-  try {
-    const snapshot = context.journal.beginSnapshot();
-    const allEntries = context.journal.readVisible(context.sessionId, snapshot, undefined);
-
-    // Group by checkId and extract outputs
-    for (const entry of allEntries) {
-      const checkId = entry.checkId;
-      if (!outputHistory.has(checkId)) {
-        outputHistory.set(checkId, []);
-      }
-      // Push the output if it exists
-      if (entry.result.output !== undefined) {
-        outputHistory.get(checkId)!.push(entry.result.output);
-      }
-    }
-  } catch (error) {
-    // Silently fail - return empty map
-    logger.debug(`[LevelDispatch] Error building output history: ${error}`);
-  }
-
-  return outputHistory;
-}
+// moved: buildOutputHistoryFromJournal → ../dispatch/history-snapshot
 
 /**
  * Evaluate 'if' condition for a check
@@ -1946,225 +1925,20 @@ async function executeSingleCheck(
 /**
  * Build dependency results for a check with scope
  */
-function buildDependencyResultsWithScope(
-  checkId: string,
-  checkConfig: any,
-  context: EngineContext,
-  scope: Array<{ check: string; index: number }>
-): Map<string, ReviewSummary> {
-  const dependencyResults = new Map<string, ReviewSummary>();
-
-  // Get dependencies from configuration
-  const dependencies = checkConfig.depends_on || [];
-  const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
-
-  // Determine current forEach index from scope (if any)
-  const currentIndex = scope.length > 0 ? scope[scope.length - 1].index : undefined;
-
-  // First, populate explicit dependencies
-  for (const depId of depList) {
-    if (!depId) continue;
-
-    // Try to get the LATEST result from journal for this exact scope
-    try {
-      const snapshotId = context.journal.beginSnapshot();
-      const visible = context.journal.readVisible(
-        context.sessionId,
-        snapshotId,
-        context.event as any
-      );
-      const sameScope = (
-        a: Array<{ check: string; index: number }>,
-        b: Array<{ check: string; index: number }>
-      ): boolean => {
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++)
-          if (a[i].check !== b[i].check || a[i].index !== b[i].index) return false;
-        return true;
-      };
-      const matches = visible.filter(e => e.checkId === depId && sameScope(e.scope as any, scope));
-      let journalResult = (
-        matches.length > 0 ? matches[matches.length - 1].result : undefined
-      ) as any;
-
-      // If we couldn't resolve a scoped result OR we received an aggregated
-      // forEach result, reconstruct a per-item view using forEachItemResults
-      if (
-        journalResult &&
-        Array.isArray(journalResult.forEachItems) &&
-        currentIndex !== undefined
-      ) {
-        const perItemSummary: any = (journalResult.forEachItemResults &&
-          journalResult.forEachItemResults[currentIndex]) || { issues: [] };
-        const perItemOutput = journalResult.forEachItems[currentIndex];
-        const combined = { ...perItemSummary, output: perItemOutput } as ReviewSummary;
-        dependencyResults.set(depId, combined);
-        continue;
-      }
-
-      if (!journalResult) {
-        // Fallback: try raw (aggregate) view and slice out current index if possible
-        try {
-          const rawView = new (require('../../snapshot-store').ContextView)(
-            context.journal,
-            context.sessionId,
-            snapshotId,
-            [],
-            context.event
-          );
-          const rawResult = rawView.get(depId) as any | undefined;
-          if (rawResult && Array.isArray(rawResult.forEachItems) && currentIndex !== undefined) {
-            const perItemSummary: any = (rawResult.forEachItemResults &&
-              rawResult.forEachItemResults[currentIndex]) || { issues: [] };
-            const perItemOutput = rawResult.forEachItems[currentIndex];
-            const combined = { ...perItemSummary, output: perItemOutput } as ReviewSummary;
-            dependencyResults.set(depId, combined);
-            continue;
-          }
-          journalResult = rawResult;
-        } catch {
-          // ignore
-        }
-      }
-
-      if (journalResult) {
-        dependencyResults.set(depId, journalResult as ReviewSummary);
-        continue;
-      }
-    } catch {
-      // Fall through to other sources
-    }
-
-    // Fall back to empty result
-    dependencyResults.set(depId, { issues: [] });
-  }
-
-  // Also populate ALL other executed checks from journal (for global outputs namespace)
-  // This provides access to all outputs via {{ outputs["check-name"] }} in templates
-  try {
-    const snapshotId = context.journal.beginSnapshot();
-    const contextView = new (require('../../snapshot-store').ContextView)(
-      context.journal,
-      context.sessionId,
-      snapshotId,
-      scope,
-      context.event
-    );
-
-    // Get all check names from the config
-    const allCheckNames = Object.keys(context.config.checks || {});
-    for (const checkName of allCheckNames) {
-      // Skip if already in dependencies
-      if (dependencyResults.has(checkName)) continue;
-
-      // Try to get result from journal
-      let jr: any | undefined = contextView.get(checkName);
-
-      // If this is an aggregated forEach result and we have an index in scope,
-      // expose the per-item view to make `outputs["name"]` reflect the current branch item.
-      if (jr && Array.isArray(jr.forEachItems) && currentIndex !== undefined) {
-        const perItemSummary: any = (jr.forEachItemResults &&
-          jr.forEachItemResults[currentIndex]) || { issues: [] };
-        const perItemOutput = jr.forEachItems[currentIndex];
-        const combined = { ...perItemSummary, output: perItemOutput } as ReviewSummary;
-        dependencyResults.set(checkName, combined);
-        continue;
-      }
-
-      if (!jr) {
-        // Fallback to raw aggregate and slice current index if possible
-        try {
-          const rawView = new (require('../../snapshot-store').ContextView)(
-            context.journal,
-            context.sessionId,
-            snapshotId,
-            [],
-            context.event
-          );
-          const raw = rawView.get(checkName) as any | undefined;
-          if (raw && Array.isArray(raw.forEachItems) && currentIndex !== undefined) {
-            const perItemSummary: any = (raw.forEachItemResults &&
-              raw.forEachItemResults[currentIndex]) || { issues: [] };
-            const perItemOutput = raw.forEachItems[currentIndex];
-            const combined = { ...perItemSummary, output: perItemOutput } as ReviewSummary;
-            dependencyResults.set(checkName, combined);
-            continue;
-          }
-          jr = raw;
-        } catch {
-          // ignore
-        }
-      }
-
-      if (jr) {
-        dependencyResults.set(checkName, jr as ReviewSummary);
-      }
-    }
-
-    // Add raw array access for forEach checks
-    // For each check with forEach:true, also provide <checkName>-raw key with the full array
-    for (const checkName of allCheckNames) {
-      const checkCfg = context.config.checks?.[checkName];
-      if (checkCfg?.forEach) {
-        // Get the check result (without scope) to access the full forEachItems array
-        try {
-          const rawContextView = new (require('../../snapshot-store').ContextView)(
-            context.journal,
-            context.sessionId,
-            snapshotId,
-            [], // No scope - get parent-level result with forEachItems
-            context.event
-          );
-          const rawResult = rawContextView.get(checkName);
-          if (rawResult && (rawResult as any).forEachItems) {
-            // Add -raw key with full array
-            const rawKey = `${checkName}-raw`;
-            dependencyResults.set(rawKey, {
-              issues: [],
-              output: (rawResult as any).forEachItems,
-            } as ReviewSummary);
-          }
-        } catch {
-          // Silently skip - raw access is optional
-        }
-      }
-    }
-  } catch {
-    // Silently fail - we'll just have the explicit dependencies
-  }
-
-  return dependencyResults;
-}
+/* moved to ../dispatch/dependency-gating */
+// moved: buildDependencyResultsWithScope → ../dispatch/dependency-gating
+// legacy_buildDependencyResultsWithScope removed (moved to ../dispatch/dependency-gating)
 
 /**
  * Build dependency results for a check
  */
-function buildDependencyResults(
-  checkId: string,
-  checkConfig: any,
-  context: EngineContext,
-  _state: RunState
-): Map<string, ReviewSummary> {
-  return buildDependencyResultsWithScope(checkId, checkConfig, context, []);
-}
+// legacy_buildDependencyResults removed (moved to ../dispatch/dependency-gating)
+// removed legacy_buildDependencyResults
 
 /**
  * Check if fail-fast should be triggered based on results
  */
-function shouldFailFast(
-  results: Array<{ checkId: string; result: ReviewSummary; error?: Error }>
-): boolean {
-  // Fail-fast if any check has critical or error severity issues
-  for (const { result } of results) {
-    if (!result || !result.issues) continue;
-
-    if (hasFatalIssues(result)) {
-      return true;
-    }
-  }
-
-  return false;
-}
+// moved: shouldFailFast → ../dispatch/stats-manager
 
 /**
  * Check if result has fatal issues (execution failures, not code quality issues)
@@ -2177,223 +1951,11 @@ function shouldFailFast(
  * Regular error/critical severity issues (e.g., security vulnerabilities found in code)
  * are NOT fatal - they represent successful execution that found issues.
  */
-function hasFatalIssues(result: ReviewSummary): boolean {
-  if (!result.issues) {
-    return false;
-  }
-
-  // Check for execution failure indicators in ruleId
-  return result.issues.some(issue => {
-    const ruleId = issue.ruleId || '';
-    return (
-      ruleId.endsWith('/error') || // System errors
-      ruleId.includes('/execution_error') || // Command failures
-      ruleId.endsWith('_fail_if') // fail_if triggered
-    );
-  });
-}
+// moved: hasFatalIssues → ../dispatch/stats-manager
 
 /**
  * Update execution stats
  */
-function updateStats(
-  results: Array<{ checkId: string; result: ReviewSummary; error?: Error; duration?: number }>,
-  state: RunState,
-  isForEachIteration: boolean = false
-): void {
-  for (const { checkId, result, error, duration } of results) {
-    const existing = state.stats.get(checkId);
+// moved: updateStats → ../dispatch/stats-manager
 
-    const stats: CheckExecutionStats = existing || {
-      checkName: checkId,
-      totalRuns: 0,
-      successfulRuns: 0,
-      failedRuns: 0,
-      skippedRuns: 0,
-      skipped: false,
-      totalDuration: 0,
-      issuesFound: 0,
-      issuesBySeverity: {
-        critical: 0,
-        error: 0,
-        warning: 0,
-        info: 0,
-      },
-    };
-
-    // DEBUG: Log when updateStats is called for post-response
-    if (checkId === 'post-response') {
-      logger.info(
-        `[updateStats] Called for post-response: existing.skipped=${existing?.skipped}, stats.skipped=${stats.skipped}, skipReason=${(stats as any).skipReason}`
-      );
-    }
-
-    // If check was previously skipped but is now executing, clear the skipped flag
-    if (stats.skipped) {
-      stats.skipped = false;
-      if (checkId === 'post-response') {
-        logger.info(
-          `[updateStats] Clearing skipped flag for post-response (was skipped, now executing)`
-        );
-      }
-    }
-
-    // Increment totalRuns for all executions including forEach iterations
-    // isForEachIteration=true means this is a single iteration of a forEach child check
-    // We count these as separate executions
-    stats.totalRuns++;
-
-    // Track duration if provided
-    if (duration !== undefined) {
-      stats.totalDuration += duration;
-    }
-
-    // Check if this is an execution failure (not a code quality finding)
-    // Execution failures have specific ruleId patterns that indicate the check itself failed
-    const hasExecutionFailure = result.issues?.some(issue => {
-      const ruleId = issue.ruleId || '';
-      return (
-        ruleId.endsWith('/error') || // System errors, exceptions
-        ruleId.includes('/execution_error') || // Command failures
-        ruleId.endsWith('_fail_if') // fail_if condition triggered
-      );
-    });
-
-    if (error) {
-      // Exception during execution
-      stats.failedRuns++;
-      stats.errorMessage = error.message;
-      // Mark check as failed so dependents can be skipped
-      // Note: forEach iteration failures are tracked per-iteration, but the check
-      // is only marked as completely failed if ALL iterations fail (handled in executeCheckWithForEachItems)
-      if (!isForEachIteration) {
-        if (!(state as any).failedChecks) {
-          (state as any).failedChecks = new Set<string>();
-        }
-        (state as any).failedChecks.add(checkId);
-      }
-    } else if (hasExecutionFailure) {
-      // Execution failure (command error, fail_if triggered, etc.)
-      stats.failedRuns++;
-      // Note: We do NOT set stats.errorMessage here because the check already produced
-      // error issues as part of its normal output. Setting errorMessage would cause
-      // convertGroupedResultsToReviewSummary to create a duplicate system/error issue.
-      // errorMessage should only be set for exceptional errors (caught exceptions).
-
-      // Mark check as failed so dependents can be skipped
-      // Note: forEach iteration failures are tracked per-iteration, but the check
-      // is only marked as completely failed if ALL iterations fail (handled in executeCheckWithForEachItems)
-      if (!isForEachIteration) {
-        if (!(state as any).failedChecks) {
-          (state as any).failedChecks = new Set<string>();
-        }
-        (state as any).failedChecks.add(checkId);
-      }
-    } else {
-      stats.successfulRuns++;
-    }
-
-    // Count issues
-    if (result.issues) {
-      stats.issuesFound += result.issues.length;
-
-      for (const issue of result.issues) {
-        if (issue.severity === 'critical') stats.issuesBySeverity.critical++;
-        else if (issue.severity === 'error') stats.issuesBySeverity.error++;
-        else if (issue.severity === 'warning') stats.issuesBySeverity.warning++;
-        else if (issue.severity === 'info') stats.issuesBySeverity.info++;
-      }
-    }
-
-    // Track outputsProduced if result has output
-    // For forEach parent checks, use the length of forEachItems
-    // For regular checks, count is 1
-    if (stats.outputsProduced === undefined) {
-      const forEachItems = (result as any).forEachItems;
-      if (Array.isArray(forEachItems)) {
-        stats.outputsProduced = forEachItems.length;
-      } else if ((result as any).output !== undefined) {
-        stats.outputsProduced = 1;
-      }
-    }
-
-    state.stats.set(checkId, stats);
-  }
-}
-
-/**
- * Render template content for a check
- * Similar to legacy engine's renderCheckContent method
- */
-async function renderTemplateContent(
-  checkId: string,
-  checkConfig: any,
-  reviewSummary: ReviewSummary
-): Promise<string | undefined> {
-  try {
-    const { createExtendedLiquid } = await import('../../liquid-extensions');
-    const fs = await import('fs/promises');
-    const path = await import('path');
-
-    // Determine template source: explicit template (content/file) or built-in by schema
-    const schemaRaw = checkConfig.schema || 'plain';
-    const schema = typeof schemaRaw === 'string' ? schemaRaw : 'code-review';
-
-    let templateContent: string | undefined;
-
-    if (checkConfig.template && checkConfig.template.content) {
-      templateContent = String(checkConfig.template.content);
-    } else if (checkConfig.template && checkConfig.template.file) {
-      // Securely resolve relative file path
-      const file = String(checkConfig.template.file);
-      const resolved = path.resolve(process.cwd(), file);
-      templateContent = await fs.readFile(resolved, 'utf-8');
-    } else if (schema && schema !== 'plain') {
-      // Built-in schema template fallback
-      const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, '');
-      if (sanitized) {
-        const candidatePaths = [
-          // When bundled (dist), __dirname points to dist/state-machine/states
-          path.join(__dirname, '..', '..', 'output', sanitized, 'template.liquid'),
-          // Dev fallback
-          path.join(process.cwd(), 'output', sanitized, 'template.liquid'),
-        ];
-        for (const p of candidatePaths) {
-          try {
-            templateContent = await fs.readFile(p, 'utf-8');
-            if (templateContent) break;
-          } catch {
-            // try next
-          }
-        }
-      }
-    }
-
-    if (!templateContent) {
-      // No template to render
-      return undefined;
-    }
-
-    // Use extended Liquid with our custom filters/tags
-    const liquid = createExtendedLiquid({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false,
-    });
-
-    const templateData: Record<string, unknown> = {
-      issues: reviewSummary.issues || [],
-      checkName: checkId,
-      output: (reviewSummary as any).output,
-    };
-
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.error(`[LevelDispatch] Failed to render template for ${checkId}: ${msg}`);
-    return undefined;
-  }
-}
+// moved: renderTemplateContent → ../dispatch/template-renderer

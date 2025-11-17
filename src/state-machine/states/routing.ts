@@ -208,7 +208,7 @@ async function processOnFinish(
           file: 'system',
           line: 0,
           ruleId: `${checkId}/routing/loop_budget_exceeded`,
-          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish run`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_finish run`,
           severity: 'error',
           category: 'logic',
         };
@@ -279,7 +279,7 @@ async function processOnFinish(
           file: 'system',
           line: 0,
           ruleId: `${checkId}/routing/loop_budget_exceeded`,
-          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish run`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_finish run`,
           severity: 'error',
           category: 'logic',
         };
@@ -322,7 +322,7 @@ async function processOnFinish(
         file: 'system',
         line: 0,
         ruleId: `${checkId}/routing/loop_budget_exceeded`,
-        message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish goto`,
+        message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_finish goto`,
         severity: 'error',
         category: 'logic',
       };
@@ -489,7 +489,7 @@ export function checkLoopBudget(
   origin: 'on_success' | 'on_fail' | 'on_finish',
   action: 'run' | 'goto'
 ): boolean {
-  const maxLoops = context.config.routing?.max_loops ?? 10;
+  const maxLoops = context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS;
 
   if (state.routingLoopCount >= maxLoops) {
     const msg = `Routing loop budget exceeded (max_loops=${maxLoops}) during ${origin} ${action}`;
@@ -537,7 +537,7 @@ async function processOnSuccess(
           file: 'system',
           line: 0,
           ruleId: `${checkId}/routing/loop_budget_exceeded`,
-          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_success run`,
+          message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS}) during on_success run`,
           severity: 'error',
           category: 'logic',
         };
@@ -1190,3 +1190,5 @@ export async function evaluateGoto(
   // Return static goto
   return gotoStatic || null;
 }
+// Default values (used only when config is absent)
+const DEFAULT_MAX_LOOPS = 10;

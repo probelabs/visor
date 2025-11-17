@@ -581,7 +581,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1173,14 +1173,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>': {
+    'Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31763>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1542,6 +1542,11 @@ export const configSchema = {
           type: 'number',
           description:
             'Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.',
+        },
+        max_workflow_depth: {
+          type: 'number',
+          description:
+            'Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3.',
         },
       },
       additionalProperties: false,

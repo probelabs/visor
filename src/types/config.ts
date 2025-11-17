@@ -673,6 +673,12 @@ export interface LimitsConfig {
    * Set to 0 or negative to disable. Default: 50.
    */
   max_runs_per_check?: number;
+  /**
+   * Maximum nesting depth for workflows executed by the state machine engine.
+   * Nested workflows are invoked by the workflow provider; this limit prevents
+   * accidental infinite recursion. Default: 3.
+   */
+  max_workflow_depth?: number;
 }
 
 /**

@@ -290,7 +290,11 @@ export class WorkflowCheckProvider extends CheckProvider {
 
     // Validate workflow depth
     const currentDepth = parentState?.flags?.currentWorkflowDepth || 0;
-    const maxDepth = parentState?.flags?.maxWorkflowDepth || 3;
+    // Prefer parent state's configured limit; fall back to config.limits if present; else default 3
+    const maxDepth =
+      parentState?.flags?.maxWorkflowDepth ??
+      parentContext?.config?.limits?.max_workflow_depth ??
+      3;
     validateWorkflowDepth(currentDepth, maxDepth, workflow.id);
 
     // Project workflow to dependency graph

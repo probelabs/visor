@@ -45,6 +45,12 @@ export class StateMachineRunner {
    * Initialize the run state
    */
   private initializeState(): RunState {
+    // Pull defaults from config where available
+    const DEFAULT_MAX_WORKFLOW_DEPTH = 3;
+    const configuredMaxDepth =
+      (this.context && this.context.config && this.context.config.limits
+        ? this.context.config.limits.max_workflow_depth
+        : undefined) ?? DEFAULT_MAX_WORKFLOW_DEPTH;
     return {
       currentState: 'Init',
       wave: 0,
@@ -55,7 +61,8 @@ export class StateMachineRunner {
       flags: {
         failFastTriggered: false,
         forwardRunRequested: false,
-        maxWorkflowDepth: 3, // Default maximum nesting depth
+        // Maximum nesting depth for nested workflows (configurable)
+        maxWorkflowDepth: configuredMaxDepth,
         currentWorkflowDepth: 0, // Start at root level
       },
       stats: new Map(),
