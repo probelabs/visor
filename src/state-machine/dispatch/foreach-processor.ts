@@ -224,7 +224,8 @@ export async function executeCheckWithForEachItems(
         logger.warn(`[LevelDispatch] Failed to commit per-iteration result to journal: ${error}`);
       }
 
-      // Aggregate outputs/contents
+      // Record per-item summary and aggregate outputs/contents
+      perItemResults.push(enrichedResult);
       if ((enrichedResult as any).content) allContents.push(String((enrichedResult as any).content));
       if ((enrichedResult as any).output !== undefined) allOutputs.push((enrichedResult as any).output);
       allIssues.push(...(enrichedResult.issues || []));
@@ -383,6 +384,21 @@ export async function executeCheckWithForEachItems(
             }
             state.routingLoopCount++;
             emitEvent({ type: 'ForwardRunRequested', target: gotoTarget, origin: 'goto' });
+          }
+        }
+
+        // If we enqueued any on_finish.run targets, request a WaveRetry so the
+        // next wave re-evaluates guards/ifs across the full plan. Guard to
+        // avoid duplicate retries for the same parent within the same wave.
+        if (queuedForward) {
+          const guardKey = `waveRetry:on_finish:${forEachParent}:wave:${state.wave}`;
+          logger.info(
+            `[LevelDispatch] Checking WaveRetry guard: ${guardKey}, has=${!!(state as any).forwardRunGuards?.has(guardKey)}`
+          );
+          if (!(state as any).forwardRunGuards?.has(guardKey)) {
+            (state as any).forwardRunGuards?.add(guardKey);
+            logger.info(`[LevelDispatch] Emitting WaveRetry event for on_finish.run targets`);
+            emitEvent({ type: 'WaveRetry', reason: 'on_finish' });
           }
         }
       }
