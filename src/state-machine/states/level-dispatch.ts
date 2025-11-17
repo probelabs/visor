@@ -1721,6 +1721,57 @@ async function executeSingleCheck(
           }
           (state as any).failedChecks.add(checkId);
         } catch {}
+        // Early exit: persist result and stop further processing to avoid
+        // undefined-state follow-on work (routing/template/per-item commits).
+        try {
+          // Record completion BEFORE storing
+          state.completedChecks.add(checkId);
+          const currentWaveCompletions = (state as any).currentWaveCompletions as
+            | Set<string>
+            | undefined;
+          if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+
+          // Update aggregated stats for forEach parent (failed run, 0 outputs)
+          const existing = state.stats.get(checkId);
+          const aggStats: CheckExecutionStats = existing || {
+            checkName: checkId,
+            totalRuns: 0,
+            successfulRuns: 0,
+            failedRuns: 0,
+            skippedRuns: 0,
+            skipped: false,
+            totalDuration: 0,
+            issuesFound: 0,
+            issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+          };
+          aggStats.totalRuns++;
+          aggStats.failedRuns++;
+          aggStats.outputsProduced = 0;
+          state.stats.set(checkId, aggStats);
+
+          // Store in journal
+          context.journal.commitEntry({
+            sessionId: context.sessionId,
+            checkId,
+            result: enrichedResult as any,
+            event: context.event || 'manual',
+            scope: [],
+          });
+        } catch (err) {
+          logger.warn(`[LevelDispatch] Failed to persist undefined forEach result: ${err}`);
+        }
+
+        // Clear active dispatch and emit completion event
+        try {
+          state.activeDispatches.delete(checkId);
+        } catch {}
+        emitEvent({
+          type: 'CheckCompleted',
+          checkId,
+          scope: [],
+          result: enrichedResult,
+        });
+        return enrichedResult as ReviewSummary;
       } else if (Array.isArray(output)) {
         isForEach = true;
         forEachItems = output;
