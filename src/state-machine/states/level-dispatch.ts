@@ -28,7 +28,6 @@ import type { CheckConfig } from '../../types/config';
 import { handleRouting, checkLoopBudget } from './routing';
 import { withActiveSpan } from '../../telemetry/trace-helpers';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
-import { Liquid } from 'liquidjs';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 

@@ -1,7 +1,6 @@
 import { IssueFilter } from '../../src/issue-filter';
 import { ReviewIssue } from '../../src/reviewer';
 import { CheckExecutionEngine } from '../../src/check-execution-engine';
-import type { PRInfo } from '../../src/pr-analyzer';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -52,7 +51,7 @@ function test() {
       execSync('git add .', { cwd: tempDir });
       execSync('git -c core.hooksPath=/dev/null commit -m "test"', { cwd: tempDir });
 
-      const engine = new CheckExecutionEngine(tempDir);
+      new CheckExecutionEngine(tempDir);
 
       // Create test issues directly - testing the IssueFilter integration
       const testIssues: ReviewIssue[] = [
