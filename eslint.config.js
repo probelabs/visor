@@ -20,6 +20,14 @@ module.exports = [
       'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
+      // Prefer our extended Liquid engine everywhere
+      'no-restricted-imports': [
+        'warn',
+        {
+          name: 'liquidjs',
+          message: 'Use createExtendedLiquid() from src/liquid-extensions instead of raw Liquid.',
+        },
+      ],
       
       // TypeScript rules
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
