@@ -353,6 +353,132 @@ For additional examples, see:
 - tests/unit/routing-transitions-and-contracts.test.ts (transitions, assume/guarantee)
 - docs/engine-state-machine-plan.md (state machine overview)
 
+## End-to-End Policy (Do-It-Right Checklist)
+
+This section summarizes the full, NASA‑style approach we recommend. Items marked (optional) are enhancements you can phase in.
+
+### Config / Schema
+- Criticality (proposed field; tags remain a fallback)
+  - `criticality: external | control-plane | policy | non-critical`
+  - or minimal boolean `critical: true|false` if you prefer simplicity.
+- Contracts (implemented)
+  - `assume:` preconditions (list of expressions)
+  - `guarantee:` postconditions (list of expressions)
+  - (optional) `assume_mode: 'skip' | 'fail'` — if set to `fail`, unmet assume marks failure and routes `on_fail`.
+- Transitions (implemented)
+  - `on_success|on_fail|on_finish.transitions: [{ when, to, goto_event? }]` with `goto_js` fallback.
+- Retries
+  - (proposed) `retry_on: ['transient'] | ['transient','logical']` (default: transient only).
+- Safety profiles (optional)
+  - `safety: strict | standard` (global defaults for budgets/retries on critical branches).
+
+### Engine Policy (derived from criticality)
+- External / Control‑plane / Policy (critical)
+  - Require meaningful `assume` and `guarantee`.
+  - Default `continue_on_failure: false`.
+  - Retries: bounded (max 2–3), transient faults only; no auto‑retry for logical violations.
+  - Lower per‑scope loop budget (e.g., 8 instead of 10).
+  - Suppress downstream mutating actions if guarantees/fail_if violate; remediate or escalate.
+- Non‑critical
+  - Contracts recommended but not required.
+  - `continue_on_failure: true` allowed where safe.
+  - Default loop budget (10), normal retry bounds.
+
+### Runtime Semantics
+- Evaluation order
+  1) `if` (plan‑time scheduling) → 2) `assume` (pre‑exec) → 3) provider → 4) `guarantee` + `fail_if` (post‑exec) → 5) transitions/goto.
+- Determinism & safety
+  - Expressions run in a secure sandbox; no I/O/time randomness; short timeouts.
+- ForEach isolation
+  - `fanout: map` executes per‑item; failures isolate; reduce aggregates once.
+  - (optional) per‑item concurrency with default 1.
+
+### Side‑Effect Control
+- Detect mutating providers (GitHub ops except read‑only, HTTP methods ≠ GET/HEAD, file writes).
+- For critical steps: require idempotency or compensating actions; block side‑effects when contracts fail.
+
+### Observability / Telemetry
+- Journal each decision (check, scope, expression, inputs, result, timestamps).
+- Emit structured fault events: `fault.detected`, `fault.isolated`, `fault.recovery.*`.
+- Metrics: retries, fault counts by class, loop budget hits.
+
+### Persistence / Resume (debug‑first)
+- Export last run as JSON (implemented): `saveSnapshotToFile()`.
+- (future) Debug‑only resume that reconstructs state from snapshot.
+
+### Validation / Guardrails
+- Warn if a critical step lacks `assume` or `guarantee`.
+- Warn if mutating provider lacks criticality classification.
+- Warn if `transitions` exist with tight loops disabled in `strict` safety profile.
+- CLI `--safe-mode` to disable mutating providers for dry‑runs.
+
+### Verification (Tests & Acceptance Criteria)
+- Unit
+  - `assume` skip vs guard‑step hard‑fail.
+  - `guarantee` violations add issues; no extra provider calls.
+  - Transitions precedence over `goto_js`; loop budget enforcement.
+- Integration
+  - Critical external step blocks downstream side‑effects on contract failure.
+  - Control‑plane forEach parent with tight budget; verifies no loops past limit.
+  - Retry policy honors transient vs logical classification.
+- YAML e2e
+  - Updated defaults remain green; include a strict safety profile scenario.
+
+### Acceptance Criteria (done when)
+- All tests (unit/integration/YAML) green with critical/non‑critical mixes.
+- Docs updated (this guide + engine plan); examples use block‑style YAML.
+- Logger outputs timestamps; debug is gated.
+- No dist/ committed; config validators warn on unsafe critical steps.
+
+## Additional Examples
+
+### Critical External Step
+```yaml
+checks:
+  post-comment:
+    type: github
+    criticality: external
+    on:
+      - pr_opened
+    op: comment.create
+    assume:
+      - "isMember()"
+      - "env.DRY_RUN !== 'true'"
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+    on_fail:
+      retry: { max: 2, backoff: { mode: exponential, delay_ms: 1200 } }
+```
+
+### Control‑Plane ForEach With Transitions
+```yaml
+routing:
+  max_loops: 8
+
+checks:
+  extract-items:
+    type: command
+    criticality: control-plane
+    exec: "node -e \"console.log('[\\"a\\",\\"b\\"]')\""
+    forEach: true
+    on_finish:
+      transitions:
+        - when: "any(outputs_history['validate'], v => v && v.ok === false)"
+          to: remediate
+
+  validate:
+    type: command
+    depends_on:
+      - extract-items
+    fanout: map
+    exec: node scripts/validate.js
+
+  remediate:
+    type: command
+    exec: node scripts/fix.js
+```
+
 ## Side‑by‑side examples: the same intent with different constructs
 
 ### Example A — Skip entirely when the repo has no changes
