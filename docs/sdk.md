@@ -153,7 +153,7 @@ Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 
 When building configs programmatically, model safety explicitly:
 
-- Declare criticality on steps with `criticality: external|control-plane|policy|non-critical`.
+- Declare criticality on steps with `criticality: external|internal|policy|info`.
 - Add contracts to critical steps:
   - `assume:` preconditions checked before execution
   - `guarantee:` postconditions checked after execution

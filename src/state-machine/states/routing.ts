@@ -928,11 +928,11 @@ async function processOnFail(
 
   // Process on_fail.retry (schedule retry of the current check)
   if (onFail.retry && typeof onFail.retry.max === 'number' && onFail.retry.max > 0) {
-    // Criticality mapping: for 'external' and 'control-plane', avoid automatic
+    // Criticality mapping: for 'external' and 'internal', avoid automatic
     // retries for logical failures (fail_if/guarantee violations).
     const crit = getCriticality(context, checkId);
     const failureKind = classifyFailure(result);
-    if ((crit === 'external' || crit === 'control-plane') && failureKind === 'logical') {
+    if ((crit === 'external' || crit === 'internal') && failureKind === 'logical') {
       if (context.debug) {
         logger.info(
           `[Routing] on_fail.retry suppressed for ${checkId} (criticality=${crit}, failure=logical)`

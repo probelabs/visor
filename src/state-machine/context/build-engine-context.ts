@@ -18,13 +18,10 @@ function applyCriticalityDefaults(cfg: VCfg): void {
   const checks = cfg.checks || {};
   for (const id of Object.keys(checks)) {
     const c: CfgCheck = (checks as any)[id] as CfgCheck;
-    if (!c.criticality) {
-      c.criticality = 'policy';
-    }
-    // For non-critical checks, default continue_on_failure to true if unset.
-    if (c.criticality === 'non-critical' && typeof c.continue_on_failure === 'undefined') {
+    if (!c.criticality) (c.criticality as any) = 'policy';
+    // For 'info' checks, default continue_on_failure to true if unset.
+    if (c.criticality === 'info' && typeof c.continue_on_failure === 'undefined')
       c.continue_on_failure = true;
-    }
   }
 }
 

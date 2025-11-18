@@ -19,7 +19,7 @@ steps:
   release-notes:
     type: ai
     group: release
-    schema: plain
+    on: [manual]
     prompt: |
       Generate professional release notes for version {{ env.TAG_NAME }} of this project.
 
@@ -56,13 +56,13 @@ steps:
 
       Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
       Use present tense and action-oriented language. Group similar changes together.
-    on: [manual]
+    schema: plain
 
   # PR overview with intelligent analysis - runs first to establish context
   overview:
     type: ai
     group: overview
-    schema: overview
+    on: [pr_opened, pr_updated]
     prompt: |
         PR Title: {{ pr.title }}
 
@@ -92,13 +92,14 @@ steps:
         - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
 
         Be concise, specific, and actionable. Avoid praise or celebration.
-    on: [pr_opened, pr_updated]
+    schema: overview
 
   # Security analysis - Critical for all projects
   security:
     type: ai
     group: review
-    schema: code-review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
     prompt: |
         Based on our overview discussion, please perform a comprehensive security analysis of the code changes.
 
@@ -138,14 +139,14 @@ steps:
         - **error**: Security issues that must be fixed before production (XSS, path traversal, weak crypto, missing auth checks)
         - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
         - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
-    depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    schema: code-review
 
   # Architecture analysis - Ensures sound design and avoids over-engineering
   architecture:
     type: ai
     group: review
-    schema: code-review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
     prompt: |
         Building on our overview analysis, evaluate the architectural decisions and design patterns.
 
@@ -190,14 +191,14 @@ steps:
         - **error**: Significant architectural problems (over-engineering, unnecessary special cases, violation of core patterns, missed reuse opportunities)
         - **warning**: Architectural concerns that should be addressed (minor over-abstraction, could be simplified, inconsistent patterns)
         - **info**: Architectural suggestions and alternative approaches (simpler patterns available, potential for future reuse)
-    depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    schema: code-review
 
   # Performance analysis - Important for all applications
   performance:
     type: ai
     group: review
-    schema: code-review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
     prompt: |
         Building on our overview analysis, now review the code changes for performance issues.
 
@@ -235,15 +236,15 @@ steps:
         - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
         - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
         - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
-    depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    schema: code-review
 
 
   # Code quality and maintainability
   quality:
     type: ai
     group: review
-    schema: code-review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
     prompt: |
         Building on our overview discussion, evaluate the code quality and maintainability.
 
@@ -306,29 +307,28 @@ steps:
         - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling, tests with magic numbers)
         - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming, unclear test expectations)
         - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements, test clarity)
-    depends_on: [overview]
-    on: [pr_opened, pr_updated]
+    schema: code-review
 
   # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
   apply-overview-labels:
     type: github
     criticality: external
     tags: [github]
-    depends_on: [overview]
     on: [pr_opened]
+    depends_on: [overview]
+    assume:
+      - "outputs['overview']?.tags?.label"
+      - "outputs['overview']?.tags?.['review-effort'] != null"
     op: labels.add
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
-    assume:
-      - "outputs['overview']?.tags?.label"
-      - "outputs['overview']?.tags?.['review-effort'] != null"
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
     type: ai
     group: dynamic  # New issue triage posts a standalone comment
-    schema: issue-assistant
+    on: [issue_opened]
     prompt: |
         You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
 
@@ -392,13 +392,12 @@ steps:
         - NEVER make promises about timelines, release dates, or team commitments
         - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
         - Focus on technical analysis and helpful information rather than commitments
-    on: [issue_opened]
 
   # Comment Assistant (comments only) — intent detection and reply
   comment-assistant:
     type: ai
     group: dynamic
-    schema: issue-assistant
+    on: [issue_comment]
     command: "visor"
     prompt: |
         You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
@@ -454,7 +453,7 @@ steps:
         - Be honest when you don't know something or can't find the answer in the available context
         - If the question requires information not available in the PR/issue context, clearly state what's missing
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
-    on: [issue_comment]
+    schema: issue-assistant
     on_success:
       transitions:
         - when: "event.name === 'issue_comment' && output?.intent === 'comment_retrigger'"
@@ -466,16 +465,16 @@ steps:
     type: github
     criticality: external
     tags: [github]
-    depends_on: [issue-assistant]
     on: [issue_opened]
+    depends_on: [issue-assistant]
+    assume:
+      - "(outputs['issue-assistant']?.labels?.length ?? 0) > 0"
     op: labels.add
     # Explicitly derive labels from issue-assistant output with guardrails
     # - Use Liquid to serialize labels array to JSON; provider will expand
     # - Assumptions ensure the dependency exists and produced at least one label
     values:
       - "{{ outputs['issue-assistant'].labels | default: [] | json }}"
-    assume:
-      - "(outputs['issue-assistant']?.labels?.length ?? 0) > 0"
 
   # External origin labelling for PRs and Issues
   external-label:
@@ -504,39 +503,8 @@ steps:
   extract-facts:
     type: ai
     group: fact-validation
-    schema:
-      type: array
-      items:
-        type: object
-        properties:
-          id:
-            type: string
-            description: Unique identifier for the fact (e.g., fact-1, fact-2)
-          category:
-            type: string
-            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
-          claim:
-            type: string
-            description: The exact factual statement being made
-          verifiable:
-            type: boolean
-            description: Whether this claim can be verified against the codebase
-          refs:
-            type: array
-            description: Optional list of code references (parsed from assistant References block)
-            items:
-              type: object
-              properties:
-                path:
-                  type: string
-                lines:
-                  type: string
-                  description: Line or range, e.g., "120-145" or "88"
-              required: [path]
-        required: [id, category, claim, verifiable]
-    # Declarative OR dependency: run after either assistant in the same stage
-    depends_on: ["issue-assistant|comment-assistant"]
     on: [issue_opened, issue_comment]
+    depends_on: ["issue-assistant|comment-assistant"]
     # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     # Ensure we have an assistant output to analyze for this event type
@@ -603,6 +571,37 @@ steps:
       Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
       Each item must be: { id, category, claim, verifiable, refs? } where refs items may contain `lines` or `symbol`.
 
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique identifier for the fact (e.g., fact-1, fact-2)
+          category:
+            type: string
+            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
+          claim:
+            type: string
+            description: The exact factual statement being made
+          verifiable:
+            type: boolean
+            description: Whether this claim can be verified against the codebase
+          refs:
+            type: array
+            description: Optional list of code references (parsed from assistant References block)
+            items:
+              type: object
+              properties:
+                path:
+                  type: string
+                lines:
+                  type: string
+                  description: Line or range, e.g., "120-145" or "88"
+              required: [path]
+        required: [id, category, claim, verifiable]
+
     forEach: true
 
     # After one validation wave completes, route back to the appropriate assistant
@@ -619,31 +618,8 @@ steps:
   validate-fact:
     type: ai
     group: fact-validation
-    schema:
-      type: object
-      properties:
-        fact_id:
-          type: string
-          description: ID of the fact being validated
-        claim:
-          type: string
-          description: The original claim being validated
-        is_valid:
-          type: boolean
-          description: Whether the claim is accurate
-        confidence:
-          type: string
-          enum: [high, medium, low]
-          description: Confidence level in the validation
-        evidence:
-          type: string
-          description: Evidence found in the codebase supporting the validation
-        correction:
-          type: string
-          description: If invalid, the correct information (optional)
-      required: [fact_id, claim, is_valid, confidence, evidence]
-    depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
+    depends_on: [extract-facts]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     ai:
       timeout: 180000 # 3 minutes hard cap per validation
@@ -680,22 +656,36 @@ steps:
       - Confidence level (high/medium/low) in your validation
       - If the claim is incorrect, provide the accurate information as a correction
 
+    schema:
+      type: object
+      properties:
+        fact_id:
+          type: string
+          description: ID of the fact being validated
+        claim:
+          type: string
+          description: The original claim being validated
+        is_valid:
+          type: boolean
+          description: Whether the claim is accurate
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence level in the validation
+        evidence:
+          type: string
+          description: Evidence found in the codebase supporting the validation
+        correction:
+          type: string
+          description: If invalid, the correct information (optional)
+      required: [fact_id, claim, is_valid, confidence, evidence]
+
   # Aggregate validation results and expose boolean all_valid
   aggregate:
     type: script
     group: fact-validation
-    namespace: fact-validation
-    schema:
-      type: object
-      properties:
-        all_valid:
-          type: boolean
-      required:
-        - all_valid
-      additionalProperties: false
-    guarantee: "output && typeof output.all_valid === 'boolean'"
-    depends_on: [validate-fact]
     on: [issue_opened, issue_comment]
+    depends_on: [validate-fact]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     assume:
       # Run only when we have per-item validations and it's the first attempt
@@ -709,13 +699,23 @@ steps:
       const allValid = recent.length > 0 && recent.every(i => i && (i.is_valid === true || i.valid === true));
       memory.set('all_valid', allValid, 'fact-validation');
       return { all_valid: allValid };
+    schema:
+      type: object
+      properties:
+        all_valid:
+          type: boolean
+      required:
+        - all_valid
+      additionalProperties: false
+    guarantee: "output && typeof output.all_valid === 'boolean'"
+    namespace: fact-validation
 
   # Post only when all facts are valid
   post-verified:
     type: log
     group: fact-validation
-    depends_on: [extract-facts]
     on: [issue_opened, issue_comment]
+    depends_on: [extract-facts]
     if: "env.ENABLE_FACT_VALIDATION === 'true' && memory.get('all_valid', 'fact-validation') === true"
     message: "✅ Posted verified response"
     level: info

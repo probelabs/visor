@@ -3,7 +3,7 @@
 This file lists the remaining engineering tasks to fully implement the criticality model, contracts, and transitions as documented. Items are grouped and check‑listable. “(optional)” items can be phased in later.
 
 ## 1) Schema & Types
-- [ ] Add `criticality` field to `CheckConfig` (`external | control-plane | policy | non-critical`).
+- [ ] Add `criticality` field to `CheckConfig` (`external | internal | policy | info`).
 - [ ] (optional) Add `assume_mode: 'skip' | 'fail'` to control unmet preconditions handling.
 - [ ] (optional) Add `retry_on: ['transient'] | ['transient','logical']` to narrow retry classes.
 - [ ] Update JSON schema generator and `src/generated/config-schema.ts`.

@@ -7,7 +7,7 @@ describe('Engine: guarantee + retry across criticality modes', () => {
     output: { pr_comment: { enabled: false } } as any,
   };
 
-  const makeCheck = (criticality?: 'external' | 'control-plane' | 'policy' | 'non-critical') => ({
+  const makeCheck = (criticality?: 'external' | 'internal' | 'policy' | 'info') => ({
     type: 'script',
     content: 'return { ok: false };',
     // Logical failure (policy violation)
@@ -27,10 +27,10 @@ describe('Engine: guarantee + retry across criticality modes', () => {
     expect(st?.totalRuns || 0).toBeGreaterThan(1); // retries occurred
   });
 
-  it('control-plane: retries suppressed for logical failure', async () => {
+  it('internal: retries suppressed for logical failure', async () => {
     const cfg = {
       ...baseCfg,
-      checks: { c: makeCheck('control-plane') },
+      checks: { c: makeCheck('internal') },
     } as VisorConfig;
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['c'], config: cfg, debug: false });

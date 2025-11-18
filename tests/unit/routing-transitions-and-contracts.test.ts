@@ -41,7 +41,7 @@ describe('Routing transitions and contracts', () => {
     });
 
     // Expect assistant to have run due to transition
-    const stats = res.executionStatistics.checks;
+    const stats = res.executionStatistics?.checks || [];
     const routed = stats.find(s => s.checkName === 'assistant');
     expect(routed?.totalRuns || 0).toBeGreaterThanOrEqual(1);
   });
@@ -61,7 +61,7 @@ describe('Routing transitions and contracts', () => {
 
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['c1'], config: cfg, debug: false });
-    const st = res.executionStatistics.checks.find(s => s.checkName === 'c1');
+    const st = (res.executionStatistics?.checks || []).find(s => s.checkName === 'c1');
     expect(st?.skipped).toBe(true);
     expect(st?.skipReason).toBe('assume');
     expect(st?.totalRuns).toBe(0);
@@ -81,9 +81,7 @@ describe('Routing transitions and contracts', () => {
 
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['c2'], config: cfg, debug: false });
-    const group = res.results['c2'] || res.results[Object.keys(res.results)[0]];
-    const checkRes = Array.isArray(group) ? group[0] : group;
-    const issues = (checkRes?.issues || []).filter((i: any) =>
+    const issues = (res.reviewSummary.issues || []).filter((i: any) =>
       String(i.ruleId || '').includes('contract/guarantee_failed')
     );
     expect(issues.length).toBeGreaterThanOrEqual(1);

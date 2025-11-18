@@ -538,7 +538,7 @@ steps:
 1. **Use JSON output** when possible for better integration
 2. **Set appropriate groups** to organize related checks
 3. **Use tags** for filtering check execution
-4. **Handle errors gracefully** - consider using `|| true` for non-critical commands
+4. **Handle errors gracefully** - consider using `|| true` for info-mode commands
 5. **Keep commands simple** - complex logic should be in scripts
 6. **Use dependencies** to chain related commands
 7. **Set timeouts** for long-running commands if needed

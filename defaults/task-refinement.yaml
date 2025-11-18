@@ -189,7 +189,7 @@ steps:
 
   run-commands:
     type: command
-    criticality: control-plane
+    criticality: internal
     group: task-refinement
     depends_on: [confirm-interpret]
     exec: |

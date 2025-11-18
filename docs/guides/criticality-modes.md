@@ -23,18 +23,18 @@ Declare criticality on each check:
 checks:
   some-step:
     type: command
-    criticality: control-plane   # external | control-plane | policy | non-critical
+    criticality: internal   # external | internal | policy | info
 ```
 
 If the field is omitted, the engine may infer a default (mutating → external; forEach parent or on_* goto/run → control‑plane; policy gates → policy; else non‑critical). You can override any default on a per‑check basis.
 
 ### Mode selection — quick checklist
 - Does this step mutate external state? → external
-- Does it steer execution (fan‑out, transitions/goto, sets flags for other guards)? → control-plane
+- Does it steer execution (fan‑out, transitions/goto, sets flags for other guards)? → internal
 - Does it enforce permissions/policy/compliance and gate external steps? → policy
-- Otherwise, is it read‑only/pure and low‑risk? → non-critical
+- Otherwise, is it read‑only/pure and low‑risk? → info
 
-If in doubt, start with non-critical and promote to policy/control‑plane/external when you add gating, routing, or side‑effects.
+If in doubt, start with info and promote to policy/internal/external when you add gating, routing, or side‑effects.
 
 ---
 
@@ -102,7 +102,7 @@ routing:
 checks:
   extract-items:
     type: command
-    criticality: control-plane
+    criticality: internal
     exec: "node -e \"console.log('[\\"a\\",\\"b\\",\\"c\\"]')\""
     forEach: true
     guarantee:
@@ -189,7 +189,7 @@ Example — summary step that won’t block the pipeline
 checks:
   summarize:
     type: ai
-    criticality: non-critical
+    criticality: info
     on:
       - pr_opened
       - pr_updated
@@ -257,7 +257,7 @@ routing:
 checks:
   extract-facts:
     type: command
-    criticality: control-plane
+    criticality: internal
     on:
       - issue_opened
       - issue_comment
@@ -286,7 +286,7 @@ checks:
 
   aggregate:
     type: command
-    criticality: control-plane
+    criticality: internal
     depends_on:
       - validate-fact
     exec: node scripts/aggregate-validity.js   # -> { all_valid: boolean }
@@ -322,7 +322,7 @@ checks:
 
   summarize:
     type: ai
-    criticality: non-critical
+    criticality: info
     on:
       - issue_opened
     continue_on_failure: true

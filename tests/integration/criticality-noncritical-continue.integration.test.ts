@@ -1,8 +1,8 @@
 import { StateMachineExecutionEngine } from '../../src/state-machine-execution-engine';
 import type { VisorConfig } from '../../src/types/config';
 
-describe('Criticality integration: non-critical continues despite failure', () => {
-  it('dependent runs when dependency is non-critical and fails logically', async () => {
+describe('Criticality integration: info continues despite failure', () => {
+  it('dependent runs when dependency is info and fails logically', async () => {
     const cfg: VisorConfig = {
       version: '1.0',
       output: { format: 'json' },
@@ -12,7 +12,7 @@ describe('Criticality integration: non-critical continues despite failure', () =
           message: 'A running',
           level: 'info',
           fail_if: 'true', // logical failure
-          criticality: 'non-critical',
+          criticality: 'info',
         },
         b: {
           type: 'log',
@@ -30,7 +30,7 @@ describe('Criticality integration: non-critical continues despite failure', () =
 
     expect(by['a']?.totalRuns).toBe(1);
     expect(by['a']?.failedRuns || 0).toBeGreaterThanOrEqual(1);
-    // non-critical should allow dependent b to run
+    // info should allow dependent b to run
     expect(by['b']?.totalRuns).toBe(1);
   });
 });

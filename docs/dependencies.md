@@ -100,7 +100,7 @@ Sometimes a check can proceed when any one of several upstream steps has complet
 
 ## Criticality and Gating
 
-`continue_on_failure` controls whether dependents may run after a failure — it is a gating knob, not the definition of criticality. Classify steps by criticality (external | control-plane | policy | non-critical) and derive defaults:
+`continue_on_failure` controls whether dependents may run after a failure — it is a gating knob, not the definition of criticality. Classify steps by criticality (external | internal | policy | info) and derive defaults:
 
 - Critical: `continue_on_failure: false`, require `assume`/`guarantee`, tighter loop budgets, retries only for transient faults.
 - Non‑critical: may allow `continue_on_failure: true` to keep non‑critical branches moving.
@@ -111,7 +111,7 @@ steps:
   summarize:
     type: ai
     tags:
-      - non-critical
+      - info
     continue_on_failure: true
     fail_if: "(output.errors || []).length > 0"
 ```

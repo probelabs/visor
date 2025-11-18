@@ -31,20 +31,20 @@ Declare criticality on each check:
 checks:
   post-comment:
     type: github
-    criticality: external        # external | control-plane | policy | non-critical
+    criticality: external        # external | internal | policy | info
 ```
 
 Meanings:
 - external
   - Step mutates an external system (GitHub ops, HTTP methods ≠ GET/HEAD, file writes).
   - Defaults: contracts required; `continue_on_failure: false`; retries only for transient faults; tighter loop budgets; suppress downstream mutating actions when contracts or `fail_if` fail; idempotency or compensation expected.
-- control-plane
+- internal
   - Step drives routing or fan‑out (forEach parents; on_* with goto/run; memory used by guards).
   - Defaults: contracts required for route integrity; `continue_on_failure: false`; tighter loop budgets (recommended 8); retries only transient; treat loops/recirculation conservatively.
 - policy
   - Step enforces permissions/compliance gates (permission checks, org policy, human‑in‑the‑loop approvals).
   - Defaults: contracts required; `continue_on_failure: false`; logical violations are failures (no auto‑retry), downstream mutating actions blocked until remediated.
-- non-critical
+- info
   - Read‑only or low‑risk compute.
   - Defaults: contracts recommended (not required); may allow `continue_on_failure: true`; standard loop budgets and retry bounds.
 
@@ -248,7 +248,7 @@ A step is critical when it meets any of:
 - Irreversible/noisy effects (user‑visible posts, ticket creation).
 
 Pragmatic marking today:
-- Use `tags: [critical]` (and optionally `control-plane`, `external`).
+- Use `tags: [critical]` (and optionally `internal`, `external`).
 - Heuristics: treat mutating providers as critical by default.
 
 Policy matrix (default)
@@ -291,7 +291,7 @@ checks:
 checks:
   label:
     type: github
-    criticality: external   # or: control-plane | policy | non-critical
+    criticality: external   # or: internal | policy | info
     on:
       - pr_opened
     op: labels.add
@@ -321,7 +321,7 @@ checks:
   summarize:
     type: ai
     tags:
-      - non-critical
+      - info
     on:
       - pr_opened
       - pr_updated
@@ -360,7 +360,7 @@ checks:
     type: command
     tags:
       - critical
-      - control-plane
+      - internal
     exec: "node -e \"console.log('[\\"a\\",\\"b\\",\\"c\\"]')\""
     forEach: true
     on_finish:
@@ -435,7 +435,7 @@ This section summarizes the full, NASA‑style approach we recommend. Items mark
 
 ### Config / Schema
 - Criticality (proposed field; tags remain a fallback)
-  - `criticality: external | control-plane | policy | non-critical`
+  - `criticality: external | internal | policy | info`
   - or minimal boolean `critical: true|false` if you prefer simplicity.
 - Contracts (implemented)
   - `assume:` preconditions (list of expressions)
@@ -535,7 +535,7 @@ routing:
 checks:
   extract-items:
     type: command
-    criticality: control-plane
+    criticality: internal
     exec: "node -e \"console.log('[\\"a\\",\\"b\\"]')\""
     forEach: true
     on_finish:
@@ -642,7 +642,7 @@ checks:
   # 1) Control‑plane fan‑out producer
   extract-facts:
     type: command
-    criticality: control-plane
+    criticality: internal
     on:
       - issue_opened
       - issue_comment
@@ -677,7 +677,7 @@ checks:
   # 3) Control‑plane aggregator that computes overall validity
   aggregate:
     type: command
-    criticality: control-plane
+    criticality: internal
     depends_on:
       - validate-fact
     exec: node scripts/aggregate-validity.js # -> { all_valid: boolean }
@@ -718,7 +718,7 @@ checks:
   # 6) Non‑critical compute — allowed to fail softly
   summarize:
     type: ai
-    criticality: non-critical
+    criticality: info
     on:
       - issue_opened
     continue_on_failure: true

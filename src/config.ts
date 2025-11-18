@@ -733,11 +733,58 @@ export class ConfigManager {
       if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality) {
         errors.push({
           field: `checks.${checkName}.criticality`,
-          message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'control-plane' to enable safe defaults for side-effecting steps.`,
+          message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'internal' to enable safe defaults for side-effecting steps.`,
         });
       }
     } catch {
       // best-effort hint only
+    }
+
+    // Criticality-driven contract requirements (lint-time)
+    // For higher-safety modes, require a pre-run guard (assume or if) and,
+    // for output-producing providers, a post-run contract (schema or guarantee).
+    try {
+      const crit = (checkConfig.criticality || 'policy') as string;
+      const isCritical = crit === 'external' || crit === 'internal';
+
+      if (isCritical) {
+        // 1) Pre-run guard: either assume (string or non-empty array) or if
+        const hasAssume =
+          typeof (checkConfig as any).assume === 'string' ||
+          (Array.isArray((checkConfig as any).assume) && (checkConfig as any).assume.length > 0);
+        const hasIf =
+          typeof (checkConfig as any).if === 'string' && (checkConfig as any).if.trim().length > 0;
+        if (!hasAssume && !hasIf) {
+          errors.push({
+            field: `checks.${checkName}.assume`,
+            message: `Critical step "${checkName}" (criticality: ${crit}) requires a precondition: set 'assume:' (preferred) or 'if:' to guard execution.`,
+          });
+        }
+
+        // 2) Post-run contract for output-producing providers
+        const outputProviders = new Set([
+          'ai',
+          'script',
+          'command',
+          'http',
+          'http_client',
+          'http_input',
+        ]);
+        if (outputProviders.has(checkConfig.type as string)) {
+          const hasSchema = typeof (checkConfig as any).schema !== 'undefined';
+          const hasGuarantee =
+            typeof (checkConfig as any).guarantee === 'string' &&
+            (checkConfig as any).guarantee.trim().length > 0;
+          if (!hasSchema && !hasGuarantee) {
+            errors.push({
+              field: `checks.${checkName}.schema/guarantee`,
+              message: `Critical step "${checkName}" (type: ${checkConfig.type}) requires an output contract: provide 'schema:' (renderer name or JSON Schema) or 'guarantee:' expression.`,
+            });
+          }
+        }
+      }
+    } catch {
+      // lint-only; never throw from here
     }
 
     // Command checks require exec field
