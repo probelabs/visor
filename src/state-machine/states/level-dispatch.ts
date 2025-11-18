@@ -773,6 +773,36 @@ async function executeCheckWithForEachItems(
         ...(content ? { content } : {}),
       };
 
+      // JSON Schema validation for per-item outputs when a schema is provided
+      try {
+        const schemaObj =
+          (checkConfig as any).output_schema ||
+          (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined);
+        const itemOutput = output;
+        if (schemaObj && itemOutput !== undefined) {
+          const Ajv = require('ajv');
+          const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+          const validate = ajv.compile(schemaObj);
+          const valid = validate(itemOutput);
+          if (!valid) {
+            const errs = (validate.errors || []).slice(0, 3).map((e: any) => e.message).join('; ');
+            const issue: ReviewIssue = {
+              file: 'contract',
+              line: 0,
+              ruleId: `contract/schema_validation_failed`,
+              message: `Output schema validation failed${errs ? `: ${errs}` : ''}`,
+              severity: 'error',
+              category: 'logic',
+              checkName: checkId,
+              group: checkConfig.group,
+              schema: 'json-schema',
+              timestamp: Date.now(),
+            } as any;
+            enrichedResult.issues = [...(enrichedResult.issues || []), issue];
+          }
+        }
+      } catch {}
+
       // Evaluate guarantee contract (non-fatal): append error issues on violation
       try {
         const guaranteeExpr = (checkConfig as any)?.guarantee as string | string[] | undefined;
@@ -1800,6 +1830,35 @@ async function executeSingleCheck(
       issues: enrichedIssues,
     };
 
+    // Validate output against JSON Schema if provided (non-fatal contract)
+    try {
+      const schemaObj =
+        (checkConfig as any).output_schema ||
+        (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined);
+      if (schemaObj && (enrichedResult as any)?.output !== undefined) {
+        const Ajv = require('ajv');
+        const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+        const validate = ajv.compile(schemaObj);
+        const valid = validate((enrichedResult as any).output);
+        if (!valid) {
+          const errs = (validate.errors || []).slice(0, 3).map((e: any) => e.message).join('; ');
+          const issue: ReviewIssue = {
+            file: 'contract',
+            line: 0,
+            ruleId: `contract/schema_validation_failed`,
+            message: `Output schema validation failed${errs ? `: ${errs}` : ''}`,
+            severity: 'error',
+            category: 'logic',
+            checkName: checkId,
+            group: checkConfig.group,
+            schema: 'json-schema',
+            timestamp: Date.now(),
+          } as any;
+          enrichedResult.issues = [...(enrichedResult.issues || []), issue];
+        }
+      }
+    } catch {}
+
     // Evaluate guarantee contract after execution (non-fatal)
     try {
       const guaranteeExpr = (checkConfig as any)?.guarantee as string | string[] | undefined;
@@ -1835,10 +1894,10 @@ async function executeSingleCheck(
     let isForEach = (result as any).isForEach;
     let forEachItems = (result as any).forEachItems;
 
-    // DEBUG: Log forEach handling
-    logger.info(
-      `[LevelDispatch][DEBUG] After execution ${checkId}: checkConfig.forEach=${checkConfig.forEach}, output type=${typeof (result as any).output}, isArray=${Array.isArray((result as any).output)}`
-    );
+      // DEBUG: Log forEach handling
+      logger.info(
+        `[LevelDispatch][DEBUG] After execution ${checkId}: checkConfig.forEach=${checkConfig.forEach}, output type=${typeof (result as any).output}, isArray=${Array.isArray((result as any).output)}`
+      );
 
     if (checkConfig.forEach === true) {
       const output = (result as any).output;

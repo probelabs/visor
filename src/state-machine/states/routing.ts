@@ -86,7 +86,12 @@ function classifyFailure(result: ReviewSummary): 'none' | 'logical' | 'execution
   for (const iss of issues) {
     const id = String((iss as any).ruleId || '');
     const msg = String((iss as any).message || '');
-    if (id.endsWith('_fail_if') || id.includes('contract/guarantee_failed')) hasLogical = true;
+    if (
+      id.endsWith('_fail_if') ||
+      id.includes('contract/guarantee_failed') ||
+      id.includes('contract/schema_validation_failed')
+    )
+      hasLogical = true;
     if (id.includes('/execution_error') || msg.includes('Command execution failed')) hasExecution = true;
     if (id.includes('forEach/execution_error') || msg.includes('sandbox_runner_error')) hasExecution = true;
   }

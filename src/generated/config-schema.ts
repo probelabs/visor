@@ -387,6 +387,11 @@ export const configSchema = {
           description:
             'Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional',
         },
+        output_schema: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description:
+            'Optional JSON Schema to validate the produced output. If omitted and schema is an object, the engine will use that object for validation.',
+        },
         template: {
           $ref: '#/definitions/CustomTemplateConfig',
           description: 'Custom template configuration - optional',

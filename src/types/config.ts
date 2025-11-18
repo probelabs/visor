@@ -455,6 +455,13 @@ export interface CheckConfig {
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
   schema?: string | Record<string, unknown>;
+  /**
+   * Optional JSON Schema to validate the produced output. If omitted and
+   * `schema` is an object, the engine will treat that object as the
+   * output_schema for validation purposes while still using string schemas
+   * (e.g., 'code-review') for template selection.
+   */
+  output_schema?: Record<string, unknown>;
   /** Custom template configuration - optional */
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */
