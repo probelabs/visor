@@ -92,8 +92,10 @@ function classifyFailure(result: ReviewSummary): 'none' | 'logical' | 'execution
       id.includes('contract/schema_validation_failed')
     )
       hasLogical = true;
-    if (id.includes('/execution_error') || msg.includes('Command execution failed')) hasExecution = true;
-    if (id.includes('forEach/execution_error') || msg.includes('sandbox_runner_error')) hasExecution = true;
+    if (id.includes('/execution_error') || msg.includes('Command execution failed'))
+      hasExecution = true;
+    if (id.includes('forEach/execution_error') || msg.includes('sandbox_runner_error'))
+      hasExecution = true;
   }
   if (hasLogical && !hasExecution) return 'logical';
   if (hasExecution && !hasLogical) return 'execution';
@@ -938,43 +940,43 @@ async function processOnFail(
       if (!(state as any).retryAttempts) (state as any).retryAttempts = new Map<string, number>();
       const attemptsMap: Map<string, number> = (state as any).retryAttempts;
 
-    const makeKey = (sc: Array<{ check: string; index: number }> | undefined) => {
-      const keyScope = sc && sc.length > 0 ? JSON.stringify(sc) : 'root';
-      return `${checkId}::${keyScope}`;
-    };
+      const makeKey = (sc: Array<{ check: string; index: number }> | undefined) => {
+        const keyScope = sc && sc.length > 0 ? JSON.stringify(sc) : 'root';
+        return `${checkId}::${keyScope}`;
+      };
 
-    const scheduleRetryForScope = (sc: Array<{ check: string; index: number }> | undefined) => {
-      const key = makeKey(sc);
-      const used = attemptsMap.get(key) || 0;
-      if (used >= max) return; // budget exhausted
-      attemptsMap.set(key, used + 1);
+      const scheduleRetryForScope = (sc: Array<{ check: string; index: number }> | undefined) => {
+        const key = makeKey(sc);
+        const used = attemptsMap.get(key) || 0;
+        if (used >= max) return; // budget exhausted
+        attemptsMap.set(key, used + 1);
 
-      // Increment loop count and schedule forward run for the same check
-      state.routingLoopCount++;
-      emitEvent({
-        type: 'ForwardRunRequested',
-        target: checkId,
-        scope: sc || [],
-        origin: 'run',
-      });
-    };
+        // Increment loop count and schedule forward run for the same check
+        state.routingLoopCount++;
+        emitEvent({
+          type: 'ForwardRunRequested',
+          target: checkId,
+          scope: sc || [],
+          origin: 'run',
+        });
+      };
 
-    const resForEachItems: any[] | undefined =
-      (result && (result as any).forEachItems) || undefined;
-    const hasForEachItems = Array.isArray(resForEachItems) && resForEachItems.length > 0;
+      const resForEachItems: any[] | undefined =
+        (result && (result as any).forEachItems) || undefined;
+      const hasForEachItems = Array.isArray(resForEachItems) && resForEachItems.length > 0;
 
-    if (hasForEachItems) {
-      for (let i = 0; i < resForEachItems!.length; i++) {
-        const itemOut = resForEachItems![i] as any;
-        // Only retry failed iterations (marked by __failed)
-        if (itemOut && typeof itemOut === 'object' && itemOut.__failed === true) {
-          const sc: Array<{ check: string; index: number }> = [{ check: checkId, index: i }];
-          scheduleRetryForScope(sc);
+      if (hasForEachItems) {
+        for (let i = 0; i < resForEachItems!.length; i++) {
+          const itemOut = resForEachItems![i] as any;
+          // Only retry failed iterations (marked by __failed)
+          if (itemOut && typeof itemOut === 'object' && itemOut.__failed === true) {
+            const sc: Array<{ check: string; index: number }> = [{ check: checkId, index: i }];
+            scheduleRetryForScope(sc);
+          }
         }
+      } else {
+        scheduleRetryForScope(scope);
       }
-    } else {
-      scheduleRetryForScope(scope);
-    }
 
       // Note: backoff.delay_ms and mode are intentionally not awaited here; the
       // state-machine processes retries as subsequent waves. If needed later, we
@@ -1404,15 +1406,24 @@ async function evaluateTransitions(
         const none = (arr, pred) => Array.isArray(arr) && !arr.some(x => pred(x));
         const count = (arr, pred) => Array.isArray(arr) ? arr.filter(x => pred(x)).length : 0;
       `;
-      const code = `${helpers}\n${rule.when}`;
+      // Mirror the variable exposure pattern used in goto_js/run_js so that
+      // `when:` expressions can reference `outputs`, `outputs_history`, `event`, etc.
+      const code = `
+        ${helpers}
+        const step = scope.step;
+        const outputs = scope.outputs;
+        const outputs_history = scope.outputs_history;
+        const output = scope.output;
+        const memory = scope.memory;
+        const event = scope.event;
+        const __eval = () => { return (${rule.when}); };
+        return __eval();
+      `;
       const matched = compileAndRun<boolean>(
         sandbox,
         code,
         { scope: scopeObj },
-        {
-          injectLog: false,
-          wrapFunction: true,
-        }
+        { injectLog: false, wrapFunction: false }
       );
       if (matched) {
         if (rule.to === null) return null;

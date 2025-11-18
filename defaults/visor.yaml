@@ -466,7 +466,15 @@ steps:
     depends_on: [issue-assistant]
     on: [issue_opened]
     op: labels.add
-    # No explicit values; provider derives labels from dependency outputs (issue-assistant.labels)
+    # Explicitly derive labels from issue-assistant output with guardrails
+    # - Use Liquid to serialize labels array to JSON; provider will expand
+    # - Assumptions ensure the dependency exists and produced at least one label
+    values:
+      - "{{ outputs['issue-assistant'].labels | default: [] | json }}"
+    assume:
+      - "outputs['issue-assistant'] != null"
+      - "outputs['issue-assistant'].labels != null"
+      - "outputs['issue-assistant'].labels.length > 0"
 
   # External origin labelling for PRs and Issues
   external-label:

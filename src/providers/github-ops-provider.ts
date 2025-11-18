@@ -224,6 +224,40 @@ export class GitHubOpsProvider extends CheckProvider {
 
     let values: string[] = await renderValues(valuesRaw);
 
+    // Flatten helpers: allow a single Liquid-rendered value to represent
+    // a JSON array (e.g., "{{ outputs['issue-assistant'].labels | json }}")
+    // or a newline-separated list. This makes explicit YAML configs expressive
+    // without re-introducing value_js.
+    try {
+      const flattened: string[] = [];
+      for (const v of values) {
+        const t = String(v ?? '').trim();
+        if (!t) continue;
+        let expanded = false;
+        // JSON array expansion
+        if (t.startsWith('[') && t.endsWith(']')) {
+          try {
+            const arr = JSON.parse(t);
+            if (Array.isArray(arr)) {
+              for (const x of arr) flattened.push(String(x ?? ''));
+              expanded = true;
+            }
+          } catch {}
+        }
+        if (expanded) continue;
+        // Newline-separated fallback (one per line)
+        if (t.includes('\n')) {
+          for (const line of t.split('\n')) {
+            const s = line.trim();
+            if (s) flattened.push(s);
+          }
+          expanded = true;
+        }
+        if (!expanded) flattened.push(t);
+      }
+      values = flattened;
+    } catch {}
+
     // Expose dependency outputs to value_js for convenience (generic map)
     const depOutputs: Record<string, unknown> = {};
     if (dependencyResults) {
@@ -235,7 +269,10 @@ export class GitHubOpsProvider extends CheckProvider {
 
     // Provider-side normalization replaces legacy value_js usage
     const sanitizeLabel = (s: string) =>
-      s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim();
+      s
+        .replace(/[^A-Za-z0-9:\/\- ]/g, '')
+        .replace(/\/{2,}/g, '/')
+        .trim();
     values = (Array.isArray(values) ? values : [])
       .map(v => String(v ?? ''))
       .map(sanitizeLabel)
