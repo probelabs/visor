@@ -157,6 +157,13 @@ export class ConfigLoader {
         throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
       }
 
+      // Normalize 'include' (alias) to 'extends' for nested chains
+      if ((config as any).include && !(config as any).extends) {
+        const inc = (config as any).include;
+        (config as any).extends = Array.isArray(inc) ? inc : [inc];
+        delete (config as any).include;
+      }
+
       // Update base directory for nested extends
       const previousBaseDir = this.options.baseDir;
       this.options.baseDir = path.dirname(resolvedPath);

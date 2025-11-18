@@ -1,5 +1,5 @@
 version: "1.0"
-extends: "./code-review.yaml"
+include: "./code-review.yaml"
 
 # Default Visor configuration - provides comprehensive code analysis out-of-the-box
 # Uses mock provider for CI compatibility when no AI API keys are configured

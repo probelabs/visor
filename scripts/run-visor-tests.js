@@ -17,6 +17,8 @@ function main() {
   // Prefer new non-dot tests filename; allow multiple suites
   const primarySuite = process.env.VISOR_TESTS_PATH || path.join(repoRoot, 'defaults', 'visor.tests.yaml');
   const refinementSuite = path.join(repoRoot, 'defaults', 'task-refinement.yaml');
+  // Local override tests that validate include/extends + appendPrompt behavior
+  const overrideSuite = path.join(repoRoot, 'tests', 'override.tests.yaml');
   const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
   let nodeArgs = [];
@@ -59,6 +61,7 @@ function main() {
 
   const suites = [primarySuite];
   if (fs.existsSync(refinementSuite)) suites.push(refinementSuite);
+  if (fs.existsSync(overrideSuite)) suites.push(overrideSuite);
 
   let exitCode = 0;
   const outDir = path.join(repoRoot, 'output');
