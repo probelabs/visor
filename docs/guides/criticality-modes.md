@@ -16,6 +16,14 @@ checks:
 
 If the field is omitted, the engine may infer a default (mutating → external; forEach parent or on_* goto/run → control‑plane; policy gates → policy; else non‑critical). You can override any default on a per‑check basis.
 
+### Mode selection — quick checklist
+- Does this step mutate external state? → external
+- Does it steer execution (fan‑out, transitions/goto, sets flags for other guards)? → control-plane
+- Does it enforce permissions/policy/compliance and gate external steps? → policy
+- Otherwise, is it read‑only/pure and low‑risk? → non-critical
+
+If in doubt, start with non-critical and promote to policy/control‑plane/external when you add gating, routing, or side‑effects.
+
 ---
 
 ## External
@@ -51,6 +59,12 @@ checks:
     on_fail:
       retry: { max: 2, backoff: { mode: exponential, delay_ms: 1200 } }
 ```
+
+### When to pick EXTERNAL (real‑life)
+- GitHub comment/label/edit operations (comment.create, labels.add/remove).
+- HTTP webhooks that mutate (POST/PUT/PATCH/DELETE) — Slack messages, PagerDuty incidents, Notion/Linear/Jira ticket creation.
+- File system writes (artifact publishing, changelog generation into repo) or any step that makes persistent changes.
+- Git operations that change state (push, tag, merge) — if ever enabled, treat as external by default.
 
 ---
 
@@ -102,6 +116,12 @@ checks:
     exec: node scripts/fix.js
 ```
 
+### When to pick CONTROL‑PLANE (real‑life)
+- A forEach parent that fans out work to child steps (e.g., facts, files, services, directories, modules).
+- An aggregator that computes a run decision (`all_valid`, `needs_retry`, `next_targets`) and routes via transitions.
+- A small `memory`/`log`/`script` step that sets flags used by `if/assume/guarantee` on other checks (e.g., `needs_retry=true`).
+- Workflow orchestration steps whose purpose is routing/looping rather than producing user-facing output.
+
 ---
 
 ## Policy
@@ -138,6 +158,11 @@ checks:
     if: "outputs['permission-check'].allowed === true"   # only proceed when policy passes
 ```
 
+### When to pick POLICY (real‑life)
+- Permission & role checks that gate external actions (only MEMBERS may post/label).
+- Compliance or guardrail checks (branch protection, commit message format, DCO/CLA verification) that block mutating steps.
+- Change‑management windows (e.g., “no posts on weekends”), environment gates (PROD vs. STAGING), or organization‑wide safety toggles.
+
 ---
 
 ## Non‑Critical
@@ -161,6 +186,11 @@ checks:
     continue_on_failure: true
     fail_if: "(output.errors || []).length > 0"
 ```
+
+### When to pick NON‑CRITICAL (real‑life)
+- Read‑only analysis and summaries (lint, style, performance hints, PR summary) where failure should not block critical tasks.
+- Exploratory AI steps that help humans but don’t gate or mutate (draft review comments in dry‑run; heuristics, suggestions).
+- Any leaf computation whose outputs aren’t consumed by control‑plane or external steps.
 
 ---
 
