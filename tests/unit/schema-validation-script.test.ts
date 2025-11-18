@@ -10,7 +10,7 @@ describe('Schema validation (script provider)', () => {
         s: {
           type: 'script',
           content: 'return { ok: false };',
-          output_schema: {
+          schema: {
             type: 'object',
             properties: { ok: { type: 'boolean' }, count: { type: 'integer' } },
             required: ['ok', 'count'],
@@ -36,7 +36,7 @@ describe('Schema validation (script provider)', () => {
         s_ok: {
           type: 'script',
           content: 'return { ok: true, count: 1 };',
-          output_schema: {
+          schema: {
             type: 'object',
             properties: { ok: { type: 'boolean' }, count: { type: 'integer' } },
             required: ['ok', 'count'],
@@ -54,4 +54,3 @@ describe('Schema validation (script provider)', () => {
     expect(issues.length).toBe(0);
   });
 });
-

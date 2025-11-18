@@ -27,9 +27,30 @@
           ],
           "description": "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\""
         },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Alias for extends - include from other configurations (backward compatibility)"
+        },
         "tools": {
           "$ref": "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
           "description": "Custom tool definitions that can be used in MCP blocks"
+        },
+        "imports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Import workflow definitions from external files or URLs"
         },
         "steps": {
           "$ref": "#/definitions/Record%3Cstring%2CCheckConfig%3E",
@@ -90,6 +111,10 @@
         "routing": {
           "$ref": "#/definitions/RoutingDefaults",
           "description": "Optional routing defaults for retry/goto/run policies"
+        },
+        "limits": {
+          "$ref": "#/definitions/LimitsConfig",
+          "description": "Global execution limits"
         }
       },
       "required": [
@@ -302,6 +327,22 @@
           "type": "string",
           "description": "AI provider to use for this check - overrides global setting"
         },
+        "ai_persona": {
+          "type": "string",
+          "description": "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
+        },
+        "ai_prompt_type": {
+          "type": "string",
+          "description": "Probe promptType for this check (underscore style)"
+        },
+        "ai_system_prompt": {
+          "type": "string",
+          "description": "System prompt for this check (underscore style)"
+        },
+        "ai_custom_prompt": {
+          "type": "string",
+          "description": "Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt"
+        },
         "ai_mcp_servers": {
           "$ref": "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
           "description": "MCP servers for this AI check - overrides global setting"
@@ -378,6 +419,20 @@
           },
           "description": "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])"
         },
+        "criticality": {
+          "type": "string",
+          "enum": [
+            "external",
+            "control-plane",
+            "policy",
+            "non-critical"
+          ],
+          "description": "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'control-plane': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'non-critical': informational checks. Lowest safety."
+        },
+        "continue_on_failure": {
+          "type": "boolean",
+          "description": "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
+        },
         "forEach": {
           "type": "boolean",
           "description": "Process output as array and run dependent checks for each item"
@@ -405,6 +460,38 @@
         "on_finish": {
           "$ref": "#/definitions/OnFinishConfig",
           "description": "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
+        },
+        "assume": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume')."
+        },
+        "guarantee": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId \"contract/guarantee_failed\"."
+        },
+        "max_runs": {
+          "type": "number",
+          "description": "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
         },
         "message": {
           "type": "string",
@@ -507,7 +594,7 @@
           "type": "string",
           "description": "Session ID for HTTP transport (optional, server may generate one)"
         },
-        "args": {
+        "command_args": {
           "type": "array",
           "items": {
             "type": "string"
@@ -533,6 +620,22 @@
         "default": {
           "type": "string",
           "description": "Default value if timeout occurs or empty input when allow_empty is true"
+        },
+        "workflow": {
+          "type": "string",
+          "description": "Workflow ID or path to workflow file"
+        },
+        "args": {
+          "$ref": "#/definitions/Record%3Cstring%2Cunknown%3E",
+          "description": "Arguments/inputs for the workflow"
+        },
+        "overrides": {
+          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E%3E",
+          "description": "Override specific step configurations in the workflow"
+        },
+        "output_mapping": {
+          "$ref": "#/definitions/Record%3Cstring%2Cstring%3E",
+          "description": "Map workflow outputs to check outputs"
         }
       },
       "additionalProperties": false,
@@ -556,7 +659,8 @@
         "github",
         "claude-code",
         "mcp",
-        "human-input"
+        "human-input",
+        "workflow"
       ],
       "description": "Valid check types in configuration"
     },
@@ -603,6 +707,18 @@
         "debug": {
           "type": "boolean",
           "description": "Enable debug mode"
+        },
+        "prompt_type": {
+          "type": "string",
+          "description": "Probe promptType to use (e.g., engineer, code-review, architect)"
+        },
+        "system_prompt": {
+          "type": "string",
+          "description": "System prompt (baseline preamble). Replaces legacy custom_prompt."
+        },
+        "custom_prompt": {
+          "type": "string",
+          "description": "Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt"
         },
         "skip_code_context": {
           "type": "boolean",
@@ -1021,6 +1137,13 @@
         "run_js": {
           "type": "string",
           "description": "Dynamic remediation list: JS expression returning string[]"
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TransitionRule"
+          },
+          "description": "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility."
         }
       },
       "additionalProperties": false,
@@ -1069,6 +1192,34 @@
         "^x-": {}
       }
     },
+    "TransitionRule": {
+      "type": "object",
+      "properties": {
+        "when": {
+          "type": "string",
+          "description": "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Target step ID, or null to explicitly prevent goto."
+        },
+        "goto_event": {
+          "$ref": "#/definitions/EventTrigger",
+          "description": "Optional event override when performing goto."
+        }
+      },
+      "required": [
+        "when"
+      ],
+      "additionalProperties": false,
+      "description": "Declarative transition rule for on_* blocks.",
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
     "OnSuccessConfig": {
       "type": "object",
       "properties": {
@@ -1094,6 +1245,13 @@
         "run_js": {
           "type": "string",
           "description": "Dynamic post-success steps: JS expression returning string[]"
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TransitionRule"
+          },
+          "description": "Declarative transitions (see OnFailConfig.transitions)."
         }
       },
       "additionalProperties": false,
@@ -1127,6 +1285,13 @@
         "run_js": {
           "type": "string",
           "description": "Dynamic post-finish steps: JS expression returning string[]"
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TransitionRule"
+          },
+          "description": "Declarative transitions (see OnFailConfig.transitions)."
         }
       },
       "additionalProperties": false,
@@ -1134,6 +1299,16 @@
       "patternProperties": {
         "^x-": {}
       }
+    },
+    "Record<string,Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>>": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E"
+      }
+    },
+    "Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>": {
+      "type": "object",
+      "additionalProperties": false
     },
     "OutputConfig": {
       "type": "object",
@@ -1523,6 +1698,24 @@
       },
       "additionalProperties": false,
       "description": "Global routing defaults",
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
+    "LimitsConfig": {
+      "type": "object",
+      "properties": {
+        "max_runs_per_check": {
+          "type": "number",
+          "description": "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
+        },
+        "max_workflow_depth": {
+          "type": "number",
+          "description": "Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Global engine limits",
       "patternProperties": {
         "^x-": {}
       }

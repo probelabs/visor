@@ -24,9 +24,27 @@ export declare const configSchema: {
                     }];
                     readonly description: "Extends from other configurations - can be file path, HTTP(S) URL, or \"default\"";
                 };
+                readonly include: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Alias for extends - include from other configurations (backward compatibility)";
+                };
                 readonly tools: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E";
                     readonly description: "Custom tool definitions that can be used in MCP blocks";
+                };
+                readonly imports: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Import workflow definitions from external files or URLs";
                 };
                 readonly steps: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
@@ -87,6 +105,10 @@ export declare const configSchema: {
                 readonly routing: {
                     readonly $ref: "#/definitions/RoutingDefaults";
                     readonly description: "Optional routing defaults for retry/goto/run policies";
+                };
+                readonly limits: {
+                    readonly $ref: "#/definitions/LimitsConfig";
+                    readonly description: "Global execution limits";
                 };
             };
             readonly required: readonly ["output", "version"];
@@ -291,6 +313,22 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "AI provider to use for this check - overrides global setting";
                 };
+                readonly ai_persona: {
+                    readonly type: "string";
+                    readonly description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'";
+                };
+                readonly ai_prompt_type: {
+                    readonly type: "string";
+                    readonly description: "Probe promptType for this check (underscore style)";
+                };
+                readonly ai_system_prompt: {
+                    readonly type: "string";
+                    readonly description: "System prompt for this check (underscore style)";
+                };
+                readonly ai_custom_prompt: {
+                    readonly type: "string";
+                    readonly description: "Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt";
+                };
                 readonly ai_mcp_servers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers for this AI check - overrides global setting";
@@ -326,6 +364,10 @@ export declare const configSchema: {
                     }];
                     readonly description: "Schema type for template rendering (e.g., \"code-review\", \"markdown\") or inline JSON schema object - optional";
                 };
+                readonly output_schema: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Optional JSON Schema to validate the produced output. If omitted and schema is an object, the engine will use that object for validation.";
+                };
                 readonly template: {
                     readonly $ref: "#/definitions/CustomTemplateConfig";
                     readonly description: "Custom template configuration - optional";
@@ -358,6 +400,15 @@ export declare const configSchema: {
                     };
                     readonly description: "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])";
                 };
+                readonly criticality: {
+                    readonly type: "string";
+                    readonly enum: readonly ["external", "control-plane", "policy", "non-critical"];
+                    readonly description: "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'control-plane': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'non-critical': informational checks. Lowest safety.";
+                };
+                readonly continue_on_failure: {
+                    readonly type: "boolean";
+                    readonly description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.";
+                };
                 readonly forEach: {
                     readonly type: "boolean";
                     readonly description: "Process output as array and run dependent checks for each item";
@@ -382,6 +433,32 @@ export declare const configSchema: {
                 readonly on_finish: {
                     readonly $ref: "#/definitions/OnFinishConfig";
                     readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
+                };
+                readonly assume: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume').";
+                };
+                readonly guarantee: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId \"contract/guarantee_failed\".";
+                };
+                readonly max_runs: {
+                    readonly type: "number";
+                    readonly description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.";
                 };
                 readonly message: {
                     readonly type: "string";
@@ -461,7 +538,7 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Session ID for HTTP transport (optional, server may generate one)";
                 };
-                readonly args: {
+                readonly command_args: {
                     readonly type: "array";
                     readonly items: {
                         readonly type: "string";
@@ -488,6 +565,22 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Default value if timeout occurs or empty input when allow_empty is true";
                 };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow ID or path to workflow file";
+                };
+                readonly args: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Arguments/inputs for the workflow";
+                };
+                readonly overrides: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E%3E";
+                    readonly description: "Override specific step configurations in the workflow";
+                };
+                readonly output_mapping: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Map workflow outputs to check outputs";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Configuration for a single check";
@@ -497,7 +590,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow"];
             readonly description: "Valid check types in configuration";
         };
         readonly EventTrigger: {
@@ -528,6 +621,18 @@ export declare const configSchema: {
                 readonly debug: {
                     readonly type: "boolean";
                     readonly description: "Enable debug mode";
+                };
+                readonly prompt_type: {
+                    readonly type: "string";
+                    readonly description: "Probe promptType to use (e.g., engineer, code-review, architect)";
+                };
+                readonly system_prompt: {
+                    readonly type: "string";
+                    readonly description: "System prompt (baseline preamble). Replaces legacy custom_prompt.";
+                };
+                readonly custom_prompt: {
+                    readonly type: "string";
+                    readonly description: "Probe customPrompt (baseline/system prompt) — deprecated, use system_prompt";
                 };
                 readonly skip_code_context: {
                     readonly type: "boolean";
@@ -919,6 +1024,13 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Dynamic remediation list: JS expression returning string[]";
                 };
+                readonly transitions: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/TransitionRule";
+                    };
+                    readonly description: "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility.";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Failure routing configuration per check";
@@ -963,6 +1075,29 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
+        readonly TransitionRule: {
+            readonly type: "object";
+            readonly properties: {
+                readonly when: {
+                    readonly type: "string";
+                    readonly description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.";
+                };
+                readonly to: {
+                    readonly type: readonly ["string", "null"];
+                    readonly description: "Target step ID, or null to explicitly prevent goto.";
+                };
+                readonly goto_event: {
+                    readonly $ref: "#/definitions/EventTrigger";
+                    readonly description: "Optional event override when performing goto.";
+                };
+            };
+            readonly required: readonly ["when"];
+            readonly additionalProperties: false;
+            readonly description: "Declarative transition rule for on_* blocks.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
         readonly OnSuccessConfig: {
             readonly type: "object";
             readonly properties: {
@@ -988,6 +1123,13 @@ export declare const configSchema: {
                 readonly run_js: {
                     readonly type: "string";
                     readonly description: "Dynamic post-success steps: JS expression returning string[]";
+                };
+                readonly transitions: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/TransitionRule";
+                    };
+                    readonly description: "Declarative transitions (see OnFailConfig.transitions).";
                 };
             };
             readonly additionalProperties: false;
@@ -1022,12 +1164,29 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Dynamic post-finish steps: JS expression returning string[]";
                 };
+                readonly transitions: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/TransitionRule";
+                    };
+                    readonly description: "Declarative transitions (see OnFailConfig.transitions).";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
+        };
+        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E";
+            };
+        };
+        readonly 'Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>': {
+            readonly type: "object";
+            readonly additionalProperties: false;
         };
         readonly OutputConfig: {
             readonly type: "object";
@@ -1369,6 +1528,24 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Global routing defaults";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly LimitsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly max_runs_per_check: {
+                    readonly type: "number";
+                    readonly description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.";
+                };
+                readonly max_workflow_depth: {
+                    readonly type: "number";
+                    readonly description: "Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3.";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Global engine limits";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

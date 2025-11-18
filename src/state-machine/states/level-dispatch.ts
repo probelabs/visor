@@ -776,8 +776,8 @@ async function executeCheckWithForEachItems(
       // JSON Schema validation for per-item outputs when a schema is provided
       try {
         const schemaObj =
-          (checkConfig as any).output_schema ||
-          (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined);
+          (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined) ||
+          (checkConfig as any).output_schema;
         const itemOutput = output;
         if (schemaObj && itemOutput !== undefined) {
           const Ajv = require('ajv');
@@ -1836,8 +1836,8 @@ async function executeSingleCheck(
     // Validate output against JSON Schema if provided (non-fatal contract)
     try {
       const schemaObj =
-        (checkConfig as any).output_schema ||
-        (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined);
+        (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined) ||
+        (checkConfig as any).output_schema;
       if (schemaObj && (enrichedResult as any)?.output !== undefined) {
         const Ajv = require('ajv');
         const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });

@@ -700,7 +700,7 @@ export class ConfigManager {
     checkConfig: CheckConfig,
     errors: ConfigValidationError[],
     config?: Partial<VisorConfig>,
-    warnings?: ConfigValidationError[]
+    _warnings?: ConfigValidationError[]
   ): void {
     // Default to 'ai' if no type specified
     if (!checkConfig.type) {
@@ -775,6 +775,19 @@ export class ConfigManager {
         message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`,
       });
     }
+
+    // Prefer single-field schema: if both schema (object) and output_schema are present, warn
+    try {
+      const hasObjSchema = (checkConfig as any)?.schema && typeof (checkConfig as any).schema === 'object';
+      const hasOutputSchema = (checkConfig as any)?.output_schema && typeof (checkConfig as any).output_schema === 'object';
+      if (hasObjSchema && hasOutputSchema) {
+        (_warnings || errors).push({
+          field: `checks.${checkName}.schema`,
+          message:
+            `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`,
+        });
+      }
+    } catch {}
 
     // HTTP client checks require url field
     if (checkConfig.type === 'http_client' && !checkConfig.url) {

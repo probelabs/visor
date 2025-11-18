@@ -17,7 +17,7 @@ describe('Schema validation for forEach map (script -> script)', () => {
           depends_on: ['list'],
           fanout: 'map',
           content: 'return { x: outputs["list"].x };',
-          output_schema: {
+          schema: {
             type: 'object',
             properties: { x: { type: 'number' } },
             required: ['x'],
@@ -35,4 +35,3 @@ describe('Schema validation for forEach map (script -> script)', () => {
     expect(issues.length).toBeGreaterThanOrEqual(1);
   });
 });
-

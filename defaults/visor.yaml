@@ -686,7 +686,7 @@ steps:
     type: script
     group: fact-validation
     namespace: fact-validation
-    output_schema:
+    schema:
       type: object
       properties:
         all_valid:
