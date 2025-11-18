@@ -2,7 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import Sandbox from '@nyariv/sandboxjs';
-import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import { createSecureSandbox } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
 
@@ -24,7 +24,7 @@ export class GitHubOpsProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['op', 'values', 'value', 'value_js'];
+    return ['op', 'values', 'value'];
   }
 
   async isAvailable(): Promise<boolean> {
@@ -47,7 +47,6 @@ export class GitHubOpsProvider extends CheckProvider {
       op: string;
       values?: string[] | string;
       value?: string;
-      value_js?: string;
     };
 
     // IMPORTANT: Always prefer authenticated octokit from event context (GitHub App or token)
@@ -234,30 +233,13 @@ export class GitHubOpsProvider extends CheckProvider {
       }
     }
 
-    if (cfg.value_js && cfg.value_js.trim()) {
-      try {
-        // Evaluate user-provided value_js in a restricted sandbox (no process/global exposure)
-        const sandbox = this.getSecureSandbox();
-
-        const res = compileAndRun<unknown>(
-          sandbox,
-          cfg.value_js,
-          { pr: prInfo, values, outputs: depOutputs },
-          { injectLog: true, wrapFunction: true, logPrefix: '[github:value_js]' }
-        );
-        if (typeof res === 'string') values = [res];
-        else if (Array.isArray(res)) values = (res as unknown[]).map(v => String(v));
-      } catch (e) {
-        // Generic fallback: keep pre-rendered values as-is (no hardcoded deps)
-        // Never hardcode a particular step like 'issue-assistant'.
-        const msg = e instanceof Error ? e.message : String(e);
-        if (process.env.VISOR_DEBUG === 'true') logger.warn(`[github-ops] value_js_error: ${msg}`);
-        // Normalize strings; leave empty if no values were provided.
-        values = Array.isArray(values)
-          ? values.map(v => String(v ?? '').trim()).filter(Boolean)
-          : [];
-      }
-    }
+    // Provider-side normalization replaces legacy value_js usage
+    const sanitizeLabel = (s: string) =>
+      s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim();
+    values = (Array.isArray(values) ? values : [])
+      .map(v => String(v ?? ''))
+      .map(sanitizeLabel)
+      .filter(Boolean);
 
     // Fallback: if values are still empty, try deriving from dependency outputs
     // 1) Common pattern: outputs.<dep>.labels (e.g., from issue-assistant)
@@ -306,8 +288,7 @@ export class GitHubOpsProvider extends CheckProvider {
       } catch {}
     }
 
-    // Trim, drop empty, and de-duplicate values regardless of source
-    values = values.map(v => v.trim()).filter(v => v.length > 0);
+    // Trim (already sanitized), drop empty, and de-duplicate values regardless of source
     values = Array.from(new Set(values));
 
     try {

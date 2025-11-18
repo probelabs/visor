@@ -320,12 +320,6 @@ steps:
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
-    value_js: |
-      // Normalize, trim, and drop empties (ES5-safe)
-      return values
-        .map(v => (v == null ? '' : String(v)))
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -472,14 +466,7 @@ steps:
     depends_on: [issue-assistant]
     on: [issue_opened]
     op: labels.add
-    value_js: |
-      const raw = (outputs && outputs['issue-assistant'] && outputs['issue-assistant'].labels) || [];
-      const labels = Array.isArray(raw) ? raw : [];
-      // Sanitize labels: keep [A-Za-z0-9:/\- ] (alphanumerics, colon, slash, hyphen, and space), collapse repeated '/'
-      return labels
-        .map(v => String(v ?? ''))
-        .map(s => s.replace(/[^A-Za-z0-9:\/\- ]/g, '').replace(/\/{2,}/g, '/').trim())
-        .filter(Boolean);
+    # No explicit values; provider derives labels from dependency outputs (issue-assistant.labels)
 
   # External origin labelling for PRs and Issues
   external-label:

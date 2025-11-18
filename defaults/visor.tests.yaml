@@ -130,7 +130,7 @@ tests:
     - name: issue-triage-labels
       description: |
         Minimal issue triage path to validate label application from issue-assistant output.
-        This specifically exercises the apply-issue-labels value_js to catch sandbox errors.
+        Provider derives labels from dependency outputs and normalizes them.
       event: issue_opened
       fixture: gh.issue_open.minimal
       mocks:
