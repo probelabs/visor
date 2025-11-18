@@ -727,14 +727,14 @@ export class ConfigManager {
       });
     }
 
-    // Recommend specifying criticality for external-effect providers
+    // Require specifying criticality for external-effect providers
     try {
       const externalTypes = new Set(['github', 'http', 'http_client', 'http_input', 'workflow']);
-      if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality && warnings) {
-        warnings.push({
+      if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality) {
+        errors.push({
           field: `checks.${checkName}.criticality`,
           message:
-            `Step "${checkName}" of type "${checkConfig.type}" lacks criticality. Consider setting criticality: 'external' or 'control-plane' to enable safer defaults.`,
+            `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'control-plane' to enable safe defaults for side-effecting steps.`,
         });
       }
     } catch {
