@@ -321,8 +321,8 @@ steps:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
     assume:
-      - "outputs['overview'] && outputs['overview'].tags && outputs['overview'].tags.label"
-      - "outputs['overview'].tags && (outputs['overview'].tags['review-effort'] != null)"
+      - "outputs['overview']?.tags?.label"
+      - "outputs['overview']?.tags?.['review-effort'] != null"
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -475,7 +475,7 @@ steps:
     values:
       - "{{ outputs['issue-assistant'].labels | default: [] | json }}"
     assume:
-      - "outputs['issue-assistant'] && outputs['issue-assistant'].labels ? outputs['issue-assistant'].labels.length > 0 : false"
+      - "(outputs['issue-assistant']?.labels?.length ?? 0) > 0"
 
   # External origin labelling for PRs and Issues
   external-label:
@@ -698,7 +698,9 @@ steps:
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
     assume:
-      - "length((outputs.history && outputs.history['validate-fact']) || []) > 0"
+      # Run only when we have per-item validations and it's the first attempt
+      - "(outputs['validate-fact']?.forEachItems?.length ?? 0) > 0"
+      - "(memory.get('attempt', 'fact-validation') ?? 0) === 0"
     content: |
       const vf = (outputs.history['validate-fact']||[]).filter(v => v && typeof v === 'object');
       const ex = (outputs.history['extract-facts']||[]);
