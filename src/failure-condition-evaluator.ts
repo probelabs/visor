@@ -573,16 +573,82 @@ export class FailureConditionEvaluator {
       if (!this.sandbox) {
         this.sandbox = this.createSecureSandbox();
       }
-      let exec: ReturnType<typeof this.sandbox.compile>;
+      let result: any;
+      // Primary path: SandboxJS
       try {
-        // Try compiling the raw expression as-is first (supports multi-line logical expressions)
-        exec = this.sandbox.compile(`return (${raw});`);
-      } catch {
-        // Fallback: normalize multi-line statements into a comma-chain expression
-        const normalizedExpr = normalize(condition);
-        exec = this.sandbox.compile(`return (${normalizedExpr});`);
+        let exec: ReturnType<typeof this.sandbox.compile>;
+        try {
+          exec = this.sandbox.compile(`return (${raw});`);
+        } catch {
+          const normalizedExpr = normalize(condition);
+          exec = this.sandbox.compile(`return (${normalizedExpr});`);
+        }
+        result = exec(scope).run();
+      } catch (_primaryErr) {
+        // Fallback path: Node VM for modern syntax (optional chaining, nullish coalescing)
+        // Build a minimal, safe context with only whitelisted symbols
+        try {
+          const vm = require('node:vm');
+          const ctx: any = {
+            // Scope vars
+            output,
+            outputs,
+            debug: debugData,
+            memory: memoryAccessor,
+            issues,
+            metadata,
+            criticalIssues,
+            errorIssues,
+            totalIssues,
+            warningIssues,
+            infoIssues,
+            checkName,
+            schema,
+            group,
+            branch,
+            baseBranch,
+            filesChanged,
+            filesCount,
+            event,
+            env,
+            // Helpers
+            contains,
+            startsWith,
+            endsWith,
+            length,
+            always,
+            success,
+            failure,
+            log,
+            hasIssue,
+            countIssues,
+            hasFileMatching,
+            hasIssueWith,
+            hasFileWith,
+            hasMinPermission,
+            isOwner,
+            isMember,
+            isCollaborator,
+            isContributor,
+            isFirstTimer,
+            Math,
+            JSON,
+          };
+          const context = vm.createContext(ctx);
+          // Try raw first; if it throws due to semicolons/newlines, normalize
+          let code = `(${raw})`;
+          try {
+            result = new vm.Script(code).runInContext(context, { timeout: 50 });
+          } catch {
+            const normalizedExpr = normalize(condition);
+            code = `(${normalizedExpr})`;
+            result = new vm.Script(code).runInContext(context, { timeout: 50 });
+          }
+        } catch (vmErr) {
+          console.error('❌ Failed to evaluate expression:', condition, vmErr);
+          throw vmErr;
+        }
       }
-      const result = exec(scope).run();
       try {
         require('./logger').logger.debug(`  fail_if: result=${Boolean(result)}`);
       } catch {}
