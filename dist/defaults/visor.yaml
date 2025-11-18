@@ -312,7 +312,6 @@ steps:
   # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
   apply-overview-labels:
     type: github
-    criticality: external
     tags: [github]
     depends_on: [overview]
     on: [pr_opened]
@@ -459,15 +458,16 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      transitions:
-        - when: "event.name === 'issue_comment' && output?.intent === 'comment_retrigger'"
-          to: overview
-          goto_event: pr_updated
+      goto_js: |
+        const intent = output?.intent;
+        const isComment = event?.name === 'issue_comment';
+        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
+        return isComment && allowed && intent === 'comment_retrigger' ? 'overview' : null;
+      goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
     type: github
-    criticality: external
     tags: [github]
     depends_on: [issue-assistant]
     on: [issue_opened]
@@ -484,7 +484,6 @@ steps:
   # External origin labelling for PRs and Issues
   external-label:
     type: github
-    criticality: external
     tags: [github]
     on: [pr_opened, issue_opened]
     if: "!isMember() && !isContributor()"
@@ -607,14 +606,15 @@ steps:
     forEach: true
 
     # After one validation wave completes, route back to the appropriate assistant
-    # using declarative transitions so the engine forward-runs dependents
-    # (assistant → extract-facts → validate-fact).
+    # using goto_js so the engine forward-runs dependents (assistant → extract-facts → validate-fact).
+    # This replaces the older run_js-only approach which didn’t forward-run the chain.
     on_finish:
-      transitions:
-        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_opened'"
-          to: issue-assistant
-        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_comment'"
-          to: comment-assistant
+      goto_js: |
+        // Route back for a correction pass when any recent fact validation failed.
+        // Be permissive here: some runners omit the `last_loop` marker; rely on is_valid when present.
+        const hist = (outputs_history['validate-fact'] || []);
+        const hasInvalid = hist.some(v => v && (v.is_valid === false || v.valid === false));
+        return hasInvalid ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant') : null;
 
   # Validate each extracted fact
   validate-fact:
@@ -680,42 +680,6 @@ steps:
       - Evidence of what you found in the codebase
       - Confidence level (high/medium/low) in your validation
       - If the claim is incorrect, provide the accurate information as a correction
-
-  # Aggregate validation results and expose boolean all_valid
-  aggregate:
-    type: script
-    group: fact-validation
-    namespace: fact-validation
-    output_schema:
-      type: object
-      properties:
-        all_valid:
-          type: boolean
-      required:
-        - all_valid
-      additionalProperties: false
-    guarantee: "output && typeof output.all_valid === 'boolean'"
-    depends_on: [validate-fact]
-    on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true'"
-    content: |
-      const vf = (outputs.history['validate-fact']||[]).filter(v => v && typeof v === 'object');
-      const ex = (outputs.history['extract-facts']||[]);
-      let lastSize = 0; for (let i = ex.length - 1; i >= 0 && lastSize === 0; i--) { if (Array.isArray(ex[i])) { lastSize = ex[i].length; } }
-      const recent = lastSize > 0 ? vf.slice(-lastSize) : vf;
-      const allValid = recent.length > 0 && recent.every(i => i && (i.is_valid === true || i.valid === true));
-      memory.set('all_valid', allValid, 'fact-validation');
-      return { all_valid: allValid };
-
-  # Post only when all facts are valid
-  post-verified:
-    type: log
-    group: fact-validation
-    depends_on: [extract-facts]
-    on: [issue_opened, issue_comment]
-    if: "env.ENABLE_FACT_VALIDATION === 'true' && memory.get('all_valid', 'fact-validation') === true"
-    message: "✅ Posted verified response"
-    level: info
 
   # Retrigger noop removed — comment-assistant schedules overview directly
 

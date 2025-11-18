@@ -1,15 +1,17 @@
 import {
   CheckExecutionEngine
-} from "./chunk-YFM7P67Q.mjs";
+} from "./chunk-4REMQZQX.mjs";
 import "./chunk-OOZITMRU.mjs";
+import "./chunk-U56FQ6ZC.mjs";
+import "./chunk-BY7H543S.mjs";
 import {
   init_logger,
   logger
-} from "./chunk-NUE2THCT.mjs";
+} from "./chunk-RH4HH6SI.mjs";
 import "./chunk-U7X54EMV.mjs";
 import {
   ConfigMerger
-} from "./chunk-JV5RIIRE.mjs";
+} from "./chunk-WXLNXBFF.mjs";
 import {
   __esm,
   __export,
@@ -56,9 +58,30 @@ var init_config_schema = __esm({
               ],
               description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
             },
+            include: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Alias for extends - include from other configurations (backward compatibility)"
+            },
             tools: {
               $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
               description: "Custom tool definitions that can be used in MCP blocks"
+            },
+            imports: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Import workflow definitions from external files or URLs"
             },
             steps: {
               $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
@@ -119,6 +142,10 @@ var init_config_schema = __esm({
             routing: {
               $ref: "#/definitions/RoutingDefaults",
               description: "Optional routing defaults for retry/goto/run policies"
+            },
+            limits: {
+              $ref: "#/definitions/LimitsConfig",
+              description: "Global execution limits"
             }
           },
           required: ["output", "version"],
@@ -323,6 +350,22 @@ var init_config_schema = __esm({
               type: "string",
               description: "AI provider to use for this check - overrides global setting"
             },
+            ai_persona: {
+              type: "string",
+              description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
+            },
+            ai_prompt_type: {
+              type: "string",
+              description: "Probe promptType for this check (underscore style)"
+            },
+            ai_system_prompt: {
+              type: "string",
+              description: "System prompt for this check (underscore style)"
+            },
+            ai_custom_prompt: {
+              type: "string",
+              description: "Legacy customPrompt (underscore style) \u2014 deprecated, use ai_system_prompt"
+            },
             ai_mcp_servers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
@@ -393,6 +436,10 @@ var init_config_schema = __esm({
               },
               description: 'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])'
             },
+            continue_on_failure: {
+              type: "boolean",
+              description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
+            },
             forEach: {
               type: "boolean",
               description: "Process output as array and run dependent checks for each item"
@@ -417,6 +464,10 @@ var init_config_schema = __esm({
             on_finish: {
               $ref: "#/definitions/OnFinishConfig",
               description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
+            },
+            max_runs: {
+              type: "number",
+              description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
             },
             message: {
               type: "string",
@@ -499,7 +550,7 @@ var init_config_schema = __esm({
               type: "string",
               description: "Session ID for HTTP transport (optional, server may generate one)"
             },
-            args: {
+            command_args: {
               type: "array",
               items: {
                 type: "string"
@@ -525,6 +576,22 @@ var init_config_schema = __esm({
             default: {
               type: "string",
               description: "Default value if timeout occurs or empty input when allow_empty is true"
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path to workflow file"
+            },
+            args: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments/inputs for the workflow"
+            },
+            overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E%3E",
+              description: "Override specific step configurations in the workflow"
+            },
+            output_mapping: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Map workflow outputs to check outputs"
             }
           },
           additionalProperties: false,
@@ -548,7 +615,8 @@ var init_config_schema = __esm({
             "github",
             "claude-code",
             "mcp",
-            "human-input"
+            "human-input",
+            "workflow"
           ],
           description: "Valid check types in configuration"
         },
@@ -589,6 +657,18 @@ var init_config_schema = __esm({
             debug: {
               type: "boolean",
               description: "Enable debug mode"
+            },
+            prompt_type: {
+              type: "string",
+              description: "Probe promptType to use (e.g., engineer, code-review, architect)"
+            },
+            system_prompt: {
+              type: "string",
+              description: "System prompt (baseline preamble). Replaces legacy custom_prompt."
+            },
+            custom_prompt: {
+              type: "string",
+              description: "Probe customPrompt (baseline/system prompt) \u2014 deprecated, use system_prompt"
             },
             skip_code_context: {
               type: "boolean",
@@ -1093,6 +1173,16 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
+        "Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E"
+          }
+        },
+        "Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>": {
+          type: "object",
+          additionalProperties: false
+        },
         OutputConfig: {
           type: "object",
           properties: {
@@ -1442,6 +1532,20 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
+        },
+        LimitsConfig: {
+          type: "object",
+          properties: {
+            max_runs_per_check: {
+              type: "number",
+              description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
+            }
+          },
+          additionalProperties: false,
+          description: "Global engine limits",
+          patternProperties: {
+            "^x-": {}
+          }
         }
       }
     };
@@ -1697,7 +1801,7 @@ var ConfigLoader = class {
       const parentConfig = await this.fetchConfig(source, this.loadedConfigs.size);
       parentConfigs.push(parentConfig);
     }
-    const { ConfigMerger: ConfigMerger2 } = await import("./config-merger-DK4ERDVJ.mjs");
+    const { ConfigMerger: ConfigMerger2 } = await import("./config-merger-WOYVDZX7.mjs");
     const merger = new ConfigMerger2();
     let mergedParents = {};
     for (const parentConfig of parentConfigs) {
@@ -1830,6 +1934,7 @@ var ConfigManager = class {
     "claude-code",
     "mcp",
     "command",
+    "script",
     "http",
     "http_input",
     "http_client",
@@ -1837,7 +1942,8 @@ var ConfigManager = class {
     "noop",
     "log",
     "github",
-    "human-input"
+    "human-input",
+    "workflow"
   ];
   validEventTriggers = [...VALID_EVENT_TRIGGERS];
   validOutputFormats = ["table", "json", "markdown", "sarif"];
@@ -1870,7 +1976,8 @@ var ConfigManager = class {
       if (!parsedConfig || typeof parsedConfig !== "object") {
         throw new Error("Configuration file must contain a valid YAML object");
       }
-      if (parsedConfig.extends) {
+      const extendsValue = parsedConfig.extends || parsedConfig.include;
+      if (extendsValue) {
         const loaderOptions = {
           baseDir: path2.dirname(resolvedPath),
           allowRemote: this.isRemoteExtendsAllowed(),
@@ -1879,8 +1986,8 @@ var ConfigManager = class {
         };
         const loader = new ConfigLoader(loaderOptions);
         const merger = new ConfigMerger();
-        const extends_ = Array.isArray(parsedConfig.extends) ? parsedConfig.extends : [parsedConfig.extends];
-        const { extends: _extendsField, ...configWithoutExtends } = parsedConfig;
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig;
         let mergedConfig = {};
         for (const source of extends_) {
           console.log(`\u{1F4E6} Extending from: ${source}`);
@@ -1890,7 +1997,11 @@ var ConfigManager = class {
         parsedConfig = merger.merge(mergedConfig, configWithoutExtends);
         parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
+      if (parsedConfig.id && typeof parsedConfig.id === "string") {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path2.dirname(resolvedPath));
+      }
       parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+      await this.loadWorkflows(parsedConfig, path2.dirname(resolvedPath));
       if (validate) {
         this.validateConfig(parsedConfig);
       }
@@ -2054,6 +2165,57 @@ var ConfigManager = class {
       currentDir = path2.dirname(currentDir);
     }
     return null;
+  }
+  /**
+   * Convert a workflow definition file to a visor config
+   * When a workflow YAML is run standalone, register the workflow and use its tests as checks
+   */
+  async convertWorkflowToConfig(workflowData, _basePath) {
+    const { WorkflowRegistry } = await import("./workflow-registry-V5UCBM6E.mjs");
+    const registry = WorkflowRegistry.getInstance();
+    const workflowId = workflowData.id;
+    logger.info(`Detected standalone workflow file: ${workflowId}`);
+    const tests = workflowData.tests || {};
+    const workflowDefinition = { ...workflowData };
+    delete workflowDefinition.tests;
+    const result = registry.register(workflowDefinition, "standalone", { override: true });
+    if (!result.valid && result.errors) {
+      const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+      throw new Error(`Failed to register workflow '${workflowId}':
+${errors}`);
+    }
+    logger.info(`Registered workflow '${workflowId}' for standalone execution`);
+    const visorConfig = {
+      version: "1.0",
+      steps: tests,
+      checks: tests
+      // Backward compatibility
+    };
+    logger.debug(`Standalone workflow config has ${Object.keys(tests).length} test checks`);
+    logger.debug(`Test check names: ${Object.keys(tests).join(", ")}`);
+    logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(", ")}`);
+    return visorConfig;
+  }
+  /**
+   * Load and register workflows from configuration
+   */
+  async loadWorkflows(config, basePath) {
+    if (!config.imports || config.imports.length === 0) {
+      return;
+    }
+    const { WorkflowRegistry } = await import("./workflow-registry-V5UCBM6E.mjs");
+    const registry = WorkflowRegistry.getInstance();
+    for (const source of config.imports) {
+      const results = await registry.import(source, { basePath, validate: true });
+      for (const result of results) {
+        if (!result.valid && result.errors) {
+          const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+          throw new Error(`Failed to import workflow from '${source}':
+${errors}`);
+        }
+      }
+      logger.info(`Imported workflows from: ${source}`);
+    }
   }
   /**
    * Normalize 'checks' and 'steps' keys for backward compatibility

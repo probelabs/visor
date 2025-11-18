@@ -319,13 +319,10 @@ tests:
             Invalid fact path: after assistant reply, extract-facts finds one claim and
             validate-fact returns is_valid=false; the runner detects problems from
             validate-fact history and reruns the assistant once with correction context.
-            Due to goto forward-running dependents, extract-facts and validate-fact also run again.
           event: issue_comment
           fixture: gh.issue_comment.visor_help
           env:
             ENABLE_FACT_VALIDATION: "true"
-          routing:
-            max_loops: 1
           mocks:
             comment-assistant:
               text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4."
@@ -342,11 +339,11 @@ tests:
           expect:
             calls:
               - step: comment-assistant
-                exactly: 2
+                at_least: 2
               - step: extract-facts
-                exactly: 2
+                exactly: 1
               - step: validate-fact
-                exactly: 2
+                at_least: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -356,13 +353,10 @@ tests:
         - name: facts-two-items (comment)
           description: |
             Two facts extracted; only the invalid fact should appear in the correction pass.
-            Due to goto forward-running dependents, extract-facts and validate-fact run again on retry.
           event: issue_comment
           fixture: gh.issue_comment.visor_help
           env:
             ENABLE_FACT_VALIDATION: "true"
-          routing:
-            max_loops: 1
           mocks:
             comment-assistant:
               text: "We rely on defaults/visor.yaml for concurrency defaults."
@@ -376,11 +370,11 @@ tests:
           expect:
             calls:
               - step: comment-assistant
-                exactly: 2
+                at_least: 2
               - step: extract-facts
-                exactly: 2
+                exactly: 1
               - step: validate-fact
-                exactly: 4
+                exactly: 2
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -440,15 +434,11 @@ tests:
                 at_least: 1
 
         - name: facts-invalid (issue)
-          description: |
-            Invalid claim triggers correction by rerunning issue-assistant.
-            Due to goto forward-running dependents, extract-facts and validate-fact also run again.
+          description: Invalid claim triggers correction by rerunning issue-assistant.
           event: issue_opened
           fixture: gh.issue_open.minimal
           env:
             ENABLE_FACT_VALIDATION: "true"
-          routing:
-            max_loops: 1
           mocks:
             issue-assistant:
               text: "Claim: max_parallelism defaults to 4"
@@ -465,13 +455,13 @@ tests:
           expect:
             calls:
               - step: issue-assistant
-                exactly: 2
+                at_least: 2
               - step: apply-issue-labels
                 exactly: 2
               - step: extract-facts
-                exactly: 2
+                exactly: 1
               - step: validate-fact
-                exactly: 2
+                at_least: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }

@@ -364,10 +364,6 @@ export declare const configSchema: {
                     }];
                     readonly description: "Schema type for template rendering (e.g., \"code-review\", \"markdown\") or inline JSON schema object - optional";
                 };
-                readonly output_schema: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
-                    readonly description: "Optional JSON Schema to validate the produced output. If omitted and schema is an object, the engine will use that object for validation.";
-                };
                 readonly template: {
                     readonly $ref: "#/definitions/CustomTemplateConfig";
                     readonly description: "Custom template configuration - optional";
@@ -400,11 +396,6 @@ export declare const configSchema: {
                     };
                     readonly description: "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])";
                 };
-                readonly criticality: {
-                    readonly type: "string";
-                    readonly enum: readonly ["external", "control-plane", "policy", "non-critical"];
-                    readonly description: "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'control-plane': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'non-critical': informational checks. Lowest safety.";
-                };
                 readonly continue_on_failure: {
                     readonly type: "boolean";
                     readonly description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error.";
@@ -433,28 +424,6 @@ export declare const configSchema: {
                 readonly on_finish: {
                     readonly $ref: "#/definitions/OnFinishConfig";
                     readonly description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)";
-                };
-                readonly assume: {
-                    readonly anyOf: readonly [{
-                        readonly type: "string";
-                    }, {
-                        readonly type: "array";
-                        readonly items: {
-                            readonly type: "string";
-                        };
-                    }];
-                    readonly description: "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume').";
-                };
-                readonly guarantee: {
-                    readonly anyOf: readonly [{
-                        readonly type: "string";
-                    }, {
-                        readonly type: "array";
-                        readonly items: {
-                            readonly type: "string";
-                        };
-                    }];
-                    readonly description: "Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId \"contract/guarantee_failed\".";
                 };
                 readonly max_runs: {
                     readonly type: "number";
@@ -574,7 +543,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1024,13 +993,6 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Dynamic remediation list: JS expression returning string[]";
                 };
-                readonly transitions: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly $ref: "#/definitions/TransitionRule";
-                    };
-                    readonly description: "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility.";
-                };
             };
             readonly additionalProperties: false;
             readonly description: "Failure routing configuration per check";
@@ -1075,29 +1037,6 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly TransitionRule: {
-            readonly type: "object";
-            readonly properties: {
-                readonly when: {
-                    readonly type: "string";
-                    readonly description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.";
-                };
-                readonly to: {
-                    readonly type: readonly ["string", "null"];
-                    readonly description: "Target step ID, or null to explicitly prevent goto.";
-                };
-                readonly goto_event: {
-                    readonly $ref: "#/definitions/EventTrigger";
-                    readonly description: "Optional event override when performing goto.";
-                };
-            };
-            readonly required: readonly ["when"];
-            readonly additionalProperties: false;
-            readonly description: "Declarative transition rule for on_* blocks.";
-            readonly patternProperties: {
-                readonly '^x-': {};
-            };
-        };
         readonly OnSuccessConfig: {
             readonly type: "object";
             readonly properties: {
@@ -1123,13 +1062,6 @@ export declare const configSchema: {
                 readonly run_js: {
                     readonly type: "string";
                     readonly description: "Dynamic post-success steps: JS expression returning string[]";
-                };
-                readonly transitions: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly $ref: "#/definitions/TransitionRule";
-                    };
-                    readonly description: "Declarative transitions (see OnFailConfig.transitions).";
                 };
             };
             readonly additionalProperties: false;
@@ -1164,13 +1096,6 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Dynamic post-finish steps: JS expression returning string[]";
                 };
-                readonly transitions: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly $ref: "#/definitions/TransitionRule";
-                    };
-                    readonly description: "Declarative transitions (see OnFailConfig.transitions).";
-                };
             };
             readonly additionalProperties: false;
             readonly description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete";
@@ -1178,13 +1103,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>': {
+        readonly 'Partial<interface-src_types_config.ts-10692-19410-src_types_config.ts-0-31513>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1538,10 +1463,6 @@ export declare const configSchema: {
                 readonly max_runs_per_check: {
                     readonly type: "number";
                     readonly description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.";
-                };
-                readonly max_workflow_depth: {
-                    readonly type: "number";
-                    readonly description: "Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3.";
                 };
             };
             readonly additionalProperties: false;
