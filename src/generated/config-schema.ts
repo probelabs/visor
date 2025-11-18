@@ -423,6 +423,12 @@ export const configSchema = {
           description:
             'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])',
         },
+        criticality: {
+          type: 'string',
+          enum: ['external', 'control-plane', 'policy', 'non-critical'],
+          description:
+            "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'control-plane': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'non-critical': informational checks. Lowest safety.",
+        },
         continue_on_failure: {
           type: 'boolean',
           description:
@@ -611,7 +617,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1249,14 +1255,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-19863-src_types_config.ts-0-33056>': {
+    'Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>': {
       type: 'object',
       additionalProperties: false,
     },

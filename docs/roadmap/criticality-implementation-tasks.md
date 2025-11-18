@@ -48,13 +48,34 @@ This file lists the remaining engineering tasks to fully implement the criticali
 - [ ] Keep JSON snapshot export (done) and add (optional) debug‑resume path gated by a debug flag.
 
 ## 9) Defaults & Examples
-- [ ] Update `defaults/visor.yaml` header comment: explain `criticality` and default policies per mode.
-- [ ] Add an annotated example block with all primitives (if, assume, guarantee, fail_if, transitions) and modes (reference the guides).
+- [ ] Update `defaults/visor.yaml` (and any bundled defaults) to declare `criticality` for relevant checks and prefer `transitions` over `goto_js` where applicable.
+- [ ] Update `defaults/task-refinement.yaml` and `defaults/agent-builder.yaml` to use `criticality` and transitions where appropriate; ensure no `assume` refers to own output.
+- [ ] Convert inline YAML arrays in defaults to block‑style lists for consistency.
+- [ ] Add an annotated example block with all primitives (if, assume, guarantee, fail_if, transitions) and modes (reference the guides) in the defaults or examples folder.
+- [ ] Verify defaults run green via dist CLI:
+      - `npm run build:cli`
+      - `node dist/index.js test defaults/visor.tests.yaml --progress compact`
+      - Any other default suites (`task-refinement`, `agent-builder`) if present.
 
 ## 10) Tests
-- [ ] Unit: `assume` skip vs guard‑step hard‑fail; `guarantee` violation issues; transitions precedence; loop budget enforcement.
-- [ ] Integration: critical external blocks side‑effects on contract failure; control‑plane loop budget; retry classifier behavior.
-- [ ] YAML e2e: strict safety profile scenario passes.
+- [ ] Unit (engine/native):
+      - `assume` skip vs guard‑step hard‑fail (no provider call on skip).
+      - `guarantee` violation adds `contract/guarantee_failed` and does not double‑execute provider.
+      - Transitions precedence over `goto_js`; undefined transition falls back to `goto`.
+      - Loop budget enforcement per scope (error surfaced; routing halts in that scope).
+      - Criticality policy mapping (external/control‑plane/policy/non‑critical) sets defaults (gating, retries, budgets).
+- [ ] Integration:
+      - Critical external step blocks downstream mutating side‑effects on contract/fail_if failure (dependents gated).
+      - Control‑plane forEach parent respects tighter loop budget; no oscillation beyond cap.
+      - Retry classifier: transient provider errors retried; logical (fail_if/guarantee) not auto‑retried in critical modes.
+      - Non‑critical step with `continue_on_failure: true` does not block pipeline.
+- [ ] YAML e2e / Defaults:
+      - `defaults/visor.yaml` flow passes using transitions.
+      - `defaults/task-refinement.yaml` and `defaults/agent-builder.yaml` pass with `criticality` declared.
+      - Add a strict safety profile scenario (e.g., `safety: strict`) and ensure it passes.
+- [ ] CI Gates:
+      - Add a job to build CLI and run default YAML suites with `--progress compact`.
+      - Run unit/integration on PR; block merges on regressions.
 
 ## 11) Docs (remaining polish)
 - [ ] README or landing page: link to Criticality Modes and Fault Management guides.
@@ -68,3 +89,4 @@ This file lists the remaining engineering tasks to fully implement the criticali
 - [ ] Engine enforces defaults per `criticality` while allowing explicit overrides.
 - [ ] Logs have timestamps; debug gated; decisions visible in journal and metrics.
 - [ ] No dist/ artifacts in commits.
+- [ ] Updated defaults (`defaults/visor.yaml`, `defaults/task-refinement.yaml`, `defaults/agent-builder.yaml`) run green via dist CLI in CI.

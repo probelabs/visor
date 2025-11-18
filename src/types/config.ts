@@ -470,6 +470,17 @@ export interface CheckConfig {
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
   /**
+   * Operational criticality of this step. Drives default safety policies
+   * (contracts, retries, loop budgets) at load time. Behavior can still be
+   * overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.
+   *
+   * - 'external': interacts with external systems (side effects). Highest safety.
+   * - 'control-plane': modifies CI/config/state but not prod. High safety.
+   * - 'policy': organizational checks (linting, style, doc). Moderate safety.
+   * - 'non-critical': informational checks. Lowest safety.
+   */
+  criticality?: 'external' | 'control-plane' | 'policy' | 'non-critical';
+  /**
    * Allow dependents to run even if this step fails.
    * Defaults to false (dependents are gated when this step fails).
    * Similar to GitHub Actions' continue-on-error.
