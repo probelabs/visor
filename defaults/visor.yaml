@@ -681,6 +681,34 @@ steps:
       - Confidence level (high/medium/low) in your validation
       - If the claim is incorrect, provide the accurate information as a correction
 
+  # Aggregate validation results and expose boolean all_valid
+  aggregate:
+    type: script
+    group: fact-validation
+    namespace: fact-validation
+    guarantee: "output && typeof output.all_valid === 'boolean'"
+    depends_on: [validate-fact]
+    on: [issue_opened, issue_comment]
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    content: |
+      const vf = (outputs.history['validate-fact']||[]).filter(v => v && typeof v === 'object');
+      const ex = (outputs.history['extract-facts']||[]);
+      let lastSize = 0; for (let i = ex.length - 1; i >= 0 && lastSize === 0; i--) { if (Array.isArray(ex[i])) { lastSize = ex[i].length; } }
+      const recent = lastSize > 0 ? vf.slice(-lastSize) : vf;
+      const allValid = recent.length > 0 && recent.every(i => i && (i.is_valid === true || i.valid === true));
+      memory.set('all_valid', allValid, 'fact-validation');
+      return { all_valid: allValid };
+
+  # Post only when all facts are valid
+  post-verified:
+    type: log
+    group: fact-validation
+    depends_on: [extract-facts]
+    on: [issue_opened, issue_comment]
+    if: "env.ENABLE_FACT_VALIDATION === 'true' && memory.get('all_valid', 'fact-validation') === true"
+    message: "✅ Posted verified response"
+    level: info
+
   # Retrigger noop removed — comment-assistant schedules overview directly
 
 output:
