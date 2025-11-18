@@ -458,12 +458,10 @@ steps:
         - Provide partial answers when possible, and indicate what additional information would help give a complete response
     on: [issue_comment]
     on_success:
-      goto_js: |
-        const intent = output?.intent;
-        const isComment = event?.name === 'issue_comment';
-        const allowed = typeof hasMinPermission === 'function' ? hasMinPermission('MEMBER') : true;
-        return isComment && allowed && intent === 'comment_retrigger' ? 'overview' : null;
-      goto_event: pr_updated
+      transitions:
+        - when: "event.name === 'issue_comment' && output?.intent === 'comment_retrigger'"
+          to: overview
+          goto_event: pr_updated
 
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
@@ -606,15 +604,14 @@ steps:
     forEach: true
 
     # After one validation wave completes, route back to the appropriate assistant
-    # using goto_js so the engine forward-runs dependents (assistant → extract-facts → validate-fact).
-    # This replaces the older run_js-only approach which didn’t forward-run the chain.
+    # using declarative transitions so the engine forward-runs dependents
+    # (assistant → extract-facts → validate-fact).
     on_finish:
-      goto_js: |
-        // Route back for a correction pass when any recent fact validation failed.
-        // Be permissive here: some runners omit the `last_loop` marker; rely on is_valid when present.
-        const hist = (outputs_history['validate-fact'] || []);
-        const hasInvalid = hist.some(v => v && (v.is_valid === false || v.valid === false));
-        return hasInvalid ? (event.name === 'issue_opened' ? 'issue-assistant' : 'comment-assistant') : null;
+      transitions:
+        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_opened'"
+          to: issue-assistant
+        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_comment'"
+          to: comment-assistant
 
   # Validate each extracted fact
   validate-fact:

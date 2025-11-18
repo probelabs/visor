@@ -277,3 +277,36 @@ Execution steps:
 3. Emit telemetry (`engine.contract.assume_failed`, `engine.contract.guarantee_failed`) so CI and runtime monitoring can flag contract regressions.
 
 By lifting control flow into `transitions` and correctness rules into `assume`/`guarantee`, we make configurations statically analyzable, reduce reliance on imperative `goto_js`, and move closer to NASA-inspired static validation goals while still honoring legacy constructs for advanced scenarios.
+## 5. Routing and Loops (spec to impl status)
+
+- on_success/on_fail evaluate `run`, `run_js`, and `goto` (with optional `goto_event`).
+- on_finish for forEach parents is processed after children complete; loop budget enforced.
+
+### 5.1 Declarative transitions (implemented)
+
+In addition to `goto`/`goto_js`, checks can use declarative transitions on `on_success`, `on_fail`, and `on_finish`:
+
+```
+on_finish:
+  transitions:
+    - when: "any(outputs_history['validate-fact'], v => v.is_valid === false) && event.name === 'issue_opened'"
+      to: issue-assistant
+    - when: "any(outputs_history['validate-fact'], v => v.is_valid === false) && event.name === 'issue_comment'"
+      to: comment-assistant
+```
+
+- Rules evaluate in order; first true wins. Use `to: null` to explicitly do nothing.
+- Backward compatible: if `transitions` is omitted or none match, the engine falls back to `goto_js/goto`.
+- Helpers available: `outputs`, `outputs_history`, `output`, `event`, `memory`, plus `any/all/none/count`.
+
+### 5.2 Assume/Guarantee contracts (implemented)
+
+Per-check contracts:
+
+```
+assume: ["env.NODE_ENV === 'ci'"]          # preconditions – if any is false, skip with skipReason=assume
+guarantee: ["Array.isArray(output.items)"]  # postconditions – violations add error issues (contract/guarantee_failed)
+```
+
+- `assume` is evaluated pre-execution; skipped checks are recorded and visible in stats/history.
+- `guarantee` is evaluated post-execution; violations are non-fatal by default (routing unaffected) but produce issues.
