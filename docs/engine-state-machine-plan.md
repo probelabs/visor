@@ -6,10 +6,11 @@ This note captures the current execution flow of the Visor engine, the surfaces 
 >
 > The engine follows a NASA‑style safety model. Every check participates in a safety policy that depends on its criticality:
 >
-> - external: mutates outside world (e.g., GitHub ops, HTTP methods ≠ GET/HEAD)
-> - control-plane: alters routing/fan‑out (forEach parents, on_* with goto/run, memory used by guards)
-> - policy: enforces permissions/policy (strong fail_if/guarantee)
-> - non-critical: read‑only compute
+> - criticality (field on each check): external | control-plane | policy | non-critical
+>   - external: mutates outside world (e.g., GitHub ops, HTTP methods ≠ GET/HEAD)
+>   - control-plane: alters routing/fan‑out (forEach parents, on_* with goto/run, memory used by guards)
+>   - policy: enforces permissions/policy (strong fail_if/guarantee)
+>   - non-critical: read‑only compute
 >
 > Defaults derived from criticality:
 > - Critical (external/control‑plane/policy): require `assume` (preconditions) and `guarantee` (postconditions); `continue_on_failure: false`; retries only for transient faults; tighter loop budgets; suppress downstream side‑effects when contracts fail.

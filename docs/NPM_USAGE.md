@@ -12,7 +12,7 @@ npx -y @probelabs/visor@latest --help
 
 Visor follows a criticality‑first model:
 
-- Mark mutating or routing‑control steps as critical (today via `tags: [critical]`).
+- Declare criticality on steps (`criticality: external|control-plane|policy|non-critical`).
 - Pair critical steps with contracts:
   - `assume:` preconditions (skip if unmet; use a guard step if you need a hard fail)
   - `guarantee:` postconditions (violation adds issues and routes `on_fail`)
@@ -23,9 +23,7 @@ Example (block‑style YAML):
 checks:
   post-comment:
     type: github
-    tags:
-      - critical
-      - external
+    criticality: external
     on:
       - pr_opened
     op: comment.create

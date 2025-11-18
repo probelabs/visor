@@ -153,7 +153,7 @@ Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 
 When building configs programmatically, model safety explicitly:
 
-- Mark critical steps (mutating or routing control) with `tags: ['critical']` (today) or a future `criticality` field.
+- Declare criticality on steps with `criticality: external|control-plane|policy|non-critical`.
 - Add contracts to critical steps:
   - `assume:` preconditions checked before execution
   - `guarantee:` postconditions checked after execution
@@ -166,7 +166,7 @@ const cfg = await loadConfig({
   checks: {
     'post-comment': {
       type: 'github',
-      tags: ['critical','external'],
+      criticality: 'external',
       on: ['pr_opened'],
       op: 'comment.create',
       assume: ["isMember()"],

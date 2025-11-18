@@ -9,32 +9,39 @@ This guide consolidates the expected behavior for conditional gating, design‑b
 - Isolation: failures do not cascade unless explicitly permitted.
 - Auditability: every decision is journaled with cause, scope, and timestamps; JSON snapshots are exportable.
 
-## Criticality Model (What It Is and Why It Matters)
+## Criticality Model (What It Is, How To Declare It, What It Does)
 
-Criticality classifies a step by the operational risk it carries. We use it to choose safe defaults for contracts, gating, retries, and loop budgets. Continue_on_failure only controls dependency gating; it does not define criticality.
+Criticality classifies a step by the operational risk it carries. The engine uses it to pick safe defaults for contracts, gating, retries, loop budgets, and side‑effects. `continue_on_failure` only controls dependency gating; it does not define criticality.
 
-Classes (pick one):
-- external: mutates outside world (GitHub ops, HTTP methods ≠ GET/HEAD, file writes)
-- control-plane: alters routing/fan‑out (forEach parents; on_* with goto/run; memory used by guards)
-- policy: enforces permissions/policy (strong `fail_if`/`guarantee` gating actions)
-- non-critical: pure/read‑only compute
+Declare criticality on each check:
+```yaml
+checks:
+  post-comment:
+    type: github
+    criticality: external        # external | control-plane | policy | non-critical
+```
 
-Defaults derived from criticality:
-- Critical (external/control‑plane/policy)
-  - Contracts required: must declare meaningful `assume` (preconditions) and `guarantee` (postconditions).
-  - Gating: `continue_on_failure: false` by default; dependents skip on failure.
-  - Retries: transient faults only; bounded (max 2–3 with backoff); no auto‑retry for logical violations (`fail_if`/`guarantee`).
-  - Loop budget: tighter per‑scope (e.g., 8).
-  - Side‑effects: suppress/postpone mutating actions when contracts or `fail_if` fail; route to remediation.
-- Non‑critical
-  - Contracts recommended; may allow `continue_on_failure: true`.
-  - Standard loop budget (10), normal retry bounds.
+Meanings:
+- external
+  - Step mutates an external system (GitHub ops, HTTP methods ≠ GET/HEAD, file writes).
+  - Defaults: contracts required; `continue_on_failure: false`; retries only for transient faults; tighter loop budgets; suppress downstream mutating actions when contracts or `fail_if` fail; idempotency or compensation expected.
+- control-plane
+  - Step drives routing or fan‑out (forEach parents; on_* with goto/run; memory used by guards).
+  - Defaults: contracts required for route integrity; `continue_on_failure: false`; tighter loop budgets (recommended 8); retries only transient; treat loops/recirculation conservatively.
+- policy
+  - Step enforces permissions/compliance gates (permission checks, org policy, human‑in‑the‑loop approvals).
+  - Defaults: contracts required; `continue_on_failure: false`; logical violations are failures (no auto‑retry), downstream mutating actions blocked until remediated.
+- non-critical
+  - Read‑only or low‑risk compute.
+  - Defaults: contracts recommended (not required); may allow `continue_on_failure: true`; standard loop budgets and retry bounds.
 
-How to express today:
-- Use tags: `tags: [critical]` (and optionally `external`, `control-plane`, `policy`).
-- (Proposed) First‑class field: `criticality: external|control-plane|policy|non-critical`.
+Precedence & inference:
+- Explicit `criticality` on a check takes precedence over tags or heuristics.
+- If `criticality` is omitted, the engine may infer:
+  - mutating providers → external; forEach parents or on_* goto/run → control‑plane; strong policy gates → policy; otherwise non‑critical.
 
-Heuristics (auto‑classification you can apply): mutating providers → external; forEach parents/on_* goto/run → control‑plane; policy gates → policy; otherwise non‑critical.
+Overriding defaults:
+- You can override any default (e.g., set `continue_on_failure: true` or adjust budgets) per check. Criticality sets sensible baselines; it does not lock you in.
 
 ## Behavior Matrix by Construct and Criticality
 
