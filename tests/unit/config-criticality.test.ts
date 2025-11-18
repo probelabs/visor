@@ -27,4 +27,3 @@ describe('Config criticality defaults', () => {
     expect(ctx.config.checks!.b!.criticality).toBe('external');
   });
 });
-

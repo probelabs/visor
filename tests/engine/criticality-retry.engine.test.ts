@@ -26,7 +26,7 @@ describe('Engine: criticality mapping for on_fail.retry', () => {
     const result = await engine.executeChecks({ checks: ['step'], config, debug: false });
     const st = (result.executionStatistics?.checks || []).find(s => s.checkName === 'step');
     expect(st?.totalRuns).toBe(1); // initial run only, retries suppressed
-    expect((st?.successfulRuns || 0)).toBe(0);
-    expect((st?.failedRuns || 0)).toBeGreaterThanOrEqual(1);
+    expect(st?.successfulRuns || 0).toBe(0);
+    expect(st?.failedRuns || 0).toBeGreaterThanOrEqual(1);
   });
 });

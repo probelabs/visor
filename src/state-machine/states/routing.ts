@@ -433,6 +433,8 @@ async function processOnFinish(
 /**
  * Evaluate fail_if conditions for a check
  */
+// Returns true only when a check-level fail_if is triggered.
+// Global fail_if records an issue for summary/reporting but MUST NOT gate routing.
 async function evaluateFailIf(
   checkId: string,
   result: ReviewSummary,
@@ -478,7 +480,7 @@ async function evaluateFailIf(
   const checkSchema = typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema || '';
   const checkGroup = checkConfig.group || '';
 
-  // Evaluate global fail_if
+  // Evaluate global fail_if (non-gating)
   if (globalFailIf) {
     try {
       const failed = await evaluator.evaluateSimpleCondition(
@@ -504,7 +506,10 @@ async function evaluateFailIf(
         };
 
         result.issues = [...(result.issues || []), failIssue];
-        return true;
+        // IMPORTANT: do not gate routing on global fail_if
+        // This condition contributes to overall run status but should not
+        // block dependents from executing when the producing check succeeded.
+        // Continue evaluating check-level fail_if below.
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -1177,14 +1182,26 @@ async function evaluateRunJs(
       return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
     `;
 
-    const evalResult = compileAndRun<string[]>(
-      sandbox,
-      code,
-      { scope: scopeObj },
-      { injectLog: false, wrapFunction: false }
-    );
-
-    return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
+    try {
+      const evalResult = compileAndRun<string[]>(
+        sandbox,
+        code,
+        { scope: scopeObj },
+        { injectLog: false, wrapFunction: false }
+      );
+      return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
+    } catch (_e) {
+      // Fallback to VM for modern syntax used inside run_js
+      try {
+        const vm = require('node:vm');
+        const context = vm.createContext({ scope: scopeObj, console: { log: () => {} } });
+        const src = `(() => { ${runJs}\n })()`;
+        const val = new vm.Script(src).runInContext(context, { timeout: 100 });
+        return Array.isArray(val) ? val.filter((x: any) => typeof x === 'string' && x) : [];
+      } catch (_vmErr) {
+        return [];
+      }
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error(`[Routing] Error evaluating run_js: ${msg}`);
@@ -1315,19 +1332,41 @@ export async function evaluateGoto(
         ${gotoJs}
       `;
 
-      const evalResult = compileAndRun<string | null>(
-        sandbox,
-        code,
-        { scope: scopeObj },
-        { injectLog: false, wrapFunction: true }
-      );
+      try {
+        const evalResult = compileAndRun<string | null>(
+          sandbox,
+          code,
+          { scope: scopeObj },
+          { injectLog: false, wrapFunction: true }
+        );
 
-      if (context.debug) {
-        logger.info(`[Routing] evaluateGoto result: ${evalResult}`);
-      }
+        if (context.debug) {
+          logger.info(`[Routing] evaluateGoto result: ${evalResult}`);
+        }
 
-      if (typeof evalResult === 'string' && evalResult) {
-        return evalResult;
+        if (typeof evalResult === 'string' && evalResult) {
+          return evalResult;
+        }
+      } catch (_e) {
+        // Fallback to VM for modern syntax in goto_js
+        try {
+          const vm = require('node:vm');
+          const contextObj = {
+            step: scopeObj.step,
+            outputs: scopeObj.outputs,
+            outputs_history: scopeObj.outputs_history,
+            output: scopeObj.output,
+            memory: scopeObj.memory,
+            event: scopeObj.event,
+            forEach: (scopeObj as any).forEach,
+          };
+          const vmctx = vm.createContext(contextObj);
+          const src = `(() => { ${gotoJs}\n })()`;
+          const res = new vm.Script(src).runInContext(vmctx, { timeout: 100 });
+          if (typeof res === 'string' && res) return res;
+        } catch (_vmErr) {
+          // ignore; fall through to static goto
+        }
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -1419,12 +1458,40 @@ export async function evaluateTransitions(
         const __eval = () => { return (${rule.when}); };
         return __eval();
       `;
-      const matched = compileAndRun<boolean>(
-        sandbox,
-        code,
-        { scope: scopeObj },
-        { injectLog: false, wrapFunction: false }
-      );
+      let matched: boolean | undefined;
+      try {
+        matched = compileAndRun<boolean>(
+          sandbox,
+          code,
+          { scope: scopeObj },
+          { injectLog: false, wrapFunction: false }
+        );
+      } catch (_e) {
+        // Fallback: Node VM for modern syntax like optional chaining and ??
+        try {
+          const vm = require('node:vm');
+          const helpersFns = {
+            any: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && arr.some(pred),
+            all: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && arr.every(pred),
+            none: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && !arr.some(pred),
+            count: (arr: any[], pred: (x: any) => boolean) =>
+              Array.isArray(arr) ? arr.filter(pred).length : 0,
+          };
+          const context = vm.createContext({
+            step: scopeObj.step,
+            outputs: scopeObj.outputs,
+            outputs_history: scopeObj.outputs_history,
+            output: scopeObj.output,
+            memory: scopeObj.memory,
+            event: scopeObj.event,
+            ...helpersFns,
+          });
+          const res = new vm.Script(`(${rule.when})`).runInContext(context, { timeout: 50 });
+          matched = !!res;
+        } catch (_vmErr) {
+          matched = false;
+        }
+      }
       if (matched) {
         if (rule.to === null) return null;
         if (typeof rule.to === 'string' && rule.to.length > 0) {

@@ -2529,7 +2529,7 @@ function hasFatalIssues(result: ReviewSummary): boolean {
     return (
       ruleId.endsWith('/error') || // System errors
       ruleId.includes('/execution_error') || // Command failures
-      ruleId.endsWith('_fail_if') // fail_if triggered
+      (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if') // check-level fail_if only
     );
   });
 }
@@ -2596,7 +2596,7 @@ function updateStats(
       return (
         ruleId.endsWith('/error') || // System errors, exceptions
         ruleId.includes('/execution_error') || // Command failures
-        ruleId.endsWith('_fail_if') // fail_if condition triggered
+        (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if') // check-level fail_if only
       );
     });
 

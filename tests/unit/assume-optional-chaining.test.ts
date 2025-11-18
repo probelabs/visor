@@ -20,7 +20,7 @@ describe('assume: optional chaining and nullish coalescing', () => {
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['dep', 'a'], config: cfg, debug: false });
     const byName: Record<string, any> = {};
-    for (const s of (res.executionStatistics?.checks || [])) byName[s.checkName] = s;
+    for (const s of res.executionStatistics?.checks || []) byName[s.checkName] = s;
     expect(byName['a']?.totalRuns).toBe(1);
   });
 
@@ -42,9 +42,8 @@ describe('assume: optional chaining and nullish coalescing', () => {
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['dep', 'a'], config: cfg, debug: false });
     const byName: Record<string, any> = {};
-    for (const s of (res.executionStatistics?.checks || [])) byName[s.checkName] = s;
+    for (const s of res.executionStatistics?.checks || []) byName[s.checkName] = s;
     // totalRuns stays undefined or 0 when skipped via assume
-    expect((byName['a']?.totalRuns || 0)).toBe(0);
+    expect(byName['a']?.totalRuns || 0).toBe(0);
   });
 });
-

@@ -29,9 +29,8 @@ describe('Criticality integration: non-critical continues despite failure', () =
     const by = Object.fromEntries(stats.map(s => [s.checkName, s]));
 
     expect(by['a']?.totalRuns).toBe(1);
-    expect((by['a']?.failedRuns || 0)).toBeGreaterThanOrEqual(1);
+    expect(by['a']?.failedRuns || 0).toBeGreaterThanOrEqual(1);
     // non-critical should allow dependent b to run
     expect(by['b']?.totalRuns).toBe(1);
   });
 });
-

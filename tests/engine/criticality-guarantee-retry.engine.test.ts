@@ -24,7 +24,7 @@ describe('Engine: guarantee + retry across criticality modes', () => {
     const engine = new StateMachineExecutionEngine();
     const res = await engine.executeChecks({ checks: ['p'], config: cfg, debug: false });
     const st = (res.executionStatistics?.checks || []).find(s => s.checkName === 'p');
-    expect((st?.totalRuns || 0)).toBeGreaterThan(1); // retries occurred
+    expect(st?.totalRuns || 0).toBeGreaterThan(1); // retries occurred
   });
 
   it('control-plane: retries suppressed for logical failure', async () => {

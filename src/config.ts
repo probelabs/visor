@@ -733,8 +733,7 @@ export class ConfigManager {
       if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality) {
         errors.push({
           field: `checks.${checkName}.criticality`,
-          message:
-            `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'control-plane' to enable safe defaults for side-effecting steps.`,
+          message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'control-plane' to enable safe defaults for side-effecting steps.`,
         });
       }
     } catch {
@@ -778,13 +777,15 @@ export class ConfigManager {
 
     // Prefer single-field schema: if both schema (object) and output_schema are present, warn
     try {
-      const hasObjSchema = (checkConfig as any)?.schema && typeof (checkConfig as any).schema === 'object';
-      const hasOutputSchema = (checkConfig as any)?.output_schema && typeof (checkConfig as any).output_schema === 'object';
+      const hasObjSchema =
+        (checkConfig as any)?.schema && typeof (checkConfig as any).schema === 'object';
+      const hasOutputSchema =
+        (checkConfig as any)?.output_schema &&
+        typeof (checkConfig as any).output_schema === 'object';
       if (hasObjSchema && hasOutputSchema) {
         (_warnings || errors).push({
           field: `checks.${checkName}.schema`,
-          message:
-            `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`,
+          message: `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`,
         });
       }
     } catch {}

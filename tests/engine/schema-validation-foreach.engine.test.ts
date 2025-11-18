@@ -28,9 +28,15 @@ describe('Schema validation for forEach map (script -> script)', () => {
     } as any;
 
     const engine = new StateMachineExecutionEngine();
-    const res = await engine.executeChecks({ checks: ['list', 'mapStep'], config: cfg, debug: false });
-    const issues = (res.reviewSummary.issues || []).filter(i =>
-      String(i.ruleId || '').includes('contract/schema_validation_failed') && i.checkName === 'mapStep'
+    const res = await engine.executeChecks({
+      checks: ['list', 'mapStep'],
+      config: cfg,
+      debug: false,
+    });
+    const issues = (res.reviewSummary.issues || []).filter(
+      i =>
+        String(i.ruleId || '').includes('contract/schema_validation_failed') &&
+        i.checkName === 'mapStep'
     );
     expect(issues.length).toBeGreaterThanOrEqual(1);
   });

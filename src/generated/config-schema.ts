@@ -390,7 +390,7 @@ export const configSchema = {
         output_schema: {
           $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
           description:
-            'Optional JSON Schema to validate the produced output. If omitted and schema is an object, the engine will use that object for validation.',
+            "Optional JSON Schema to validate the produced output. If omitted and `schema` is an object, the engine will treat that object as the output_schema for validation purposes while still using string schemas (e.g., 'code-review') for template selection.",
         },
         template: {
           $ref: '#/definitions/CustomTemplateConfig',
@@ -622,7 +622,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20805-src_types_config.ts-0-33998%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1260,14 +1260,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-20805-src_types_config.ts-0-33998>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20805-src_types_config.ts-0-33998%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-20480-src_types_config.ts-0-33673>': {
+    'Partial<interface-src_types_config.ts-10692-20805-src_types_config.ts-0-33998>': {
       type: 'object',
       additionalProperties: false,
     },
