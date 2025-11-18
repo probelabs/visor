@@ -74,6 +74,33 @@ function hasMapFanoutDependents(context: EngineContext, checkId: string): boolea
   return false;
 }
 
+/** Classify failure type to inform retry policy mapping */
+function classifyFailure(result: ReviewSummary): 'none' | 'logical' | 'execution' {
+  const issues = result?.issues || [];
+  if (!issues || issues.length === 0) return 'none';
+  // Heuristics:
+  // - logical: fail_if, contract/guarantee_failed, explicit ruleIds ending with _fail_if
+  // - execution: provider/command errors, forEach/execution_error, sandbox_runner_error
+  let hasLogical = false;
+  let hasExecution = false;
+  for (const iss of issues) {
+    const id = String((iss as any).ruleId || '');
+    const msg = String((iss as any).message || '');
+    if (id.endsWith('_fail_if') || id.includes('contract/guarantee_failed')) hasLogical = true;
+    if (id.includes('/execution_error') || msg.includes('Command execution failed')) hasExecution = true;
+    if (id.includes('forEach/execution_error') || msg.includes('sandbox_runner_error')) hasExecution = true;
+  }
+  if (hasLogical && !hasExecution) return 'logical';
+  if (hasExecution && !hasLogical) return 'execution';
+  // Mixed or unknown: treat as execution to avoid suppressing retries unexpectedly
+  return hasExecution ? 'execution' : 'logical';
+}
+
+function getCriticality(context: EngineContext, checkId: string): CheckConfig['criticality'] {
+  const cfg = context.config.checks?.[checkId];
+  return (cfg && (cfg as any).criticality) || 'policy';
+}
+
 /**
  * Context for a check that just completed and needs routing evaluation
  */
@@ -889,10 +916,22 @@ async function processOnFail(
 
   // Process on_fail.retry (schedule retry of the current check)
   if (onFail.retry && typeof onFail.retry.max === 'number' && onFail.retry.max > 0) {
-    const max = Math.max(0, onFail.retry.max || 0);
-    // Initialize retry attempt map on state
-    if (!(state as any).retryAttempts) (state as any).retryAttempts = new Map<string, number>();
-    const attemptsMap: Map<string, number> = (state as any).retryAttempts;
+    // Criticality mapping: for 'external' and 'control-plane', avoid automatic
+    // retries for logical failures (fail_if/guarantee violations).
+    const crit = getCriticality(context, checkId);
+    const failureKind = classifyFailure(result);
+    if ((crit === 'external' || crit === 'control-plane') && failureKind === 'logical') {
+      if (context.debug) {
+        logger.info(
+          `[Routing] on_fail.retry suppressed for ${checkId} (criticality=${crit}, failure=logical)`
+        );
+      }
+      // Skip retry scheduling
+    } else {
+      const max = Math.max(0, onFail.retry.max || 0);
+      // Initialize retry attempt map on state
+      if (!(state as any).retryAttempts) (state as any).retryAttempts = new Map<string, number>();
+      const attemptsMap: Map<string, number> = (state as any).retryAttempts;
 
     const makeKey = (sc: Array<{ check: string; index: number }> | undefined) => {
       const keyScope = sc && sc.length > 0 ? JSON.stringify(sc) : 'root';
@@ -932,9 +971,10 @@ async function processOnFail(
       scheduleRetryForScope(scope);
     }
 
-    // Note: backoff.delay_ms and mode are intentionally not awaited here; the
-    // state-machine processes retries as subsequent waves. If needed later, we
-    // can insert a timed wait in the orchestrator layer.
+      // Note: backoff.delay_ms and mode are intentionally not awaited here; the
+      // state-machine processes retries as subsequent waves. If needed later, we
+      // can insert a timed wait in the orchestrator layer.
+    }
   }
 
   // Declarative transitions for on_fail (override goto/goto_js when present)

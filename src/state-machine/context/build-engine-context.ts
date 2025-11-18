@@ -21,6 +21,10 @@ function applyCriticalityDefaults(cfg: VCfg): void {
     if (!c.criticality) {
       c.criticality = 'policy';
     }
+    // For non-critical checks, default continue_on_failure to true if unset.
+    if (c.criticality === 'non-critical' && typeof c.continue_on_failure === 'undefined') {
+      c.continue_on_failure = true;
+    }
   }
 }
 
