@@ -304,8 +304,10 @@ on_finish:
 Per-check contracts:
 
 ```
-assume: ["env.NODE_ENV === 'ci'"]          # preconditions – if any is false, skip with skipReason=assume
-guarantee: ["Array.isArray(output.items)"]  # postconditions – violations add error issues (contract/guarantee_failed)
+assume:
+  - "env.NODE_ENV === 'ci'"                 # preconditions – if any is false, skip with skipReason=assume
+guarantee:
+  - "Array.isArray(output.items)"           # postconditions – violations add error issues (contract/guarantee_failed)
 ```
 
 - `assume` is evaluated pre-execution; skipped checks are recorded and visible in stats/history.

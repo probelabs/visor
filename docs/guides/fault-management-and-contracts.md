@@ -21,7 +21,9 @@ This guide consolidates the expected behavior for conditional gating, design‑b
 checks:
   lint:
     type: command
-    on: [pr_opened, pr_updated]
+    on:
+      - pr_opened
+      - pr_updated
     if: "filesCount > 0 && env.CI === 'true'"
     exec: npx eslint .
 ```
@@ -39,11 +41,11 @@ checks:
     exec: node scripts/bootstrap.js
   analyze:
     type: command
-    depends_on: [prepare-env]
-    assume: [
-      "env.TOOLING_READY === 'true'",
-      "Array.isArray(outputs_history['prepare-env']) ? true : true"
-    ]
+    depends_on:
+      - prepare-env
+    assume:
+      - "env.TOOLING_READY === 'true'"
+      - "Array.isArray(outputs_history['prepare-env']) ? true : true"
     exec: node scripts/analyze.js
 ```
 
@@ -58,12 +60,12 @@ checks:
   summarize:
     type: command
     exec: "node -e \"console.log('{\\"items\\":[1,2,3]}')\""
-    guarantee: [
-      "output && Array.isArray(output.items)",
-      "output.items.length > 0"
-    ]
+    guarantee:
+      - "output && Array.isArray(output.items)"
+      - "output.items.length > 0"
     on_fail:
-      run: [recompute]
+      run:
+        - recompute
   recompute:
     type: command
     exec: node scripts/recompute.js
@@ -83,7 +85,8 @@ checks:
     fail_if: "output.summary.failed > 0"
     on_fail:
       retry: { max: 2, backoff: { mode: exponential, delay_ms: 1000 } }
-      run: [collect-logs]
+      run:
+        - collect-logs
   collect-logs:
     type: command
     exec: node scripts/collect-logs.js
@@ -109,7 +112,8 @@ checks:
 
   validate-fact:
     type: ai
-    depends_on: [extract-facts]
+    depends_on:
+      - extract-facts
 
   issue-assistant:
     type: ai
@@ -152,11 +156,16 @@ Recommended practice:
 checks:
   post-comment:
     type: github
-    tags: [critical, external]
-    on: [pr_opened]
+    tags:
+      - critical
+      - external
+    on:
+      - pr_opened
     op: comment.create
-    assume: ["env.ALLOW_POST === 'true'"]
-    guarantee: ["typeof output.id === 'number'"]
+    assume:
+      - "env.ALLOW_POST === 'true'"
+    guarantee:
+      - "typeof output.id === 'number'"
     continue_on_failure: false
     on_fail:
       retry: { max: 2, backoff: { mode: exponential, delay_ms: 1500 } }
@@ -168,9 +177,11 @@ checks:
   label:
     type: github
     criticality: external   # or: control-plane | policy | non-critical
-    on: [pr_opened]
+    on:
+      - pr_opened
     op: labels.add
-    values: ["reviewed"]
+    values:
+      - "reviewed"
     assume: "isMember()"
     guarantee: "Array.isArray(output.added) && output.added.includes('reviewed')"
 ```
@@ -194,8 +205,11 @@ Engine policy derived from criticality (summary):
 checks:
   summarize:
     type: ai
-    tags: [non-critical]
-    on: [pr_opened, pr_updated]
+    tags:
+      - non-critical
+    on:
+      - pr_opened
+      - pr_updated
     continue_on_failure: true
     fail_if: "(output.errors || []).length > 0"
 ```
@@ -205,11 +219,17 @@ checks:
 checks:
   post-comment:
     type: github
-    tags: [critical, external]
-    on: [pr_opened]
+    tags:
+      - critical
+      - external
+    on:
+      - pr_opened
     op: comment.create
-    assume: ["isMember()", "env.DRY_RUN !== 'true'"]
-    guarantee: ["output && typeof output.id === 'number'"]
+    assume:
+      - "isMember()"
+      - "env.DRY_RUN !== 'true'"
+    guarantee:
+      - "output && typeof output.id === 'number'"
     continue_on_failure: false
     on_fail:
       retry: { max: 2, backoff: { mode: exponential, delay_ms: 1200 } }
@@ -223,7 +243,9 @@ routing:
 checks:
   extract-items:
     type: command
-    tags: [critical, control-plane]
+    tags:
+      - critical
+      - control-plane
     exec: "node -e \"console.log('[\\"a\\",\\"b\\",\\"c\\"]')\""
     forEach: true
     on_finish:
@@ -233,7 +255,8 @@ checks:
 
   validate:
     type: command
-    depends_on: [extract-items]
+    depends_on:
+      - extract-items
     fanout: map
     exec: node scripts/validate.js
 
