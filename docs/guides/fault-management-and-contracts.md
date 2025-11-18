@@ -9,6 +9,60 @@ This guide consolidates the expected behavior for conditional gating, design‑b
 - Isolation: failures do not cascade unless explicitly permitted.
 - Auditability: every decision is journaled with cause, scope, and timestamps; JSON snapshots are exportable.
 
+## Criticality Model (What It Is and Why It Matters)
+
+Criticality classifies a step by the operational risk it carries. We use it to choose safe defaults for contracts, gating, retries, and loop budgets. Continue_on_failure only controls dependency gating; it does not define criticality.
+
+Classes (pick one):
+- external: mutates outside world (GitHub ops, HTTP methods ≠ GET/HEAD, file writes)
+- control-plane: alters routing/fan‑out (forEach parents; on_* with goto/run; memory used by guards)
+- policy: enforces permissions/policy (strong `fail_if`/`guarantee` gating actions)
+- non-critical: pure/read‑only compute
+
+Defaults derived from criticality:
+- Critical (external/control‑plane/policy)
+  - Contracts required: must declare meaningful `assume` (preconditions) and `guarantee` (postconditions).
+  - Gating: `continue_on_failure: false` by default; dependents skip on failure.
+  - Retries: transient faults only; bounded (max 2–3 with backoff); no auto‑retry for logical violations (`fail_if`/`guarantee`).
+  - Loop budget: tighter per‑scope (e.g., 8).
+  - Side‑effects: suppress/postpone mutating actions when contracts or `fail_if` fail; route to remediation.
+- Non‑critical
+  - Contracts recommended; may allow `continue_on_failure: true`.
+  - Standard loop budget (10), normal retry bounds.
+
+How to express today:
+- Use tags: `tags: [critical]` (and optionally `external`, `control-plane`, `policy`).
+- (Proposed) First‑class field: `criticality: external|control-plane|policy|non-critical`.
+
+Heuristics (auto‑classification you can apply): mutating providers → external; forEach parents/on_* goto/run → control‑plane; policy gates → policy; otherwise non‑critical.
+
+## Behavior Matrix by Construct and Criticality
+
+Below is the exact behavior for each construct depending on criticality. “Skip” means provider is not executed and it does not count as a run.
+
+- if (plan‑time)
+  - Non‑critical: false/error → skip; dependents may run if OR‑deps satisfy or they are unrelated.
+  - Critical: same skip; because `continue_on_failure: false` is default, downstream mutators must depend on this step and will skip.
+
+- assume (pre‑exec)
+  - Non‑critical: false/error → skip (skipReason=assume); no retry.
+  - Critical: false/error → skip and block downstream side‑effects via dependency gating. If you need an explicit failure (not a skip), add a guard step (see Example C below) or (optional) `assume_mode: 'fail'` when available.
+
+- guarantee (post‑exec)
+  - Non‑critical: violation → add `contract/guarantee_failed` issue; mark failure; route `on_fail`; no auto‑retry unless remediation exists.
+  - Critical: violation → mark failure; suppress downstream mutating actions (dependents should depend_on this step). Route `on_fail` to remediation; retries only for transient exec faults, not logical ones.
+
+- fail_if (post‑exec)
+  - Non‑critical: true → failure; bounded retry only for transient faults; otherwise remediation.
+  - Critical: true → failure; do not auto‑retry logical failures; block side‑effects; route remediation with tight caps.
+
+- transitions / goto
+  - Both: prefer declarative `transitions` first; respect per‑scope loop budgets (default 10; critical recommended 8). Exceeding budget adds `routing/loop_budget_exceeded` and halts routing in that scope.
+
+Numeric defaults (recommended)
+- Retries: max 3 (non‑critical), max 2 (critical), exponential backoff with jitter (e.g., 1s, 2s, 4s ±10%).
+- Loop budgets: 10 (non‑critical), 8 (critical/control‑plane branches).
+
 ## Constructs and Expected Behavior
 
 ### Quick reference: differences at a glance
@@ -70,7 +124,7 @@ checks:
 ### 2) `assume` (preconditions, design‑by‑contract)
 - Purpose: non‑negotiable prerequisites before a step executes.
 - Behavior:
-  - Any `assume` expression false → skip with reason `assume` (non‑critical) or block dependents (critical).
+  - Any `assume` expression false → skip with reason `assume`. In critical branches, this blocks dependent mutating steps via dependency gating.
   - No automatic retry unless a defined remediation can satisfy the precondition.
 - Example with remediation:
 ```yaml
@@ -91,8 +145,8 @@ checks:
 ### 3) `guarantee` (postconditions, design‑by‑contract)
 - Purpose: invariants that must hold after a step completes.
 - Behavior:
-  - Violations add non‑fatal issues with ruleId `contract/guarantee_failed` and route via `on_fail`.
-  - Critical steps may treat violations as fatal downstream (e.g., skip posting labels/comments).
+  - Violations add issues with ruleId `contract/guarantee_failed`, mark failure, and route via `on_fail`.
+  - In critical branches, violation blocks downstream mutating actions (dependents should be gated on this step) and is not auto‑retried as a logical failure.
 - Example:
 ```yaml
 checks:
