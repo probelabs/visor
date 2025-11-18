@@ -611,3 +611,112 @@ checks:
       - prechecks
     exec: node scripts/analyze.js
 ```
+
+## Comprehensive Example — All Primitives Working Together
+
+This end‑to‑end example shows `criticality`, `if`, `assume`, `guarantee`, `fail_if`, and declarative `transitions` in one flow. It includes fan‑out (control‑plane), a policy gate, and an external step with contracts.
+
+```yaml
+version: "1.0"
+
+routing:
+  # Tighter budget recommended for control‑plane loops
+  max_loops: 8
+
+checks:
+  # 1) Control‑plane fan‑out producer
+  extract-facts:
+    type: command
+    criticality: control-plane
+    on:
+      - issue_opened
+      - issue_comment
+    exec: "node -e \"console.log('[{""id"":1,""claim"":""A""},{""id"":2,""claim"":""B""}]')\""
+    forEach: true
+    # Preconditions: must be an array and limited size; block if unmet.
+    assume:
+      - "Array.isArray(output)"
+      - "output.length <= 50"
+    # Postconditions: enforce shape
+    guarantee:
+      - "Array.isArray(output)"
+      - "output.every(x => typeof x.id === 'number' && typeof x.claim === 'string')"
+    # Route back for remediation when any validation failed
+    on_finish:
+      transitions:
+        - when: "any(outputs_history['validate-fact'], v => v && v.is_valid === false) && event.name === 'issue_opened'"
+          to: issue-assistant
+        - when: "any(outputs_history['validate-fact'], v => v && v.is_valid === false) && event.name === 'issue_comment'"
+          to: comment-assistant
+
+  # 2) Map fan‑out validator
+  validate-fact:
+    type: command
+    depends_on:
+      - extract-facts
+    fanout: map
+    exec: node scripts/validate-fact.js      # -> { is_valid: boolean, errors?: number }
+    # declare policy failure
+    fail_if: "output && output.is_valid === false"
+    on_fail:
+      # Only retry transient provider errors (e.g., script crashed), not logical invalids
+      retry: { max: 1, backoff: { mode: exponential, delay_ms: 1000 } }
+
+  # 3) Control‑plane aggregator that computes overall validity
+  aggregate:
+    type: command
+    criticality: control-plane
+    depends_on:
+      - validate-fact
+    exec: node scripts/aggregate-validity.js # -> { all_valid: boolean }
+    guarantee:
+      - "output && typeof output.all_valid === 'boolean'"
+    on_success:
+      transitions:
+        - when: "output.all_valid === true"
+          to: permission-check
+
+  # 4) Policy gate (no external side‑effect but gates external actions)
+  permission-check:
+    type: command
+    criticality: policy
+    exec: node scripts/check-permissions.js  # -> { allowed: boolean }
+    guarantee:
+      - "typeof output.allowed === 'boolean'"
+
+  # 5) External action — only runs when policy passes (belt and suspenders)
+  post-comment:
+    type: github
+    criticality: external
+    depends_on:
+      - permission-check
+    on:
+      - issue_opened
+    # Coarse plan‑time gate (cheap & early)
+    if: "outputs['permission-check'] && outputs['permission-check'].allowed === true"
+    # Final execution preflight to avoid side‑effects if context shifted
+    assume:
+      - "outputs['permission-check'] && outputs['permission-check'].allowed === true"
+      - "env.DRY_RUN !== 'true'"
+    op: comment.create
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+
+  # 6) Non‑critical compute — allowed to fail softly
+  summarize:
+    type: ai
+    criticality: non-critical
+    on:
+      - issue_opened
+    continue_on_failure: true
+    fail_if: "(output.errors || []).length > 0"
+```
+
+Highlights
+- control‑plane steps (extract-facts, aggregate) carry `assume`/`guarantee` and drive transitions under a tight loop budget.
+- validate-fact uses `fail_if` for policy failure and a bounded retry only for transient provider errors.
+- permission-check (policy) gates external actions without itself mutating external systems.
+- post-comment (external) uses both `if` (early prune) and `assume` (preflight) plus a `guarantee` after posting.
+- summarize shows a non‑critical step with soft failure handling via `continue_on_failure: true`.
+```

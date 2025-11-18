@@ -205,3 +205,90 @@ checks:
 ## See also
 - docs/guides/fault-management-and-contracts.md — full safety checklist, behavior matrix, and examples
 - docs/engine-state-machine-plan.md — engine phases, routing, and loop budgets
+
+## Comprehensive Example — End‑to‑End Flow Using All Primitives
+
+```yaml
+version: "1.0"
+
+routing:
+  max_loops: 8
+
+checks:
+  extract-facts:
+    type: command
+    criticality: control-plane
+    on:
+      - issue_opened
+      - issue_comment
+    exec: "node -e \"console.log('[{""id"":1,""claim"":""A""},{""id"":2,""claim"":""B""}]')\""
+    forEach: true
+    assume:
+      - "Array.isArray(output)"
+      - "output.length <= 50"
+    guarantee:
+      - "Array.isArray(output)"
+      - "output.every(x => typeof x.id === 'number' && typeof x.claim === 'string')"
+    on_finish:
+      transitions:
+        - when: "any(outputs_history['validate-fact'], v => v && v.is_valid === false) && event.name === 'issue_opened'"
+          to: issue-assistant
+        - when: "any(outputs_history['validate-fact'], v => v && v.is_valid === false) && event.name === 'issue_comment'"
+          to: comment-assistant
+
+  validate-fact:
+    type: command
+    depends_on:
+      - extract-facts
+    fanout: map
+    exec: node scripts/validate-fact.js
+    fail_if: "output && output.is_valid === false"
+    on_fail:
+      retry: { max: 1, backoff: { mode: exponential, delay_ms: 1000 } }
+
+  aggregate:
+    type: command
+    criticality: control-plane
+    depends_on:
+      - validate-fact
+    exec: node scripts/aggregate-validity.js   # -> { all_valid: boolean }
+    guarantee:
+      - "output && typeof output.all_valid === 'boolean'"
+    on_success:
+      transitions:
+        - when: "output.all_valid === true"
+          to: permission-check
+
+  permission-check:
+    type: command
+    criticality: policy
+    exec: node scripts/check-permissions.js    # -> { allowed: boolean }
+    guarantee:
+      - "typeof output.allowed === 'boolean'"
+
+  post-comment:
+    type: github
+    criticality: external
+    depends_on:
+      - permission-check
+    on:
+      - issue_opened
+    if: "outputs['permission-check'] && outputs['permission-check'].allowed === true"
+    assume:
+      - "outputs['permission-check'] && outputs['permission-check'].allowed === true"
+      - "env.DRY_RUN !== 'true'"
+    op: comment.create
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+
+  summarize:
+    type: ai
+    criticality: non-critical
+    on:
+      - issue_opened
+    continue_on_failure: true
+    fail_if: "(output.errors || []).length > 0"
+```
+
+This scenario demonstrates all primitives across modes: control‑plane fan‑out + transitions, policy gating, external action with contracts, and a non‑critical leaf that may fail softly.
