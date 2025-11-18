@@ -775,9 +775,16 @@ async function executeCheckWithForEachItems(
 
       // JSON Schema validation for per-item outputs when a schema is provided
       try {
-        const schemaObj =
+        let schemaObj =
           (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined) ||
           (checkConfig as any).output_schema;
+        // If schema is a known renderer string, attempt to load its JSON Schema
+        if (!schemaObj && typeof (checkConfig as any).schema === 'string') {
+          try {
+            const { loadRendererSchema } = await import('../dispatch/renderer-schema');
+            schemaObj = await loadRendererSchema((checkConfig as any).schema as string);
+          } catch {}
+        }
         const itemOutput = output;
         if (schemaObj && itemOutput !== undefined) {
           const Ajv = require('ajv');
@@ -1897,9 +1904,15 @@ async function executeSingleCheck(
 
     // Validate output against JSON Schema if provided (non-fatal contract)
     try {
-      const schemaObj =
+      let schemaObj =
         (typeof checkConfig.schema === 'object' ? (checkConfig.schema as any) : undefined) ||
         (checkConfig as any).output_schema;
+      if (!schemaObj && typeof (checkConfig as any).schema === 'string') {
+        try {
+          const { loadRendererSchema } = await import('../dispatch/renderer-schema');
+          schemaObj = await loadRendererSchema((checkConfig as any).schema as string);
+        } catch {}
+      }
       if (schemaObj && (enrichedResult as any)?.output !== undefined) {
         const Ajv = require('ajv');
         const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
