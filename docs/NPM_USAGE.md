@@ -8,6 +8,34 @@ Run Visor directly using npx:
 npx -y @probelabs/visor@latest --help
 ```
 
+### Safety & Criticality (Quick Note)
+
+Visor follows a criticality‑first model:
+
+- Mark mutating or routing‑control steps as critical (today via `tags: [critical]`).
+- Pair critical steps with contracts:
+  - `assume:` preconditions (skip if unmet; use a guard step if you need a hard fail)
+  - `guarantee:` postconditions (violation adds issues and routes `on_fail`)
+- Prefer declarative `transitions` over `goto_js` for routing.
+
+Example (block‑style YAML):
+```yaml
+checks:
+  post-comment:
+    type: github
+    tags:
+      - critical
+      - external
+    on:
+      - pr_opened
+    op: comment.create
+    assume:
+      - "isMember()"
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+```
+
 ## Global Installation
 
 Install globally for frequent use:
@@ -100,7 +128,6 @@ project:
 steps:
   - type: ai
     prompt: security
-    
   - type: ai
     prompt: performance
     

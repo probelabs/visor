@@ -149,6 +149,34 @@ try {
 
 Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 
+## Safety & Criticality (Quick Note)
+
+When building configs programmatically, model safety explicitly:
+
+- Mark critical steps (mutating or routing control) with `tags: ['critical']` (today) or a future `criticality` field.
+- Add contracts to critical steps:
+  - `assume:` preconditions checked before execution
+  - `guarantee:` postconditions checked after execution
+- Use declarative `transitions` for routing rather than `goto_js`.
+
+Example config (JS object):
+```ts
+const cfg = await loadConfig({
+  version: '1.0',
+  checks: {
+    'post-comment': {
+      type: 'github',
+      tags: ['critical','external'],
+      on: ['pr_opened'],
+      op: 'comment.create',
+      assume: ["isMember()"],
+      guarantee: ["output && typeof output.id === 'number'"],
+      continue_on_failure: false,
+    },
+  },
+});
+```
+
 ## Notes
 
 - SDK adds no new sandboxing or providers; all safety lives in the core engine.
