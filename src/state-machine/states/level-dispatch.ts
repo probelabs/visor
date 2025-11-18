@@ -799,7 +799,9 @@ async function executeCheckWithForEachItems(
               timestamp: Date.now(),
             } as any;
             enrichedResult.issues = [...(enrichedResult.issues || []), issue];
-            try { enrichedIssues.push(issue); } catch {}
+            if (Array.isArray(enrichedIssues)) {
+              enrichedIssues.push(issue);
+            }
           }
         }
       } catch {}
