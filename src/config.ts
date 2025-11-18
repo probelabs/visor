@@ -315,6 +315,12 @@ export class ConfigManager {
           const raw = fs.readFileSync(p, 'utf8');
           const obj = yaml.load(raw) as Partial<VisorConfig>;
           if (!obj || typeof obj !== 'object') return {};
+          // Alias: support 'include' as 'extends' in packaged defaults
+          if ((obj as any).include && !(obj as any).extends) {
+            const inc = (obj as any).include;
+            (obj as any).extends = Array.isArray(inc) ? inc : [inc];
+            delete (obj as any).include;
+          }
           return obj;
         };
         const baseDir = path.dirname(bundledConfigPath);
@@ -457,10 +463,11 @@ export class ConfigManager {
    * Ensures both keys are present and contain the same data
    */
   private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
-    // If both are present, 'steps' takes precedence
+    // If both are present, merge with 'steps' taking precedence on key conflicts
     if (config.steps && config.checks) {
-      // Use steps as the source of truth
-      config.checks = config.steps;
+      const merged = { ...(config.checks as Record<string, any>), ...(config.steps as any) };
+      config.checks = merged;
+      config.steps = merged;
     } else if (config.steps && !config.checks) {
       // Copy steps to checks for internal compatibility
       config.checks = config.steps;

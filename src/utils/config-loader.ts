@@ -307,12 +307,26 @@ export class ConfigLoader {
         throw new Error('Invalid default configuration');
       }
 
+      // Alias: support 'include' as 'extends' in packaged defaults
+      if ((config as any).include && !(config as any).extends) {
+        const inc = (config as any).include;
+        (config as any).extends = Array.isArray(inc) ? inc : [inc];
+        delete (config as any).include;
+      }
+
       // Normalize 'checks' and 'steps' for backward compatibility
       config = this.normalizeStepsAndChecks(config);
 
       // Default configs shouldn't have extends, but handle it just in case
       if (config.extends) {
-        return await this.processExtends(config);
+        // Ensure relative paths (e.g., ./code-review.yaml) resolve from the defaults directory
+        const previousBaseDir = this.options.baseDir;
+        try {
+          this.options.baseDir = path.dirname(defaultConfigPath);
+          return await this.processExtends(config);
+        } finally {
+          this.options.baseDir = previousBaseDir;
+        }
       }
 
       return config;
@@ -488,10 +502,11 @@ export class ConfigLoader {
    * Ensures both keys are present and contain the same data
    */
   private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
-    // If both are present, 'steps' takes precedence
+    // If both are present, merge with 'steps' taking precedence on key conflicts
     if (config.steps && config.checks) {
-      // Use steps as the source of truth
-      config.checks = config.steps;
+      const merged = { ...(config.checks as Record<string, unknown>), ...(config.steps as any) };
+      config.checks = merged as any;
+      config.steps = merged as any;
     } else if (config.steps && !config.checks) {
       // Copy steps to checks for internal compatibility
       config.checks = config.steps;

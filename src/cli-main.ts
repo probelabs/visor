@@ -375,6 +375,23 @@ export async function main(): Promise<void> {
       await handleTestCommand(filteredArgv);
       return;
     }
+    // Check for core-review subcommand: run the built-in code-review suite
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'core-review') {
+      const base = filteredArgv.slice(0, 2);
+      const rest = filteredArgv.slice(3); // preserve flags like --output, --debug, etc.
+      // Prefer packaged default under dist/; fall back to local defaults/ for dev
+      const packaged = path.resolve(__dirname, 'defaults', 'code-review.yaml');
+      const localDev = path.resolve(process.cwd(), 'defaults', 'code-review.yaml');
+      const chosen = fs.existsSync(packaged) ? packaged : localDev;
+      if (!fs.existsSync(chosen)) {
+        console.error(
+          '❌ Could not locate built-in code-review config. Expected at dist/defaults/code-review.yaml (packaged) or ./defaults/code-review.yaml (dev).'
+        );
+        process.exit(1);
+      }
+      // Let event auto-detection pick pr_updated for code-review schemas unless user overrides with --event
+      filteredArgv = [...base, '--config', chosen, ...rest];
+    }
     // Check for build subcommand: run the official agent-builder config
     if (filteredArgv.length > 2 && filteredArgv[2] === 'build') {
       // Transform into a standard run with our official builder config (agent-builder.yaml).
