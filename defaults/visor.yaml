@@ -320,6 +320,9 @@ steps:
     values:
       - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
       - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+    assume:
+      - "outputs['overview'] && outputs['overview'].tags && outputs['overview'].tags.label"
+      - "outputs['overview'].tags && (outputs['overview'].tags['review-effort'] != null)"
 
   # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
   issue-assistant:
@@ -536,6 +539,9 @@ steps:
     on: [issue_opened, issue_comment]
     # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    # Ensure we have an assistant output to analyze for this event type
+    assume:
+      - "outputs['issue-assistant'] || outputs['comment-assistant']"
     ai:
       skip_code_context: true
       disableTools: true
@@ -691,6 +697,8 @@ steps:
     depends_on: [validate-fact]
     on: [issue_opened, issue_comment]
     if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    assume:
+      - "length((outputs.history && outputs.history['validate-fact']) || []) > 0"
     content: |
       const vf = (outputs.history['validate-fact']||[]).filter(v => v && typeof v === 'object');
       const ex = (outputs.history['extract-facts']||[]);
