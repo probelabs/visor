@@ -5,6 +5,24 @@ import { ExecutionJournal } from '../../snapshot-store';
 import { MemoryStore } from '../../memory-store';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../logger';
+import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
+
+/**
+ * Apply minimal criticality defaults in-place.
+ * This is a no-behavior-change scaffold: we only default missing
+ * check.criticality to 'policy' so downstream code can rely on a value.
+ * Future mapping (retries/loop budgets) can build on this without
+ * changing existing behavior.
+ */
+function applyCriticalityDefaults(cfg: VCfg): void {
+  const checks = cfg.checks || {};
+  for (const id of Object.keys(checks)) {
+    const c: CfgCheck = (checks as any)[id] as CfgCheck;
+    if (!c.criticality) {
+      c.criticality = 'policy';
+    }
+  }
+}
 
 /**
  * Pure helper to build an EngineContext for a state-machine run.
@@ -24,6 +42,9 @@ export function buildEngineContextForRun(
 
   // Build check metadata
   const checks: Record<string, CheckMetadata> = {};
+
+  // Fill in minimal defaults derived from criticality (no behavior change)
+  applyCriticalityDefaults(clonedConfig);
 
   // If config has checks, use them
   for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
