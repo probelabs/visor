@@ -11,6 +11,45 @@ This guide consolidates the expected behavior for conditional gating, design‑b
 
 ## Constructs and Expected Behavior
 
+### Quick reference: differences at a glance
+
+- Purpose
+  - `if`: Scheduling gate — decides whether the step should be scheduled in this run.
+  - `assume`: Preconditions — must hold immediately before executing the provider.
+  - `guarantee`: Postconditions — must hold for the result the provider produced.
+  - `fail_if`: Failure detector — declares which results count as failures.
+
+- When it runs
+  - `if`: before scheduling (earliest).
+  - `assume`: after scheduling, right before calling the provider.
+  - `guarantee`: immediately after provider returns.
+  - `fail_if`: immediately after provider returns (can co‑exist with `guarantee`).
+
+- Inputs visible to the expression
+  - `if`: event, env, filesChanged meta, previous check outputs (current wave), memory (read‑only helpers).
+  - `assume`: same as `if`, plus fully resolved dependency results for this scope.
+  - `guarantee`/`fail_if`: same as `assume`, plus the step’s own output/result.
+
+- Effect on execution
+  - `if` false (or error): step is skipped and never scheduled.
+  - `assume` false (or error): step is skipped right before execution; provider is not called.
+  - `guarantee` violation: step has executed; violation adds issues; routes `on_fail`.
+  - `fail_if` true: step has executed; marks failure; routes `on_fail`.
+
+- Stats/journal
+  - `if`/`assume` skip: recorded as a skip; does not count as a run; journal contains an empty result entry.
+  - `guarantee`/`fail_if`: counted run; issues recorded; journal contains the full result.
+
+- Routing & dependents
+  - Skips (`if`/`assume`) propagate gating to dependents unless OR‑deps satisfy or `continue_on_failure` applies on an alternate path.
+  - Failures (`guarantee`/`fail_if`) route via `on_fail` with bounded retries/remediation.
+
+When to choose which
+- Use `if` when you can decide at plan time whether a step should even be considered (tags, events, coarse repo conditions).
+- Use `assume` when prerequisites depend on dynamic dependencies or environment right before execution (e.g., tools bootstrapped by a `prepare` step).
+- Use `guarantee` when the provider must produce outputs that satisfy invariants (shape, counts, idempotency confirmations).
+- Use `fail_if` when policy/thresholds on the produced results define failure (test counts, lints, security finding thresholds).
+
 ### 1) `if` (pre‑run gate)
 - Purpose: schedule a step only when conditions are met (event, env, prior outputs).
 - Behavior:
@@ -313,3 +352,75 @@ For additional examples, see:
 - defaults/visor.yaml (fact validation transitions)
 - tests/unit/routing-transitions-and-contracts.test.ts (transitions, assume/guarantee)
 - docs/engine-state-machine-plan.md (state machine overview)
+
+## Side‑by‑side examples: the same intent with different constructs
+
+### Example A — Skip entirely when the repo has no changes
+Using `if` (best: planning‑time decision):
+```yaml
+checks:
+  summarize:
+    type: ai
+    on:
+      - pr_opened
+      - pr_updated
+    if: "filesCount > 0"
+    exec: node scripts/summarize.js
+```
+
+Using `assume` (works but later in the lifecycle):
+```yaml
+checks:
+  summarize:
+    type: ai
+    on:
+      - pr_opened
+      - pr_updated
+    assume:
+      - "filesCount > 0"
+    exec: node scripts/summarize.js
+```
+Both skip the step; `if` prunes earlier, `assume` skips right before calling the provider.
+
+### Example B — Ensure outputs obey invariants
+Using `guarantee` (contract):
+```yaml
+checks:
+  collect:
+    type: command
+    exec: "node collect.js"    # produces { items: [...] }
+    guarantee:
+      - "output && Array.isArray(output.items)"
+      - "output.items.length > 0"
+    on_fail:
+      run:
+        - recompute
+```
+
+Using `fail_if` (policy):
+```yaml
+checks:
+  collect:
+    type: command
+    exec: "node collect.js"
+    fail_if: "!(output && Array.isArray(output.items) && output.items.length > 0)"
+    on_fail:
+      run:
+        - recompute
+```
+Both mark the run as failed and route `on_fail`; use `guarantee` for design‑by‑contract semantics, `fail_if` for policy rules.
+
+### Example C — “Hard‑fail” on unmet preconditions (guard step pattern)
+If you need an explicit failure instead of a skip for an unmet `assume`, use a guard:
+```yaml
+checks:
+  prechecks:
+    type: command
+    exec: node scripts/check-tools.js   # exit 1 when tools missing
+    fail_if: "output.exitCode !== 0"
+  analyze:
+    type: command
+    depends_on:
+      - prechecks
+    exec: node scripts/analyze.js
+```
