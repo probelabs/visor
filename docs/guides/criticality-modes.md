@@ -93,12 +93,10 @@ checks:
     criticality: control-plane
     exec: "node -e \"console.log('[\\"a\\",\\"b\\",\\"c\\"]')\""
     forEach: true
-    assume:
-      - "Array.isArray(output)"
-      - "output.length <= 100"
     guarantee:
       - "Array.isArray(output)"
       - "output.every(x => typeof x === 'string')"
+      - "output.length <= 100"           # size cap belongs in guarantee (post‑exec)
     on_finish:
       transitions:
         - when: "any(outputs_history['validate'], v => v && v.ok === false)"

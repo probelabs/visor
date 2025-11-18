@@ -131,8 +131,10 @@ checks:
 ### 2) `assume` (preconditions, design‑by‑contract)
 - Purpose: non‑negotiable prerequisites before a step executes.
 - Behavior:
-  - Any `assume` expression false → skip with reason `assume`. In critical branches, this blocks dependent mutating steps via dependency gating.
-  - No automatic retry unless a defined remediation can satisfy the precondition.
+- Any `assume` expression false → skip with reason `assume`. In critical branches, this blocks dependent mutating steps via dependency gating.
+- No automatic retry unless a defined remediation can satisfy the precondition.
+
+Important: `assume` runs before the provider; do not reference this step’s own `output` inside `assume`. Use dependency results (e.g., `outputs['dep']`) or environment/memory. Assertions about this step’s produced data belong in `guarantee`.
 - Example with remediation:
 ```yaml
 checks:
@@ -633,14 +635,11 @@ checks:
       - issue_comment
     exec: "node -e \"console.log('[{""id"":1,""claim"":""A""},{""id"":2,""claim"":""B""}]')\""
     forEach: true
-    # Preconditions: must be an array and limited size; block if unmet.
-    assume:
-      - "Array.isArray(output)"
-      - "output.length <= 50"
-    # Postconditions: enforce shape
+    # Postconditions: enforce shape and cap fan‑out size
     guarantee:
       - "Array.isArray(output)"
       - "output.every(x => typeof x.id === 'number' && typeof x.claim === 'string')"
+      - "output.length <= 50"
     # Route back for remediation when any validation failed
     on_finish:
       transitions:
