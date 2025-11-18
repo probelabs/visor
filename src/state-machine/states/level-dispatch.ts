@@ -785,7 +785,10 @@ async function executeCheckWithForEachItems(
           const validate = ajv.compile(schemaObj);
           const valid = validate(itemOutput);
           if (!valid) {
-            const errs = (validate.errors || []).slice(0, 3).map((e: any) => e.message).join('; ');
+            const errs = (validate.errors || [])
+              .slice(0, 3)
+              .map((e: any) => e.message)
+              .join('; ');
             const issue: ReviewIssue = {
               file: 'contract',
               line: 0,
@@ -1195,7 +1198,66 @@ async function executeCheckWithForEachItems(
           }
         }
 
-        // Evaluate goto_js and schedule routing
+        // Declarative transitions override goto/goto_js when present.
+        // Mirror routing.ts behavior for the forEach-parent on_finish path.
+        try {
+          const { evaluateTransitions } = await import('./routing');
+          const transTarget = await evaluateTransitions(
+            (onFinish as any).transitions,
+            forEachParent,
+            parentCheckConfig as any,
+            parentResult as any,
+            context,
+            state
+          );
+          if (transTarget !== undefined) {
+            if (transTarget) {
+              // Loop budget guard
+              if (checkLoopBudget(context, state, 'on_finish', 'goto')) {
+                const errorIssue: ReviewIssue = {
+                  file: 'system',
+                  line: 0,
+                  ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                  message: `Routing loop budget exceeded (max_loops=${context.config.routing?.max_loops ?? 10}) during on_finish transitions`,
+                  severity: 'error',
+                  category: 'logic',
+                };
+                parentResult.issues = [...(parentResult.issues || []), errorIssue];
+                try {
+                  context.journal.commitEntry({
+                    sessionId: context.sessionId,
+                    checkId: forEachParent,
+                    result: parentResult as any,
+                    event: context.event || 'manual',
+                    scope: [],
+                  });
+                } catch {}
+                return aggregatedResult; // abort further routing
+              }
+              state.routingLoopCount++;
+              emitEvent({
+                type: 'ForwardRunRequested',
+                target: transTarget.to,
+                scope: [],
+                origin: 'goto_js',
+                gotoEvent: (transTarget as any).goto_event,
+              });
+              queuedForward = true;
+            }
+            // Whether null (explicit no-op) or a target, transitions override goto/goto_js
+            // Also request a WaveRetry if we queued something (handled below)
+            if (queuedForward) {
+              // no-op here; WaveRetry emitted after this block
+            }
+            return aggregatedResult;
+          }
+        } catch (e) {
+          logger.error(
+            `[LevelDispatch] Error evaluating on_finish transitions for ${forEachParent}: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+
+        // Evaluate goto_js and schedule routing if transitions did not match
         const { evaluateGoto } = await import('./routing');
 
         // Debug logging for forEach on_finish.goto_js evaluation
@@ -1844,7 +1906,10 @@ async function executeSingleCheck(
         const validate = ajv.compile(schemaObj);
         const valid = validate((enrichedResult as any).output);
         if (!valid) {
-          const errs = (validate.errors || []).slice(0, 3).map((e: any) => e.message).join('; ');
+          const errs = (validate.errors || [])
+            .slice(0, 3)
+            .map((e: any) => e.message)
+            .join('; ');
           const issue: ReviewIssue = {
             file: 'contract',
             line: 0,
@@ -1897,10 +1962,10 @@ async function executeSingleCheck(
     let isForEach = (result as any).isForEach;
     let forEachItems = (result as any).forEachItems;
 
-      // DEBUG: Log forEach handling
-      logger.info(
-        `[LevelDispatch][DEBUG] After execution ${checkId}: checkConfig.forEach=${checkConfig.forEach}, output type=${typeof (result as any).output}, isArray=${Array.isArray((result as any).output)}`
-      );
+    // DEBUG: Log forEach handling
+    logger.info(
+      `[LevelDispatch][DEBUG] After execution ${checkId}: checkConfig.forEach=${checkConfig.forEach}, output type=${typeof (result as any).output}, isArray=${Array.isArray((result as any).output)}`
+    );
 
     if (checkConfig.forEach === true) {
       const output = (result as any).output;

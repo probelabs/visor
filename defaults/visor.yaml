@@ -472,7 +472,7 @@ steps:
     values:
       - "{{ outputs['issue-assistant'].labels | default: [] | json }}"
     assume:
-      - "(outputs['issue-assistant']?.labels?.length ?? 0) > 0"
+      - "outputs['issue-assistant'] && outputs['issue-assistant'].labels ? outputs['issue-assistant'].labels.length > 0 : false"
 
   # External origin labelling for PRs and Issues
   external-label:

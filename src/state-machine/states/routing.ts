@@ -1353,7 +1353,7 @@ const DEFAULT_MAX_LOOPS = 10;
  *  - null (explicit) when a rule matches with to=null,
  *  - undefined when no rule matched or transitions is empty.
  */
-async function evaluateTransitions(
+export async function evaluateTransitions(
   transitions: TransitionRule[] | undefined,
   checkId: string,
   checkConfig: CheckConfig,

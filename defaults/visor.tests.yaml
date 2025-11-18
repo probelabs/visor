@@ -347,6 +347,8 @@ tests:
                 exactly: 2
               - step: validate-fact
                 exactly: 2
+              - step: aggregate
+                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -381,6 +383,8 @@ tests:
                 exactly: 2
               - step: validate-fact
                 exactly: 4
+              - step: aggregate
+                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
@@ -472,6 +476,8 @@ tests:
                 exactly: 2
               - step: validate-fact
                 exactly: 2
+              - step: aggregate
+                exactly: 1
             outputs:
               - step: validate-fact
                 where: { path: fact_id, equals: f1 }
