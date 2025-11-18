@@ -32,6 +32,15 @@ export class MemoryStore {
   }
 
   /**
+   * Create a new isolated MemoryStore instance that does not affect the
+   * process-wide singleton. Useful for nested workflows or tests where
+   * state must not leak between runs.
+   */
+  static createIsolated(config?: MemoryConfig): MemoryStore {
+    return new MemoryStore(config);
+  }
+
+  /**
    * Reset singleton instance (for testing)
    */
   static resetInstance(): void {

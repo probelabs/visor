@@ -192,6 +192,9 @@ steps:
     criticality: internal
     group: task-refinement
     depends_on: [confirm-interpret]
+    assume:
+      - "outputs['confirm-interpret']?.proceed === true"
+      - "(outputs['confirm-interpret']?.commands?.length ?? 0) > 0"
     exec: |
       node <<'NODE'
       const { spawn } = require('child_process');
@@ -215,6 +218,24 @@ steps:
       })().catch(e => { process.stdout.write(JSON.stringify({ failed: 1, error: String(e) })); process.exit(0); });
       NODE
     output_format: json
+    schema:
+      type: object
+      additionalProperties: true
+      properties:
+        failed: { type: number }
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              cmd: { type: string }
+              code: {}
+              stdout: { type: string }
+              stderr: { type: string }
+              durationMs: { type: number }
+            required: [cmd, code]
+      required: [failed]
     fail_if: "output && Number(output.failed||0) > 0"
     on_fail:
       goto: plan-commands

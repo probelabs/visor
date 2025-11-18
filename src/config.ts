@@ -310,17 +310,37 @@ export class ConfigManager {
       if (bundledConfigPath) {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
-        const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
-        let parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+        // Synchronous loader for bundled defaults with shallow extends support
+        const readAndParse = (p: string): Partial<VisorConfig> => {
+          const raw = fs.readFileSync(p, 'utf8');
+          const obj = yaml.load(raw) as Partial<VisorConfig>;
+          if (!obj || typeof obj !== 'object') return {};
+          return obj;
+        };
+        const baseDir = path.dirname(bundledConfigPath);
+        const merger = new (require('./utils/config-merger').ConfigMerger)();
 
-        if (!parsedConfig || typeof parsedConfig !== 'object') {
-          return null;
-        }
+        const loadWithExtendsSync = (p: string): Partial<VisorConfig> => {
+          const current = readAndParse(p);
+          const extVal: any = (current as any).extends || (current as any).include;
+          // Strip extends/include to prevent re-processing
+          if ((current as any).extends !== undefined) delete (current as any).extends;
+          if ((current as any).include !== undefined) delete (current as any).include;
+          if (!extVal) return current;
+          const list = Array.isArray(extVal) ? extVal : [extVal];
+          let acc: Partial<VisorConfig> = {};
+          for (const src of list) {
+            const rel = typeof src === 'string' ? src : String(src);
+            const abs = path.isAbsolute(rel) ? rel : path.resolve(baseDir, rel);
+            const parentCfg = loadWithExtendsSync(abs);
+            acc = merger.merge(acc, parentCfg);
+          }
+          return merger.merge(acc, current);
+        };
 
-        // Normalize 'checks' and 'steps' for backward compatibility
+        let parsedConfig = loadWithExtendsSync(bundledConfigPath);
+        // Normalize and validate as usual
         parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
-
-        // Validate and merge with defaults
         this.validateConfig(parsedConfig);
         return this.mergeWithDefaults(parsedConfig) as VisorConfig;
       }

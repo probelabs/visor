@@ -1,0 +1,254 @@
+version: "1.0"
+
+# Extracted code review steps for reuse and composition
+steps:
+  # PR overview with intelligent analysis - runs first to establish context
+  overview:
+    type: ai
+    group: overview
+    on: [pr_opened, pr_updated]
+    prompt: |
+        PR Title: {{ pr.title }}
+
+        You are generating PR overview, to help owners of the repository to understand what this PR is above, and help reviewer to point to the right parts of the code. First you should provide detailed but concise description, mentioning all the changes.
+
+        ## Files Changed Analysis
+        After you need to summarize insights from `<files_summary>`: changed files, additions/deletions, notable patterns.
+
+        Next ensure you cover all below:
+
+        ## Architecture & Impact Assessment
+          - What this PR accomplishes
+          - Key technical changes introduced
+          - Affected system components
+          - Include one or more mermaid diagrams when useful to visualize component relationships or flow.
+          
+        ## Scope Discovery & Context Expansion
+        - From the `<files_summary>` and code diffs, infer the broader scope of impact across modules, services, and boundaries.
+        - If your environment supports code search/extract tools, use them to peek at immediately-related files (tests, configs, entrypoints) for better context. If tools are not available, infer and list what you would search next.
+
+        You may also be asked to assign labels to PR; if so use this:
+        - `tags.review-effort`: integer 1–5 estimating review effort (1=trivial, 5=very high).
+        - `tags.label`: one of [bug, chore, documentation, enhancement, feature]. Choose the best fit.
+
+        Important:
+        - Propose `tags.review-effort` and `tags.label` only for the initial PR open event.
+        - Do not change or re-suggest labels on PR update events; the repository applies labels only on `pr_opened`.
+
+        Be concise, specific, and actionable. Avoid praise or celebration.
+    schema: overview
+
+  # Security analysis - Critical for all projects
+  security:
+    type: ai
+    group: review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
+    prompt: |
+        Based on our overview discussion, please perform a comprehensive security analysis of the code changes.
+
+        Analyze the files listed in the `<files_summary>` section and focus on the code changes shown in the diff sections.
+
+        ## Security Analysis Areas
+
+        **Input Validation & Injection:**
+        - SQL injection in database queries
+        - XSS vulnerabilities in user input handling
+        - Command injection in system calls
+        - Path traversal in file operations
+
+        **Authentication & Authorization:**
+        - Weak authentication mechanisms
+        - Session management flaws
+        - Access control bypasses
+        - Privilege escalation opportunities
+
+        **Data Protection:**
+        - Sensitive data exposure in logs/errors
+        - Unencrypted data storage
+        - API key or credential leaks
+        - Privacy regulation compliance
+
+        **Infrastructure Security:**
+        - Insecure configurations
+        - Missing security headers
+        - Vulnerable dependencies
+        - Resource exhaustion vulnerabilities
+
+        Provide specific findings with clear explanations and actionable remediation steps.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Security vulnerabilities that could lead to immediate compromise (RCE, SQL injection, authentication bypass, exposed secrets)
+        - **error**: Security issues that must be fixed before production (XSS, path traversal, weak crypto, missing auth checks)
+        - **warning**: Security concerns that should be addressed (verbose errors, missing rate limiting, insecure defaults)
+        - **info**: Security best practices and hardening suggestions (defense in depth, additional validation)
+    schema: code-review
+
+  # Architecture analysis - Ensures sound design and avoids over-engineering
+  architecture:
+    type: ai
+    group: review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
+    prompt: |
+        Building on our overview analysis, evaluate the architectural decisions and design patterns.
+
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
+
+        ## Architecture Analysis Areas
+        **Design Simplicity & Pragmatism:**
+        - Over-engineering: Is the solution more complex than necessary?
+        - YAGNI violations: Are we building features not currently needed?
+        - Can this be implemented more simply using existing patterns?
+        - Are there existing functions/modules that could be reused instead?
+        - Is the abstraction level appropriate for the problem size?
+
+        **Special Cases & Edge Cases:**
+        - Does the code introduce special case handling that could be generalized?
+        - Are there hard-coded values or logic for specific scenarios?
+        - Can special cases be eliminated through better design?
+        - Are edge cases handled through general patterns rather than one-offs?
+
+        **Consistency & Reusability:**
+        - Does this follow existing architectural patterns in the codebase?
+        - Are there similar problems already solved differently elsewhere?
+        - Could this functionality be generalized to handle more cases?
+        - Does it duplicate existing functionality that could be extended?
+
+        **Design Patterns & Structure:**
+        - Are design patterns used appropriately (not forced)?
+        - Is the separation of concerns clear and logical?
+        - Are dependencies and coupling minimized?
+        - Is the code organized in a way that makes sense?
+
+        **Scalability & Extensibility:**
+        - Will this design scale with future requirements?
+        - Is it easy to extend without major refactoring?
+        - Are boundaries and interfaces well-defined?
+
+        Flag issues where simpler solutions exist, special cases are introduced unnecessarily, or existing functionality could be reused.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Architectural decisions that will cause system failures or major technical debt (circular dependencies, tight coupling causing deadlocks)
+        - **error**: Significant architectural problems (over-engineering, unnecessary special cases, violation of core patterns, missed reuse opportunities)
+        - **warning**: Architectural concerns that should be addressed (minor over-abstraction, could be simplified, inconsistent patterns)
+        - **info**: Architectural suggestions and alternative approaches (simpler patterns available, potential for future reuse)
+    schema: code-review
+
+  # Performance analysis - Important for all applications
+  performance:
+    type: ai
+    group: review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
+    prompt: |
+        Building on our overview analysis, now review the code changes for performance issues.
+
+        Focus on the files listed in `<files_summary>` and analyze the code changes shown in the `<full_diff>` or `<commit_diff>` sections.
+
+        ## Performance Analysis Areas
+        **Algorithm & Data Structure Efficiency:**
+        - Time complexity analysis (O(n), O(n²), etc.)
+        - Space complexity and memory usage
+        - Inefficient loops and nested operations
+        - Suboptimal data structure choices
+
+        **Database Performance:**
+        - N+1 query problems
+        - Missing database indexes
+        - Inefficient JOIN operations
+        - Large result set retrievals
+
+        **Resource Management:**
+        - Memory leaks and excessive allocations
+        - File handle management
+        - Connection pooling issues
+        - Resource cleanup patterns
+
+        **Async & Concurrency:**
+        - Blocking operations in async contexts
+        - Race conditions and deadlocks
+        - Inefficient parallel processing
+
+        Building on our overview analysis, identify performance issues and provide optimization recommendations.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Performance issues causing system failure or severe degradation (infinite loops, memory leaks causing OOM)
+        - **error**: Significant performance problems affecting user experience (O(n²) in critical path, N+1 queries, blocking I/O)
+        - **warning**: Performance concerns that should be optimized (inefficient algorithms, missing indexes, unnecessary operations)
+        - **info**: Performance best practices and optimization opportunities (caching suggestions, async improvements)
+    schema: code-review
+
+  # Code quality and maintainability
+  quality:
+    type: ai
+    group: review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
+    prompt: |
+        Building on our overview discussion, evaluate the code quality and maintainability.
+
+        Review the code changes shown in the `<full_diff>` or `<commit_diff>` sections, considering the files listed in `<files_summary>`.
+
+        ## Quality Assessment Areas
+        **Code Structure & Design:**
+        - SOLID principles adherence
+        - Design pattern appropriateness
+        - Separation of concerns
+        - Code organization and clarity
+
+        **Error Handling & Reliability:**
+        - Exception handling completeness
+        - Error propagation patterns
+        - Input validation thoroughness
+        - Edge case coverage
+
+        **Testing & Test Coverage:**
+        - Missing tests for critical functionality
+        - Test coverage gaps
+        - Test quality and effectiveness
+        - Edge cases and error scenarios coverage
+
+        **Test Quality - Critical Checks:**
+        - **Magic Numbers in Tests**: Are tests using hard-coded values just to make assertions pass?
+          - Look for arbitrary numbers without clear meaning (e.g., `expect(result).toBe(42)` where 42 has no semantic meaning)
+          - Tests should use meaningful constants or derive expected values from the input
+          - Tests that "cut corners" by adjusting expected values to match output are fragile
+          - Flag tests where the expected value seems arbitrary or reverse-engineered from implementation
+        - **Test Integrity**: Do tests actually validate correct behavior or just check current behavior?
+          - Are tests meaningful and would catch real bugs?
+          - Do tests explain why a value should be expected (through variable names, comments, or clear logic)?
+          - Are test assertions based on requirements rather than implementation details?
+        - **Negative Testing Coverage**: Are failure cases and error conditions properly tested?
+          - Are there tests for invalid inputs, boundary conditions, and error states?
+          - Do tests verify error messages and error handling paths?
+          - Are edge cases like null, empty, undefined, zero, negative values tested?
+          - Do tests cover "unhappy path" scenarios (authentication failures, network errors, invalid data)?
+          - Are exception handling and error recovery mechanisms validated?
+          - Flag missing negative tests for critical functionality
+
+        **Maintainability:**
+        - Code testability issues
+        - Dependencies and coupling problems
+        - Technical debt introduction
+        - Code duplication (DRY violations)
+
+        **Language-Specific Best Practices:**
+        - Idiomatic code usage
+        - Framework/library best practices
+        - Type safety (if applicable)
+
+        Focus on actionable improvements that enhance code maintainability based on the overview analysis.
+        Pay special attention to test quality - tests that use magic numbers or cut corners undermine reliability.
+
+        ## Severity Guidelines
+        Use the following severity levels appropriately:
+        - **critical**: Code quality issues that will cause bugs or failures (logic errors, race conditions, null pointer issues)
+        - **error**: Quality problems that significantly impact maintainability (no error handling, high complexity, severe coupling, tests with magic numbers)
+        - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming, unclear test expectations)
+        - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements, test clarity)
+    schema: code-review
+

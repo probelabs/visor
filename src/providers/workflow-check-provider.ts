@@ -304,15 +304,29 @@ export class WorkflowCheckProvider extends CheckProvider {
       config.checkName || workflow.id
     );
 
-    // Build child engine context
+    // Build isolated child engine context (separate journal/memory to avoid state contamination)
+    // Reuse parent's memory config if available, but never the instance
+    const parentMemoryCfg =
+      (parentContext?.memory &&
+        parentContext.memory.getConfig &&
+        parentContext.memory.getConfig()) ||
+      parentContext?.config?.memory;
+
+    const childJournal = new ExecutionJournal();
+    const childMemory = MemoryStore.createIsolated(parentMemoryCfg);
+    try {
+      await childMemory.initialize();
+    } catch {}
+
     const childContext = {
       mode: 'state-machine' as const,
       config: workflowConfig,
       checks: checksMetadata,
-      journal: parentContext?.journal || new ExecutionJournal(),
-      memory: parentContext?.memory || MemoryStore.getInstance(),
+      journal: childJournal,
+      memory: childMemory,
       workingDirectory: parentContext?.workingDirectory || process.cwd(),
-      sessionId: parentContext?.sessionId || uuidv4(),
+      // Always use a fresh session for nested workflows to isolate history
+      sessionId: uuidv4(),
       event: parentContext?.event || prInfo.eventType,
       debug: parentContext?.debug || false,
       maxParallelism: parentContext?.maxParallelism,
