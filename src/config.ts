@@ -551,7 +551,7 @@ export class ConfigManager {
           checkConfig.type = 'ai';
         }
         // 'on' field is optional - if not specified, check can run on any event
-        this.validateCheckConfig(checkName, checkConfig, errors, config);
+        this.validateCheckConfig(checkName, checkConfig, errors, config, warnings);
 
         // Unknown/typo keys at the check level are produced by Ajv.
 
@@ -699,7 +699,8 @@ export class ConfigManager {
     checkName: string,
     checkConfig: CheckConfig,
     errors: ConfigValidationError[],
-    config?: Partial<VisorConfig>
+    config?: Partial<VisorConfig>,
+    warnings?: ConfigValidationError[]
   ): void {
     // Default to 'ai' if no type specified
     if (!checkConfig.type) {
@@ -724,6 +725,20 @@ export class ConfigManager {
         field: `checks.${checkName}.prompt`,
         message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`,
       });
+    }
+
+    // Recommend specifying criticality for external-effect providers
+    try {
+      const externalTypes = new Set(['github', 'http', 'http_client', 'http_input', 'workflow']);
+      if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality && warnings) {
+        warnings.push({
+          field: `checks.${checkName}.criticality`,
+          message:
+            `Step "${checkName}" of type "${checkConfig.type}" lacks criticality. Consider setting criticality: 'external' or 'control-plane' to enable safer defaults.`,
+        });
+      }
+    } catch {
+      // best-effort hint only
     }
 
     // Command checks require exec field
