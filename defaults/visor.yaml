@@ -312,6 +312,7 @@ steps:
   # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
   apply-overview-labels:
     type: github
+    criticality: external
     tags: [github]
     depends_on: [overview]
     on: [pr_opened]
@@ -466,6 +467,7 @@ steps:
   # Apply labels to new issues based on assistant output (GitHub-only)
   apply-issue-labels:
     type: github
+    criticality: external
     tags: [github]
     depends_on: [issue-assistant]
     on: [issue_opened]
@@ -482,6 +484,7 @@ steps:
   # External origin labelling for PRs and Issues
   external-label:
     type: github
+    criticality: external
     tags: [github]
     on: [pr_opened, issue_opened]
     if: "!isMember() && !isContributor()"
