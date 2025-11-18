@@ -2,6 +2,19 @@
 
 This guide consolidates the expected behavior for conditional gating, design‑by‑contract, routing, and retries in the state‑machine engine. It follows safety‑critical software principles (detect → isolate → recover → report) while remaining practical for CI/PR automation.
 
+> Assume vs. Guarantee — Do’s and Don’ts
+>
+> Do
+> - Use `assume` for pre‑execution prerequisites that do not depend on this step’s output (env, memory, upstream results).
+> - Keep expressions pure (no time/random/network); short and deterministic.
+> - Use `guarantee` to assert properties of this step’s produced output (shape, size caps, idempotency markers, control signals).
+> - For critical steps, pair both: `assume` (preflight) + `guarantee` (post‑exec safety lock).
+>
+> Don’t
+> - Don’t reference `output` of the same step in `assume` (it runs before execution).
+> - Don’t put policy thresholds into `guarantee`—use `fail_if` for policy/quality gates.
+> - Don’t rely on side‑effects or external clocks in expressions.
+
 ## Core Principles
 - Deterministic evaluations: expressions are pure (no side‑effects, time/network), evaluated in a sandbox.
 - Fail‑secure defaults: evaluation errors pick the safest behavior (skip or fail closed), and are logged.

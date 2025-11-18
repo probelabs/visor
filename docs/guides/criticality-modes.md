@@ -2,6 +2,18 @@
 
 This document explains what each criticality mode means, how to declare it, the engine defaults it enables, and how core constructs (if, assume, guarantee, fail_if, transitions, retries, loop budgets) behave per mode. All examples use block‑style YAML.
 
+> Assume vs. Guarantee — Do’s and Don’ts
+>
+> Do
+> - Use `assume` for pre‑execution prerequisites (env/memory/upstream), not this step’s `output`.
+> - Use `guarantee` for assertions about this step’s produced `output` (shape, fan‑out size, control signals).
+> - Use `fail_if` for policy/threshold decisions.
+>
+> Don’t
+> - Don’t reference this step’s `output` in `assume`.
+> - Don’t mix policy thresholds into `guarantee`—use `fail_if`.
+> - Don’t rely on time/random/network in expressions.
+
 ## Why criticality?
 
 Criticality classifies a step by the operational risk it carries. The engine uses it to pick safe defaults for contracts, dependency gating, retries, and loop budgets. `continue_on_failure` only controls gating; it does not define criticality.
@@ -79,8 +91,8 @@ Defaults
 - Loop budgets: tighter per‑scope (recommended 8) to avoid oscillations.
 
 Recommended contracts
-- assume: structural preconditions and size caps (e.g., arrays, max fan‑out).
-- guarantee: postconditions about control signals (e.g., last_wave_size ≤ cap, valid transition targets).
+- assume: pre‑execution prerequisites independent of this step's own output (e.g., env/memory flags, upstream readiness).
+- guarantee: postconditions about this step's produced control signals and shape/size caps (e.g., arrays, max fan‑out, valid transition targets).
 
 Example — fan‑out producer with loopback transitions
 ```yaml
@@ -251,12 +263,10 @@ checks:
       - issue_comment
     exec: "node -e \"console.log('[{""id"":1,""claim"":""A""},{""id"":2,""claim"":""B""}]')\""
     forEach: true
-    assume:
-      - "Array.isArray(output)"
-      - "output.length <= 50"
     guarantee:
       - "Array.isArray(output)"
       - "output.every(x => typeof x.id === 'number' && typeof x.claim === 'string')"
+      - "output.length <= 50"
     on_finish:
       transitions:
         - when: "any(outputs_history['validate-fact'], v => v && v.is_valid === false) && event.name === 'issue_opened'"
