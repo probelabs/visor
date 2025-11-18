@@ -46,7 +46,9 @@ steps:
     prompt: "Analyze for security vulnerabilities..."
     group: review
     schema: code-review
-    on: [pr_opened, pr_updated]
+    on:
+      - pr_opened
+      - pr_updated
 
     # Check-specific failure conditions override global ones
     failure_conditions:
@@ -58,7 +60,9 @@ steps:
     prompt: "Analyze performance implications..."
     group: review
     schema: code-review
-    on: [pr_opened, pr_updated]
+    on:
+      - pr_opened
+      - pr_updated
 
     # Inherits global failure conditions unless overridden
     failure_conditions:
@@ -112,7 +116,9 @@ steps:
   security:
     type: ai
     prompt: "Security analysis..."
-    on: [pr_opened, pr_updated]
+    on:
+      - pr_opened
+      - pr_updated
 
 # Enhanced format with failure conditions
 version: "1.0"
@@ -123,7 +129,23 @@ steps:
   security:
     type: ai
     prompt: "Security analysis..."
-    on: [pr_opened, pr_updated]
+    on:
+      - pr_opened
+      - pr_updated
+
+## Interaction with Criticality
+
+Failure conditions (`fail_if`) and design‑by‑contract (`assume`, `guarantee`) work together with criticality:
+
+- Critical steps (external/control‑plane/policy):
+  - Require meaningful `assume` and `guarantee`.
+  - `continue_on_failure: false` by default; dependents skip when this step fails.
+  - Retries only for transient provider faults; no auto‑retry for logical failures (`fail_if`/`guarantee`).
+- Non‑critical steps:
+  - Contracts recommended; may allow `continue_on_failure: true`.
+  - Same retry bounds; tolerant gating.
+
+See docs/guides/fault-management-and-contracts.md for the full policy checklist and examples.
     failure_conditions:
       security_specific: "metadata.errorIssues >= 1"
 ```

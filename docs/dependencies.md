@@ -16,8 +16,13 @@ steps:
     group: code-review
     schema: code-review
     prompt: "Comprehensive security analysis..."
-    tags: ["security", "critical", "comprehensive"]
-    on: [pr_opened, pr_updated]
+    tags:
+      - security
+      - critical
+      - comprehensive
+    on:
+      - pr_opened
+      - pr_updated
     # No dependencies - runs first
 
   performance:
@@ -25,8 +30,14 @@ steps:
     group: code-review
     schema: code-review
     prompt: "Performance analysis..."
-    tags: ["performance", "fast", "local", "remote"]
-    on: [pr_opened, pr_updated]
+    tags:
+      - performance
+      - fast
+      - local
+      - remote
+    on:
+      - pr_opened
+      - pr_updated
     # No dependencies - runs parallel with security
 
   style:
@@ -34,17 +45,26 @@ steps:
     group: code-review
     schema: code-review
     prompt: "Style analysis based on security findings..."
-    tags: ["style", "fast", "local"]
-    on: [pr_opened]
-    depends_on: [security]  # Waits for security to complete
+    tags:
+      - style
+      - fast
+      - local
+    on:
+      - pr_opened
+    depends_on:
+      - security  # Waits for security to complete
 
   architecture:
     type: ai
     group: code-review
     schema: code-review
     prompt: "Architecture analysis building on previous checks..."
-    on: [pr_opened, pr_updated]
-    depends_on: [security, performance]
+    on:
+      - pr_opened
+      - pr_updated
+    depends_on:
+      - security
+      - performance
 ```
 
 ### Execution Flow
@@ -77,6 +97,24 @@ steps:
 #### Any‑of (OR) Dependency Groups
 
 Sometimes a check can proceed when any one of several upstream steps has completed successfully. Visor supports this with pipe‑separated tokens inside `depends_on`.
+
+## Criticality and Gating
+
+`continue_on_failure` controls whether dependents may run after a failure — it is a gating knob, not the definition of criticality. Classify steps by criticality (external | control-plane | policy | non-critical) and derive defaults:
+
+- Critical: `continue_on_failure: false`, require `assume`/`guarantee`, tighter loop budgets, retries only for transient faults.
+- Non‑critical: may allow `continue_on_failure: true` to keep non‑critical branches moving.
+
+Example — non‑critical branch that can proceed after a soft failure:
+```yaml
+steps:
+  summarize:
+    type: ai
+    tags:
+      - non-critical
+    continue_on_failure: true
+    fail_if: "(output.errors || []).length > 0"
+```
 
 ```yaml
 checks:

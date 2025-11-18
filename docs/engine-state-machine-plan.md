@@ -2,6 +2,24 @@
 
 This note captures the current execution flow of the Visor engine, the surfaces where a feature flag can live, and an initial proposal for a bespoke state-machine-based Runner v2. The user-provided research artifact referenced in the request is not available inside this workspace yet, so there are a few open questions that we should fill in once we can read it.
 
+> Safety Model & Criticality (Summary)
+>
+> The engine follows a NASA‑style safety model. Every check participates in a safety policy that depends on its criticality:
+>
+> - external: mutates outside world (e.g., GitHub ops, HTTP methods ≠ GET/HEAD)
+> - control-plane: alters routing/fan‑out (forEach parents, on_* with goto/run, memory used by guards)
+> - policy: enforces permissions/policy (strong fail_if/guarantee)
+> - non-critical: read‑only compute
+>
+> Defaults derived from criticality:
+> - Critical (external/control‑plane/policy): require `assume` (preconditions) and `guarantee` (postconditions); `continue_on_failure: false`; retries only for transient faults; tighter loop budgets; suppress downstream side‑effects when contracts fail.
+> - Non‑critical: contracts recommended; may allow `continue_on_failure: true`; standard budgets and retry bounds.
+>
+> Expressions apply at distinct phases:
+> - `if` (plan-time scheduling) → `assume` (pre‑exec) → provider → `guarantee`/`fail_if` (post‑exec) → transitions/goto.
+>
+> See also: docs/guides/fault-management-and-contracts.md for the full checklist and examples.
+
 ## 1. Current Engine Map
 
 ### 1.1 Entry points & global state
