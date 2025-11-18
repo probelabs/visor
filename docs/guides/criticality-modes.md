@@ -45,7 +45,7 @@ Mutates systems outside the engine (GitHub ops, HTTP methods ≠ GET/HEAD, file 
 Defaults
 - Contracts required: declare `assume` (preconditions) and `guarantee` (postconditions).
 - Gating: `continue_on_failure: false` by default; dependents skip when this step fails.
-- Retries: transient faults only, bounded (max 2–3 with backoff); no auto‑retry for logical (policy/contract) violations.
+- Retries: transient faults only, bounded (max 2–3 with backoff); no auto‑retry for logical (policy/contract) violations, including `contract/schema_validation_failed`.
 - Loop budget: standard (10) unless the step also routes.
 - Side‑effects: suppress/postpone mutating actions when `guarantee`/`fail_if` fail; require remediation/approval.
 
@@ -87,7 +87,7 @@ Steers execution (decides what runs next and how often). Examples: forEach paren
 Defaults
 - Contracts required (route integrity): meaningful `assume` and `guarantee`.
 - Gating: `continue_on_failure: false` by default.
-- Retries: transient faults only (provider crashes); no auto‑retry for logical violations.
+- Retries: transient faults only (provider crashes); no auto‑retry for logical violations (including `contract/schema_validation_failed`).
 - Loop budgets: tighter per‑scope (recommended 8) to avoid oscillations.
 
 Recommended contracts

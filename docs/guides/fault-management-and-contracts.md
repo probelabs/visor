@@ -732,3 +732,7 @@ Highlights
 - post-comment (external) uses both `if` (early prune) and `assume` (preflight) plus a `guarantee` after posting.
 - summarize shows a non‑critical step with soft failure handling via `continue_on_failure: true`.
 ```
+- JSON Schema validation (unified `schema`)
+  - `schema: <string>` selects layout/renderer (no validation).
+  - `schema: <object>` is a JSON Schema; the engine validates `output` for any provider (ai/command/script/http). Violations create `contract/schema_validation_failed` and follow criticality rules.
+  - `output_schema` is deprecated; keep it only for backward compatibility.

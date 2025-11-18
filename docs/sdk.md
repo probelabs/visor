@@ -173,6 +173,22 @@ const cfg = await loadConfig({
       guarantee: ["output && typeof output.id === 'number'"],
       continue_on_failure: false,
     },
+    // Structured outputs with unified `schema` (object) for validation
+    'summarize-json': {
+      type: 'ai',
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' }, items: { type: 'array', items: { type: 'string' } } },
+        required: ['ok', 'items']
+      },
+      prompt: 'Return JSON with ok and items...'
+    },
+    // Command/script can also use JSON Schema via `schema`
+    'aggregate': {
+      type: 'script',
+      content: 'return { all_valid: true };',
+      schema: { type: 'object', properties: { all_valid: { type: 'boolean' } }, required: ['all_valid'], additionalProperties: false }
+    }
   },
 });
 ```
