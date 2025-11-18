@@ -686,6 +686,14 @@ steps:
     type: script
     group: fact-validation
     namespace: fact-validation
+    output_schema:
+      type: object
+      properties:
+        all_valid:
+          type: boolean
+      required:
+        - all_valid
+      additionalProperties: false
     guarantee: "output && typeof output.all_valid === 'boolean'"
     depends_on: [validate-fact]
     on: [issue_opened, issue_comment]
