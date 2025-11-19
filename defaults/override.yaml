@@ -2,7 +2,7 @@ version: "1.0"
 
 # Bring in the full default Visor workflow (which itself includes code-review.yaml)
 include:
-  - ./defaults/visor.yaml
+  - ./visor.yaml
 
 # Override exactly one of the imported code-review steps using appendPrompt
 steps:
