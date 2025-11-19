@@ -1,4 +1,4 @@
-# RFC: Event-Driven GitHub Integration
+# RFC: Event-Driven Integrations via Frontends (GitHub, Slack, …)
 
 **Status**: Proposed
 **Created**: 2025-11-19
@@ -6,7 +6,7 @@
 
 ## Abstract
 
-This RFC proposes an event-driven architecture for GitHub integration with the state machine engine, replacing the current dependency injection pattern. The goal is to enable multi-platform support, improve testability, and align with the observability and replay goals outlined in the state machine RFC (Section 5).
+This RFC proposes moving to a fully event‑driven architecture for integrations using a pluggable “frontends” system that reacts to neutral engine events. The legacy dependency‑injection (DI) GitHub path remains in the codebase for backward compatibility, but new functionality—including the new GitHub integration—will be implemented as frontends on the event bus.
 
 ## Motivation
 
@@ -40,59 +40,71 @@ The state machine currently uses **dependency injection** for GitHub integration
 
 ## Proposed Architecture
 
-### 1. Event Schema Design
+### 1. Neutral Event Envelope & Taxonomy (Platform‑agnostic)
 
-Extend `EngineEvent` type in `src/types/engine.ts` with GitHub-specific events:
+Instead of GitHub‑specific core events, define a neutral event payload taxonomy and wrap every payload in a common envelope that carries correlation/observability metadata.
 
 ```typescript
-// Request events (emitted by state machine)
+// Neutral domain payloads (core)
 export type EngineEvent =
-  // ... existing events ...
+  // ... existing engine events (StateTransition, CheckScheduled, CheckCompleted, etc.) ...
   | {
-      type: 'GitHubCheckCreateRequested';
-      checkName: string;
-      status: 'queued' | 'in_progress';
-      output?: {
-        title: string;
-        summary: string;
-      };
-    }
-  | {
-      type: 'GitHubCheckUpdateRequested';
-      checkName: string;
-      status: 'in_progress' | 'completed' | 'cancelled';
+      type: 'CheckStatusRequested';
+      checkId?: string;            // stable id if available (external_id, run key)
+      checkName: string;           // human name
+      status: 'queued' | 'in_progress' | 'completed' | 'cancelled';
       conclusion?: 'success' | 'failure' | 'neutral' | 'skipped';
-      output?: {
-        title: string;
-        summary: string;
-        text?: string;
-        annotations?: any[];
-      };
+      output?: { title?: string; summary?: string; text?: string; annotations?: any[] };
+      idempotencyKey?: string;     // required for side effects (see delivery policy)
     }
   | {
-      type: 'GitHubCommentRequested';
+      type: 'CommentRequested';
       body: string;
-      commentId?: string; // for updates
+      threadKey?: string;          // adapter can group updates by logical thread
+      commentId?: string;          // update if present
+      idempotencyKey?: string;     // for safe retries
     }
-  // Completion events (emitted by adapters back to state machine)
+  // Adapter feedback (generic)
   | {
-      type: 'GitHubCheckCompleted';
-      checkName: string;
+      type: 'CheckStatusCompleted';
+      checkId?: string;
       success: boolean;
       error?: SerializedError;
     }
   | {
-      type: 'GitHubCommentPosted';
+      type: 'CommentPosted';
+      threadKey?: string;
       commentId: string;
       success: boolean;
       error?: SerializedError;
     };
+
+// Event envelope (common metadata for all events)
+export interface EventEnvelope<T extends EngineEvent = EngineEvent> {
+  id: string;                 // uuid
+  version: 1;                 // envelope version
+  timestamp: string;          // ISO8601
+  // Correlation
+  runId: string;              // engine run id
+  workflowId?: string;        // active workflow/config id
+  caseId?: string;            // test/case id (when under runner)
+  wave?: number;              // wave counter
+  attempt?: number;           // retries for the check
+  checkId?: string;           // convenience copy if available
+  traceId?: string;           // tracing correlation
+  spanId?: string;            // tracing correlation
+  causationId?: string;       // which event caused this
+  correlationId?: string;     // stable id for a log/thread/check group
+  payload: T;                 // the actual domain event
+}
 ```
 
+Adapter‑specific payloads (e.g., GitHubCheckAnnotationRequested) should live under adapter namespaces and must be created by adapters in response to neutral core events, not emitted by the state machine core.
+
 **Design Decisions**:
-- **Request/Response Pattern**: Separate "Requested" (state machine → adapter) from "Completed" (adapter → state machine)
-- **Platform Agnostic Core**: State machine emits generic check/comment requests
-- **Error Feedback Loop**: Adapters emit completion events for retry logic
+- Core stays platform‑agnostic (CheckStatusRequested, CommentRequested, …)
+- Envelope carries correlation/idempotency/observability metadata
+- Feedback events are generic (Completed/Posted) and do not leak provider names
 
 ### 2. Event Bus Architecture
 
@@ -127,17 +139,17 @@ export class EventBus {
   /**
    * Emit event (handles both sync and async handlers)
    */
-  emit(event: EngineEvent): Promise<void>;
+  emit(event: EngineEvent | EventEnvelope): Promise<void>;
 
   /**
    * Emit and wait for completion event
    * Useful for request/response patterns
    */
   emitAndWait<T extends EngineEvent>(
-    event: T,
+    event: T | EventEnvelope<T>,
     completionType: EngineEvent['type'],
     timeout?: number
-  ): Promise<Extract<EngineEvent, { type: typeof completionType }>>;
+  ): Promise<EventEnvelope<Extract<EngineEvent, { type: typeof completionType }>>>;
 }
 ```
 
@@ -177,9 +189,18 @@ export class StateMachineRunner {
       } catch (_err) {}
     }
 
-    // NEW: Emit to event bus if available
+    // NEW: Emit to event bus if available (wrapped in envelope)
     if (this.eventBus) {
-      this.eventBus.emit(event).catch(err => {
+      const envelope: EventEnvelope = {
+        id: uuidv4(),
+        version: 1,
+        timestamp: new Date().toISOString(),
+        runId: this.state.runId,
+        workflowId: this.state.workflowId,
+        wave: this.state.wave,
+        payload: event,
+      };
+      this.eventBus.emit(envelope).catch(err => {
         logger.error(`[EventBus] Error emitting ${event.type}:`, err);
       });
     }
@@ -191,7 +212,7 @@ export class StateMachineRunner {
 }
 ```
 
-### 3. GitHub Adapter Implementation
+### 3. GitHub Frontend Implementation (example)
 
 **File**: `src/event-bus/adapters/github-adapter.ts`
 
@@ -207,15 +228,12 @@ export class GitHubEventAdapter {
   }
 
   start(): void {
-    // Subscribe to GitHub-related request events
+    // Subscribe to neutral request events
     this.subscriptions.push(
-      this.eventBus.on('GitHubCheckCreateRequested', this.handleCheckCreate.bind(this))
+      this.eventBus.on('CheckStatusRequested', this.handleCheckStatus.bind(this))
     );
     this.subscriptions.push(
-      this.eventBus.on('GitHubCheckUpdateRequested', this.handleCheckUpdate.bind(this))
-    );
-    this.subscriptions.push(
-      this.eventBus.on('GitHubCommentRequested', this.handleCommentRequest.bind(this))
+      this.eventBus.on('CommentRequested', this.handleCommentRequest.bind(this))
     );
 
     // Subscribe to state transitions for automatic status updates
@@ -232,129 +250,57 @@ export class GitHubEventAdapter {
     this.subscriptions = [];
   }
 
-  private async handleCheckCreate(
-    event: Extract<EngineEvent, { type: 'GitHubCheckCreateRequested' }>
+  private async handleCheckStatus(
+    event: Extract<EngineEvent, { type: 'CheckStatusRequested' }>
   ): Promise<void> {
     try {
-      await this.gitHubService.createCheck({
-        name: event.checkName,
-        status: event.status,
-        output: event.output,
-      });
-
-      // Emit completion event
-      await this.eventBus.emit({
-        type: 'GitHubCheckCompleted',
-        checkName: event.checkName,
-        success: true,
-      });
-    } catch (error) {
-      await this.eventBus.emit({
-        type: 'GitHubCheckCompleted',
-        checkName: event.checkName,
-        success: false,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : undefined,
-        },
-      });
-    }
-  }
-
-  private async handleCheckUpdate(
-    event: Extract<EngineEvent, { type: 'GitHubCheckUpdateRequested' }>
-  ): Promise<void> {
-    try {
-      await this.gitHubService.updateCheck({
+      // Map neutral request to GitHub API (create/update by external_id)
+      await this.gitHubService.upsertCheck({
+        externalId: event.checkId || event.idempotencyKey,
         name: event.checkName,
         status: event.status,
         conclusion: event.conclusion,
         output: event.output,
       });
 
-      await this.eventBus.emit({
-        type: 'GitHubCheckCompleted',
-        checkName: event.checkName,
-        success: true,
-      });
+      // Emit completion event
+      await this.eventBus.emit({ type: 'CheckStatusCompleted', checkId: event.checkId, success: true });
     } catch (error) {
-      await this.eventBus.emit({
-        type: 'GitHubCheckCompleted',
-        checkName: event.checkName,
-        success: false,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : undefined,
-        },
-      });
+      await this.eventBus.emit({ type: 'CheckStatusCompleted', checkId: event.checkId, success: false, error: {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined,
+      }});
     }
   }
 
   private async handleCommentRequest(
-    event: Extract<EngineEvent, { type: 'GitHubCommentRequested' }>
+    event: Extract<EngineEvent, { type: 'CommentRequested' }>
   ): Promise<void> {
     try {
       const commentId = event.commentId
         ? await this.gitHubService.updateComment(event.commentId, event.body)
         : await this.gitHubService.createComment(event.body);
-
-      await this.eventBus.emit({
-        type: 'GitHubCommentPosted',
-        commentId,
-        success: true,
-      });
+      await this.eventBus.emit({ type: 'CommentPosted', commentId, success: true });
     } catch (error) {
-      await this.eventBus.emit({
-        type: 'GitHubCommentPosted',
-        commentId: event.commentId || '',
-        success: false,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : undefined,
-        },
-      });
+      await this.eventBus.emit({ type: 'CommentPosted', commentId: event.commentId || '', success: false, error: {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined,
+      }});
     }
   }
 
   private async handleStateTransition(
     event: Extract<EngineEvent, { type: 'StateTransition' }>
   ): Promise<void> {
-    // Auto-update GitHub check status based on state transitions
+    // Auto-update check status based on state transitions (derive names from context)
     if (event.to === 'CheckRunning') {
-      await this.eventBus.emit({
-        type: 'GitHubCheckUpdateRequested',
-        checkName: 'visor-review',
-        status: 'in_progress',
-        output: {
-          title: 'Running checks...',
-          summary: `State: ${event.to}`,
-        },
-      });
+      await this.eventBus.emit({ type: 'CheckStatusRequested', checkName: event.checkName || 'run', status: 'in_progress', output: { title: 'Running checks...', summary: `State: ${event.to}` } });
     } else if (event.to === 'Completed') {
-      await this.eventBus.emit({
-        type: 'GitHubCheckUpdateRequested',
-        checkName: 'visor-review',
-        status: 'completed',
-        conclusion: 'success',
-        output: {
-          title: 'Review completed',
-          summary: 'All checks completed successfully',
-        },
-      });
+      await this.eventBus.emit({ type: 'CheckStatusRequested', checkName: event.checkName || 'run', status: 'completed', conclusion: 'success', output: { title: 'Completed', summary: 'All checks completed successfully' } });
     } else if (event.to === 'Error') {
-      await this.eventBus.emit({
-        type: 'GitHubCheckUpdateRequested',
-        checkName: 'visor-review',
-        status: 'completed',
-        conclusion: 'failure',
-        output: {
-          title: 'Review failed',
-          summary: 'Execution encountered an error',
-        },
-      });
+      await this.eventBus.emit({ type: 'CheckStatusRequested', checkName: event.checkName || 'run', status: 'completed', conclusion: 'failure', output: { title: 'Failed', summary: 'Execution encountered an error' } });
     }
   }
 
@@ -367,66 +313,249 @@ export class GitHubEventAdapter {
 }
 ```
 
-### 4. Migration Strategy
+#### 3.1 Comment Grouping & Incremental Updates (GitHub)
 
-**Phase 1: Additive Changes (No Breaking Changes)**
+Goal: keep a single evolving PR comment that summarizes the run, grouped by check/step, and update it incrementally without spamming new comments.
 
-1. Add `EventBus` class alongside existing code
-2. Make `eventBus` optional parameter in `StateMachineRunner` constructor
-3. Keep existing `GitHubCheckService` in `EngineContext`
-4. Add event emission in `emitEvent()` method (non-blocking)
-5. Both direct calls AND events work simultaneously
+Default strategy (no new knobs):
 
-**Phase 2: Dual-Mode Operation**
+- Thread key: `threadKey = <repo>#<pull_number>@<head_sha>[:<workflowId>]` (or `runId` when PR metadata is unavailable).
+- Hidden markers: the adapter renders HTML comment markers to delineate the “visor group” and each step section. GitHub preserves these markers but does not display them.
+- Single comment policy: create once, then update in place using `commentId`. Adapter discovers an existing comment by scanning for the `visor:thread` header marker.
+- Partial update (logical): the adapter parses the existing body into sections (by markers), replaces only changed sections in memory, and re-renders the full body for the GitHub update API call.
+- Debounce & coalescing: updates are debounced (e.g., 300–500 ms) to batch bursts of events and respect rate limits.
+- Idempotency: for each update, compute `idempotencyKey = hash(threadKey + revision)`. Retries reuse the same key.
 
-1. Add feature flag: `context.config.experimental?.eventDrivenGitHub`
-2. When enabled:
-   - Remove `gitHubChecks` from `EngineContext`
-   - Pass `EventBus` to runner
-   - Create `GitHubEventAdapter` in main engine
-3. When disabled (default):
-   - Keep current dependency injection pattern
-4. All tests pass in both modes
+Markers and layout:
 
-**Phase 3: Full Migration (Breaking Change)**
+```markdown
+<!-- visor:thread={
+  "key":"<threadKey>",
+  "runId":"<runId>",
+  "workflowId":"<workflowId>",
+  "headSha":"<sha>",
+  "revision": 7,
+  "generatedAt": "2025-11-19T12:34:56Z"
+} -->
 
-1. Remove `gitHubChecks` from `EngineContext` interface entirely
-2. Make `eventBus` required in `StateMachineRunner`
-3. Remove all direct `context.gitHubChecks` calls from state handlers
-4. Replace with event emissions
-5. Update all state files:
-   - `init.ts`: Emit `GitHubCheckCreateRequested` instead of checking `context.gitHubChecks`
-   - `completed.ts`: Remove GitHub finalization (adapter handles it)
-   - Other states emit events as needed
+## Visor Summary — <status icon> <conclusion>  
+SHA: <shortSha> • Checks: <passed>/<total> • Duration: <h:mm:ss>
 
-**Backward Compatibility During Migration**:
+<!-- visor:section={"id":"overview","name":"overview"} -->
+### Overview <status>
+…overview summary…
+<!-- visor:section-end id="overview" -->
 
-```typescript
-// In state-machine-execution-engine.ts
-const eventBus = context.config.experimental?.eventDrivenGitHub
-  ? new EventBus()
-  : undefined;
+<!-- visor:section={"id":"security","name":"security"} -->
+### Security <status>
+…security summary and key failures…
+<!-- visor:section-end id="security" -->
 
-const gitHubAdapter = eventBus && gitHubCheckService
-  ? new GitHubEventAdapter(eventBus, gitHubCheckService)
-  : undefined;
+<!-- visor:thread-end key="<threadKey>" -->
+```
 
-if (gitHubAdapter) {
-  gitHubAdapter.start();
+Aggregation model (maintained in adapter):
+
+```ts
+type StepStatus = 'queued'|'in_progress'|'completed';
+type StepConclusion = 'success'|'failure'|'neutral'|'skipped'|undefined;
+
+interface StepModel {
+  name: string;
+  status: StepStatus;
+  conclusion?: StepConclusion;
+  startedAt?: string;
+  completedAt?: string;
+  annotations?: number;  // count only
+  summary?: string;      // brief human text
 }
 
-const runner = new StateMachineRunner(
-  context,
-  this.debugServer,
-  eventBus // optional, undefined in legacy mode
-);
-
-await runner.run();
-
-if (gitHubAdapter) {
-  gitHubAdapter.stop();
+interface ThreadModel {
+  threadKey: string;
+  runId: string;
+  workflowId?: string;
+  headSha?: string;
+  revision: number;      // increments on each render
+  steps: Record<string, StepModel>;
+  totals: { passed: number; failed: number; skipped: number; total: number };
 }
 ```
+
+Update cycle (pseudocode):
+
+```ts
+onEvent(envelope) {
+  switch (envelope.payload.type) {
+    case 'CheckStatusRequested':
+    case 'CheckCompleted':
+      updateThreadModel(model, envelope);  // update steps/totals
+      scheduleRender(threadKey);
+      break;
+    case 'StateTransition':
+      if (to === 'Completed' || to === 'Error') scheduleRender(threadKey);
+  }
+}
+
+async renderThread(threadKey) {
+  const comment = await findOrCreateComment(threadKey);          // scan once per run; cache commentId
+  const existing = comment?.body || '';
+  const parsed = parseSections(existing);                         // read markers into a dictionary
+  const next = mergeSections(parsed, buildSectionsFromModel());   // replace only changed sections
+  const body = serialize(next);                                   // full markdown body
+  const idempotencyKey = hash(threadKey + model.revision);
+  await github.updateComment(comment.id, body, { idempotencyKey });
+  model.revision++;
+}
+```
+
+Notes:
+
+- findOrCreateComment: search the PR for a comment containing `<!-- visor:thread={..."key":"<threadKey>"...} -->`; if none found, create one and include the header marker.
+- parseSections/mergeSections/serialize: simple utilities that treat the comment as a set of named blocks framed by section markers; unknown blocks are preserved unmodified.
+- Failure safety: if parsing fails (e.g., user edited the comment and removed markers), the adapter falls back to re‑creating the comment with fresh markers and updates the cached `commentId`.
+- Multiple workflows: include `workflowId` in `threadKey` to separate comments per workflow if desired; default behavior is one summary per PR/headSha.
+
+#### 3.2 Frontends API (Pluggable Integrations)
+
+Contracts (reference shapes to implement):
+
+```ts
+export interface Frontend {
+  readonly name: string;                               // e.g., "github", "slack", "ndjson-sink"
+  readonly subscriptions?: Array<EngineEvent['type']>; // optional; host may wire defaults
+  start(ctx: FrontendContext): Promise<void> | void;
+  stop(): Promise<void> | void;
+}
+
+export interface FrontendContext {
+  eventBus: EventBus;
+  logger: Logger;
+  config: unknown; // decoded user config for this frontend only
+  run: { runId: string; workflowId?: string; repo?: string; pr?: number; headSha?: string };
+}
+
+export interface FrontendSpec {
+  name: string;            // "github"
+  package?: string;        // external package name for discovery; omitted for built-ins
+  config?: unknown;        // serialized config to hand to the frontend
+  features?: string[];     // claims, e.g., ["checks","summary-comment","annotations"]
+}
+
+export class FrontendsHost {
+  constructor(private bus: EventBus, private log: Logger) {}
+  async load(specs: FrontendSpec[]): Promise<void> { /* resolve built-ins or dynamic import */ }
+  async startAll(ctxFactory: () => FrontendContext): Promise<void> { /* wire subs; start */ }
+  async stopAll(): Promise<void> { /* unsubscribe; stop */ }
+}
+```
+
+Feature ownership and conflicts
+- A single feature for a provider must have a single owner (e.g., exactly one GitHub frontend owns "checks").
+- The host enforces exclusivity; the first claimant wins by config order and a warning is logged for subsequent claimants.
+- Legacy DI is bypassed when a frontend claims a feature to prevent double posting.
+
+Minimal default configuration (illustrative; no extra knobs needed):
+
+```yaml
+frontends:
+  - name: github
+    features: [checks, summary-comment]
+    # config: {}    # optional, sane defaults
+  - name: ndjson-sink
+    # config: { file: ".visor-events.ndjson" } # optional
+  # - name: slack   # example future frontend
+  #   features: [notifications]
+```
+
+#### 3.3 Comment Markers — Mini Grammar & Utilities
+
+Markers (regular expressions shown informally):
+- Thread header: `<!--\s*visor:thread=(?<json>\{[^]*?\})\s*-->`
+- Section start: `<!--\s*visor:section=(?<json>\{[^]*?\})\s*-->`
+- Section end: `<!--\s*visor:section-end\s+id=\"(?<id>[^\"]+)\"\s*-->`
+- Thread end: `<!--\s*visor:thread-end\s+key=\"(?<key>[^\"]+)\"\s*-->`
+
+Utilities (sketch):
+
+```ts
+interface SectionDoc { header: ThreadHeader; sections: Record<string,string>; tail?: string }
+
+function parseSections(body: string): SectionDoc { /* scan markers; collect text blocks by id */ }
+function mergeSections(prev: SectionDoc, nextBlocks: Record<string,string>): SectionDoc { /* replace changed */ }
+function serialize(doc: SectionDoc): string { /* stitch header + blocks + thread-end */ }
+```
+
+Persistence keys in header JSON:
+- `key` (threadKey), `runId`, `workflowId`, `headSha`, `revision`, `generatedAt`.
+
+NDJSON sink line shape (for reference):
+
+```json
+{ "id":"...", "ts":"2025-11-19T12:34:56Z", "runId":"...", "payload": { "type":"CheckStatusRequested", "checkName":"...", "status":"in_progress" }, "safe": true }
+```
+
+
+### 4. Delivery, Ordering, Idempotency & Failure Policy
+
+Defaults (no extra knobs required):
+
+- Quality of Service: in‑process, at‑least‑once delivery.
+- Ordering: FIFO per `checkId` (or `checkName` fallback) and per `runId`.
+- Idempotency: All side‑effecting requests MUST include `idempotencyKey` or a stable `checkId`. Adapters must deduplicate.
+- Timeouts: `emitAndWait` defaults to 10s; failure triggers a non‑blocking warning for optional sinks and a retry for critical sinks.
+- Retries: Exponential backoff with jitter for HTTP 5xx/429; up to 3 attempts. 4xx except 409/412 are not retried.
+- Rate limits: Adapters throttle using provider budgets; surface “deferred” state via `CheckStatusRequested` with `queued`.
+- Dead‑letter: A global hook `onEventDeliveryFailure(envelope, error)` logs NDJSON entries for forensics.
+
+Critical vs optional adapters:
+
+- Critical (GitHub checks/comments): fail fast after bounded retries → engine surfaces error.
+- Optional (metrics, logs): never block engine; best‑effort with warnings.
+
+### 5. Security & Redaction
+
+- Redact tokens/PII by default in envelopes and adapter payloads.
+- Provide `safeSummary`/`safeText` fields for public sinks; adapters prefer safe fields when present.
+- Sampling for large payloads and bounded annotation batching.
+
+### 6. Event Persistence & Replay
+
+- Optional `EventSink` writes `EventEnvelope` to NDJSON (one line per envelope) with rotation.
+- Replay modes:
+  - Inspect‑only (no side effects): adapters ignore side‑effecting requests.
+  - With‑effects (debug only): adapters re‑issue idempotent requests.
+- Envelopes include `causationId`/`correlationId` enabling time‑travel visualization.
+
+### 7. Frontend Contracts (GitHub example)
+
+- Upsert check via `external_id` (prefer) or `(name+head_sha)`.
+- Handle secondary rate limits and abuse detection by exponential backoff and budget throttling.
+- Batch annotations to provider limits; retry partial failures.
+- Error classification: 4xx (caller issue), 5xx/429 (transient).
+
+### 8. Testing Utilities
+
+- `captureEvents(eventBus)` returns in‑memory array of envelopes.
+- `expectEvents(events).toContainInOrder([...])` asserts ordered subsequences per `checkId`.
+- Use neutral events in tests; adapter unit tests validate mapping and idempotency.
+
+### 9. Migration Strategy (to Full Event‑Driven via Frontends)
+
+Phase 1 — Foundations (no breaking changes)
+- Add `EventBus` + `EventEnvelope`.
+- Introduce `FrontendsHost` and `Frontend` API; ship a built‑in NDJSON sink frontend.
+- Keep legacy DI GitHub path untouched.
+
+Phase 2 — Frontends‑first (opt‑in)
+- Implement GitHub frontend (checks + summary comment) using neutral events, grouping, idempotency.
+- Add Slack and Metrics frontends as examples.
+- Configuration enables frontends mode; when the GitHub frontend is active, it owns checks/comments and the legacy DI is bypassed to avoid double posting.
+
+Phase 3 — Default to frontends
+- Make frontends mode the default once stable; legacy DI remains available but off by default.
+
+Phase 4 — Remove legacy (future breaking change)
+- After a deprecation window, remove the DI GitHub path and keep frontends as the single integration layer.
 
 ## Benefits
 
@@ -476,22 +605,22 @@ it('should create GitHub check when entering CheckRunning state', async () => {
   });
 });
 
-// After: Event assertion (clear)
+// After: Event assertion (clear, neutral)
 it('should create GitHub check when entering CheckRunning state', async () => {
   const eventBus = new EventBus();
-  const events: EngineEvent[] = [];
+  const events: EventEnvelope[] = [];
 
-  eventBus.onAny(event => events.push(event));
+  eventBus.onAny(env => events.push(env));
 
   const runner = new StateMachineRunner(context, undefined, eventBus);
   await runner.run();
 
   const checkCreateEvent = events.find(
-    e => e.type === 'GitHubCheckCreateRequested'
+    e => e.payload.type === 'CheckStatusRequested' && e.payload.status === 'in_progress'
   );
 
   expect(checkCreateEvent).toBeDefined();
-  expect(checkCreateEvent.checkName).toBe('visor-review');
+  expect(checkCreateEvent?.payload.checkName).toBe('visor-review');
 });
 ```
 
@@ -541,52 +670,17 @@ it('should create GitHub check when entering CheckRunning state', async () => {
 - ✅ Direct control flow easier to reason about
 - ✅ Team unfamiliar with event-driven patterns
 
-## Recommendation: Hybrid Approach
+## Recommendation: Full Event‑Driven with Frontends
 
-Instead of full migration, consider **targeted event-driven features**:
-
-1. **Keep dependency injection for core GitHub integration**
-   - GitHub check creation/updates stay in handlers
-   - Simpler error handling
-   - Easier to debug
-
-2. **Add EventBus for observability only**
-   - Debug visualizer subscribes to events
-   - Metrics adapter tracks execution statistics
-   - Audit logger writes events to file
-
-3. **Use events for cross-cutting concerns**
-   - Progress reporting
-   - Telemetry
-   - Error tracking
-
-4. **Direct calls for critical path**
-   - GitHub operations remain synchronous
-   - Clearer control flow
-
-This gives you event benefits (observability, extensibility) without event costs (complexity, async error handling).
+Adopt the event bus and frontends as the primary, pluggable integration layer. Keep the legacy DI GitHub code path in the repository for backward compatibility, but new functionality (GitHub and beyond) should be built as frontends. Roll out by enabling the GitHub frontend alongside the bus, then make it the default once stable.
 
 ## Open Questions
 
-1. **Error Handling**: How should state machine react to adapter failures?
-   - Option A: Adapters emit error events, state machine retries
-   - Option B: Adapters handle retries internally, state machine ignores failures
-   - Option C: Critical adapters (GitHub) fail fast, optional adapters (metrics) fail silently
+Kept intentionally small after adopting defaults above:
 
-2. **Event Ordering**: Should event bus guarantee delivery order?
-   - Option A: FIFO queue per subscriber
-   - Option B: Best effort, no guarantees
-   - Option C: Priority-based delivery
-
-3. **Adapter Lifecycle**: When should adapters be created/destroyed?
-   - Option A: One adapter per state machine run (created in constructor, destroyed after run)
-   - Option B: Long-lived adapters shared across runs
-   - Option C: Lazy initialization on first event
-
-4. **Event Persistence**: Should events be persisted for replay?
-   - Option A: Yes, write to disk/database for full audit trail
-   - Option B: No, `historyLog` in memory is sufficient
-   - Option C: Configurable persistence strategy
+1. Should we persist envelopes by default in local dev (NDJSON) and disable in CI, or the reverse?
+2. Per‑run adapters vs shared process‑wide adapters: we currently recommend shared with per‑run correlation; confirm for multi‑repo runners.
+3. Priority delivery: do we need priority channels for UI feedback vs background telemetry?
 
 ## Implementation Checklist
 
@@ -621,6 +715,4 @@ This gives you event benefits (observability, extensibility) without event costs
 
 ## Conclusion
 
-Event-driven GitHub integration offers significant benefits for multi-platform support, testability, and observability. However, the current dependency injection pattern is simpler and sufficient for single-platform (GitHub) use cases.
-
-**Recommended approach**: Start with **hybrid model** (event bus for observability, direct calls for GitHub) to gain benefits without complexity costs. Migrate to full event-driven architecture only if/when multi-platform support becomes a real requirement.
+Move integrations to a fully event‑driven model using neutral events and pluggable frontends. Keep the legacy DI path for compatibility but direct new development to frontends. This gives a clean core, scales to additional platforms (Slack, metrics) without touching the engine, and unlocks robust replay and observability.
