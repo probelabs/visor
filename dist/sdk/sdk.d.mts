@@ -359,6 +359,13 @@ interface CheckConfig {
     group?: string;
     /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
     schema?: string | Record<string, unknown>;
+    /**
+     * Optional JSON Schema to validate the produced output. If omitted and
+     * `schema` is an object, the engine will treat that object as the
+     * output_schema for validation purposes while still using string schemas
+     * (e.g., 'code-review') for template selection.
+     */
+    output_schema?: Record<string, unknown>;
     /** Custom template configuration - optional */
     template?: CustomTemplateConfig;
     /** Condition to determine if check should run - runs if expression evaluates to true */
@@ -373,6 +380,17 @@ interface CheckConfig {
     failure_conditions?: FailureConditions;
     /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
     tags?: string[];
+    /**
+     * Operational criticality of this step. Drives default safety policies
+     * (contracts, retries, loop budgets) at load time. Behavior can still be
+     * overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.
+     *
+     * - 'external': interacts with external systems (side effects). Highest safety.
+     * - 'internal': modifies CI/config/state but not prod. High safety.
+     * - 'policy': organizational checks (linting, style, doc). Moderate safety.
+     * - 'info': informational checks. Lowest safety.
+     */
+    criticality?: 'external' | 'internal' | 'policy' | 'info';
     /**
      * Allow dependents to run even if this step fails.
      * Defaults to false (dependents are gated when this step fails).
@@ -397,6 +415,17 @@ interface CheckConfig {
     on_success?: OnSuccessConfig;
     /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
     on_finish?: OnFinishConfig;
+    /**
+     * Preconditions that must hold before executing the check. If any expression
+     * evaluates to false, the check is skipped (skipReason='assume').
+     */
+    assume?: string | string[];
+    /**
+     * Postconditions that should hold after executing the check. Expressions are
+     * evaluated against the produced result/output; violations are recorded as
+     * error issues with ruleId "contract/guarantee_failed".
+     */
+    guarantee?: string | string[];
     /**
      * Hard cap on how many times this check may execute within a single engine run.
      * Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.
@@ -516,6 +545,12 @@ interface OnFailConfig {
     goto_js?: string;
     /** Dynamic remediation list: JS expression returning string[] */
     run_js?: string;
+    /**
+     * Declarative transitions. Evaluated in order; first matching rule wins.
+     * If a rule's `to` is null, no goto occurs. When omitted or none match,
+     * the engine falls back to goto_js/goto for backward compatibility.
+     */
+    transitions?: TransitionRule[];
 }
 /**
  * Success routing configuration per check
@@ -531,6 +566,8 @@ interface OnSuccessConfig {
     goto_js?: string;
     /** Dynamic post-success steps: JS expression returning string[] */
     run_js?: string;
+    /** Declarative transitions (see OnFailConfig.transitions). */
+    transitions?: TransitionRule[];
 }
 /**
  * Finish routing configuration for forEach checks
@@ -547,6 +584,19 @@ interface OnFinishConfig {
     goto_js?: string;
     /** Dynamic post-finish steps: JS expression returning string[] */
     run_js?: string;
+    /** Declarative transitions (see OnFailConfig.transitions). */
+    transitions?: TransitionRule[];
+}
+/**
+ * Declarative transition rule for on_* blocks.
+ */
+interface TransitionRule {
+    /** JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule. */
+    when: string;
+    /** Target step ID, or null to explicitly prevent goto. */
+    to?: string | null;
+    /** Optional event override when performing goto. */
+    goto_event?: EventTrigger;
 }
 /**
  * Global routing defaults
@@ -569,6 +619,12 @@ interface LimitsConfig {
      * Set to 0 or negative to disable. Default: 50.
      */
     max_runs_per_check?: number;
+    /**
+     * Maximum nesting depth for workflows executed by the state machine engine.
+     * Nested workflows are invoked by the workflow provider; this limit prevents
+     * accidental infinite recursion. Default: 3.
+     */
+    max_workflow_depth?: number;
 }
 /**
  * Custom template configuration
@@ -824,51 +880,6 @@ interface VisorConfig {
 }
 
 /**
- * Execution context passed to check providers
- */
-interface ExecutionContext {
-    /** Session information for AI session reuse */
-    parentSessionId?: string;
-    reuseSession?: boolean;
-    /** CLI message value (from --message argument) */
-    cliMessage?: string;
-    /**
-     * Stage-local baseline of output history lengths per check name.
-     * When present, providers should expose an `outputs_history_stage` object in
-     * Liquid/JS contexts that slices the global history from this baseline.
-     * This enables stage-scoped assertions in the YAML test runner without
-     * relying on global execution history.
-     */
-    stageHistoryBase?: Record<string, number>;
-    /** Workflow inputs - available when executing within a workflow */
-    workflowInputs?: Record<string, unknown>;
-    /** SDK hooks for human input */
-    hooks?: {
-        onHumanInput?: (request: HumanInputRequest) => Promise<string>;
-        onPromptCaptured?: (info: {
-            step: string;
-            provider: string;
-            prompt: string;
-        }) => void;
-        mockForStep?: (step: string) => unknown | undefined;
-    };
-    /**
-     * Optional execution mode hints. The core engine does not read environment
-     * variables directly; callers (CLI, test runner) can set these flags to
-     * request certain behaviors without polluting core logic with test-specific
-     * branches.
-     */
-    mode?: {
-        /** true when running under the YAML test runner */
-        test?: boolean;
-        /** post review comments from grouped execution paths (used by tests) */
-        postGroupedComments?: boolean;
-        /** reset per-run guard state before grouped execution */
-        resetPerRunState?: boolean;
-    };
-}
-
-/**
  * Statistics for a single check execution
  */
 interface CheckExecutionStats {
@@ -876,8 +887,9 @@ interface CheckExecutionStats {
     totalRuns: number;
     successfulRuns: number;
     failedRuns: number;
+    skippedRuns: number;
     skipped: boolean;
-    skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed';
+    skipReason?: 'if_condition' | 'fail_fast' | 'dependency_failed' | 'forEach_empty' | 'assume';
     skipCondition?: string;
     totalDuration: number;
     providerDurationMs?: number;
@@ -954,6 +966,51 @@ interface DebugInfo {
         processingTime: number;
         success: boolean;
     }>;
+}
+
+/**
+ * Execution context passed to check providers
+ */
+interface ExecutionContext {
+    /** Session information for AI session reuse */
+    parentSessionId?: string;
+    reuseSession?: boolean;
+    /** CLI message value (from --message argument) */
+    cliMessage?: string;
+    /**
+     * Stage-local baseline of output history lengths per check name.
+     * When present, providers should expose an `outputs_history_stage` object in
+     * Liquid/JS contexts that slices the global history from this baseline.
+     * This enables stage-scoped assertions in the YAML test runner without
+     * relying on global execution history.
+     */
+    stageHistoryBase?: Record<string, number>;
+    /** Workflow inputs - available when executing within a workflow */
+    workflowInputs?: Record<string, unknown>;
+    /** SDK hooks for human input */
+    hooks?: {
+        onHumanInput?: (request: HumanInputRequest) => Promise<string>;
+        onPromptCaptured?: (info: {
+            step: string;
+            provider: string;
+            prompt: string;
+        }) => void;
+        mockForStep?: (step: string) => unknown | undefined;
+    };
+    /**
+     * Optional execution mode hints. The core engine does not read environment
+     * variables directly; callers (CLI, test runner) can set these flags to
+     * request certain behaviors without polluting core logic with test-specific
+     * branches.
+     */
+    mode?: {
+        /** true when running under the YAML test runner */
+        test?: boolean;
+        /** post review comments from grouped execution paths (used by tests) */
+        postGroupedComments?: boolean;
+        /** reset per-run guard state before grouped execution */
+        resetPerRunState?: boolean;
+    };
 }
 
 interface VisorOptions {
