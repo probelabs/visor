@@ -1,0 +1,52 @@
+version: "1.0"
+
+# Bring in the full default Visor workflow (which itself includes code-review.yaml)
+include:
+  - ./defaults/visor.yaml
+
+# Override exactly one of the imported code-review steps using appendPrompt
+steps:
+  security:
+    appendPrompt: |
+      Additionally, search for any hard-coded credentials (API keys, tokens,
+      passwords) or secrets in diffs and configuration files. If found, mark
+      them as critical and recommend using a secret manager or environment
+      variables instead.
+  # Add a new lightweight code-review step to demonstrate extending the suite
+  readability:
+    type: ai
+    group: review
+    on: [pr_opened, pr_updated]
+    depends_on: [overview]
+    prompt: |
+      Perform a lightweight readability review of the proposed changes.
+      Focus on:
+      - Clear, intention-revealing naming
+      - Helpful comments (avoid redundant ones)
+      - Function length and cohesion
+      - Early returns to reduce nesting
+      - Eliminate dead code and commented-out blocks
+    schema: code-review
+
+tests:
+  defaults:
+    strict: false
+    ai_provider: mock
+  cases:
+    - name: override-appendPrompt-security
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks:
+        overview:
+          text: "Overview body"
+          tags: { label: feature, review-effort: 2 }
+        security: { issues: [] }
+      expect:
+        calls:
+          - step: security
+            exactly: 1
+        prompts:
+          - step: security
+            contains:
+              - "hard-coded credentials"
+              - "secret manager"
