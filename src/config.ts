@@ -141,8 +141,9 @@ export class ConfigManager {
         parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path.dirname(resolvedPath));
       }
 
-      // Normalize 'checks' and 'steps' - support both keys for backward compatibility
-      parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+      // Normalize 'checks' and 'steps'. Prefer checks when this config used extends/include
+      // so child overrides win over bundled defaults that may live under steps.
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
 
       // Load workflows if defined
       await this.loadWorkflows(parsedConfig, path.dirname(resolvedPath));
@@ -462,12 +463,27 @@ export class ConfigManager {
    * Normalize 'checks' and 'steps' keys for backward compatibility
    * Ensures both keys are present and contain the same data
    */
-  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
-    // If both are present, merge with 'steps' taking precedence on key conflicts
+  private normalizeStepsAndChecks(
+    config: Partial<VisorConfig>,
+    preferChecks: boolean = false
+  ): Partial<VisorConfig> {
+    // If both are present, merge with CHECKS taking precedence on key conflicts.
+    // Rationale: user overrides typically land in 'checks' while bundled defaults
+    // may come in via 'steps' (e.g., included workflows). We want user overrides
+    // (e.g., appendPrompt) to win over defaults.
     if (config.steps && config.checks) {
-      const merged = { ...(config.checks as Record<string, any>), ...(config.steps as any) };
-      config.checks = merged;
-      config.steps = merged;
+      if (preferChecks) {
+        // Union with checks winning over steps (child overrides)
+        const merged = { ...(config.steps as any), ...(config.checks as Record<string, any>) };
+        config.steps = merged as any;
+        config.checks = merged as any;
+      } else {
+        // Back-compat: when both present in a single file, honor steps exclusively
+        // (ignore extra keys under checks)
+        config.checks = config.steps;
+        // Ensure steps remains authoritative
+        config.steps = config.steps;
+      }
     } else if (config.steps && !config.checks) {
       // Copy steps to checks for internal compatibility
       config.checks = config.steps;

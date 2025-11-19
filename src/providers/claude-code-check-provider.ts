@@ -480,6 +480,17 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
+    // Test hook: allow short-circuiting provider with mock output (YAML tests)
+    try {
+      const stepName = (config as any).checkName || 'claude-code';
+      const mock = (sessionInfo as any)?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        if (mock && typeof mock === 'object' && 'issues' in (mock as any)) {
+          return mock as unknown as ReviewSummary;
+        }
+        return { issues: [], output: mock as unknown } as ReviewSummary & { output: unknown };
+      }
+    } catch {}
     // Extract Claude Code configuration
     const claudeCodeConfig = (config.claude_code as ClaudeCodeConfig) || {};
 

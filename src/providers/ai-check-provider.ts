@@ -754,6 +754,15 @@ export class AICheckProvider extends CheckProvider {
       const stepName = (config as any).checkName || 'unknown';
       const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
       if (mock !== undefined) {
+        // If the mock looks like a ReviewSummary (has issues/content), use it directly
+        if (
+          mock &&
+          typeof mock === 'object' &&
+          ('issues' in (mock as any) || 'content' in (mock as any))
+        ) {
+          return mock as unknown as ReviewSummary;
+        }
+        // Otherwise treat it as provider output payload
         return { issues: [], output: mock } as ReviewSummary & { output: unknown };
       }
     } catch {}

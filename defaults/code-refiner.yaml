@@ -1,0 +1,114 @@
+version: "1.0"
+
+# Example: Code Refiner
+#
+# Re-uses the existing defaults/code-review.yaml as a nested workflow step (via
+# `config:`), then iteratively applies fixes using claude-code until no
+# critical/error issues remain. Uses declarative transitions with pure JS.
+
+steps:
+  # 1) Run code-review as a nested workflow step
+  run-review:
+    type: workflow
+    # Re-use existing config directly (resolved from workingDirectory)
+    config: defaults/code-review.yaml
+    criticality: policy
+    on: [pr_opened, pr_updated]
+    # If the review discovered blocking issues, mark this check failed so
+    # routing goes to the fix step via on_fail. Base this on the workflow's
+    # own output contract to avoid relying on implicit vars.
+    fail_if: "(output?.hasErrors === true) || ((output?.issues?.length ?? 0) > 0) || ((issues?.length ?? 0) > 0)"
+    # Guarantee that the workflow output contract is present for downstream logic
+    guarantee: "typeof output.hasErrors === 'boolean' && Array.isArray(output.issues)"
+    on_fail:
+      goto: fix-with-claude
+    on_success:
+      goto: post-verified
+
+  # 2) Attempt automated fixes with Claude Code
+  fix-with-claude:
+    type: claude-code
+    criticality: internal
+    if: "outputs['run-review']?.hasErrors === true"
+    # Minimal post-exec contract for internal steps
+    guarantee: typeof output.content === 'string' && output.content.length > 0
+    prompt: |
+      You are an expert code refiner.
+      Apply targeted, minimal changes to resolve blocking issues from the latest review.
+
+      Review results (JSON):
+      {{ outputs['run-review'] | json }}
+
+      Please prioritize fixing issues with severity "critical" or "error" first.
+
+      Rules:
+      - Keep diffs minimal; avoid broad refactors.
+      - Preserve behavior and tests unless the issue requires updating them.
+      - Prefer local fixes near the reported lines.
+      - Add/adjust tests when necessary.
+
+      When finished, summarize the changes you made.
+
+    # After fixes, re-run the review; routing loop budget protects from infinity
+    on_success:
+      goto: run-review
+
+  # 3) Final confirmation step once no blocking issues remain
+  post-verified:
+    type: log
+    group: summary
+    if: "outputs['run-review']?.hasErrors === false"
+    message: |
+      ✅ Code Refiner complete. No critical/error issues remain in the latest review.
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+    fail_on_unexpected_calls: true
+  fixtures: []
+
+  cases:
+    - name: code-refiner-clean-pass
+      description: |
+        Nested workflow (code-review) runs as a step via `config:` and produces no blocking issues.
+        The refiner should skip the fix step and proceed directly to post-verified.
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks:
+        # Black-box mock for the workflow step output
+        run-review:
+          hasErrors: false
+          issues: []
+      expect:
+        calls:
+          - step: run-review
+            exactly: 1
+          - step: post-verified
+            exactly: 1
+        no_calls:
+          - step: fix-with-claude
+
+    - name: code-refiner-fix-loop
+      description: |
+        First review finds blocking issues → fix-with-claude runs → second review is clean → post-verified.
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks:
+        # First run: hasErrors -> triggers fix; Second run: clean -> post-verified
+        run-review[]:
+          - hasErrors: true
+            issues:
+              - { severity: error, ruleId: "security/test", message: "Mock issue", file: "a.ts", line: 1 }
+          - hasErrors: false
+            issues: []
+        # Mock Claude Code to satisfy guarantee
+        fix-with-claude: { content: "Applied targeted fixes" }
+      expect:
+        calls:
+          - step: run-review
+            exactly: 2
+          - step: fix-with-claude
+            exactly: 1
+          - step: post-verified
+            exactly: 1

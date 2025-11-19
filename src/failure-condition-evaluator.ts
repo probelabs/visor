@@ -490,6 +490,9 @@ export class FailureConditionEvaluator {
         hasChanges: context.hasChanges || false,
       };
 
+      // Do not mutate output shape here. Output contracts are defined by providers and
+      // workflow outputs. Tests and expressions should rely on those schemas directly.
+
       // Legacy variables for backward compatibility
       const criticalIssues = metadata.criticalIssues;
       const errorIssues = metadata.errorIssues;

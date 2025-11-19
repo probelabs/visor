@@ -17,7 +17,7 @@ import { logger } from '../logger';
 export function projectWorkflowToGraph(
   workflow: WorkflowDefinition,
   workflowInputs: Record<string, unknown>,
-  parentCheckId: string
+  _parentCheckId: string
 ): {
   config: VisorConfig;
   checks: Record<string, CheckMetadata>;
@@ -31,8 +31,9 @@ export function projectWorkflowToGraph(
   const checksMetadata: Record<string, CheckMetadata> = {};
 
   for (const [stepId, step] of Object.entries(workflow.steps)) {
-    // Create a scoped check ID for this workflow step
-    const scopedCheckId = `${parentCheckId}:${stepId}`;
+    // Inside a nested workflow engine instance, step IDs do not need parent scoping.
+    // Keep them unscoped to provide a clean, black‑box view.
+    const scopedCheckId = stepId;
 
     // Build check configuration from workflow step
     checks[scopedCheckId] = {
@@ -52,7 +53,7 @@ export function projectWorkflowToGraph(
       triggers: step.on || workflow.on || [],
       group: step.group,
       providerType: step.type || 'ai',
-      dependencies: (step.depends_on || []).map(dep => `${parentCheckId}:${dep}`),
+      dependencies: (step.depends_on || []).map(dep => dep),
     };
   }
 

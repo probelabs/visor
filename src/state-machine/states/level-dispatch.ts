@@ -97,20 +97,42 @@ async function evaluateIfCondition(
   try {
     const evaluator = new FailureConditionEvaluator();
 
-    // Build previous results from CURRENT WAVE ONLY
-    // This ensures that when routing creates a new wave via goto/on_fail,
-    // the 'outputs' context is reset and checks can re-execute
+    // Build previous results for condition evaluation
+    // Default: include only results from the CURRENT wave. This prevents
+    // stale data from causing routing loops in normal execution.
     const previousResults = new Map<string, ReviewSummary>();
 
-    // Check if we're tracking wave-specific completions
     const currentWaveCompletions = (state as any).currentWaveCompletions as Set<string> | undefined;
+    const useGlobalOutputs = !!((state as any).flags && (state as any).flags.forwardRunActive);
 
-    if (currentWaveCompletions) {
-      // Only include outputs from checks completed in the current wave
+    if (useGlobalOutputs) {
+      // Forward-run wave: allow guards to consult latest outputs from the entire
+      // journal so follow-up steps (e.g., post-verified after run-review) can
+      // see the outputs produced in the prior wave that scheduled this forward-run.
+      try {
+        const snapshotId = context.journal.beginSnapshot();
+        const ContextView = require('../../snapshot-store').ContextView;
+        const contextView = new ContextView(
+          context.journal,
+          context.sessionId,
+          snapshotId,
+          [],
+          context.event
+        );
+        for (const key of Object.keys(context.checks || {})) {
+          const jr = contextView.get(key);
+          if (jr) previousResults.set(key, jr as ReviewSummary);
+        }
+      } catch {
+        // Fallback to current-wave only if any error occurs
+      }
+    } else if (currentWaveCompletions) {
+      // Current-wave-only results
       for (const key of currentWaveCompletions) {
         try {
           const snapshotId = context.journal.beginSnapshot();
-          const contextView = new (require('../../snapshot-store').ContextView)(
+          const ContextView = require('../../snapshot-store').ContextView;
+          const contextView = new ContextView(
             context.journal,
             context.sessionId,
             snapshotId,

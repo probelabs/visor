@@ -36,19 +36,26 @@ export class WorkflowCheckProvider extends CheckProvider {
   }
 
   async validateConfig(config: unknown): Promise<boolean> {
-    const cfg = config as CheckProviderConfig;
+    const cfg = config as CheckProviderConfig & { workflow?: string; config?: string };
 
-    if (!cfg.workflow) {
-      logger.error('Workflow provider requires "workflow" field');
+    // Two supported modes:
+    // 1) workflow: <id> (pre-registered in WorkflowRegistry via imports)
+    // 2) config: <path|url> (load a Visor config file and execute its steps as a workflow)
+    if (!cfg.workflow && !cfg.config) {
+      logger.error('Workflow provider requires either "workflow" (id) or "config" (path)');
       return false;
     }
 
-    // Check if workflow exists in registry
-    if (!this.registry.has(cfg.workflow as string)) {
-      logger.error(`Workflow '${cfg.workflow}' not found in registry`);
-      return false;
+    // If using workflow id, verify presence in registry now
+    if (cfg.workflow) {
+      if (!this.registry.has(cfg.workflow as string)) {
+        logger.error(`Workflow '${cfg.workflow}' not found in registry`);
+        return false;
+      }
     }
 
+    // For config path mode we cannot fully validate existence here (no base path);
+    // execution will resolve it relative to the parent working directory and fail fast if missing.
     return true;
   }
 
@@ -58,15 +65,49 @@ export class WorkflowCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     context?: ExecutionContext
   ): Promise<ReviewSummary> {
-    const workflowId = config.workflow as string;
+    const cfg = config as CheckProviderConfig & { workflow?: string; config?: string };
+    const isConfigPathMode = !!cfg.config && !cfg.workflow;
 
-    // Get the workflow definition
-    const workflow = this.registry.get(workflowId);
-    if (!workflow) {
-      throw new Error(`Workflow '${workflowId}' not found in registry`);
+    // Test harness support: allow mocking workflow checks as a black box.
+    // If a mock is provided for this step, short-circuit nested execution and
+    // return a ReviewSummary with optional output field.
+    try {
+      const stepName = (config as any).checkName || cfg.workflow || cfg.config || 'workflow';
+      // test-runner passes hooks on execution context
+      const mock = (context as any)?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        const ms = mock as any;
+        const issuesArr = Array.isArray(ms?.issues) ? (ms.issues as any[]) : [];
+        // Prefer explicit output if provided; otherwise treat the mock object itself as output
+        const out = ms && typeof ms === 'object' && 'output' in ms ? ms.output : ms;
+        const summary: ReviewSummary & { output?: unknown } = {
+          issues: issuesArr,
+          output: out,
+          ...(typeof ms?.content === 'string' ? { content: String(ms.content) } : {}),
+        } as any;
+        return summary;
+      }
+    } catch {}
+
+    // Resolve workflow definition
+    let workflow: WorkflowDefinition | undefined;
+    let workflowId = cfg.workflow as string | undefined;
+
+    if (isConfigPathMode) {
+      const parentCwd = ((context as any)?._parentContext?.workingDirectory ||
+        (context as any)?.workingDirectory ||
+        process.cwd()) as string;
+      workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
+      workflowId = workflow.id;
+      logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
+    } else {
+      workflowId = String(cfg.workflow);
+      workflow = this.registry.get(workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow '${workflowId}' not found in registry`);
+      }
+      logger.info(`Executing workflow '${workflowId}'`);
     }
-
-    logger.info(`Executing workflow '${workflowId}'`);
 
     // Prepare inputs
     const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
@@ -130,7 +171,16 @@ export class WorkflowCheckProvider extends CheckProvider {
   }
 
   getSupportedConfigKeys(): string[] {
-    return ['workflow', 'args', 'overrides', 'output_mapping', 'timeout', 'env', 'checkName'];
+    return [
+      'workflow',
+      'config',
+      'args',
+      'overrides',
+      'output_mapping',
+      'timeout',
+      'env',
+      'checkName',
+    ];
   }
 
   async isAvailable(): Promise<boolean> {
@@ -331,6 +381,11 @@ export class WorkflowCheckProvider extends CheckProvider {
       debug: parentContext?.debug || false,
       maxParallelism: parentContext?.maxParallelism,
       failFast: parentContext?.failFast,
+      // Propagate execution hooks (mocks, octokit, etc.) into the child so
+      // nested steps can be mocked/observed by the YAML test runner.
+      executionContext: (parentContext as any)?.executionContext,
+      // Ensure all workflow steps are considered requested to avoid tag/event filtering surprises
+      requestedChecks: Object.keys(checksMetadata),
     };
 
     // Create child runner with inherited context
@@ -418,7 +473,7 @@ export class WorkflowCheckProvider extends CheckProvider {
   private async computeWorkflowOutputsFromState(
     workflow: WorkflowDefinition,
     inputs: Record<string, unknown>,
-    stepResults: Record<string, ReviewSummary>,
+    groupedResults: Record<string, Array<{ checkName: string; output?: unknown; issues?: any[] }>>,
     prInfo: PRInfo
   ): Promise<Record<string, unknown>> {
     const outputs: Record<string, unknown> = {};
@@ -429,6 +484,22 @@ export class WorkflowCheckProvider extends CheckProvider {
 
     const sandbox = createSecureSandbox();
 
+    // Flatten GroupedCheckResults (group -> CheckResult[]) to a simple map
+    // of checkName -> { output, issues } so workflow-level value_js can
+    // reference outputs["security"].issues, etc.
+    const flat: Record<string, { output?: unknown; issues?: any[] }> = {};
+    try {
+      for (const arr of Object.values(groupedResults || {})) {
+        for (const item of arr || []) {
+          if (!item) continue;
+          const name = (item as any).checkName || (item as any).name;
+          if (typeof name === 'string' && name) {
+            flat[name] = { output: (item as any).output, issues: (item as any).issues };
+          }
+        }
+      }
+    } catch {}
+
     for (const output of workflow.outputs) {
       if (output.value_js) {
         // JavaScript expression
@@ -438,12 +509,9 @@ export class WorkflowCheckProvider extends CheckProvider {
           {
             inputs,
             steps: Object.fromEntries(
-              Object.entries(stepResults).map(([id, result]) => [
-                id.split(':').pop() || id,
-                (result as any).output,
-              ])
+              Object.entries(flat).map(([id, result]) => [id, (result as any).output])
             ),
-            outputs: stepResults,
+            outputs: flat,
             pr: prInfo,
           },
           { injectLog: true, logPrefix: `workflow.output.${output.name}` }
@@ -453,12 +521,9 @@ export class WorkflowCheckProvider extends CheckProvider {
         outputs[output.name] = await this.liquid.parseAndRender(output.value, {
           inputs,
           steps: Object.fromEntries(
-            Object.entries(stepResults).map(([id, result]) => [
-              id.split(':').pop() || id,
-              (result as any).output,
-            ])
+            Object.entries(flat).map(([id, result]) => [id, (result as any).output])
           ),
-          outputs: stepResults,
+          outputs: flat,
           pr: prInfo,
         });
       }
@@ -543,5 +608,49 @@ export class WorkflowCheckProvider extends CheckProvider {
     }
 
     return lines.join('\n');
+  }
+
+  /**
+   * Load a Visor config file (with steps/checks) and wrap it as a WorkflowDefinition
+   * so it can be executed by the state machine as a nested workflow.
+   */
+  private async loadWorkflowFromConfigPath(
+    sourcePath: string,
+    baseDir: string
+  ): Promise<WorkflowDefinition> {
+    const path = require('node:path');
+    const fs = require('node:fs');
+    const resolved = path.isAbsolute(sourcePath) ? sourcePath : path.resolve(baseDir, sourcePath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Workflow config not found at: ${resolved}`);
+    }
+
+    const { ConfigManager } = require('../config');
+    const mgr = new ConfigManager();
+    // Load as-is without merging bundled defaults; keep child config pure
+    const loaded = await mgr.loadConfig(resolved, { validate: false, mergeDefaults: false });
+
+    const steps: Record<string, any> = (loaded as any).steps || (loaded as any).checks || {};
+    if (!steps || Object.keys(steps).length === 0) {
+      throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
+    }
+
+    const id = path.basename(resolved).replace(/\.(ya?ml)$/i, '');
+    const name = (loaded as any).name || `Workflow from ${path.basename(resolved)}`;
+
+    const workflowDef: WorkflowDefinition = {
+      id,
+      name,
+      version: (loaded as any).version || '1.0',
+      steps,
+      description: (loaded as any).description,
+      // Inherit optional triggers if present (not required)
+      on: (loaded as any).on,
+      // Carry over optional inputs/outputs if present so callers can consume them
+      inputs: (loaded as any).inputs,
+      outputs: (loaded as any).outputs,
+    } as WorkflowDefinition;
+
+    return workflowDef;
   }
 }

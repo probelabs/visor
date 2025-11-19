@@ -73,9 +73,11 @@ export class ContextView {
       .filter(e => e.checkId === checkId);
     if (visible.length === 0) return undefined;
 
-    // exact scope match
-    const exact = visible.find(e => this.sameScope(e.scope, this.scope));
-    if (exact) return exact.result;
+    // exact scope match: prefer the most recent commit for this scope
+    const exactMatches = visible.filter(e => this.sameScope(e.scope, this.scope));
+    if (exactMatches.length > 0) {
+      return exactMatches[exactMatches.length - 1].result;
+    }
 
     // nearest ancestor (shortest distance)
     let best: { entry: JournalEntry; dist: number } | undefined;

@@ -23,6 +23,13 @@ export async function handleWavePlanning(
     logger.info(`[WavePlanning] Planning wave ${state.wave}...`);
   }
 
+  // Reset forward-run active flag at the beginning of each planning cycle.
+  // It will be set to true only when we schedule a wave spawned by a forward-run request.
+  try {
+    (state as any).flags = (state as any).flags || {};
+    (state as any).flags.forwardRunActive = false;
+  } catch {}
+
   // Check if we have a dependency graph
   if (!context.dependencyGraph) {
     throw new Error('Dependency graph not available');
@@ -227,6 +234,12 @@ export async function handleWavePlanning(
 
       // Clear forward run flag since we're processing them
       state.flags.forwardRunRequested = false;
+
+      // Mark this wave as a forward-run wave so guards (if/assume) may consult
+      // prior outputs from the journal when evaluating conditions.
+      try {
+        (state as any).flags.forwardRunActive = true;
+      } catch {}
 
       // Transition to LevelDispatch
       transition('LevelDispatch');

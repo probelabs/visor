@@ -1,6 +1,28 @@
 version: "1.0"
 
 # Extracted code review steps for reuse and composition
+outputs:
+  - name: issues
+    description: Aggregated issues from review steps
+    value_js: |
+      const values = Object.values(outputs || {});
+      const all = [];
+      for (const v of values) {
+        const arr = (v && Array.isArray(v.issues)) ? v.issues : [];
+        if (arr.length) all.push(...arr);
+      }
+      return all;
+
+  - name: hasErrors
+    description: True if any critical or error issues exist
+    value_js: |
+      for (const v of Object.values(outputs || {})) {
+        const arr = (v && Array.isArray(v.issues)) ? v.issues : [];
+        if (arr.some(i => i && (i.severity === 'critical' || i.severity === 'error'))) return true;
+      }
+      return false;
+
+
 steps:
   # PR overview with intelligent analysis - runs first to establish context
   overview:
@@ -251,4 +273,3 @@ steps:
         - **warning**: Quality concerns that should be addressed (missing tests, code duplication, poor naming, unclear test expectations)
         - **info**: Best practices and improvement suggestions (refactoring opportunities, documentation improvements, test clarity)
     schema: code-review
-

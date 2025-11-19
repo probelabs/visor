@@ -375,8 +375,9 @@ export async function main(): Promise<void> {
       await handleTestCommand(filteredArgv);
       return;
     }
-    // Check for core-review subcommand: run the built-in code-review suite
-    if (filteredArgv.length > 2 && filteredArgv[2] === 'core-review') {
+    // Check for code-review subcommands: run the built-in code-review suite
+    // Aliases: code-review | review
+    if (filteredArgv.length > 2 && ['code-review', 'review'].includes(filteredArgv[2])) {
       const base = filteredArgv.slice(0, 2);
       const rest = filteredArgv.slice(3); // preserve flags like --output, --debug, etc.
       // Prefer packaged default under dist/; fall back to local defaults/ for dev
