@@ -63,10 +63,12 @@ function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unkn
       if (!outputHistory.has(checkId)) {
         outputHistory.set(checkId, []);
       }
-      // Push the output if it exists
-      if (entry.result.output !== undefined) {
-        outputHistory.get(checkId)!.push(entry.result.output);
-      }
+      // Prefer explicit output; otherwise use the full result (for schemas like
+      // code-review where issues are returned directly). This ensures
+      // outputs_history['security'].last.issues[...] works in prompts and tests.
+      const payload =
+        entry.result.output !== undefined ? entry.result.output : (entry.result as unknown);
+      if (payload !== undefined) outputHistory.get(checkId)!.push(payload);
     }
   } catch (error) {
     // Silently fail - return empty map
@@ -103,7 +105,28 @@ async function evaluateIfCondition(
     const previousResults = new Map<string, ReviewSummary>();
 
     const currentWaveCompletions = (state as any).currentWaveCompletions as Set<string> | undefined;
-    const useGlobalOutputs = !!((state as any).flags && (state as any).flags.forwardRunActive);
+    const useGlobalOutputsFlag = !!((state as any).flags && (state as any).flags.forwardRunActive);
+    const waveKind = ((state as any).flags && (state as any).flags.waveKind) || undefined;
+    // Heuristic: only allow global outputs for guards on checks that actually
+    // have dependencies. Checks without deps (e.g., top-level prompts like
+    // 'ask') should continue to see an empty outputs set so they can re-run
+    // during forward-run waves triggered by goto/on_fail.
+    const hasDeps = (() => {
+      try {
+        const deps = (checkConfig as any)?.depends_on;
+        if (!deps) return false;
+        if (Array.isArray(deps)) return deps.length > 0;
+        return typeof deps === 'string' ? deps.trim().length > 0 : false;
+      } catch {
+        return false;
+      }
+    })();
+    // In forward-run waves (from on_success/on_fail goto), guards should see the
+    // latest global outputs even if the check has no explicit dependencies.
+    // In wave-retry (from on_finish), restrict to checks with dependencies to
+    // avoid wrongly skipping top-level prompts like 'ask'.
+    const useGlobalOutputs =
+      (useGlobalOutputsFlag && waveKind === 'forward') || (useGlobalOutputsFlag && hasDeps);
 
     if (useGlobalOutputs) {
       // Forward-run wave: allow guards to consult latest outputs from the entire
@@ -1290,7 +1313,7 @@ async function executeCheckWithForEachItems(
         const { evaluateGoto } = await import('./routing');
 
         // Debug logging for forEach on_finish.goto_js evaluation
-        if (context.debug || true) {
+        if (context.debug) {
           logger.info(
             `[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`
           );
@@ -1299,15 +1322,6 @@ async function executeCheckWithForEachItems(
           }
           try {
             const snapshotId = context.journal.beginSnapshot();
-            const view = new (require('../../snapshot-store').ContextView)(
-              context.journal,
-              context.sessionId,
-              snapshotId,
-              [],
-              undefined
-            );
-            const vfHist = view.getHistory('validate-fact') || [];
-            logger.info(`[LevelDispatch] history['validate-fact'] length: ${vfHist.length}`);
             const all = context.journal.readVisible(context.sessionId, snapshotId, undefined);
             const keys = Array.from(new Set(all.map((e: any) => e.checkId)));
             logger.info(`[LevelDispatch] history keys: ${keys.join(', ')}`);
@@ -1324,7 +1338,7 @@ async function executeCheckWithForEachItems(
           state
         );
 
-        if (context.debug || true) {
+        if (context.debug) {
           logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || 'null'}`);
         }
 

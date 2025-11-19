@@ -4,7 +4,6 @@ import { ReviewSummary } from '../reviewer';
 import { AIReviewService, AIReviewConfig } from '../ai-review-service';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { IssueFilter } from '../issue-filter';
-import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
 import path from 'path';
@@ -20,7 +19,7 @@ import {
  */
 export class AICheckProvider extends CheckProvider {
   private aiReviewService: AIReviewService;
-  private liquidEngine: Liquid;
+  private liquidEngine: ReturnType<typeof createExtendedLiquid>;
 
   constructor() {
     super();
@@ -453,17 +452,9 @@ export class AICheckProvider extends CheckProvider {
 
     try {
       if (process.env.VISOR_DEBUG === 'true') {
-        console.error(
-          `[prompt-ctx] outputs.keys=${Object.keys((templateContext as any).outputs || {}).join(', ')} hist.validate-fact.len=${(() => {
-            try {
-              const h = (templateContext as any).outputs_history || {};
-              const v = h['validate-fact'];
-              return Array.isArray(v) ? v.length : 0;
-            } catch {
-              return 0;
-            }
-          })()}`
-        );
+        const outKeys = Object.keys((templateContext as any).outputs || {}).join(', ');
+        const histKeys = Object.keys((templateContext as any).outputs_history || {}).join(', ');
+        console.error(`[prompt-ctx] outputs.keys=${outKeys} hist.keys=${histKeys}`);
       }
     } catch {}
 

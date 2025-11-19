@@ -1,7 +1,6 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
-import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
@@ -15,7 +14,7 @@ import { createSyncMemoryOps } from '../utils/script-memory-ops';
  * a first-class step: `type: 'script'` + `content: | ...`.
  */
 export class ScriptCheckProvider extends CheckProvider {
-  private liquid: Liquid;
+  private liquid: ReturnType<typeof createExtendedLiquid>;
 
   constructor() {
     super();
@@ -70,14 +69,8 @@ export class ScriptCheckProvider extends CheckProvider {
       (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined,
       { attachMemoryReadHelpers: false }
     );
-    try {
-      if (process.env.VISOR_DEBUG === 'true') {
-        const hist: any = (ctx as any).outputs_history || {};
-        const len = Array.isArray(hist['refine']) ? hist['refine'].length : 0;
-
-        console.error(`[script] history.refine.len=${len}`);
-      }
-    } catch {}
+    // Keep provider quiet by default; no step-specific debug
+    // (historical ad-hoc logs removed to avoid hardcoding step names).
 
     // Attach synchronous memory ops consistent with memory provider
     const { ops, needsSave } = createSyncMemoryOps(memoryStore);
@@ -132,8 +125,11 @@ export class ScriptCheckProvider extends CheckProvider {
       if (process.env.VISOR_DEBUG === 'true') {
         const name = String((config as any).checkName || '');
         const t = typeof result;
+        // Generic, step-agnostic debug
         console.error(
-          `[script-return] ${name} outputType=${t} hasArray=${Array.isArray(result)} hasObj=${result && typeof result === 'object'}`
+          `[script-return] ${name} outputType=${t} hasArray=${Array.isArray(result)} hasObj=${
+            result && typeof result === 'object'
+          }`
         );
       }
     } catch {}

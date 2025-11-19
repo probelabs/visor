@@ -377,10 +377,35 @@ export class StateMachineExecutionEngine {
       if (!outputHistory[checkId]) {
         outputHistory[checkId] = [];
       }
-      // Push the output if it exists
-      if (entry.result.output !== undefined) {
-        outputHistory[checkId].push(entry.result.output);
-      }
+      // Skip journal stubs for skipped checks
+      try {
+        if (entry && typeof entry.result === 'object' && (entry.result as any).__skipped) {
+          continue;
+        }
+      } catch {}
+
+      // Prefer explicit .output; fall back to the full result (issues/content)
+      // so tests and templates can reference paths like issues[0].severity for
+      // code-review schema steps which do not set a separate output object.
+      const payload =
+        entry.result.output !== undefined ? entry.result.output : (entry.result as unknown);
+
+      // Filter out forEach aggregation metadata objects (which contain a
+      // forEachItems array) to avoid double-counting per-item executions in
+      // tests. The actual per-item outputs are committed as separate entries
+      // and should be used for history-based assertions and routing.
+      try {
+        if (
+          payload &&
+          typeof payload === 'object' &&
+          (payload as any).forEachItems &&
+          Array.isArray((payload as any).forEachItems)
+        ) {
+          continue;
+        }
+      } catch {}
+
+      if (payload !== undefined) outputHistory[checkId].push(payload);
     }
 
     logger.debug(

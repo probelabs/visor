@@ -184,6 +184,63 @@ export class ConfigManager {
   }
 
   /**
+   * Load configuration from an in-memory object (used by the test runner to
+   * handle co-located config + tests without writing temp files).
+   */
+  public async loadConfigFromObject(
+    obj: Partial<VisorConfig>,
+    options: ConfigLoadOptions & { baseDir?: string } = {}
+  ): Promise<VisorConfig> {
+    const { validate = true, mergeDefaults = true, allowedRemotePatterns, baseDir } = options;
+    try {
+      let parsedConfig: Partial<VisorConfig> = JSON.parse(JSON.stringify(obj || {}));
+      if (!parsedConfig || typeof parsedConfig !== 'object') {
+        throw new Error('Configuration must be a YAML/JSON object');
+      }
+
+      const extendsValue = (parsedConfig as any).extends || (parsedConfig as any).include;
+      if (extendsValue) {
+        const loaderOptions: ConfigLoaderOptions = {
+          baseDir: baseDir || process.cwd(),
+          allowRemote: this.isRemoteExtendsAllowed(),
+          maxDepth: 10,
+          allowedRemotePatterns,
+        };
+        const loader = new ConfigLoader(loaderOptions);
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+        // Remove extends/include
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig as any;
+        let mergedConfig: Partial<VisorConfig> = {};
+        for (const source of extends_) {
+          console.log(`📦 Extending from: ${source}`);
+          const parentConfig = await loader.fetchConfig(String(source));
+          mergedConfig = new ConfigMerger().merge(mergedConfig, parentConfig);
+        }
+        parsedConfig = new ConfigMerger().merge(mergedConfig, configWithoutExtends);
+        parsedConfig = new ConfigMerger().removeDisabledChecks(parsedConfig);
+      }
+
+      // Convert workflow definition to runnable config if needed
+      if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
+      }
+
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+      await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
+
+      if (validate) this.validateConfig(parsedConfig);
+
+      let finalConfig = parsedConfig as VisorConfig;
+      if (mergeDefaults) finalConfig = this.mergeWithDefaults(parsedConfig) as VisorConfig;
+      return finalConfig;
+    } catch (error) {
+      if (error instanceof Error) throw new Error(`Failed to load configuration: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Find and load configuration from default locations
    */
   public async findAndLoadConfig(options: ConfigLoadOptions = {}): Promise<VisorConfig> {

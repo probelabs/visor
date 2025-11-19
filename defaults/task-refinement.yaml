@@ -8,7 +8,7 @@ steps:
   ask:
     type: human-input
     group: task-refinement
-    if: "!(outputs && outputs['ask'])"
+    # Allow multiple turns in the refinement loop; do not guard with an `if`
     # No explicit event trigger; run in CLI by default but guard via if
     prompt: |
       {% assign last_refine = outputs_history.refine | last %}
@@ -27,8 +27,7 @@ steps:
     group: task-refinement
     # Run only after 'ask' — dependency drives ordering
     depends_on: [ask]
-    # Execute once per run; forward-run loops do not need to re-run refine
-    if: "!(outputs && outputs['refine'])"
+    # Allow re-execution in loop turns (no if guard)
     ai:
       skip_code_context: true
       disableTools: true

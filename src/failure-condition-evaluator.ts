@@ -205,11 +205,18 @@ export class FailureConditionEvaluator {
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           const envMap = context.env || {};
-
+          let memStr = '';
+          try {
+            // best-effort peek for common flag
+            const m = (context as any).memory;
+            const v =
+              m && typeof m.get === 'function' ? m.get('all_valid', 'fact-validation') : undefined;
+            memStr = ` mem.fact-validation.all_valid=${String(v)}`;
+          } catch {}
           console.error(
             `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
               (envMap as any).ENABLE_FACT_VALIDATION
-            )} event=${context.event?.event_name} result=${String(res)}`
+            )} event=${context.event?.event_name} result=${String(res)}${memStr}`
           );
         }
       } catch {}

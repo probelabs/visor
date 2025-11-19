@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import * as yaml from 'js-yaml';
-
 import { ConfigManager } from '../config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
@@ -17,14 +16,12 @@ import { EnvironmentManager } from './core/environment';
 import { MockManager } from './core/mocks';
 import { buildPrInfoFromFixture } from './core/fixture';
 import { validateTestsDoc } from './validator';
-
 export type TestCase = {
   name: string;
   description?: string;
   event?: string;
   flow?: Array<{ name: string }>;
 };
-
 export type TestSuite = {
   version: string;
   extends?: string | string[];
@@ -34,19 +31,225 @@ export type TestSuite = {
     cases: TestCase[];
   };
 };
-
 export interface DiscoverOptions {
-  testsPath?: string; // Path to .visor.tests.yaml
+  testsPath?: string; // File, directory, or glob pattern
   cwd?: string;
 }
-
+/**
+ * Very small glob-to-RegExp converter supporting **, *, and ?
+ * - ** matches across path separators
+ * - *  matches any chars except '/'
+ * - ?  matches a single char except '/'
+ */
+function globToRegExp(glob: string): RegExp {
+  // Escape regex special chars, then replace globs
+  const re = glob
+    .replace(/[.+^${}()|\[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '::GLOBSTAR::')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/::GLOBSTAR::/g, '.*');
+  return new RegExp('^' + re + '$');
+}
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function isFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function listFilesRecursive(root: string, predicate: (p: string) => boolean): string[] {
+  const out: string[] = [];
+  const stack: string[] = [root];
+  const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'output', 'tmp', '.schema-tmp']);
+  while (stack.length) {
+    const cur = stack.pop() as string;
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(cur).map(n => path.join(cur, n));
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      try {
+        const st = fs.statSync(e);
+        if (st.isDirectory()) {
+          const base = path.basename(e);
+          if (!ignoreDirs.has(base)) stack.push(e);
+        } else if (st.isFile()) {
+          if (predicate(e)) out.push(e);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return out;
+}
+/**
+ * Discover all YAML test suites under a directory or by glob pattern.
+ * Rules:
+ *  - Include files ending with .tests.yaml/.tests.yml
+ *  - Include YAML files containing a top-level `tests:` key (embedded suites)
+ */
+export function discoverSuites(rootOrPattern?: string, cwd: string = process.cwd()): string[] {
+  const root = rootOrPattern
+    ? path.isAbsolute(rootOrPattern)
+      ? rootOrPattern
+      : path.resolve(cwd, rootOrPattern)
+    : cwd;
+  const candidates: string[] = [];
+  const matcher = (() => {
+    // If input looks like a glob (contains * or ?), compile into regex and scan from cwd
+    if (rootOrPattern && /[?*]/.test(rootOrPattern)) {
+      const rx = globToRegExp(
+        path.isAbsolute(rootOrPattern) ? rootOrPattern : path.resolve(cwd, rootOrPattern)
+      );
+      return (p: string) => rx.test(p);
+    }
+    return null;
+  })();
+  if (matcher) {
+    // Walk from repo root/cwd and test regex against absolute paths
+    const files = listFilesRecursive(cwd, p => /\.ya?ml$/i.test(p) && matcher(p));
+    candidates.push(...files);
+  } else if (isDir(root)) {
+    // Directory discovery
+    const files = listFilesRecursive(root, p => /\.ya?ml$/i.test(p));
+    candidates.push(...files);
+  } else if (isFile(root)) {
+    candidates.push(root);
+  }
+  // Filter to suites: *.tests.yaml|yml or YAML with top-level `tests.cases` array
+  const suites: string[] = [];
+  for (const f of candidates) {
+    if (/\.tests\.ya?ml$/i.test(f)) {
+      suites.push(f);
+      continue;
+    }
+    // Probe for embedded tests key (cheap read + yaml parse)
+    try {
+      const raw = fs.readFileSync(f, 'utf8');
+      // quick reject for large files
+      if (!/\btests\s*:/i.test(raw)) continue;
+      const doc = yaml.load(raw) as any;
+      const isSuite =
+        doc &&
+        typeof doc === 'object' &&
+        doc.tests &&
+        typeof doc.tests === 'object' &&
+        Array.isArray((doc.tests as any).cases);
+      if (isSuite) suites.push(f);
+    } catch {
+      // ignore unreadable
+    }
+  }
+  // Stable order for reproducibility
+  return Array.from(new Set(suites)).sort((a, b) => a.localeCompare(b));
+}
+export async function runSuites(
+  files: string[],
+  options: {
+    only?: string;
+    bail?: boolean;
+    maxParallelSuites?: number;
+    maxParallel?: number;
+    promptMaxChars?: number;
+  }
+): Promise<{
+  totalSuites: number;
+  failedSuites: number;
+  totalCases: number;
+  failedCases: number;
+  perSuite: Array<{
+    file: string;
+    failures: number;
+    results: Array<{
+      name: string;
+      passed: boolean;
+      errors?: string[];
+      stages?: Array<{ name: string; errors?: string[] }>;
+    }>;
+  }>;
+}> {
+  const runner = new VisorTestRunner();
+  const perSuite: Array<{
+    file: string;
+    failures: number;
+    results: Array<{
+      name: string;
+      passed: boolean;
+      errors?: string[];
+      stages?: Array<{ name: string; errors?: string[] }>;
+    }>;
+  }> = [];
+  let failedSuites = 0;
+  let totalCases = 0;
+  let failedCases = 0;
+  let idx = 0;
+  const filesSorted = [...files];
+  const workers = Math.max(1, options.maxParallelSuites || 1);
+  let stop = false;
+  const runWorker = async () => {
+    while (!stop) {
+      const i = idx++;
+      if (i >= filesSorted.length) return;
+      const fp = filesSorted[i];
+      let suite: TestSuite | null = null;
+      try {
+        suite = runner.loadSuite(fp);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // Record a synthetic failure for this suite and continue to others
+        perSuite.push({
+          file: fp,
+          failures: 1,
+          results: [{ name: '(load)', passed: false, errors: [msg] }],
+        });
+        failedSuites += 1;
+        failedCases += 1;
+        totalCases += 1;
+        if (options.bail) stop = true;
+        continue;
+      }
+      // expose relative path for suite header printing
+      (runner as any).__suiteRel = path.relative(process.cwd(), fp) || fp;
+      const r = await runner.runCases(fp, suite as TestSuite, {
+        only: options.only,
+        bail: options.bail,
+        maxParallel: options.maxParallel,
+        promptMaxChars: options.promptMaxChars,
+      });
+      perSuite.push({ file: fp, failures: r.failures, results: r.results });
+      failedSuites += r.failures > 0 ? 1 : 0;
+      totalCases += r.results.length;
+      failedCases += r.results.filter(x => !x.passed).length;
+      if (options.bail && r.failures > 0) {
+        stop = true; // stop scheduling new suites
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, runWorker));
+  return {
+    totalSuites: filesSorted.length,
+    failedSuites,
+    totalCases,
+    failedCases,
+    perSuite,
+  };
+}
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
-
 export class VisorTestRunner {
   constructor(private readonly cwd: string = process.cwd()) {}
-
   // Minimal TTY color helpers (no external deps)
   private readonly isTTY = typeof process !== 'undefined' && !!process.stderr.isTTY;
   private color(txt: string, code: string): string {
@@ -68,13 +271,11 @@ export class VisorTestRunner {
   private tagSkip(): string {
     return this.color(this.color(' SKIP ', '30'), '43'); // black on yellow
   }
-
   private line(title = '', char = '─', width = 60): string {
     if (!title) return char.repeat(width);
     const pad = Math.max(1, width - title.length - 2);
     return `${char.repeat(2)} ${title} ${char.repeat(pad)}`;
   }
-
   // Extracted helper: prepare engine/recorder, prompts/mocks, env, and checksToRun for a single-event case
   private setupTestCase(
     _case: any,
@@ -111,7 +312,6 @@ export class VisorTestRunner {
       fixtureInput?.builtin,
       fixtureInput?.overrides
     );
-
     // Inject recording Octokit and apply env overrides via EnvironmentManager
     const envMgr = new EnvironmentManager();
     const envOverrides =
@@ -119,7 +319,6 @@ export class VisorTestRunner {
         ? ((_case as any).env as Record<string, string>)
         : undefined;
     envMgr.apply(envOverrides);
-
     const ghRecCase =
       typeof (_case as any).github_recorder === 'object' && (_case as any).github_recorder
         ? ((_case as any).github_recorder as { error_code?: number; timeout_ms?: number })
@@ -135,7 +334,6 @@ export class VisorTestRunner {
     } catch {}
     // Always use StateMachineExecutionEngine
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
-
     // Prompts and mocks setup
     const prompts: Record<string, string[]> = {};
     const mocks =
@@ -185,7 +383,6 @@ export class VisorTestRunner {
         },
       },
     } as any);
-
     // Determine checks to run for this event
     const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
     const desiredSteps = new Set<string>(
@@ -198,9 +395,7 @@ export class VisorTestRunner {
     );
     if (checksToRun.length === 0)
       checksToRun = this.computeChecksToRun(cfg, eventForCase, undefined);
-
     const restoreEnv = () => envMgr.restore();
-
     return {
       name,
       strict,
@@ -215,7 +410,6 @@ export class VisorTestRunner {
       tagFilter,
     };
   }
-
   // Extracted helper: execute a prepared single case, including on_finish static fallback
   private async executeTestCase(
     setup: ReturnType<VisorTestRunner['setupTestCase']>,
@@ -236,14 +430,12 @@ export class VisorTestRunner {
     else process.env.VISOR_STRICT_ERRORS = prevStrict;
     return { res, outHistory };
   }
-
   private printCaseHeader(name: string, kind: 'flow' | 'single', event?: string): void {
     console.log('\n' + this.line(`${this.bold('Case')}: ${name}`));
     const meta: string[] = [`type=${kind}`];
     if (event) meta.push(`event=${event}`);
     console.log(`  ${this.gray(meta.join('  ·  '))}`);
   }
-
   private printStageHeader(
     flowName: string,
     stageName: string,
@@ -256,12 +448,10 @@ export class VisorTestRunner {
     if (fixture) meta.push(`fixture=${fixture}`);
     if (meta.length) console.log(`  ${this.gray(meta.join('  ·  '))}`);
   }
-
   private printSelectedChecks(checks: string[]): void {
     if (!checks || checks.length === 0) return;
     console.log(`  checks: ${checks.join(', ')}`);
   }
-
   /**
    * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml
    */
@@ -315,7 +505,6 @@ export class VisorTestRunner {
       `No tests file found. Attempted: ${attemptedPaths}. Provide --config <path> or add defaults/visor.tests.yaml.`
     );
   }
-
   /**
    * Load and minimally validate tests YAML.
    */
@@ -324,11 +513,20 @@ export class VisorTestRunner {
     const doc = yaml.load(raw) as unknown;
     const validation = validateTestsDoc(doc);
     if (!validation.ok) {
+      let lineHint = '';
+      try {
+        const first = String(validation.errors[0] || '');
+        const m = first.match(/unknown field\s+"([^"]+)"/i);
+        const badKey = m ? m[1] : undefined;
+        if (badKey) {
+          const ln = findKeyLineInParent(raw, 'tests', badKey);
+          if (ln) lineHint = ` (at ${path.relative(process.cwd(), testsPath)}:${ln})`;
+        }
+      } catch {}
       const errs = validation.errors.map(e => ` - ${e}`).join('\n');
-      throw new Error(`Tests file validation failed:\n${errs}`);
+      throw new Error(`Tests file validation failed${lineHint}:\n${errs}`);
     }
     if (!isObject(doc)) throw new Error('Tests YAML must be a YAML object');
-
     const version = String((doc as any).version ?? '1.0');
     const tests = (doc as any).tests;
     if (!tests || !isObject(tests)) throw new Error('tests: {} section is required');
@@ -336,7 +534,6 @@ export class VisorTestRunner {
     if (!Array.isArray(cases) || cases.length === 0) {
       throw new Error('tests.cases must be a non-empty array');
     }
-
     // Preserve full case objects for execution; discovery prints selective fields
     const suite: TestSuite = {
       version,
@@ -349,7 +546,6 @@ export class VisorTestRunner {
     };
     return suite;
   }
-
   /**
    * Pretty print discovered cases to stdout.
    */
@@ -366,7 +562,6 @@ export class VisorTestRunner {
     const defaults = suite.tests.defaults || {};
     const strict = (defaults as any).strict === undefined ? true : !!(defaults as any).strict;
     console.log(`   Strict: ${strict ? 'on' : 'off'}`);
-
     // List cases
     console.log('\nCases:');
     for (const c of suite.tests.cases) {
@@ -376,7 +571,6 @@ export class VisorTestRunner {
     }
     console.log('\nTip: run `visor test --only <name>` to filter, `--bail` to stop early.');
   }
-
   /**
    * Execute non-flow cases with minimal assertions (Milestone 1 MVP).
    */
@@ -412,7 +606,6 @@ export class VisorTestRunner {
       console.log('No matching cases.');
       return { failures: 0, results: [] };
     }
-
     // Load merged config via ConfigManager (honors extends), then clone for test overrides
     const cm = new ConfigManager();
     // Prefer loading the base config referenced by extends; fall back to the tests file
@@ -427,36 +620,31 @@ export class VisorTestRunner {
         configFileToLoad = resolved;
       }
     }
-
-    // If the tests file is also a full Visor config (co-located tests),
-    // sanitize it by stripping the top-level `tests` key into a temp file
-    // before loading via ConfigManager (which validates against config schema).
-    if (configFileToLoad === testsPath) {
-      try {
-        const rawCfg = fs.readFileSync(testsPath, 'utf8');
-        const docAny = yaml.load(rawCfg) as any;
-        if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
-          const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
-          delete (cfgObj as Record<string, unknown>)['tests'];
-          const tmpDir = path.join(process.cwd(), 'tmp');
-          try {
-            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-          } catch {}
-          const tmpPath = path.join(
-            tmpDir,
-            `visor-config-sanitized-${Date.now()}-${Math.random().toString(36).slice(2)}.yaml`
-          );
-          fs.writeFileSync(tmpPath, yaml.dump(cfgObj), 'utf8');
-          configFileToLoad = tmpPath;
-        }
-      } catch {}
+    let config: any;
+    if (configFileToLoad !== testsPath) {
+      config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
+    } else {
+      // Load co-located config directly from the tests file by stripping
+      // the tests block in-memory. No temp files, preserve relative baseDir.
+      const rawCfg = fs.readFileSync(testsPath, 'utf8');
+      const docAny = yaml.load(rawCfg) as any;
+      if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
+        const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
+        delete (cfgObj as Record<string, unknown>)['tests'];
+        config = await cm.loadConfigFromObject(cfgObj as any, {
+          validate: true,
+          mergeDefaults: true,
+          baseDir: path.dirname(testsPath),
+        });
+      } else {
+        // If it's not a co-located config, fall back to loading the tests file as a config
+        // (this will likely fail validation explicitly and be reported cleanly).
+        config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
+      }
     }
-
-    const config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
     if (!config.checks) {
       throw new Error('Loaded config has no checks; cannot run tests');
     }
-
     const defaultsAny: any = suite.tests.defaults || {};
     (this as any).suiteDefaults = defaultsAny;
     const defaultStrict = defaultsAny?.strict !== false;
@@ -473,7 +661,6 @@ export class VisorTestRunner {
       options.maxParallel ||
       (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) ||
       1;
-
     // Parse default tags/include and exclude from suite defaults (string or array)
     const parseTags = (v: unknown): string[] | undefined => {
       if (!v) return undefined;
@@ -491,7 +678,6 @@ export class VisorTestRunner {
     };
     const defaultIncludeTags = parseTags(defaultsAny?.tags);
     const defaultExcludeTags = parseTags(defaultsAny?.exclude_tags);
-
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
     const cfg = JSON.parse(JSON.stringify(config));
     const allowCtxEnv =
@@ -519,7 +705,6 @@ export class VisorTestRunner {
         cfg.checks[name] = chk;
       }
     }
-
     let failures = 0;
     const caseResults: Array<{
       name: string;
@@ -538,7 +723,6 @@ export class VisorTestRunner {
       __suiteRel = path.relative(this.cwd, testsPath) || testsPath;
       console.log(`Suite: ${__suiteRel}`);
     } catch {}
-
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
       // Case header for clarity
       const isFlow = Array.isArray((_case as any).flow) && (_case as any).flow.length > 0;
@@ -550,7 +734,7 @@ export class VisorTestRunner {
       );
       if ((_case as any).skip) {
         console.log(`⏭ SKIP ${(_case as any).name}`);
-        caseResults.push({ name: _case.name, passed: true });
+        caseResults.push({ name: _case.name, passed: true, /* annotate skip */ errors: [] as any });
         return { name: _case.name, failed: 0 };
       }
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
@@ -584,7 +768,6 @@ export class VisorTestRunner {
           cfgLocal.checks[name] = chk;
         }
       }
-
       const setup = this.setupTestCase(
         _case,
         cfgLocal,
@@ -594,7 +777,6 @@ export class VisorTestRunner {
         defaultIncludeTags,
         defaultExcludeTags
       );
-
       try {
         this.printSelectedChecks(setup.checksToRun);
         // Do not pass an implicit tag filter during tests; let the engine honor config.
@@ -617,7 +799,6 @@ export class VisorTestRunner {
         }
         // avoid printing raw history keys each case
         // (fallback for on_finish static targets handled inside executeTestCase)
-
         const caseFailures = require('./evaluators').evaluateCase(
           _case.name,
           res.statistics,
@@ -672,7 +853,6 @@ export class VisorTestRunner {
       }
       return { name: _case.name, failed: 0 };
     };
-
     if (options.bail || false || caseMaxParallel <= 1) {
       for (const _case of selected) {
         const r = await runOne(_case);
@@ -692,11 +872,36 @@ export class VisorTestRunner {
       };
       await Promise.all(Array.from({ length: workers }, runWorker));
     }
-
     // Summary (suppressible for embedded runs)
-    const passedCount = caseResults.filter(r => r.passed).length;
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
+    // Compute Jest-like test counts (cases and stages)
+    let totalTests = 0;
+    let failedTests = 0;
+    let skippedTests = 0;
+    for (const cr of caseResults) {
+      const isFlow = Array.isArray(cr.stages);
+      if (isFlow) {
+        const stageCount = (cr.stages as any[]).length;
+        totalTests += stageCount;
+        failedTests += (cr.stages as any[]).filter(
+          s => Array.isArray((s as any).errors) && (s as any).errors.length > 0
+        ).length;
+      } else {
+        totalTests += 1;
+        if (!cr.passed) failedTests += 1;
+      }
+      // Treat YAML-level skip as a skipped test
+      // (we tagged skipped cases above by pushing an empty errors array)
+      if (
+        !isFlow &&
+        Array.isArray((cr as any).errors) &&
+        (cr as any).errors.length === 0 &&
+        cr.passed
+      ) {
+        skippedTests += 1;
+      }
+    }
     {
       const silentSummary =
         String(process.env.VISOR_TEST_SUMMARY_SILENT || '')
@@ -715,49 +920,87 @@ export class VisorTestRunner {
         };
         const elapsed = ((Date.now() - __suiteStart) / 1000).toFixed(2);
         write('\n' + this.line('Summary'));
+        // Jest-like header lines
+        // Suites: we have a single suite here (the YAML file)
+        const suitesPassed = failedCases.length === 0 ? 1 : 0;
+        const suitesFailed = failedCases.length === 0 ? 0 : 1;
+        write(`  Test Suites: ${suitesFailed} failed, ${suitesPassed} passed, ${1} total`);
         write(
-          `  Passed: ${passedCount}/${selected.length}   Failed: ${failedCases.length}/${selected.length}   Time: ${elapsed}s`
+          `  Tests:       ${skippedTests} skipped, ${totalTests - failedTests - skippedTests} passed, ${failedTests} failed, ${totalTests} total`
         );
+        write(`  Time:        ${elapsed}s`);
+        // Keep a short preview of passes for convenience
         if (passedCases.length > 0) {
-          const names = passedCases.map(r => r.name).join(', ');
-          write(`   • ${names}`);
+          const MAX_SHOW = Math.max(
+            1,
+            parseInt(String(process.env.VISOR_SUMMARY_SHOW_PASSED || '6'), 10) || 6
+          );
+          const names = passedCases.slice(0, MAX_SHOW).map(r => r.name);
+          const more = passedCases.length - names.length;
+          write(`   • Passed: ${names.join(', ')}${more > 0 ? ` … and ${more} more` : ''}`);
         }
+        // Detailed failures with re-run hints (section header)
+        write(`\n${this.line('Failures')}`);
         write(`  Failed: ${failedCases.length}/${selected.length}`);
         if (failedCases.length > 0) {
-          const maxErrs = Math.max(
-            1,
-            parseInt(String(process.env.VISOR_SUMMARY_ERRORS_MAX || '5'), 10) || 5
-          );
+          const cross = this.color('✖', '31');
+          const relFile = (p: string) => {
+            try {
+              return require('path').relative(process.cwd(), p) || p;
+            } catch {
+              return p;
+            }
+          };
+          let raw: string | undefined;
+          try {
+            raw = fs.readFileSync(testsPath, 'utf8');
+          } catch {}
+          const findLine = (caseName: string, stageName?: string): number | undefined => {
+            if (!raw) return undefined;
+            const lines = raw.split(/\r?\n/);
+            let caseLine: number | undefined;
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].includes('- name:') && lines[i].includes(caseName)) {
+                caseLine = i + 1;
+                break;
+              }
+            }
+            if (!stageName) return caseLine;
+            if (caseLine !== undefined) {
+              for (let j = caseLine; j < lines.length; j++) {
+                if (lines[j].includes('- name:') && lines[j].includes(stageName)) return j + 1;
+              }
+            }
+            return caseLine;
+          };
           for (const fc of failedCases) {
-            write(`   • ${fc.name}`);
-            // If flow case, print failing stages with their first errors
             if (Array.isArray(fc.stages) && fc.stages.length > 0) {
               const bad = fc.stages.filter(s => s.errors && s.errors.length > 0);
               for (const st of bad) {
-                write(`     - ${st.name}`);
-                const errs = (st.errors || []).slice(0, maxErrs);
-                for (const e of errs) write(`       • ${e}`);
-                const more = (st.errors?.length || 0) - errs.length;
-                if (more > 0) write(`       • … and ${more} more`);
-              }
-              if (bad.length === 0) {
-                // No per-stage errors captured; print names for context
-                const names = fc.stages.map(s => s.name).join(', ');
-                write(`     stages: ${names}`);
+                const stageNameOnly = String(st.name || '').includes('#')
+                  ? String(st.name).split('#').pop()
+                  : String(st.name);
+                const label = `${fc.name}#${stageNameOnly}`;
+                const ln = findLine(fc.name, stageNameOnly);
+                write(`  ${cross} ${label}${ln ? ` (${relFile(testsPath)}:${ln})` : ''}`);
+                for (const e of st.errors || []) write(`      • ${e}`);
               }
             }
-            // Non-flow case errors
             if (
               (!fc.stages || fc.stages.length === 0) &&
               Array.isArray(fc.errors) &&
               fc.errors.length > 0
             ) {
-              const errs = fc.errors.slice(0, maxErrs);
-              for (const e of errs) write(`     • ${e}`);
-              const more = fc.errors.length - errs.length;
-              if (more > 0) write(`     • … and ${more} more`);
+              const ln = findLine(fc.name);
+              write(`  ${cross} ${fc.name}${ln ? ` (${relFile(testsPath)}:${ln})` : ''}`);
+              for (const e of fc.errors) write(`      • ${e}`);
             }
           }
+          try {
+            const rel = relFile(testsPath);
+            write(`
+  Tip: Re-run a specific test: visor test --config ${rel} --only "CASE[#STAGE]"`);
+          } catch {}
         }
       }
     }
@@ -772,7 +1015,6 @@ export class VisorTestRunner {
     clearInterval(__keepAlive);
     return { failures, results: caseResults };
   }
-
   private async runFlowCase(
     flowCase: any,
     cfg: any,
@@ -798,15 +1040,12 @@ export class VisorTestRunner {
     const flowName = flowCase.name || 'flow';
     let failures = 0;
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
-
     // Shared prompts captured across the flow (FlowStage computes deltas per-stage)
     const prompts: Record<string, string[]> = {};
-
     // Stage filter (by name substring or 1-based index)
     const sf = (stageFilter || '').trim().toLowerCase();
     const sfIndex = sf && /^\d+$/.test(sf) ? parseInt(sf, 10) : undefined;
     let anyStageRan = false;
-
     for (let i = 0; i < flowCase.flow.length; i++) {
       const stage = flowCase.flow[i];
       const nm = String(stage.name || `stage-${i + 1}`).toLowerCase();
@@ -819,7 +1058,6 @@ export class VisorTestRunner {
       const strict = (
         typeof flowCase.strict === 'boolean' ? flowCase.strict : defaultStrict
       ) as boolean;
-
       try {
         // Clear in-memory store before each stage to avoid leakage across stages
         try {
@@ -843,7 +1081,6 @@ export class VisorTestRunner {
         const suiteDefaults: any = (this as any).suiteDefaults || {};
         const defaultIncludeTags = parseTags(suiteDefaults?.tags);
         const defaultExcludeTags = parseTags(suiteDefaults?.exclude_tags);
-
         const stageRunner = new FlowStage(
           flowName,
           engine,
@@ -903,7 +1140,6 @@ export class VisorTestRunner {
       );
     return { failures, stages: stagesSummary };
   }
-
   private mapEventFromFixtureName(name?: string): import('../types/config').EventTrigger {
     if (!name) return 'manual';
     if (name.includes('pr_open')) return 'pr_opened';
@@ -913,7 +1149,6 @@ export class VisorTestRunner {
     if (name.includes('issue_open')) return 'issue_opened';
     return 'manual';
   }
-
   // Print warnings when AI or command steps execute without mocks in tests
   private warnUnmockedProviders(
     stats: import('../types/execution').ExecutionStatistics,
@@ -943,11 +1178,8 @@ export class VisorTestRunner {
       }
     } catch {}
   }
-
   // buildPrInfoFromFixture and deepSet moved to src/test-runner/core/fixture.ts
-
   // (legacy in-class evaluateCase removed; test runner now uses evaluators.ts)
-
   private mapGithubOp(op: string): string {
     if (!op) return '';
     const map: Record<string, string> = {
@@ -960,7 +1192,6 @@ export class VisorTestRunner {
     };
     return map[op] || op;
   }
-
   private computeChecksToRun(cfg: any, event: string, desired?: Set<string>): string[] {
     const all = Object.keys(cfg.checks || {});
     const byEvent = all.filter(name => {
@@ -1003,7 +1234,6 @@ export class VisorTestRunner {
     }
     return res;
   }
-
   private printCoverage(
     label: string,
     stats: import('../types/execution').ExecutionStatistics,
@@ -1052,13 +1282,54 @@ export class VisorTestRunner {
   }
 }
 
+// Helper: locate a child key line number inside a parent mapping in YAML (1-based)
+function findKeyLineInParent(yamlSrc: string, parentKey: string, childKey: string): number | null {
+  try {
+    const lines = yamlSrc.split(/\r?\n/);
+    let parentLine = -1;
+    let parentIndent = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\s*)\b([A-Za-z0-9_-]+)\s*:\s*$/);
+      if (m && m[2] === parentKey) {
+        parentLine = i;
+        parentIndent = m[1].length;
+        break;
+      }
+    }
+    if (parentLine < 0) return null;
+    // Scan forward until indentation drops back to parentIndent or end
+    for (let i = parentLine + 1; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(/^(\s*)/);
+      const indent = m ? m[1].length : 0;
+      if (indent <= parentIndent && line.trim().length > 0) break;
+      const km = line.match(new RegExp(`^\\s{${parentIndent + 2},}(${childKey})\\s*:`));
+      if (km) return i + 1; // 1-based
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 export async function discoverAndPrint(options: DiscoverOptions = {}): Promise<void> {
-  const runner = new VisorTestRunner(options.cwd);
+  const cwd = options.cwd || process.cwd();
+  if (
+    options.testsPath &&
+    (isDir(path.resolve(cwd, options.testsPath)) || /[?*]/.test(options.testsPath))
+  ) {
+    const files = discoverSuites(options.testsPath, cwd);
+    console.log(`Discovered ${files.length} suite(s):`);
+    for (const f of files) console.log(' - ' + path.relative(cwd, f));
+    console.log(
+      '\nTip: run `visor test <folder>` to execute all, or `visor test --config <file>` for one.'
+    );
+    return;
+  }
+  const runner = new VisorTestRunner(cwd);
   const testsPath = runner.resolveTestsPath(options.testsPath);
   const suite = runner.loadSuite(testsPath);
   runner.printDiscovery(testsPath, suite);
 }
-
 export async function runMvp(options: {
   testsPath?: string;
   only?: string;
@@ -1077,7 +1348,6 @@ export async function runMvp(options: {
   });
   return failures;
 }
-
 export async function validateTestsOnly(options: { testsPath?: string }): Promise<number> {
   const runner = new VisorTestRunner();
   const testsPath = runner.resolveTestsPath(options.testsPath);

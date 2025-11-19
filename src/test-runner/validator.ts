@@ -15,6 +15,9 @@ const schema: any = {
     extends: {
       oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
     },
+    include: {
+      oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+    },
     // Optional: co-located config (ignored by tests DSL validator)
     steps: { type: 'object' },
     checks: { type: 'object' },

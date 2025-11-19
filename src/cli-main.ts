@@ -113,7 +113,7 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
  * Handle the test subcommand (Milestone 0: discovery only)
  */
 async function handleTestCommand(argv: string[]): Promise<void> {
-  // Minimal flag parsing: --config <path>, --only <name>, --bail
+  // Minimal flag parsing: --config <path|dir|glob>, positional path, --only <name>, --bail
   const getArg = (name: string): string | undefined => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
@@ -126,9 +126,34 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     // Look for first positional argument (non-flag) after the command
     // argv is [node, script, 'test', ...rest]
     const rest = argv.slice(3); // Skip node, script, and 'test' command
-    const positional = rest.find(arg => !arg.startsWith('--') && !arg.startsWith('-'));
-    if (positional) {
-      testsPath = positional;
+    const flagsWithValues = new Set([
+      '--config',
+      '--only',
+      '--json',
+      '--report',
+      '--summary',
+      '--max-parallel',
+      '--max-suites',
+      '--prompt-max-chars',
+      '--progress',
+    ]);
+    let i = 0;
+    while (i < rest.length) {
+      const token = rest[i];
+      if (token.startsWith('--')) {
+        if (flagsWithValues.has(token))
+          i += 2; // skip flag + its value
+        else i += 1; // boolean flag
+        continue;
+      }
+      if (token.startsWith('-')) {
+        // Conservatively skip single-dash flag and its value if present
+        i += 2;
+        continue;
+      }
+      // First non-flag token is a positional tests path
+      testsPath = token;
+      break;
     }
   }
   const only = getArg('--only');
@@ -141,8 +166,10 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const reportArg = getArg('--report'); // e.g. junit:path.xml
   const summaryArg = getArg('--summary'); // e.g. md:path.md
   const maxParallelRaw = getArg('--max-parallel');
+  const maxSuitesRaw = getArg('--max-suites');
   const promptMaxCharsRaw = getArg('--prompt-max-chars');
   const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
+  const maxParallelSuites = maxSuitesRaw ? Math.max(1, parseInt(maxSuitesRaw, 10) || 1) : undefined;
   const promptMaxChars = promptMaxCharsRaw
     ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1)
     : undefined;
@@ -154,9 +181,8 @@ async function handleTestCommand(argv: string[]): Promise<void> {
 
   console.log('🧪 Visor Test Runner');
   try {
-    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import(
-      './test-runner/index'
-    );
+    const { discoverAndPrint, validateTestsOnly, VisorTestRunner, discoverSuites, runSuites } =
+      await import('./test-runner/index');
     if (validateOnly) {
       const errors = await validateTestsOnly({ testsPath });
       process.exit(errors > 0 ? 1 : 0);
@@ -167,18 +193,121 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (bail) console.log('Mode: --bail (stop on first failure)');
       process.exit(0);
     }
-    // Run and capture structured results
-    const runner = new (VisorTestRunner as any)();
-    const tpath = runner.resolveTestsPath(testsPath);
-    const suite = runner.loadSuite(tpath);
-    const runRes = await runner.runCases(tpath, suite, {
-      only,
-      bail,
-      maxParallel,
-      promptMaxChars,
-      engineMode: 'state-machine',
-    });
-    const failures = runRes.failures;
+    // Multi-suite discovery: if testsPath is a directory or glob, discover all suites
+    let multiFiles: string[] | null = null;
+    if (!testsPath) {
+      // No path provided: discover from current working directory
+      multiFiles = discoverSuites(process.cwd(), process.cwd());
+    } else {
+      const p = require('path');
+      const fs = require('fs');
+      const abs = p.isAbsolute(testsPath) ? testsPath : p.resolve(process.cwd(), testsPath);
+      const looksLikeGlob = /[?*]/.test(testsPath);
+      if (looksLikeGlob || (fs.existsSync(abs) && fs.statSync(abs).isDirectory())) {
+        multiFiles = discoverSuites(testsPath, process.cwd());
+      }
+    }
+
+    let failures = 0;
+    let runRes: any = null;
+    if (multiFiles && multiFiles.length > 0) {
+      console.log(
+        `Discovered ${multiFiles.length} test suite(s). Running${bail ? ' (bail enabled)' : ''}...`
+      );
+      const agg = await runSuites(multiFiles, {
+        only,
+        bail,
+        maxParallelSuites: maxParallelSuites || Math.max(1, require('os').cpus()?.length || 2),
+        maxParallel,
+        promptMaxChars,
+      });
+      failures = agg.failedSuites;
+      // Print aggregated summary with re-run hints
+      const rel = (p: string) => {
+        try {
+          return require('path').relative(process.cwd(), p) || p;
+        } catch {
+          return p;
+        }
+      };
+      const failed = agg.perSuite.filter(s => s.failures > 0);
+      const passed = agg.perSuite.filter(s => s.failures === 0);
+      const write = (s: string) => {
+        try {
+          require('fs').writeSync(2, s + '\n');
+        } catch {
+          console.log(s);
+        }
+      };
+      // Jest-like aggregated summary lines
+      let __totalTests = 0;
+      let __failedTests = 0;
+      for (const s of agg.perSuite) {
+        for (const r of s.results) {
+          if (Array.isArray((r as any).stages) && (r as any).stages.length > 0) {
+            __totalTests += (r as any).stages.length;
+            __failedTests += (r as any).stages.filter(
+              (st: any) => Array.isArray(st.errors) && st.errors.length > 0
+            ).length;
+          } else {
+            __totalTests += 1;
+            if (!r.passed) __failedTests += 1;
+          }
+        }
+      }
+      const __suitesPassed = agg.totalSuites - agg.failedSuites;
+      const __suitesFailed = agg.failedSuites;
+      const __testsPassed = __totalTests - __failedTests;
+      write('\n' + '── Global Summary '.padEnd(66, '─'));
+      write(
+        `  Test Suites: ${__suitesFailed} failed, ${__suitesPassed} passed, ${agg.totalSuites} total`
+      );
+      write(
+        `  Tests:       ${__testsPassed} passed, ${__failedTests} failed, ${__totalTests} total`
+      );
+      if (passed.length) write(`   • Passed suites: ${passed.map(s => rel(s.file)).join(', ')}`);
+      if (failed.length) {
+        write('  Failures:');
+        const cross = '\u001b[31m✖\u001b[0m';
+        for (const s of failed) {
+          const fcases = s.results.filter((r: any) => !r.passed);
+          write(`   ${rel(s.file)}`);
+          for (const c of fcases) {
+            if (Array.isArray(c.stages) && c.stages.length > 0) {
+              const bad = c.stages.filter(
+                (st: any) => Array.isArray(st.errors) && st.errors.length > 0
+              );
+              for (const st of bad) {
+                const errs = st.errors || [];
+                for (const e of errs) write(`     ${cross} ${c.name}#${st.name} | ${e}`);
+              }
+            }
+            if (
+              (!c.stages || c.stages.length === 0) &&
+              Array.isArray(c.errors) &&
+              c.errors.length > 0
+            ) {
+              for (const e of c.errors) write(`     ${cross} ${c.name} | ${e}`);
+            }
+          }
+          write(`   Tip: visor test --config ${rel(s.file)} --only "CASE[#STAGE]"`);
+        }
+      }
+      runRes = { results: agg.perSuite };
+    } else {
+      // Single suite path resolution
+      const runner = new (VisorTestRunner as any)();
+      const tpath = runner.resolveTestsPath(testsPath);
+      const suite = runner.loadSuite(tpath);
+      runRes = await runner.runCases(tpath, suite, {
+        only,
+        bail,
+        maxParallel,
+        promptMaxChars,
+        engineMode: 'state-machine',
+      });
+      failures = runRes.failures;
+    }
     // Fallback: If for any reason the runner didn't print its own summary
     // (e.g., natural early exit in some environments), print a concise one here.
     try {

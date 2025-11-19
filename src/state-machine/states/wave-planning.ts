@@ -239,6 +239,7 @@ export async function handleWavePlanning(
       // prior outputs from the journal when evaluating conditions.
       try {
         (state as any).flags.forwardRunActive = true;
+        (state as any).flags.waveKind = 'forward';
       } catch {}
 
       // Transition to LevelDispatch
@@ -309,6 +310,16 @@ export async function handleWavePlanning(
     // Reset wave-scoped state to allow retry evaluation
     (state as any).currentWaveCompletions = new Set<string>();
     (state as any).failedChecks = new Set<string>();
+
+    // Mark this wave as a forward-style evaluation wave so guards (if/assume)
+    // can consult latest outputs/memory across the journal. This mirrors the
+    // behavior we enable for forward runs, and is necessary for patterns like
+    // on_finish.run → aggregate sets memory flags → skipped-if checks re-run.
+    try {
+      (state as any).flags = (state as any).flags || {};
+      (state as any).flags.forwardRunActive = true;
+      (state as any).flags.waveKind = 'retry';
+    } catch {}
 
     transition('LevelDispatch');
     return;

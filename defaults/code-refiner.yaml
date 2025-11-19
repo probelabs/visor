@@ -15,9 +15,9 @@ steps:
     criticality: policy
     on: [pr_opened, pr_updated]
     # If the review discovered blocking issues, mark this check failed so
-    # routing goes to the fix step via on_fail. Base this on the workflow's
-    # own output contract to avoid relying on implicit vars.
-    fail_if: "(output?.hasErrors === true) || ((output?.issues?.length ?? 0) > 0) || ((issues?.length ?? 0) > 0)"
+    # routing goes to the fix step via on_fail. Base this strictly on the
+    # nested workflow's output object (no implicit globals).
+    fail_if: "(output?.hasErrors === true) || ((output?.issues?.length ?? 0) > 0)"
     # Guarantee that the workflow output contract is present for downstream logic
     guarantee: "typeof output.hasErrors === 'boolean' && Array.isArray(output.issues)"
     on_fail:

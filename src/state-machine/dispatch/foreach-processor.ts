@@ -500,8 +500,8 @@ export async function executeCheckWithForEachItems(
           }
         }
 
-        // Debug for goto_js
-        if (context.debug || true) {
+        // Debug for goto_js (guarded)
+        if (context.debug) {
           logger.info(
             `[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`
           );
@@ -509,10 +509,6 @@ export async function executeCheckWithForEachItems(
             logger.info(`[LevelDispatch] goto_js code: ${onFinish.goto_js.substring(0, 200)}`);
           try {
             const snapshotId2 = context.journal.beginSnapshot();
-            const { ContextView: CV } = require('../../snapshot-store');
-            const view = new CV(context.journal, context.sessionId, snapshotId2, [], undefined);
-            const vfHist = view.getHistory('validate-fact') || [];
-            logger.info(`[LevelDispatch] history['validate-fact'] length: ${vfHist.length}`);
             const all = context.journal.readVisible(context.sessionId, snapshotId2, undefined);
             const keys = Array.from(new Set(all.map((e: any) => e.checkId)));
             logger.info(`[LevelDispatch] history keys: ${keys.join(', ')}`);
@@ -528,7 +524,7 @@ export async function executeCheckWithForEachItems(
           context,
           state
         );
-        if (context.debug || true)
+        if (context.debug)
           logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || 'null'}`);
 
         if (gotoTarget) {
