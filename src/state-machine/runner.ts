@@ -12,6 +12,8 @@ import type {
   EngineState,
   SerializedError,
 } from '../types/engine';
+import { v4 as uuidv4 } from 'uuid';
+import type { EventEnvelope } from '../event-bus/types';
 import { logger } from '../logger';
 import type { ExecutionResult } from '../types/execution';
 import { GroupedCheckResults } from '../reviewer';
@@ -234,6 +236,23 @@ export class StateMachineRunner {
         // Ignore debug server errors
       }
     }
+
+    // Optional: publish to event bus if present in context (no-ops otherwise)
+    try {
+      const bus: any = (this.context as any).eventBus;
+      if (bus && typeof bus.emit === 'function') {
+        const envelope: EventEnvelope<EngineEvent> = {
+          id: uuidv4(),
+          version: 1,
+          timestamp: new Date().toISOString(),
+          runId: this.context.sessionId,
+          workflowId: (this.context as any).workflowId,
+          wave: this.state.wave,
+          payload: event,
+        };
+        void bus.emit(envelope);
+      }
+    } catch {}
 
     if (this.context.debug && event.type !== 'StateTransition') {
       logger.debug(`[StateMachine] Event: ${event.type}`);
