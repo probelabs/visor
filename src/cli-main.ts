@@ -205,6 +205,13 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       const looksLikeGlob = /[?*]/.test(testsPath);
       if (looksLikeGlob || (fs.existsSync(abs) && fs.statSync(abs).isDirectory())) {
         multiFiles = discoverSuites(testsPath, process.cwd());
+        // Gracefully handle directories/globs that contain no YAML suites
+        if ((looksLikeGlob || fs.existsSync(abs)) && (!multiFiles || multiFiles.length === 0)) {
+          console.log(
+            `Discovered 0 YAML test suite(s) under ${testsPath}. Nothing to run; exiting 0.`
+          );
+          process.exit(0);
+        }
       }
     }
 
