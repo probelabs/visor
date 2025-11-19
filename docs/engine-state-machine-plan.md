@@ -248,7 +248,7 @@ Implementation strategy:
 | **M4 – Observability & default flip** ✅ DONE | Stream `EngineEvent`s to the debug visualizer, enrich OTEL spans/check runs with `engine_mode`, remove legacy guard maps, and make the state machine the default once confidence is high. | Continue running a reduced legacy suite in CI until full deprecation; monitor telemetry dashboards for regressions before removing legacy mode entirely. |
 
 ### Test philosophy
-- YAML-based regression suites **must not change**; they encode behavior, not engine internals. We simply re-run them with `--state-machine` (e.g., `node scripts/run-visor-tests.js --state-machine`) during rollout to prove parity.
+ - YAML-based regression suites **must not change**; they encode behavior, not engine internals. Re-run them with the new test runner (e.g., `node dist/index.js test --progress compact`) during rollout to prove parity.
 - Jest/unit/integration tests remain authoritative; we only add a handful of state-machine-specific cases (event queue ordering, wave retry limits) instead of duplicating every scenario.
 - CI should eventually run in a matrix (`ENGINE_MODE=legacy` vs `state-machine`) so every PR exercises both engines until we flip the default. This is easier than maintaining a completely separate test suite.
 
