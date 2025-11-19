@@ -415,6 +415,31 @@ Notes:
 - Failure safety: if parsing fails (e.g., user edited the comment and removed markers), the adapter falls back to re‑creating the comment with fresh markers and updates the cached `commentId`.
 - Multiple workflows: include `workflowId` in `threadKey` to separate comments per workflow if desired; default behavior is one summary per PR/headSha.
 
+##### 3.1.1 Section‑Level Metadata & Override Semantics
+
+Each rendered section carries compact JSON metadata in the start marker to enable precise partial replacement without touching other sections. Recommended fields:
+
+- `id`: stable logical id (e.g., step id: `overview`, `security`)
+- `name`: human label (optional)
+- `runId`: engine run id that produced this section
+- `wave`: wave counter when the section was updated (optional)
+- `revision`: monotonically increasing integer maintained by the adapter per section
+
+Replacement rules:
+
+- On each render, the adapter compares the incoming section’s `{ id, runId }` against what exists in the current comment body. If found, it replaces the entire block between `section` and `section-end`. If not found, it appends the new block before `thread-end`.
+- The `revision` is incremented after a successful update and recorded in the marker JSON to support idempotent retries (same `{id, runId, revision}` should be a no‑op).
+- When a step disappears (e.g., configuration change), the adapter may either preserve the last known block (default) or remove it if a `pruneMissingSections` policy is enabled.
+
+Idempotency and dedupe:
+
+- The update call uses `idempotencyKey = hash(threadKey + sectionId + revision)` to ensure safe retries.
+- If GitHub returns 409/412 (conflict/precondition), the adapter re‑fetches, re‑parses, merges, and retries once.
+
+Slack mapping:
+
+- Use Slack thread messages with a single parent message keyed by `threadKey`; per‑section updates edit a dedicated child message whose `ts` is cached by `{threadKey, sectionId}`. This mirrors the GitHub marker approach without HTML comments.
+
 #### 3.2 Frontends API (Pluggable Integrations)
 
 Contracts (reference shapes to implement):
