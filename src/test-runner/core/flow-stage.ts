@@ -1,7 +1,7 @@
 // import type { PRInfo } from '../../pr-analyzer';
 import type { ExpectBlock } from '../assertions';
-import type { ExecutionStatistics } from '../../check-execution-engine';
-import { CheckExecutionEngine } from '../../check-execution-engine';
+import type { ExecutionStatistics } from '../../types/execution';
+import { StateMachineExecutionEngine } from '../../state-machine-execution-engine';
 import { RecordingOctokit } from '../recorders/github-recorder';
 import { EnvironmentManager } from './environment';
 import { MockManager } from './mocks';
@@ -27,7 +27,7 @@ type WarnUnmockedFn = (
 export class FlowStage {
   constructor(
     private readonly flowName: string,
-    private readonly engine: CheckExecutionEngine,
+    private readonly engine: StateMachineExecutionEngine,
     private readonly recorder: RecordingOctokit,
     private readonly cfg: any,
     private readonly prompts: Record<string, string[]>,
@@ -196,11 +196,20 @@ export class FlowStage {
         exclude: exclude.length ? exclude : undefined,
       };
 
+      // Merge stage-level routing configuration into config
+      const stageConfig = { ...this.cfg };
+      if ((stage as any).routing) {
+        stageConfig.routing = {
+          ...(this.cfg.routing || {}),
+          ...(stage as any).routing,
+        };
+      }
+
       const wrapper = new TestExecutionWrapper(this.engine);
       const { res, outHistory } = await wrapper.execute(
         prInfo,
         checksToRun,
-        this.cfg,
+        stageConfig,
         process.env.VISOR_DEBUG === 'true',
         tagFilter
       );
@@ -315,11 +324,19 @@ export class FlowStage {
         const inferred = Math.max(histRuns, promptRuns);
         // Stage-local runs only: do not use global totals across the flow
         let isForEachLike = false;
+        // Prefer configuration: if the check declares forEach, treat it as forEach-like
         try {
-          const r = (res.results as any)[name];
-          if (r && (Array.isArray((r as any).forEachItems) || (r as any).isForEach === true))
-            isForEachLike = true;
+          const cfgCheck = ((this.cfg || {}) as any).checks?.[name];
+          if (cfgCheck && cfgCheck.forEach === true) isForEachLike = true;
         } catch {}
+        // Fallback to results heuristics (for providers that emit forEach metadata)
+        if (!isForEachLike) {
+          try {
+            const r = (res.results as any)[name];
+            if (r && (Array.isArray((r as any).forEachItems) || (r as any).isForEach === true))
+              isForEachLike = true;
+          } catch {}
+        }
         let depWaveSize = 0;
         try {
           const depList = ((this.cfg.checks || {})[name] || {}).depends_on || [];
@@ -356,8 +373,12 @@ export class FlowStage {
         }
         if (runs === 0 && presentInResults.has(name)) runs = 1;
         if (!isForEachLike && histRuns > 0) runs = histRuns;
-        if (histPerItemRuns > 0) runs = histPerItemRuns;
-        if (depWaveSize > 0) runs = depWaveSize;
+        // Only use per-item history counts for non-forEach checks. For forEach parents,
+        // use aggregated totals from res.statistics to reflect number of parent executions.
+        if (!isForEachLike && histPerItemRuns > 0) runs = histPerItemRuns;
+        // Align to parent wave size only when we couldn't observe any
+        // stage-local history for this check (avoid clobbering multi-wave counts).
+        if (depWaveSize > 0 && histRuns === 0 && histPerItemRuns === 0) runs = depWaveSize;
         // Generic dependent alignment: if a check has direct parents that executed
         // more times in this stage (per statistics delta), align to the max parent delta.
         try {

@@ -1,17 +1,17 @@
 import { CronScheduler } from '../../src/cron-scheduler';
 import * as cron from 'node-cron';
-import { CheckExecutionEngine } from '../../src/check-execution-engine';
+import { StateMachineExecutionEngine } from '../../src/state-machine-execution-engine';
 import { VisorConfig } from '../../src/types/config';
 
 // Mock node-cron
 jest.mock('node-cron');
 
-// Mock CheckExecutionEngine
-jest.mock('../../src/check-execution-engine');
+// Mock StateMachineExecutionEngine
+jest.mock('../../src/state-machine-execution-engine');
 
 describe('CronScheduler', () => {
   let scheduler: CronScheduler;
-  let mockExecutionEngine: jest.Mocked<CheckExecutionEngine>;
+  let mockExecutionEngine: jest.Mocked<StateMachineExecutionEngine>;
   let mockConfig: VisorConfig;
   let mockCronTasks: Map<string, { start: jest.Mock; stop: jest.Mock }>;
 
@@ -26,7 +26,7 @@ describe('CronScheduler', () => {
       isGitRepository: jest.fn(),
       evaluateFailureConditions: jest.fn(),
       getRepositoryStatus: jest.fn(),
-    } as unknown as jest.Mocked<CheckExecutionEngine>;
+    } as unknown as jest.Mocked<StateMachineExecutionEngine>;
 
     mockConfig = {
       version: '1.0',

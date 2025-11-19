@@ -711,9 +711,11 @@ async function handleIssueEvent(
     prInfo.comments = [];
   }
 
-  // Run the checks using CheckExecutionEngine
-  const { CheckExecutionEngine } = await import('./check-execution-engine');
-  const engine = new CheckExecutionEngine(undefined, octokit);
+  // Run the checks using StateMachineExecutionEngine
+  const engine = new (await import('./state-machine-execution-engine')).StateMachineExecutionEngine(
+    undefined,
+    octokit
+  );
 
   try {
     // Build tag filter from action inputs (if provided)
@@ -795,8 +797,22 @@ async function handleIssueEvent(
       // Directly use check content without adding extra headers
       for (const checks of Object.values(resultsToUse)) {
         for (const check of checks) {
-          if (check.content && check.content.trim()) {
-            commentBody += `${check.content}\n\n`;
+          // Try to get content, with fallback to output.text (for custom schemas like issue-assistant)
+          let content = check.content?.trim();
+          if (!content && check.output) {
+            const out = check.output as any;
+            if (typeof out === 'string' && out.trim()) {
+              content = out.trim();
+            } else if (typeof out === 'object') {
+              const txt = out.text || out.response || out.message;
+              if (typeof txt === 'string' && txt.trim()) {
+                content = txt.trim();
+              }
+            }
+          }
+
+          if (content) {
+            commentBody += `${content}\n\n`;
           }
         }
       }

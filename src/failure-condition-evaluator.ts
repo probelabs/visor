@@ -205,11 +205,18 @@ export class FailureConditionEvaluator {
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           const envMap = context.env || {};
-
+          let memStr = '';
+          try {
+            // best-effort peek for common flag
+            const m = (context as any).memory;
+            const v =
+              m && typeof m.get === 'function' ? m.get('all_valid', 'fact-validation') : undefined;
+            memStr = ` mem.fact-validation.all_valid=${String(v)}`;
+          } catch {}
           console.error(
             `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
               (envMap as any).ENABLE_FACT_VALIDATION
-            )} event=${context.event?.event_name} result=${String(res)}`
+            )} event=${context.event?.event_name} result=${String(res)}${memStr}`
           );
         }
       } catch {}
@@ -265,15 +272,6 @@ export class FailureConditionEvaluator {
       results.push(...filteredResults, ...checkResults);
     }
 
-    try {
-      if (checkName === 'B') {
-        console.error(
-          `🔧 Debug: fail_if results for ${checkName}: ${JSON.stringify(results)} context.output=${JSON.stringify(
-            context.output
-          )}`
-        );
-      }
-    } catch {}
     return results;
   }
 
@@ -499,6 +497,9 @@ export class FailureConditionEvaluator {
         hasChanges: context.hasChanges || false,
       };
 
+      // Do not mutate output shape here. Output contracts are defined by providers and
+      // workflow outputs. Tests and expressions should rely on those schemas directly.
+
       // Legacy variables for backward compatibility
       const criticalIssues = metadata.criticalIssues;
       const errorIssues = metadata.errorIssues;
@@ -582,16 +583,82 @@ export class FailureConditionEvaluator {
       if (!this.sandbox) {
         this.sandbox = this.createSecureSandbox();
       }
-      let exec: ReturnType<typeof this.sandbox.compile>;
+      let result: any;
+      // Primary path: SandboxJS
       try {
-        // Try compiling the raw expression as-is first (supports multi-line logical expressions)
-        exec = this.sandbox.compile(`return (${raw});`);
-      } catch {
-        // Fallback: normalize multi-line statements into a comma-chain expression
-        const normalizedExpr = normalize(condition);
-        exec = this.sandbox.compile(`return (${normalizedExpr});`);
+        let exec: ReturnType<typeof this.sandbox.compile>;
+        try {
+          exec = this.sandbox.compile(`return (${raw});`);
+        } catch {
+          const normalizedExpr = normalize(condition);
+          exec = this.sandbox.compile(`return (${normalizedExpr});`);
+        }
+        result = exec(scope).run();
+      } catch (_primaryErr) {
+        // Fallback path: Node VM for modern syntax (optional chaining, nullish coalescing)
+        // Build a minimal, safe context with only whitelisted symbols
+        try {
+          const vm = require('node:vm');
+          const ctx: any = {
+            // Scope vars
+            output,
+            outputs,
+            debug: debugData,
+            memory: memoryAccessor,
+            issues,
+            metadata,
+            criticalIssues,
+            errorIssues,
+            totalIssues,
+            warningIssues,
+            infoIssues,
+            checkName,
+            schema,
+            group,
+            branch,
+            baseBranch,
+            filesChanged,
+            filesCount,
+            event,
+            env,
+            // Helpers
+            contains,
+            startsWith,
+            endsWith,
+            length,
+            always,
+            success,
+            failure,
+            log,
+            hasIssue,
+            countIssues,
+            hasFileMatching,
+            hasIssueWith,
+            hasFileWith,
+            hasMinPermission,
+            isOwner,
+            isMember,
+            isCollaborator,
+            isContributor,
+            isFirstTimer,
+            Math,
+            JSON,
+          };
+          const context = vm.createContext(ctx);
+          // Try raw first; if it throws due to semicolons/newlines, normalize
+          let code = `(${raw})`;
+          try {
+            result = new vm.Script(code).runInContext(context, { timeout: 50 });
+          } catch {
+            const normalizedExpr = normalize(condition);
+            code = `(${normalizedExpr})`;
+            result = new vm.Script(code).runInContext(context, { timeout: 50 });
+          }
+        } catch (vmErr) {
+          console.error('❌ Failed to evaluate expression:', condition, vmErr);
+          throw vmErr;
+        }
       }
-      const result = exec(scope).run();
       try {
         require('./logger').logger.debug(`  fail_if: result=${Boolean(result)}`);
       } catch {}
@@ -599,7 +666,8 @@ export class FailureConditionEvaluator {
       return Boolean(result);
     } catch (error) {
       console.error('❌ Failed to evaluate expression:', condition, error);
-      // Re-throw the error so it can be caught at a higher level for error reporting
+      // Re-throw the error so it can be caught by evaluateSingleCondition
+      // and properly populate the error field in the result
       throw error;
     }
   }

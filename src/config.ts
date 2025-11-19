@@ -141,8 +141,9 @@ export class ConfigManager {
         parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path.dirname(resolvedPath));
       }
 
-      // Normalize 'checks' and 'steps' - support both keys for backward compatibility
-      parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+      // Normalize 'checks' and 'steps'. Prefer checks when this config used extends/include
+      // so child overrides win over bundled defaults that may live under steps.
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
 
       // Load workflows if defined
       await this.loadWorkflows(parsedConfig, path.dirname(resolvedPath));
@@ -178,6 +179,63 @@ export class ConfigManager {
         }
         throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Load configuration from an in-memory object (used by the test runner to
+   * handle co-located config + tests without writing temp files).
+   */
+  public async loadConfigFromObject(
+    obj: Partial<VisorConfig>,
+    options: ConfigLoadOptions & { baseDir?: string } = {}
+  ): Promise<VisorConfig> {
+    const { validate = true, mergeDefaults = true, allowedRemotePatterns, baseDir } = options;
+    try {
+      let parsedConfig: Partial<VisorConfig> = JSON.parse(JSON.stringify(obj || {}));
+      if (!parsedConfig || typeof parsedConfig !== 'object') {
+        throw new Error('Configuration must be a YAML/JSON object');
+      }
+
+      const extendsValue = (parsedConfig as any).extends || (parsedConfig as any).include;
+      if (extendsValue) {
+        const loaderOptions: ConfigLoaderOptions = {
+          baseDir: baseDir || process.cwd(),
+          allowRemote: this.isRemoteExtendsAllowed(),
+          maxDepth: 10,
+          allowedRemotePatterns,
+        };
+        const loader = new ConfigLoader(loaderOptions);
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+        // Remove extends/include
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig as any;
+        let mergedConfig: Partial<VisorConfig> = {};
+        for (const source of extends_) {
+          console.log(`📦 Extending from: ${source}`);
+          const parentConfig = await loader.fetchConfig(String(source));
+          mergedConfig = new ConfigMerger().merge(mergedConfig, parentConfig);
+        }
+        parsedConfig = new ConfigMerger().merge(mergedConfig, configWithoutExtends);
+        parsedConfig = new ConfigMerger().removeDisabledChecks(parsedConfig);
+      }
+
+      // Convert workflow definition to runnable config if needed
+      if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
+      }
+
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+      await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
+
+      if (validate) this.validateConfig(parsedConfig);
+
+      let finalConfig = parsedConfig as VisorConfig;
+      if (mergeDefaults) finalConfig = this.mergeWithDefaults(parsedConfig) as VisorConfig;
+      return finalConfig;
+    } catch (error) {
+      if (error instanceof Error) throw new Error(`Failed to load configuration: ${error.message}`);
       throw error;
     }
   }
@@ -310,17 +368,43 @@ export class ConfigManager {
       if (bundledConfigPath) {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
-        const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
-        let parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+        // Synchronous loader for bundled defaults with shallow extends support
+        const readAndParse = (p: string): Partial<VisorConfig> => {
+          const raw = fs.readFileSync(p, 'utf8');
+          const obj = yaml.load(raw) as Partial<VisorConfig>;
+          if (!obj || typeof obj !== 'object') return {};
+          // Alias: support 'include' as 'extends' in packaged defaults
+          if ((obj as any).include && !(obj as any).extends) {
+            const inc = (obj as any).include;
+            (obj as any).extends = Array.isArray(inc) ? inc : [inc];
+            delete (obj as any).include;
+          }
+          return obj;
+        };
+        const baseDir = path.dirname(bundledConfigPath);
+        const merger = new (require('./utils/config-merger').ConfigMerger)();
 
-        if (!parsedConfig || typeof parsedConfig !== 'object') {
-          return null;
-        }
+        const loadWithExtendsSync = (p: string): Partial<VisorConfig> => {
+          const current = readAndParse(p);
+          const extVal: any = (current as any).extends || (current as any).include;
+          // Strip extends/include to prevent re-processing
+          if ((current as any).extends !== undefined) delete (current as any).extends;
+          if ((current as any).include !== undefined) delete (current as any).include;
+          if (!extVal) return current;
+          const list = Array.isArray(extVal) ? extVal : [extVal];
+          let acc: Partial<VisorConfig> = {};
+          for (const src of list) {
+            const rel = typeof src === 'string' ? src : String(src);
+            const abs = path.isAbsolute(rel) ? rel : path.resolve(baseDir, rel);
+            const parentCfg = loadWithExtendsSync(abs);
+            acc = merger.merge(acc, parentCfg);
+          }
+          return merger.merge(acc, current);
+        };
 
-        // Normalize 'checks' and 'steps' for backward compatibility
+        let parsedConfig = loadWithExtendsSync(bundledConfigPath);
+        // Normalize and validate as usual
         parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
-
-        // Validate and merge with defaults
         this.validateConfig(parsedConfig);
         return this.mergeWithDefaults(parsedConfig) as VisorConfig;
       }
@@ -436,11 +520,27 @@ export class ConfigManager {
    * Normalize 'checks' and 'steps' keys for backward compatibility
    * Ensures both keys are present and contain the same data
    */
-  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
-    // If both are present, 'steps' takes precedence
+  private normalizeStepsAndChecks(
+    config: Partial<VisorConfig>,
+    preferChecks: boolean = false
+  ): Partial<VisorConfig> {
+    // If both are present, merge with CHECKS taking precedence on key conflicts.
+    // Rationale: user overrides typically land in 'checks' while bundled defaults
+    // may come in via 'steps' (e.g., included workflows). We want user overrides
+    // (e.g., appendPrompt) to win over defaults.
     if (config.steps && config.checks) {
-      // Use steps as the source of truth
-      config.checks = config.steps;
+      if (preferChecks) {
+        // Union with checks winning over steps (child overrides)
+        const merged = { ...(config.steps as any), ...(config.checks as Record<string, any>) };
+        config.steps = merged as any;
+        config.checks = merged as any;
+      } else {
+        // Back-compat: when both present in a single file, honor steps exclusively
+        // (ignore extra keys under checks)
+        config.checks = config.steps;
+        // Ensure steps remains authoritative
+        config.steps = config.steps;
+      }
     } else if (config.steps && !config.checks) {
       // Copy steps to checks for internal compatibility
       config.checks = config.steps;
@@ -551,7 +651,7 @@ export class ConfigManager {
           checkConfig.type = 'ai';
         }
         // 'on' field is optional - if not specified, check can run on any event
-        this.validateCheckConfig(checkName, checkConfig, errors, config);
+        this.validateCheckConfig(checkName, checkConfig, errors, config, warnings);
 
         // Unknown/typo keys at the check level are produced by Ajv.
 
@@ -699,7 +799,8 @@ export class ConfigManager {
     checkName: string,
     checkConfig: CheckConfig,
     errors: ConfigValidationError[],
-    config?: Partial<VisorConfig>
+    config?: Partial<VisorConfig>,
+    _warnings?: ConfigValidationError[]
   ): void {
     // Default to 'ai' if no type specified
     if (!checkConfig.type) {
@@ -724,6 +825,66 @@ export class ConfigManager {
         field: `checks.${checkName}.prompt`,
         message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`,
       });
+    }
+
+    // Require specifying criticality for external-effect providers
+    try {
+      const externalTypes = new Set(['github', 'http', 'http_client', 'http_input', 'workflow']);
+      if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality) {
+        errors.push({
+          field: `checks.${checkName}.criticality`,
+          message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'internal' to enable safe defaults for side-effecting steps.`,
+        });
+      }
+    } catch {
+      // best-effort hint only
+    }
+
+    // Criticality-driven contract requirements (lint-time)
+    // For higher-safety modes, require a pre-run guard (assume or if) and,
+    // for output-producing providers, a post-run contract (schema or guarantee).
+    try {
+      const crit = (checkConfig.criticality || 'policy') as string;
+      const isCritical = crit === 'external' || crit === 'internal';
+
+      if (isCritical) {
+        // 1) Pre-run guard: either assume (string or non-empty array) or if
+        const hasAssume =
+          typeof (checkConfig as any).assume === 'string' ||
+          (Array.isArray((checkConfig as any).assume) && (checkConfig as any).assume.length > 0);
+        const hasIf =
+          typeof (checkConfig as any).if === 'string' && (checkConfig as any).if.trim().length > 0;
+        if (!hasAssume && !hasIf) {
+          errors.push({
+            field: `checks.${checkName}.assume`,
+            message: `Critical step "${checkName}" (criticality: ${crit}) requires a precondition: set 'assume:' (preferred) or 'if:' to guard execution.`,
+          });
+        }
+
+        // 2) Post-run contract for output-producing providers
+        const outputProviders = new Set([
+          'ai',
+          'script',
+          'command',
+          'http',
+          'http_client',
+          'http_input',
+        ]);
+        if (outputProviders.has(checkConfig.type as string)) {
+          const hasSchema = typeof (checkConfig as any).schema !== 'undefined';
+          const hasGuarantee =
+            typeof (checkConfig as any).guarantee === 'string' &&
+            (checkConfig as any).guarantee.trim().length > 0;
+          if (!hasSchema && !hasGuarantee) {
+            errors.push({
+              field: `checks.${checkName}.schema/guarantee`,
+              message: `Critical step "${checkName}" (type: ${checkConfig.type}) requires an output contract: provide 'schema:' (renderer name or JSON Schema) or 'guarantee:' expression.`,
+            });
+          }
+        }
+      }
+    } catch {
+      // lint-only; never throw from here
     }
 
     // Command checks require exec field
@@ -760,6 +921,21 @@ export class ConfigManager {
         message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`,
       });
     }
+
+    // Prefer single-field schema: if both schema (object) and output_schema are present, warn
+    try {
+      const hasObjSchema =
+        (checkConfig as any)?.schema && typeof (checkConfig as any).schema === 'object';
+      const hasOutputSchema =
+        (checkConfig as any)?.output_schema &&
+        typeof (checkConfig as any).output_schema === 'object';
+      if (hasObjSchema && hasOutputSchema) {
+        (_warnings || errors).push({
+          field: `checks.${checkName}.schema`,
+          message: `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`,
+        });
+      }
+    } catch {}
 
     // HTTP client checks require url field
     if (checkConfig.type === 'http_client' && !checkConfig.url) {

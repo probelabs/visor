@@ -79,8 +79,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           remote: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com/webhook',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -533,8 +536,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           custom: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -968,8 +974,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           top: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1020,8 +1029,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           remote: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1543,8 +1555,11 @@ describe('Config Extends Functionality', () => {
           },
           performance: {
             type: 'http',
+            criticality: 'external',
             url: 'https://perf.example.com/analyze',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
             group: 'performance',
           },
@@ -1773,8 +1788,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           level2: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1841,8 +1859,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           child: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },

@@ -70,14 +70,30 @@ export function buildProviderTemplateContext(
         const name = checkName.slice(0, -4);
         outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
       } else {
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        const extracted = summary.output !== undefined ? summary.output : summary;
+        outputs[checkName] = extracted;
       }
     }
   }
 
   if (outputHistory) {
     for (const [checkName, historyArray] of outputHistory) {
-      history[checkName] = historyArray;
+      const arr = Array.isArray(historyArray) ? (historyArray as unknown[]) : [];
+      // Filter out aggregated forEach metadata objects to keep history aligned
+      // with per-item outputs. This mirrors provider-side history builder
+      // behavior and prevents scripts from accidentally counting aggregated
+      // results as items.
+      const filtered = arr.filter(v => {
+        try {
+          if (!v || typeof v !== 'object') return true;
+          const obj = v as Record<string, unknown>;
+          if (Array.isArray((obj as any).forEachItems)) return false;
+          if ((obj as any).isForEach === true && (obj as any).forEachItems !== undefined)
+            return false;
+        } catch {}
+        return true;
+      });
+      history[checkName] = filtered;
     }
   }
 

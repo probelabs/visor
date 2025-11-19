@@ -387,6 +387,11 @@ export const configSchema = {
           description:
             'Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional',
         },
+        output_schema: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description:
+            "Optional JSON Schema to validate the produced output. If omitted and `schema` is an object, the engine will treat that object as the output_schema for validation purposes while still using string schemas (e.g., 'code-review') for template selection.",
+        },
         template: {
           $ref: '#/definitions/CustomTemplateConfig',
           description: 'Custom template configuration - optional',
@@ -423,6 +428,12 @@ export const configSchema = {
           description:
             'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])',
         },
+        criticality: {
+          type: 'string',
+          enum: ['external', 'internal', 'policy', 'info'],
+          description:
+            "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'internal': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'info': informational checks. Lowest safety.",
+        },
         continue_on_failure: {
           type: 'boolean',
           description:
@@ -455,6 +466,36 @@ export const configSchema = {
           $ref: '#/definitions/OnFinishConfig',
           description:
             'Finish routing configuration for forEach checks (runs after ALL iterations complete)',
+        },
+        assume: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume').",
+        },
+        guarantee: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            'Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId "contract/guarantee_failed".',
         },
         max_runs: {
           type: 'number',
@@ -581,7 +622,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1062,6 +1103,14 @@ export const configSchema = {
           type: 'string',
           description: 'Dynamic remediation list: JS expression returning string[]',
         },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description:
+            "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility.",
+        },
       },
       additionalProperties: false,
       description: 'Failure routing configuration per check',
@@ -1106,6 +1155,30 @@ export const configSchema = {
         '^x-': {},
       },
     },
+    TransitionRule: {
+      type: 'object',
+      properties: {
+        when: {
+          type: 'string',
+          description:
+            'JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.',
+        },
+        to: {
+          type: ['string', 'null'],
+          description: 'Target step ID, or null to explicitly prevent goto.',
+        },
+        goto_event: {
+          $ref: '#/definitions/EventTrigger',
+          description: 'Optional event override when performing goto.',
+        },
+      },
+      required: ['when'],
+      additionalProperties: false,
+      description: 'Declarative transition rule for on_* blocks.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     OnSuccessConfig: {
       type: 'object',
       properties: {
@@ -1131,6 +1204,13 @@ export const configSchema = {
         run_js: {
           type: 'string',
           description: 'Dynamic post-success steps: JS expression returning string[]',
+        },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description: 'Declarative transitions (see OnFailConfig.transitions).',
         },
       },
       additionalProperties: false,
@@ -1165,6 +1245,13 @@ export const configSchema = {
           type: 'string',
           description: 'Dynamic post-finish steps: JS expression returning string[]',
         },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description: 'Declarative transitions (see OnFailConfig.transitions).',
+        },
       },
       additionalProperties: false,
       description:
@@ -1173,14 +1260,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10382-18284-src_types_config.ts-0-30017>': {
+    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1542,6 +1629,11 @@ export const configSchema = {
           type: 'number',
           description:
             'Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50.',
+        },
+        max_workflow_depth: {
+          type: 'number',
+          description:
+            'Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3.',
         },
       },
       additionalProperties: false,

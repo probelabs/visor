@@ -1,8 +1,8 @@
 import type { PRInfo } from '../../pr-analyzer';
-import { CheckExecutionEngine } from '../../check-execution-engine';
+import { StateMachineExecutionEngine } from '../../state-machine-execution-engine';
 
 export class TestExecutionWrapper {
-  constructor(private readonly engine: CheckExecutionEngine) {}
+  constructor(private readonly engine: StateMachineExecutionEngine) {}
 
   /**
    * Execute a grouped run in a deterministic, test-friendly way without
@@ -16,8 +16,14 @@ export class TestExecutionWrapper {
     tagFilter?: { include?: string[]; exclude?: string[] }
   ): Promise<{ res: any; outHistory: Record<string, unknown[]> }> {
     // Ensure per-run guard sets and statistics are clean
+    // Note: StateMachineExecutionEngine manages its own state, no manual reset needed
     try {
-      this.engine.resetPerRunState();
+      if (
+        'resetPerRunState' in this.engine &&
+        typeof (this.engine as any).resetPerRunState === 'function'
+      ) {
+        (this.engine as any).resetPerRunState();
+      }
     } catch {}
 
     // Merge mode flags into the current execution context

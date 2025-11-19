@@ -455,6 +455,13 @@ export interface CheckConfig {
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
   schema?: string | Record<string, unknown>;
+  /**
+   * Optional JSON Schema to validate the produced output. If omitted and
+   * `schema` is an object, the engine will treat that object as the
+   * output_schema for validation purposes while still using string schemas
+   * (e.g., 'code-review') for template selection.
+   */
+  output_schema?: Record<string, unknown>;
   /** Custom template configuration - optional */
   template?: CustomTemplateConfig;
   /** Condition to determine if check should run - runs if expression evaluates to true */
@@ -469,6 +476,17 @@ export interface CheckConfig {
   failure_conditions?: FailureConditions;
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
+  /**
+   * Operational criticality of this step. Drives default safety policies
+   * (contracts, retries, loop budgets) at load time. Behavior can still be
+   * overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.
+   *
+   * - 'external': interacts with external systems (side effects). Highest safety.
+   * - 'internal': modifies CI/config/state but not prod. High safety.
+   * - 'policy': organizational checks (linting, style, doc). Moderate safety.
+   * - 'info': informational checks. Lowest safety.
+   */
+  criticality?: 'external' | 'internal' | 'policy' | 'info';
   /**
    * Allow dependents to run even if this step fails.
    * Defaults to false (dependents are gated when this step fails).
@@ -493,6 +511,17 @@ export interface CheckConfig {
   on_success?: OnSuccessConfig;
   /** Finish routing configuration for forEach checks (runs after ALL iterations complete) */
   on_finish?: OnFinishConfig;
+  /**
+   * Preconditions that must hold before executing the check. If any expression
+   * evaluates to false, the check is skipped (skipReason='assume').
+   */
+  assume?: string | string[];
+  /**
+   * Postconditions that should hold after executing the check. Expressions are
+   * evaluated against the produced result/output; violations are recorded as
+   * error issues with ruleId "contract/guarantee_failed".
+   */
+  guarantee?: string | string[];
   /**
    * Hard cap on how many times this check may execute within a single engine run.
    * Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step.
@@ -616,6 +645,12 @@ export interface OnFailConfig {
   goto_js?: string;
   /** Dynamic remediation list: JS expression returning string[] */
   run_js?: string;
+  /**
+   * Declarative transitions. Evaluated in order; first matching rule wins.
+   * If a rule's `to` is null, no goto occurs. When omitted or none match,
+   * the engine falls back to goto_js/goto for backward compatibility.
+   */
+  transitions?: TransitionRule[];
 }
 
 /**
@@ -632,6 +667,8 @@ export interface OnSuccessConfig {
   goto_js?: string;
   /** Dynamic post-success steps: JS expression returning string[] */
   run_js?: string;
+  /** Declarative transitions (see OnFailConfig.transitions). */
+  transitions?: TransitionRule[];
 }
 
 /**
@@ -649,6 +686,20 @@ export interface OnFinishConfig {
   goto_js?: string;
   /** Dynamic post-finish steps: JS expression returning string[] */
   run_js?: string;
+  /** Declarative transitions (see OnFailConfig.transitions). */
+  transitions?: TransitionRule[];
+}
+
+/**
+ * Declarative transition rule for on_* blocks.
+ */
+export interface TransitionRule {
+  /** JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule. */
+  when: string;
+  /** Target step ID, or null to explicitly prevent goto. */
+  to?: string | null;
+  /** Optional event override when performing goto. */
+  goto_event?: EventTrigger;
 }
 
 /**
@@ -673,6 +724,12 @@ export interface LimitsConfig {
    * Set to 0 or negative to disable. Default: 50.
    */
   max_runs_per_check?: number;
+  /**
+   * Maximum nesting depth for workflows executed by the state machine engine.
+   * Nested workflows are invoked by the workflow provider; this limit prevents
+   * accidental infinite recursion. Default: 3.
+   */
+  max_workflow_depth?: number;
 }
 
 /**

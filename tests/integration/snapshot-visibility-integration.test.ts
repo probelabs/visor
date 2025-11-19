@@ -23,8 +23,7 @@ describe('Snapshot Visibility Integration', () => {
         },
         consumer: {
           type: 'script',
-          depends_on: ['producer'],
-          // Note: with script provider, we provide explicit dependency
+          // NO depends_on - we test snapshot visibility via goto routing
           content: `
             // Read producer output via snapshot-provided outputs
             const value = outputs["producer"]?.msg;

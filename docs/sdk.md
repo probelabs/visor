@@ -149,6 +149,50 @@ try {
 
 Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 
+## Safety & Criticality (Quick Note)
+
+When building configs programmatically, model safety explicitly:
+
+- Declare criticality on steps with `criticality: external|internal|policy|info`.
+- Add contracts to critical steps:
+  - `assume:` preconditions checked before execution
+  - `guarantee:` postconditions checked after execution
+- Use declarative `transitions` for routing rather than `goto_js`.
+
+Example config (JS object):
+```ts
+const cfg = await loadConfig({
+  version: '1.0',
+  checks: {
+    'post-comment': {
+      type: 'github',
+      criticality: 'external',
+      on: ['pr_opened'],
+      op: 'comment.create',
+      assume: ["isMember()"],
+      guarantee: ["output && typeof output.id === 'number'"],
+      continue_on_failure: false,
+    },
+    // Structured outputs with unified `schema` (object) for validation
+    'summarize-json': {
+      type: 'ai',
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' }, items: { type: 'array', items: { type: 'string' } } },
+        required: ['ok', 'items']
+      },
+      prompt: 'Return JSON with ok and items...'
+    },
+    // Command/script can also use JSON Schema via `schema`
+    'aggregate': {
+      type: 'script',
+      content: 'return { all_valid: true };',
+      schema: { type: 'object', properties: { all_valid: { type: 'boolean' } }, required: ['all_valid'], additionalProperties: false }
+    }
+  },
+});
+```
+
 ## Notes
 
 - SDK adds no new sandboxing or providers; all safety lives in the core engine.

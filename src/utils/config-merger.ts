@@ -40,6 +40,14 @@ export class ConfigMerger {
       result.checks = this.mergeChecks(parent.checks || {}, child.checks);
     }
 
+    // Merge steps as well (some configs provide only 'steps' and rely on normalization later)
+    // This preserves step definitions across extends chains before normalization.
+    if ((child as any).steps) {
+      const parentSteps = ((parent as any).steps || {}) as Record<string, CheckConfig>;
+      const childSteps = ((child as any).steps || {}) as Record<string, CheckConfig>;
+      (result as any).steps = this.mergeChecks(parentSteps, childSteps);
+    }
+
     // Merge custom tools
     if (child.tools) {
       result.tools = this.mergeObjects(parent.tools || {}, child.tools);

@@ -5,7 +5,7 @@ import 'dotenv/config';
 
 import { CLI } from './cli';
 import { ConfigManager } from './config';
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
@@ -113,14 +113,49 @@ async function handleValidateCommand(argv: string[], configManager: ConfigManage
  * Handle the test subcommand (Milestone 0: discovery only)
  */
 async function handleTestCommand(argv: string[]): Promise<void> {
-  // Minimal flag parsing: --config <path>, --only <name>, --bail
+  // Minimal flag parsing: --config <path|dir|glob>, positional path, --only <name>, --bail
   const getArg = (name: string): string | undefined => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const hasFlag = (name: string): boolean => argv.includes(name);
 
-  const testsPath = getArg('--config');
+  // Support both --config flag and positional argument for tests path
+  let testsPath = getArg('--config');
+  if (!testsPath) {
+    // Look for first positional argument (non-flag) after the command
+    // argv is [node, script, 'test', ...rest]
+    const rest = argv.slice(3); // Skip node, script, and 'test' command
+    const flagsWithValues = new Set([
+      '--config',
+      '--only',
+      '--json',
+      '--report',
+      '--summary',
+      '--max-parallel',
+      '--max-suites',
+      '--prompt-max-chars',
+      '--progress',
+    ]);
+    let i = 0;
+    while (i < rest.length) {
+      const token = rest[i];
+      if (token.startsWith('--')) {
+        if (flagsWithValues.has(token))
+          i += 2; // skip flag + its value
+        else i += 1; // boolean flag
+        continue;
+      }
+      if (token.startsWith('-')) {
+        // Conservatively skip single-dash flag and its value if present
+        i += 2;
+        continue;
+      }
+      // First non-flag token is a positional tests path
+      testsPath = token;
+      break;
+    }
+  }
   const only = getArg('--only');
   const bail = hasFlag('--bail');
   const listOnly = hasFlag('--list');
@@ -131,8 +166,10 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const reportArg = getArg('--report'); // e.g. junit:path.xml
   const summaryArg = getArg('--summary'); // e.g. md:path.md
   const maxParallelRaw = getArg('--max-parallel');
+  const maxSuitesRaw = getArg('--max-suites');
   const promptMaxCharsRaw = getArg('--prompt-max-chars');
   const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
+  const maxParallelSuites = maxSuitesRaw ? Math.max(1, parseInt(maxSuitesRaw, 10) || 1) : undefined;
   const promptMaxChars = promptMaxCharsRaw
     ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1)
     : undefined;
@@ -144,9 +181,8 @@ async function handleTestCommand(argv: string[]): Promise<void> {
 
   console.log('🧪 Visor Test Runner');
   try {
-    const { discoverAndPrint, validateTestsOnly, VisorTestRunner } = await import(
-      './test-runner/index'
-    );
+    const { discoverAndPrint, validateTestsOnly, VisorTestRunner, discoverSuites, runSuites } =
+      await import('./test-runner/index');
     if (validateOnly) {
       const errors = await validateTestsOnly({ testsPath });
       process.exit(errors > 0 ? 1 : 0);
@@ -157,12 +193,128 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (bail) console.log('Mode: --bail (stop on first failure)');
       process.exit(0);
     }
-    // Run and capture structured results
-    const runner = new (VisorTestRunner as any)();
-    const tpath = runner.resolveTestsPath(testsPath);
-    const suite = runner.loadSuite(tpath);
-    const runRes = await runner.runCases(tpath, suite, { only, bail, maxParallel, promptMaxChars });
-    const failures = runRes.failures;
+    // Multi-suite discovery: if testsPath is a directory or glob, discover all suites
+    let multiFiles: string[] | null = null;
+    if (!testsPath) {
+      // No path provided: discover from current working directory
+      multiFiles = discoverSuites(process.cwd(), process.cwd());
+    } else {
+      const p = require('path');
+      const fs = require('fs');
+      const abs = p.isAbsolute(testsPath) ? testsPath : p.resolve(process.cwd(), testsPath);
+      const looksLikeGlob = /[?*]/.test(testsPath);
+      if (looksLikeGlob || (fs.existsSync(abs) && fs.statSync(abs).isDirectory())) {
+        multiFiles = discoverSuites(testsPath, process.cwd());
+        // Gracefully handle directories/globs that contain no YAML suites
+        if ((looksLikeGlob || fs.existsSync(abs)) && (!multiFiles || multiFiles.length === 0)) {
+          console.log(
+            `Discovered 0 YAML test suite(s) under ${testsPath}. Nothing to run; exiting 0.`
+          );
+          process.exit(0);
+        }
+      }
+    }
+
+    let failures = 0;
+    let runRes: any = null;
+    if (multiFiles && multiFiles.length > 0) {
+      console.log(
+        `Discovered ${multiFiles.length} test suite(s). Running${bail ? ' (bail enabled)' : ''}...`
+      );
+      const agg = await runSuites(multiFiles, {
+        only,
+        bail,
+        maxParallelSuites: maxParallelSuites || Math.max(1, require('os').cpus()?.length || 2),
+        maxParallel,
+        promptMaxChars,
+      });
+      failures = agg.failedSuites;
+      // Print aggregated summary with re-run hints
+      const rel = (p: string) => {
+        try {
+          return require('path').relative(process.cwd(), p) || p;
+        } catch {
+          return p;
+        }
+      };
+      const failed = agg.perSuite.filter(s => s.failures > 0);
+      const passed = agg.perSuite.filter(s => s.failures === 0);
+      const write = (s: string) => {
+        try {
+          require('fs').writeSync(2, s + '\n');
+        } catch {
+          console.log(s);
+        }
+      };
+      // Jest-like aggregated summary lines
+      let __totalTests = 0;
+      let __failedTests = 0;
+      for (const s of agg.perSuite) {
+        for (const r of s.results) {
+          if (Array.isArray((r as any).stages) && (r as any).stages.length > 0) {
+            __totalTests += (r as any).stages.length;
+            __failedTests += (r as any).stages.filter(
+              (st: any) => Array.isArray(st.errors) && st.errors.length > 0
+            ).length;
+          } else {
+            __totalTests += 1;
+            if (!r.passed) __failedTests += 1;
+          }
+        }
+      }
+      const __suitesPassed = agg.totalSuites - agg.failedSuites;
+      const __suitesFailed = agg.failedSuites;
+      const __testsPassed = __totalTests - __failedTests;
+      write('\n' + '── Global Summary '.padEnd(66, '─'));
+      write(
+        `  Test Suites: ${__suitesFailed} failed, ${__suitesPassed} passed, ${agg.totalSuites} total`
+      );
+      write(
+        `  Tests:       ${__testsPassed} passed, ${__failedTests} failed, ${__totalTests} total`
+      );
+      if (passed.length) write(`   • Passed suites: ${passed.map(s => rel(s.file)).join(', ')}`);
+      if (failed.length) {
+        write('  Failures:');
+        const cross = '\u001b[31m✖\u001b[0m';
+        for (const s of failed) {
+          const fcases = s.results.filter((r: any) => !r.passed);
+          write(`   ${rel(s.file)}`);
+          for (const c of fcases) {
+            if (Array.isArray(c.stages) && c.stages.length > 0) {
+              const bad = c.stages.filter(
+                (st: any) => Array.isArray(st.errors) && st.errors.length > 0
+              );
+              for (const st of bad) {
+                const errs = st.errors || [];
+                for (const e of errs) write(`     ${cross} ${c.name}#${st.name} | ${e}`);
+              }
+            }
+            if (
+              (!c.stages || c.stages.length === 0) &&
+              Array.isArray(c.errors) &&
+              c.errors.length > 0
+            ) {
+              for (const e of c.errors) write(`     ${cross} ${c.name} | ${e}`);
+            }
+          }
+          write(`   Tip: visor test --config ${rel(s.file)} --only "CASE[#STAGE]"`);
+        }
+      }
+      runRes = { results: agg.perSuite };
+    } else {
+      // Single suite path resolution
+      const runner = new (VisorTestRunner as any)();
+      const tpath = runner.resolveTestsPath(testsPath);
+      const suite = runner.loadSuite(tpath);
+      runRes = await runner.runCases(tpath, suite, {
+        only,
+        bail,
+        maxParallel,
+        promptMaxChars,
+        engineMode: 'state-machine',
+      });
+      failures = runRes.failures;
+    }
     // Fallback: If for any reason the runner didn't print its own summary
     // (e.g., natural early exit in some environments), print a concise one here.
     try {
@@ -358,6 +510,24 @@ export async function main(): Promise<void> {
     if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
       await handleTestCommand(filteredArgv);
       return;
+    }
+    // Check for code-review subcommands: run the built-in code-review suite
+    // Aliases: code-review | review
+    if (filteredArgv.length > 2 && ['code-review', 'review'].includes(filteredArgv[2])) {
+      const base = filteredArgv.slice(0, 2);
+      const rest = filteredArgv.slice(3); // preserve flags like --output, --debug, etc.
+      // Prefer packaged default under dist/; fall back to local defaults/ for dev
+      const packaged = path.resolve(__dirname, 'defaults', 'code-review.yaml');
+      const localDev = path.resolve(process.cwd(), 'defaults', 'code-review.yaml');
+      const chosen = fs.existsSync(packaged) ? packaged : localDev;
+      if (!fs.existsSync(chosen)) {
+        console.error(
+          '❌ Could not locate built-in code-review config. Expected at dist/defaults/code-review.yaml (packaged) or ./defaults/code-review.yaml (dev).'
+        );
+        process.exit(1);
+      }
+      // Let event auto-detection pick pr_updated for code-review schemas unless user overrides with --event
+      filteredArgv = [...base, '--config', chosen, ...rest];
     }
     // Check for build subcommand: run the official agent-builder config
     if (filteredArgv.length > 2 && filteredArgv[2] === 'build') {
@@ -613,6 +783,29 @@ export async function main(): Promise<void> {
     // Determine checks to run and validate check types early
     let checksToRun = options.checks.length > 0 ? options.checks : Object.keys(config.checks || {});
 
+    // Generic: remove checks that are meant to be scheduled via routing (on_*.run)
+    // from the initial root set unless the user explicitly requested them.
+    if (options.checks.length === 0) {
+      const routingRunTargets = new Set<string>();
+      for (const [, cfg] of Object.entries(config.checks || {})) {
+        const onFinish: any = (cfg as any).on_finish || {};
+        const onSuccess: any = (cfg as any).on_success || {};
+        const onFail: any = (cfg as any).on_fail || {};
+        const collect = (arr?: string[]) => {
+          if (Array.isArray(arr))
+            for (const t of arr) if (typeof t === 'string' && t) routingRunTargets.add(t);
+        };
+        collect(onFinish.run);
+        collect(onSuccess.run);
+        collect(onFail.run);
+      }
+      const before = checksToRun.length;
+      checksToRun = checksToRun.filter(chk => !routingRunTargets.has(chk));
+      if (before !== checksToRun.length) {
+        logger.verbose(`Pruned ${before - checksToRun.length} routing-run target(s) from roots`);
+      }
+    }
+
     // Validate that all requested checks exist in the configuration
     const availableChecks = Object.keys(config.checks || {});
     const invalidChecks = checksToRun.filter(check => !availableChecks.includes(check));
@@ -780,8 +973,8 @@ export async function main(): Promise<void> {
     logger.step(`Executing ${checksToRun.length} check(s)`);
     logger.verbose(`Checks: ${checksToRun.join(', ')}`);
 
-    // Create CheckExecutionEngine for running checks
-    const engine = new CheckExecutionEngine();
+    // Create StateMachineExecutionEngine for running checks
+    const engine = new StateMachineExecutionEngine(undefined, undefined, debugServer || undefined);
 
     // Set execution context on engine
     engine.setExecutionContext(executionContext);
@@ -1023,8 +1216,17 @@ export async function main(): Promise<void> {
       { total: 0, critical: 0, error: 0, warning: 0, info: 0 }
     );
 
+    // Build execution summary for display
+    // For user-facing readability, count distinct checks that produced a result
+    // (ignores forEach per-item iterations and multi-wave re-executions).
+    // Keep detailed per-run counts in executionStatistics for programmatic use.
+    const distinctExecuted = new Set(allResults.map((r: any) => r.checkName).filter(Boolean)).size;
+    const executionSummary = executionStatistics
+      ? `Checks: ${executionStatistics.totalChecksConfigured} configured → ${distinctExecuted} executions`
+      : `Completed ${distinctExecuted} check(s)`;
+
     logger.success(
-      `Completed ${executedCheckNames.length} check(s): ${counts.total} issues (${counts.critical} critical, ${counts.error} error, ${counts.warning} warning)`
+      `${executionSummary}: ${counts.total} issues (${counts.critical} critical, ${counts.error} error, ${counts.warning} warning)`
     );
     logger.verbose(`Checks executed: ${executedCheckNames.join(', ')}`);
 

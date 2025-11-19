@@ -4,7 +4,7 @@
  - Dual ESM/CJS bundle via tsup.
 */
 
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { ConfigManager } from './config';
 import type { AnalysisResult } from './output-formatters';
 import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
@@ -121,7 +121,8 @@ export async function runChecks(opts: RunOptions = {}): Promise<AnalysisResult> 
       ? resolveChecks(opts.checks, config)
       : Object.keys(config.checks || {});
 
-  const engine = new CheckExecutionEngine(opts.cwd);
+  // Always use StateMachineExecutionEngine
+  const engine = new StateMachineExecutionEngine(opts.cwd);
 
   // Set execution context if provided
   if (opts.executionContext) {

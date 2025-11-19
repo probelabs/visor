@@ -151,8 +151,8 @@ export class PRReviewer {
     const { debug = false, config, checks } = options;
 
     if (config && checks && checks.length > 0) {
-      const { CheckExecutionEngine } = await import('./check-execution-engine');
-      const engine = new CheckExecutionEngine();
+      const { StateMachineExecutionEngine } = await import('./state-machine-execution-engine');
+      const engine = new StateMachineExecutionEngine();
       const { results } = await engine.executeGroupedChecks(
         prInfo,
         checks,

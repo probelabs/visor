@@ -14,6 +14,7 @@ export interface CheckRunOptions {
   name: string;
   details_url?: string;
   external_id?: string;
+  engine_mode?: 'legacy' | 'state-machine'; // M4: Track which engine mode was used
 }
 
 export interface CheckRunAnnotation {
@@ -54,12 +55,22 @@ export class GitHubCheckService {
 
   /**
    * Create a new check run in queued status
+   * M4: Includes engine_mode metadata in summary
    */
   async createCheckRun(
     options: CheckRunOptions,
     summary?: CheckRunSummary
   ): Promise<{ id: number; url: string }> {
     try {
+      // M4: Add engine mode metadata to summary if provided
+      const enhancedSummary =
+        summary && options.engine_mode
+          ? {
+              ...summary,
+              summary: `${summary.summary}\n\n_Engine: ${options.engine_mode}_`,
+            }
+          : summary;
+
       const response = await this.octokit.rest.checks.create({
         owner: options.owner,
         repo: options.repo,
@@ -68,11 +79,11 @@ export class GitHubCheckService {
         status: 'queued',
         details_url: options.details_url,
         external_id: options.external_id,
-        output: summary
+        output: enhancedSummary
           ? {
-              title: summary.title,
-              summary: summary.summary,
-              text: summary.text,
+              title: enhancedSummary.title,
+              summary: enhancedSummary.summary,
+              text: enhancedSummary.text,
             }
           : undefined,
       });

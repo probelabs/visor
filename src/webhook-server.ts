@@ -5,7 +5,7 @@ import * as crypto from 'crypto';
 import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from './liquid-extensions';
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 
 export interface WebhookPayload {
   endpoint: string;
@@ -26,7 +26,7 @@ export class WebhookServer {
   private config: HttpServerConfig;
   private liquid: Liquid;
   private webhookData: Map<string, unknown> = new Map();
-  private executionEngine?: CheckExecutionEngine;
+  private executionEngine?: StateMachineExecutionEngine;
   private visorConfig?: VisorConfig;
   private isGitHubActions: boolean;
 
@@ -42,7 +42,7 @@ export class WebhookServer {
   /**
    * Set the execution engine for triggering checks on webhook receipt
    */
-  public setExecutionEngine(engine: CheckExecutionEngine): void {
+  public setExecutionEngine(engine: StateMachineExecutionEngine): void {
     this.executionEngine = engine;
   }
 
@@ -508,7 +508,7 @@ export class WebhookServer {
 export function createWebhookServer(
   config: HttpServerConfig,
   visorConfig?: VisorConfig,
-  executionEngine?: CheckExecutionEngine
+  executionEngine?: StateMachineExecutionEngine
 ): WebhookServer {
   const server = new WebhookServer(config, visorConfig);
 

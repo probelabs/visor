@@ -8,6 +8,32 @@ Run Visor directly using npx:
 npx -y @probelabs/visor@latest --help
 ```
 
+### Safety & Criticality (Quick Note)
+
+Visor follows a criticality‑first model:
+
+- Declare criticality on steps (`criticality: external|internal|policy|info`).
+- Pair critical steps with contracts:
+  - `assume:` preconditions (skip if unmet; use a guard step if you need a hard fail)
+  - `guarantee:` postconditions (violation adds issues and routes `on_fail`)
+- Prefer declarative `transitions` over `goto_js` for routing.
+
+Example (block‑style YAML):
+```yaml
+checks:
+  post-comment:
+    type: github
+    criticality: external
+    on:
+      - pr_opened
+    op: comment.create
+    assume:
+      - "isMember()"
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+```
+
 ## Global Installation
 
 Install globally for frequent use:
@@ -100,13 +126,62 @@ project:
 steps:
   - type: ai
     prompt: security
-    
   - type: ai
     prompt: performance
     
 output:
   format: table
   verbose: false
+
+## Structured outputs and schemas (unified `schema`)
+
+Use a single `schema` field:
+
+- Strings (e.g., `code-review` or `markdown`) select the renderer/template and do not imply validation.
+- Objects (JSON Schema) validate the produced `output` after execution for any provider (ai, command, script, http).
+
+Examples:
+```yaml
+checks:
+  summary:
+    type: ai
+    schema: code-review
+    prompt: |
+      Summarize the PR...
+
+  summarize-json:
+    type: ai
+    schema:
+      type: object
+      properties:
+        ok: { type: boolean }
+        items: { type: array, items: { type: string } }
+      required: [ok, items]
+    prompt: |
+      Return JSON with ok and items...
+
+  parse:
+    type: command
+    exec: node scripts/parse.js
+    schema:
+      type: object
+      properties:
+        count: { type: integer }
+      required: [count]
+
+  aggregate:
+    type: script
+    content: |
+      return { all_valid: true };
+    schema:
+      type: object
+      properties:
+        all_valid: { type: boolean }
+      required: [all_valid]
+      additionalProperties: false
+```
+
+Note: `output_schema` is deprecated and kept for backward compatibility. Prefer `schema` as a JSON object for validation.
 ```
 
 ## Environment Variables

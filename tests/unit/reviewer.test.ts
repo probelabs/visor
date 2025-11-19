@@ -191,7 +191,7 @@ jest.mock('../../src/ai-review-service', () => {
             file: 'src/test.ts',
             line: 5,
             ruleId: 'security/dangerous-eval',
-            message: 'Dangerous eval usage detected',
+            message: 'Dangerous eval usage detected - security vulnerability',
             severity: 'critical',
             category: 'security',
           });

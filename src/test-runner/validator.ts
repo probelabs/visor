@@ -15,6 +15,9 @@ const schema: any = {
     extends: {
       oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
     },
+    include: {
+      oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+    },
     // Optional: co-located config (ignored by tests DSL validator)
     steps: { type: 'object' },
     checks: { type: 'object' },
@@ -154,6 +157,13 @@ const schema: any = {
         env: {
           type: 'object',
           additionalProperties: { type: 'string' },
+        },
+        routing: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            max_loops: { type: 'number' },
+          },
         },
         mocks: {
           type: 'object',
@@ -334,6 +344,7 @@ const knownKeys = new Set([
   'event',
   'fixture',
   'env',
+  'routing',
   'mocks',
   'expect',
   'flow',
@@ -363,6 +374,8 @@ const knownKeys = new Set([
   'equalsDeep',
   'where',
   'contains_unordered',
+  // routing
+  'max_loops',
 ]);
 
 function hintForAdditionalProperty(err: ErrorObject): string | undefined {
