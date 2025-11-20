@@ -4565,6 +4565,39 @@ var init_diff_processor = __esm({
   }
 });
 
+// src/utils/comment-metadata.ts
+function parseVisorThreadMetadata(commentBody) {
+  const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
+  const match = headerRe.exec(commentBody);
+  if (!match) {
+    return null;
+  }
+  try {
+    const metadata = JSON.parse(match[1]);
+    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : null;
+  } catch {
+    return null;
+  }
+}
+function shouldFilterVisorReviewComment(commentBody) {
+  if (!commentBody) {
+    return false;
+  }
+  if (commentBody.includes("visor-comment-id:pr-review-")) {
+    return true;
+  }
+  const metadata = parseVisorThreadMetadata(commentBody);
+  if (metadata && metadata.group === "review") {
+    return true;
+  }
+  return false;
+}
+var init_comment_metadata = __esm({
+  "src/utils/comment-metadata.ts"() {
+    "use strict";
+  }
+});
+
 // src/ai-review-service.ts
 function log(...args) {
   logger.debug(args.join(" "));
@@ -4578,6 +4611,7 @@ var init_ai_review_service = __esm({
     init_logger();
     init_tracer_init();
     init_diff_processor();
+    init_comment_metadata();
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -5052,7 +5086,7 @@ ${this.escapeXml(prInfo.body)}
             let historicalComments = triggeringComment2 ? issueComments.filter((c) => c.id !== triggeringComment2.id) : issueComments;
             if (isCodeReviewSchema) {
               historicalComments = historicalComments.filter(
-                (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+                (c) => !shouldFilterVisorReviewComment(c.body)
               );
             }
             if (historicalComments.length > 0) {
@@ -5165,7 +5199,7 @@ ${this.escapeXml(processedFallbackDiff)}
           let historicalComments = triggeringComment ? prComments.filter((c) => c.id !== triggeringComment.id) : prComments;
           if (isCodeReviewSchema) {
             historicalComments = historicalComments.filter(
-              (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+              (c) => !shouldFilterVisorReviewComment(c.body)
             );
           }
           if (historicalComments.length > 0) {
