@@ -6,6 +6,7 @@ import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
+import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
 
 /**
  * Helper function to log debug messages using the centralized logger
@@ -762,10 +763,11 @@ ${this.escapeXml(prInfo.body)}
           : issueComments;
 
         // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
-        // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+        // Old format: <!-- visor-comment-id:pr-review-244-review -->
+        // New format: <!-- visor:thread={"key":"...","group":"review",...} -->
         if (isCodeReviewSchema) {
           historicalComments = historicalComments.filter(
-            c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+            c => !shouldFilterVisorReviewComment(c.body)
           );
         }
 
@@ -914,10 +916,11 @@ ${this.escapeXml(processedFallbackDiff)}
         : prComments;
 
       // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
-      // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+      // Old format: <!-- visor-comment-id:pr-review-244-review -->
+      // New format: <!-- visor:thread={"key":"...","group":"review",...} -->
       if (isCodeReviewSchema) {
         historicalComments = historicalComments.filter(
-          c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
+          c => !shouldFilterVisorReviewComment(c.body)
         );
       }
 
