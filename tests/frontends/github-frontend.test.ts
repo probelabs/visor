@@ -49,7 +49,7 @@ function makeFakeOctokit() {
 }
 
 describe('GitHubFrontend (event-bus v2)', () => {
-  test('CheckScheduled creates queued check run and grouped comment', async () => {
+  test('CheckScheduled creates queued check run but defers comment until content exists', async () => {
     const bus = new EventBus();
     const octokit = makeFakeOctokit();
     const fe = new GitHubFrontend();
@@ -69,12 +69,8 @@ describe('GitHubFrontend (event-bus v2)', () => {
     expect(call.name).toBe('Visor: overview');
     expect(call.head_sha).toBe('abcdef1');
 
-    // Grouped comment created with markers
-    expect(octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
-    const body = octokit.__state.comments[0]?.body as string;
-    expect(body).toContain('visor:thread=');
-    expect(body).toContain('visor:section={');
-    expect(body).toContain('overview');
+    // No comment yet (we defer until content is available)
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
   });
 
   test('CheckCompleted finalizes check and updates grouped comment', async () => {
@@ -90,7 +86,8 @@ describe('GitHubFrontend (event-bus v2)', () => {
     });
 
     await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
-    expect(octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    // Still no comment on schedule
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
 
     // Complete with 0 issues
     await bus.emit({
@@ -103,10 +100,10 @@ describe('GitHubFrontend (event-bus v2)', () => {
     // Check run completed (update called by service)
     expect(octokit.rest.checks.update).toHaveBeenCalled();
 
-    // Comment updated in place (no new comment created)
-    expect(octokit.rest.issues.updateComment).toHaveBeenCalledTimes(1);
+    // Comment created on first completed result
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
     const body = octokit.__state.comments[0]?.body as string;
-    expect(body).toMatch(/section-start|visor:section=/);
+    expect(body).toMatch(/visor:section=/);
     expect(body).toContain('security');
   });
 
@@ -213,24 +210,20 @@ describe('GitHubFrontend (event-bus v2)', () => {
       octokit,
     });
 
-    // Schedule two checks
+    // Schedule then complete both to create initial comment with both sections
     await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
     await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov' } });
+    await bus.emit({ type: 'CheckCompleted', checkId: 'security', scope: ['root'], result: { issues: [], content: 'sec' } });
+
     const initialBody = octokit.__state.comments[0]?.body as string;
     expect(initialBody).toContain('overview');
     expect(initialBody).toContain('security');
-    // Capture exact 'security' block text
     const secBlockBefore = extractSection(initialBody, 'security');
 
-    // Complete only 'overview'
-    await bus.emit({
-      type: 'CheckCompleted',
-      checkId: 'overview',
-      scope: ['root'],
-      result: { issues: [] },
-    });
+    // Update only 'overview'
+    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov2' } });
 
-    // Body should still contain 'security' section unchanged, plus updated 'overview'
     const updated = octokit.__state.comments[0]?.body as string;
     expect(updated).toContain('overview');
     expect(updated).toContain('security');
@@ -280,8 +273,10 @@ describe('GitHubFrontend (event-bus v2)', () => {
 
     await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
     await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov' } });
+    await bus.emit({ type: 'CheckCompleted', checkId: 'security', scope: ['root'], result: { issues: [], content: 'sec' } });
 
-    // Two distinct comments should exist: one for group=overview, one for group=review
+    // Two distinct comments should now exist: one for group=overview, one for group=review
     const bodies = octokit.__state.comments.map((c: any) => String(c.body));
     const headerJsons = bodies.map(parseThreadHeader).filter(Boolean) as any[];
     const groups = headerJsons.map(h => h.group);

@@ -63,13 +63,13 @@ export class GitHubFrontend implements Frontend {
         try {
           if (!canPost || !svc) return;
           if (this.checkRunIds.has(ev.checkId)) return; // already created
-          // Update local model and grouped comment
+          // Update local model only (no comment yet; wait for content)
           const group = this.getGroupForCheck(ctx, ev.checkId);
           this.upsertSectionState(group, ev.checkId, {
             status: 'queued',
             lastUpdated: new Date().toISOString(),
           });
-          if (comments) await this.updateGroupedComment(ctx, comments, group, ev.checkId);
+          // Do not call updateGroupedComment here — avoid "queued" placeholder comments
           const res = await svc.createCheckRun(
             {
               owner: repo!.owner,
