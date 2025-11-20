@@ -101,10 +101,6 @@ inputs:
     description: 'Enable debug mode for detailed output in comments'
     required: false
     default: 'false'
-  github-v2:
-    description: 'Enable event-bus GitHub integration (checks + grouped comment)'
-    required: false
-    default: 'false'
 
   tags:
     description: 'Include checks with these tags (comma-separated)'

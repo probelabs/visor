@@ -75,7 +75,6 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
-      .option('--github-v2', 'Use event-bus GitHub integration (experimental)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -153,7 +152,6 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
-        .option('--github-v2', 'Use event-bus GitHub integration (experimental)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -222,7 +220,7 @@ export class CLI {
         analyzeBranchDiff: options.analyzeBranchDiff,
         event: options.event,
         message: options.message,
-        githubV2: !!options.githubV2,
+        githubV2: false,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

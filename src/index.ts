@@ -251,19 +251,13 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Optionally enable GitHub v2 frontend (event bus)
+    // Enable GitHub frontend by default in Actions path
     try {
-      const githubV2Flag =
-        String(getInput('github-v2') || '').toLowerCase() === 'true' ||
-        String(process.env.VISOR_GITHUB_V2 || '').toLowerCase() === 'true';
-      if (githubV2Flag) {
-        const cfg: any = JSON.parse(JSON.stringify(config));
-        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
-        if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
-        cfg.frontends = fronts;
-        (config as any) = cfg;
-        console.log('🔄 GitHub V2 integration: ENABLED (event-bus frontends)');
-      }
+      const cfg: any = JSON.parse(JSON.stringify(config));
+      const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+      if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+      cfg.frontends = fronts;
+      (config as any) = cfg;
     } catch {}
 
     // Determine AI provider overrides && fallbacks for issue flows
@@ -576,9 +570,7 @@ async function handleEvent(
           inputs,
           config,
           checksToRun,
-          context,
-          String(getInput('github-v2') || '').toLowerCase() === 'true' ||
-            String(process.env.VISOR_GITHUB_V2 || '').toLowerCase() === 'true'
+          context
         );
         break;
       case 'issues':
@@ -1300,7 +1292,7 @@ async function handlePullRequestWithConfig(
   config: import('./types/config').VisorConfig,
   checksToRun: string[],
   context: GitHubContext,
-  githubV2?: boolean
+  _githubV2_unused?: boolean
 ): Promise<void> {
   const pullRequest = context.event?.pull_request as any;
   const action = context.event?.action as string | undefined;
@@ -1364,8 +1356,8 @@ async function handlePullRequestWithConfig(
 
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
 
-  // Github v2 path: run state-machine engine with event-bus frontends
-  if (githubV2) {
+  // Default path: run state-machine engine with event-bus frontends
+  {
     const engine = new (
       await import('./state-machine-execution-engine')
     ).StateMachineExecutionEngine(undefined, octokit);
@@ -1394,7 +1386,7 @@ async function handlePullRequestWithConfig(
     return;
   }
 
-  // Create review options
+  // Legacy path removed
   // Build tag filter from inputs && labels
   const inputTagFilter: import('./types/config').TagFilter | undefined =
     (inputs.tags && inputs.tags.trim() !== '') ||
