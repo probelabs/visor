@@ -91,6 +91,22 @@ export class StateMachineExecutionEngine {
         );
       }
 
+      // If a webhook context is provided (from WebhookServer or Slack socket),
+      // attach it to the http_input provider so http_input checks can read data.
+      try {
+        const map = (options as any)?.webhookContext?.webhookData as
+          | Map<string, unknown>
+          | undefined;
+        if (map) {
+          const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+          const reg = CheckProviderRegistry.getInstance();
+          const p: any = reg.getProvider('http_input');
+          if (p && typeof p.setWebhookContext === 'function') p.setWebhookContext(map);
+          const prev: any = this.executionContext || {};
+          this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } } as any);
+        }
+      } catch {}
+
       // Execute checks using state machine
       logger.info(`Executing checks: ${filteredChecks.join(', ')}`);
       const executionResult = await this.executeGroupedChecks(
@@ -273,6 +289,16 @@ export class StateMachineExecutionEngine {
         const bus = new EventBus();
         (context as any).eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
+        if (process.env.VISOR_DEBUG === 'true') {
+          try {
+            const fns = ((configWithTagFilter as any).frontends || []).map((f: any) => ({
+              name: f?.name,
+              hasConfig: !!f?.config,
+              cfg: f?.config || undefined,
+            }));
+            logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
+          } catch {}
+        }
         await frontendsHost.load((configWithTagFilter as any).frontends);
         // Derive repo/pr/headSha and octokit if available
         let owner: string | undefined;
