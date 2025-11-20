@@ -297,7 +297,16 @@ export class StateMachineExecutionEngine {
           logger,
           // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
           config: configWithTagFilter,
-          run: { runId: (context as any).sessionId, repo: repoObj, pr: prNum, headSha },
+          run: {
+            runId: (context as any).sessionId,
+            repo: repoObj,
+            pr: prNum,
+            headSha,
+            event: (context as any).event || (prInfo as any)?.eventType,
+            actor:
+              (prInfo as any)?.eventContext?.sender?.login ||
+              (typeof process.env.GITHUB_ACTOR === 'string' ? process.env.GITHUB_ACTOR : undefined),
+          },
           octokit,
         }));
       } catch (err) {

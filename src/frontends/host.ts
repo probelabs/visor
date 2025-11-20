@@ -14,6 +14,8 @@ export interface FrontendContext {
     repo?: { owner: string; name: string };
     pr?: number;
     headSha?: string;
+    event?: string;
+    actor?: string;
   };
   octokit?: any;
 }

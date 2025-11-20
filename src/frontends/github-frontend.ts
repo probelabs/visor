@@ -265,7 +265,7 @@ ${end}`);
         mergedBody,
         {
           commentId: this.commentIdForGroup(ctx, group),
-          triggeredBy: 'github-frontend',
+          triggeredBy: this.deriveTriggeredBy(ctx),
           commitSha: ctx.run.headSha,
         }
       );
@@ -274,6 +274,21 @@ ${end}`);
         `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
       );
     }
+  }
+
+  private deriveTriggeredBy(ctx: FrontendContext): string {
+    const ev = (ctx.run as any).event || '';
+    const actor = (ctx.run as any).actor;
+    const commentEvents = new Set([
+      'issue_comment',
+      'issue_comment_created',
+      'pr_comment',
+      'comment',
+      'pull_request_review_comment',
+    ]);
+    if (commentEvents.has(ev) && actor) return actor;
+    if (ev) return ev;
+    return actor || 'unknown';
   }
 
   private async mergeIntoExistingBody(
