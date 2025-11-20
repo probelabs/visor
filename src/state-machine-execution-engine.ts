@@ -327,6 +327,9 @@ export class StateMachineExecutionEngine {
               (typeof process.env.GITHUB_ACTOR === 'string' ? process.env.GITHUB_ACTOR : undefined),
           },
           octokit,
+          // Surface any injected test doubles for Slack as well
+          slack:
+            (this.executionContext as any)?.slack || (this.executionContext as any)?.slackClient,
         }));
       } catch (err) {
         logger.warn(

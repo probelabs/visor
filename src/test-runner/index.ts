@@ -293,6 +293,7 @@ export class VisorTestRunner {
     prInfo: PRInfo;
     engine: StateMachineExecutionEngine;
     recorder: RecordingOctokit;
+    slackRecorder?: { calls: Array<{ provider: string; op: string; args: any; ts: number }> };
     prompts: Record<string, string[]>;
     mocks: Record<string, unknown>;
     restoreEnv: () => void;
@@ -328,6 +329,8 @@ export class VisorTestRunner {
     const recorder = new RecordingOctokit(
       rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
     );
+    // Optional Slack recorder when tests enable 'slack' frontend
+    let slackRecorder: any | undefined;
     setGlobalRecorder(recorder);
     // Always clear in-memory store between cases to prevent cross-case leakage
     try {
@@ -338,7 +341,23 @@ export class VisorTestRunner {
     try {
       // Seed execution context with octokit so frontends can act in flows
       const prev: any = (engine as any).executionContext || {};
-      (engine as any).setExecutionContext({ ...prev, octokit: recorder as unknown as any });
+      // Attach GitHub and (optionally) Slack test doubles into executionContext
+      const ctxPatch: any = { ...prev, octokit: recorder as unknown as any };
+      try {
+        const suiteDefaults: any = (this as any).suiteDefaults || {};
+        const fns = (suiteDefaults.frontends || undefined) as unknown;
+        const names = Array.isArray(fns)
+          ? (fns as any[])
+              .map(x => (typeof x === 'string' ? x : (x && x.name) || ''))
+              .filter(Boolean)
+          : [];
+        if (names.includes('slack')) {
+          const { RecordingSlack } = require('./recorders/slack-recorder');
+          slackRecorder = new RecordingSlack();
+          ctxPatch.slack = slackRecorder;
+        }
+      } catch {}
+      (engine as any).setExecutionContext(ctxPatch);
     } catch {}
     // Prompts and mocks setup
     const prompts: Record<string, string[]> = {};
@@ -412,6 +431,7 @@ export class VisorTestRunner {
       prInfo,
       engine,
       recorder,
+      slackRecorder,
       prompts,
       mocks,
       restoreEnv,
@@ -820,6 +840,7 @@ export class VisorTestRunner {
           _case.name,
           res.statistics,
           setup.recorder,
+          setup.slackRecorder ? { calls: setup.slackRecorder.calls } : undefined,
           setup.expect,
           setup.strict,
           setup.prompts,
