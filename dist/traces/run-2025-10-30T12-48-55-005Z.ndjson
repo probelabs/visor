@@ -1,3 +1,0 @@
-{"name":"visor.run","attributes":{"started":true}}
-{"name":"visor.provider","attributes":{"visor.check.id":"comment-assistant","visor.provider.type":"ai"}}
-{"name":"visor.check","attributes":{"visor.check.id":"comment-assistant","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"Sample issue title\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}

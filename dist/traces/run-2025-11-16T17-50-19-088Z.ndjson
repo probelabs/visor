@@ -1,2 +1,0 @@
-{"name":"visor.run","attributes":{"started":true}}
-{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"95b11623-499b-4dc2-9435-4c644750a6bb"}}]}
