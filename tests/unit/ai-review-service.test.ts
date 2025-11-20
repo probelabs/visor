@@ -626,5 +626,166 @@ describe('AIReviewService', () => {
       expect(context).toContain('Regular comment');
       expect(context).toContain('Review results');
     });
+
+    it('should filter out Visor review comments with new metadata format (visor:thread with group="review")', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 299,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [
+          {
+            filename: 'test.ts',
+            additions: 10,
+            deletions: 5,
+            changes: 15,
+            patch: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+            status: 'modified',
+          },
+        ],
+        totalAdditions: 10,
+        totalDeletions: 5,
+        fullDiff: '--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-line1\n+line1-modified',
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular user comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:visor-thread-review-probelabs/probe#299 -->\n<!-- visor:thread={"key":"probelabs/probe#299<CHORUS_TAG>78c2ca6</CHORUS_TAG>","runId":"bcf2dc1a-bce7-4be8-a7e1-d6e19b547a02","revision":7,"group":"review","generatedAt":"2025-11-20T18:13:06.218Z"} -->\n## Security Review\nFound 3 security issues...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+          {
+            id: 3,
+            author: 'user2',
+            body: 'Another user comment',
+            createdAt: '2024-01-01T12:00:00Z',
+            updatedAt: '2024-01-01T12:00:00Z',
+          },
+          {
+            id: 4,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:visor-thread-overview-probelabs/probe#299 -->\n<!-- visor:thread={"key":"probelabs/probe#299<CHORUS_TAG>78c2ca6</CHORUS_TAG>","runId":"bcf2dc1a-bce7-4be8-a7e1-d6e19b547a02","revision":2,"group":"overview","generatedAt":"2025-11-20T18:10:00.000Z"} -->\n## Overview\nGeneral PR summary...',
+            createdAt: '2024-01-01T13:00:00Z',
+            updatedAt: '2024-01-01T13:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      // Pass true to indicate code-review schema
+      const context = await (service as any).formatPRContext(prInfoWithComments, true);
+
+      // Should include regular user comments
+      expect(context).toContain('Regular user comment');
+      expect(context).toContain('Another user comment');
+
+      // Should NOT include Visor review comments with group="review"
+      expect(context).not.toContain('Security Review');
+      expect(context).not.toContain('Found 3 security issues');
+
+      // Should include Visor comments with group="overview" (not "review")
+      expect(context).toContain('Overview');
+      expect(context).toContain('General PR summary');
+    });
+
+    it('should filter out both old and new format Visor review comments', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor-comment-id:pr-review-244-review -->\n## Old Format Review\nOld style review...',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+          {
+            id: 3,
+            author: 'visor-bot',
+            body: '<!-- visor:thread={"key":"owner/repo#123","runId":"abc123","group":"review"} -->\n## New Format Review\nNew style review...',
+            createdAt: '2024-01-01T12:00:00Z',
+            updatedAt: '2024-01-01T12:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      const context = await (service as any).formatPRContext(prInfoWithComments, true);
+
+      // Should include regular user comments
+      expect(context).toContain('Regular comment');
+
+      // Should NOT include old format review comments
+      expect(context).not.toContain('Old Format Review');
+      expect(context).not.toContain('Old style review');
+
+      // Should NOT include new format review comments
+      expect(context).not.toContain('New Format Review');
+      expect(context).not.toContain('New style review');
+    });
+
+    it('should handle malformed visor:thread JSON gracefully', async () => {
+      const prInfoWithComments: PRInfo = {
+        number: 123,
+        title: 'Test PR',
+        body: 'Test description',
+        author: 'testuser',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        comments: [
+          {
+            id: 1,
+            author: 'user1',
+            body: 'Regular comment',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            id: 2,
+            author: 'visor-bot',
+            body: '<!-- visor:thread={invalid json here} -->\n## Malformed Metadata\nShould still be included since JSON parse fails',
+            createdAt: '2024-01-01T11:00:00Z',
+            updatedAt: '2024-01-01T11:00:00Z',
+          },
+        ],
+      };
+
+      const service = new AIReviewService();
+      const context = await (service as any).formatPRContext(prInfoWithComments, true);
+
+      // Should include regular user comments
+      expect(context).toContain('Regular comment');
+
+      // Should include malformed visor comment (safe fallback)
+      expect(context).toContain('Malformed Metadata');
+      expect(context).toContain('Should still be included since JSON parse fails');
+    });
   });
 });

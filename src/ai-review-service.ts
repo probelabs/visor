@@ -762,11 +762,28 @@ ${this.escapeXml(prInfo.body)}
           : issueComments;
 
         // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
-        // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+        // Old format: <!-- visor-comment-id:pr-review-244-review -->
+        // New format: <!-- visor:thread={"key":"...","group":"review",...} -->
         if (isCodeReviewSchema) {
-          historicalComments = historicalComments.filter(
-            c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
-          );
+          historicalComments = historicalComments.filter(c => {
+            if (!c.body) return true;
+
+            // Old format: check for visor-comment-id:pr-review- pattern
+            if (c.body.includes('visor-comment-id:pr-review-')) return false;
+
+            // New format: check for visor:thread metadata with group="review"
+            const threadMatch = c.body.match(/<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/);
+            if (threadMatch) {
+              try {
+                const metadata = JSON.parse(threadMatch[1]);
+                if (metadata.group === 'review') return false;
+              } catch {
+                // If parsing fails, keep the comment to be safe
+              }
+            }
+
+            return true;
+          });
         }
 
         if (historicalComments.length > 0) {
@@ -914,11 +931,28 @@ ${this.escapeXml(processedFallbackDiff)}
         : prComments;
 
       // For code-review schema checks, filter out previous Visor code-review comments to avoid self-bias
-      // Comment IDs look like: <!-- visor-comment-id:pr-review-244-review -->
+      // Old format: <!-- visor-comment-id:pr-review-244-review -->
+      // New format: <!-- visor:thread={"key":"...","group":"review",...} -->
       if (isCodeReviewSchema) {
-        historicalComments = historicalComments.filter(
-          c => !c.body || !c.body.includes('visor-comment-id:pr-review-')
-        );
+        historicalComments = historicalComments.filter(c => {
+          if (!c.body) return true;
+
+          // Old format: check for visor-comment-id:pr-review- pattern
+          if (c.body.includes('visor-comment-id:pr-review-')) return false;
+
+          // New format: check for visor:thread metadata with group="review"
+          const threadMatch = c.body.match(/<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/);
+          if (threadMatch) {
+            try {
+              const metadata = JSON.parse(threadMatch[1]);
+              if (metadata.group === 'review') return false;
+            } catch {
+              // If parsing fails, keep the comment to be safe
+            }
+          }
+
+          return true;
+        });
       }
 
       if (historicalComments.length > 0) {
