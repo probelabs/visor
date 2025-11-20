@@ -334,6 +334,11 @@ export class VisorTestRunner {
     } catch {}
     // Always use StateMachineExecutionEngine
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
+    try {
+      // Seed execution context with octokit so frontends can act in flows
+      const prev: any = (engine as any).executionContext || {};
+      (engine as any).setExecutionContext({ ...prev, octokit: recorder as unknown as any });
+    } catch {}
     // Prompts and mocks setup
     const prompts: Record<string, string[]> = {};
     const mocks =

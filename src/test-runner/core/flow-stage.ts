@@ -73,8 +73,10 @@ export class FlowStage {
     } as Record<string, unknown>;
     const mockMgr = new MockManager(mergedMocks);
 
-    // Hook execution context for prompts and mocks
+    // Hook execution context for prompts and mocks, preserving existing context and octokit
+    const prevCtx: any = (this.engine as any).executionContext || {};
     this.engine.setExecutionContext({
+      ...prevCtx,
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
           const k = info.step;
@@ -152,8 +154,9 @@ export class FlowStage {
       // Pass stage baseline to providers through execution context so they can
       // compute outputs_history_stage for template guards and assertions.
       try {
+        const prev: any = (this.engine as any).executionContext || {};
         this.engine.setExecutionContext({
-          ...(this.engine as any).executionContext,
+          ...prev,
           stageHistoryBase: histBase,
         } as any);
       } catch {}
