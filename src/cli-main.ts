@@ -276,28 +276,48 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (failed.length) {
         write('  Failures:');
         const cross = '\u001b[31m✖\u001b[0m';
+        const fsSync = require('fs');
         for (const s of failed) {
           const fcases = s.results.filter((r: any) => !r.passed);
           write(`   ${rel(s.file)}`);
-          for (const c of fcases) {
-            if (Array.isArray(c.stages) && c.stages.length > 0) {
-              const bad = c.stages.filter(
-                (st: any) => Array.isArray(st.errors) && st.errors.length > 0
-              );
-              for (const st of bad) {
-                const errs = st.errors || [];
-                for (const e of errs) write(`     ${cross} ${c.name}#${st.name} | ${e}`);
+          // best-effort line hints
+          let raw: string | undefined;
+          try { raw = fsSync.readFileSync(s.file, 'utf8'); } catch {}
+          const findLine = (caseName: string, stageName?: string): number | undefined => {
+            if (!raw) return undefined;
+            const lines = raw.split(/\r?\n/);
+            let caseLine: number | undefined;
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].includes('- name:') && lines[i].includes(caseName)) { caseLine = i + 1; break; }
+            }
+            if (!stageName) return caseLine;
+            if (caseLine !== undefined) {
+              for (let j = caseLine; j < lines.length; j++) {
+                if (lines[j].includes('- name:') && lines[j].includes(stageName)) return j + 1;
               }
             }
-            if (
-              (!c.stages || c.stages.length === 0) &&
-              Array.isArray(c.errors) &&
-              c.errors.length > 0
-            ) {
-              for (const e of c.errors) write(`     ${cross} ${c.name} | ${e}`);
+            return caseLine;
+          };
+          for (const c of fcases) {
+            if (Array.isArray(c.stages) && c.stages.length > 0) {
+              const bad = c.stages.filter((st: any) => Array.isArray(st.errors) && st.errors.length > 0);
+              for (const st of bad) {
+                const stageNameOnly = String(st.name || '').includes('#')
+                  ? String(st.name).split('#').pop()
+                  : String(st.name);
+                const label = `${c.name}#${stageNameOnly}`;
+                const ln = findLine(c.name, stageNameOnly);
+                write(`     ${cross} ${label}${ln ? ` (${rel(s.file)}:${ln})` : ''}`);
+                for (const e of st.errors || []) write(`       • ${e}`);
+              }
+            }
+            if ((!c.stages || c.stages.length === 0) && Array.isArray(c.errors) && c.errors.length > 0) {
+              const ln = findLine(c.name);
+              write(`     ${cross} ${c.name}${ln ? ` (${rel(s.file)}:${ln})` : ''}`);
+              for (const e of c.errors) write(`       • ${e}`);
             }
           }
-          write(`   Tip: visor test --config ${rel(s.file)} --only "CASE[#STAGE]"`);
+          write(`   Tip: visor test --config ${rel(s.file)} --only \"CASE[#STAGE]\"`);
         }
       }
       runRes = { results: agg.perSuite };
