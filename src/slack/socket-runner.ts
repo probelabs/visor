@@ -2,6 +2,9 @@ import WebSocket from 'ws';
 import { logger } from '../logger';
 import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
+import { SlackClient } from './client';
+import { SlackAdapter } from './adapter';
+import { CachePrewarmer } from './cache-prewarmer';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -34,6 +37,26 @@ export class SlackSocketRunner {
   }
 
   async start(): Promise<void> {
+    // Optional cache prewarming
+    try {
+      const slackAny: any = (this.cfg as any).slack || {};
+      const botToken = slackAny.bot_token || process.env.SLACK_BOT_TOKEN;
+      if (botToken && slackAny.cache_prewarming?.enabled) {
+        const client = new SlackClient(botToken);
+        const adapter = new SlackAdapter(client, {
+          id: 'default',
+          endpoint: this.endpoint,
+          signing_secret: '',
+          bot_token: botToken,
+          fetch: { scope: 'thread', max_messages: slackAny.fetch?.max_messages || 40, cache: slackAny.fetch?.cache },
+        });
+        const pre = new CachePrewarmer(client, adapter, slackAny.cache_prewarming || {});
+        const res = await pre.prewarm();
+        logger.info(`[SlackSocket] Prewarmed ${res.totalThreads} threads in ${res.durationMs}ms`);
+      }
+    } catch (e) {
+      logger.warn(`[SlackSocket] Prewarm skipped: ${e instanceof Error ? e.message : e}`);
+    }
     const url = await this.openConnection();
     await this.connect(url);
   }
@@ -138,4 +161,3 @@ export class SlackSocketRunner {
     }
   }
 }
-
