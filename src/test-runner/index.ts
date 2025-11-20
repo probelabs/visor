@@ -179,7 +179,6 @@ export async function runSuites(
     }>;
   }>;
 }> {
-  const runner = new VisorTestRunner();
   const perSuite: Array<{
     file: string;
     failures: number;
@@ -204,6 +203,7 @@ export async function runSuites(
       const fp = filesSorted[i];
       let suite: TestSuite | null = null;
       try {
+        const runner = new VisorTestRunner();
         suite = runner.loadSuite(fp);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -220,6 +220,7 @@ export async function runSuites(
         continue;
       }
       // expose relative path for suite header printing
+      const runner = new VisorTestRunner();
       (runner as any).__suiteRel = path.relative(process.cwd(), fp) || fp;
       const r = await runner.runCases(fp, suite as TestSuite, {
         only: options.only,
@@ -334,6 +335,11 @@ export class VisorTestRunner {
     } catch {}
     // Always use StateMachineExecutionEngine
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
+    try {
+      // Seed execution context with octokit so frontends can act in flows
+      const prev: any = (engine as any).executionContext || {};
+      (engine as any).setExecutionContext({ ...prev, octokit: recorder as unknown as any });
+    } catch {}
     // Prompts and mocks setup
     const prompts: Record<string, string[]> = {};
     const mocks =
@@ -382,6 +388,9 @@ export class VisorTestRunner {
           return (req.default ?? '').toString();
         },
       },
+      // Expose Octokit to frontends via executionContext so event-driven
+      // GitHub frontend can perform calls during tests
+      octokit: recorder as unknown as any,
     } as any);
     // Determine checks to run for this event
     const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
@@ -757,6 +766,14 @@ export class VisorTestRunner {
           ? (_case as any).ai_include_code_context
           : false) || suiteDefaults.ai_include_code_context === true;
       const cfgLocal = JSON.parse(JSON.stringify(cfg));
+      // Respect suite-level frontends (e.g., ['github'])
+      try {
+        const fns = (suiteDefaults.frontends || undefined) as unknown;
+        if (Array.isArray(fns) && fns.length > 0) {
+          const norm = (fns as any[]).map(x => (typeof x === 'string' ? { name: x } : x));
+          (cfgLocal as any).frontends = norm;
+        }
+      } catch {}
       for (const name of Object.keys(cfgLocal.checks || {})) {
         const chk = cfgLocal.checks[name] || {};
         if ((chk.type || 'ai') === 'ai') {
@@ -1094,7 +1111,8 @@ export class VisorTestRunner {
           this.printSelectedChecks.bind(this),
           this.warnUnmockedProviders.bind(this),
           defaultIncludeTags,
-          defaultExcludeTags
+          defaultExcludeTags,
+          (suiteDefaults.frontends || undefined) as any[]
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

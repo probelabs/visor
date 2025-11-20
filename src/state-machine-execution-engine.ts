@@ -261,52 +261,97 @@ export class StateMachineExecutionEngine {
     // Store context for later access (e.g., getOutputHistorySnapshot)
     this._lastContext = context;
 
+    // Optionally enable event-driven frontends if configured
+    let frontendsHost: any | undefined;
+    if (
+      Array.isArray((configWithTagFilter as any).frontends) &&
+      (configWithTagFilter as any).frontends.length > 0
+    ) {
+      try {
+        const { EventBus } = await import('./event-bus/event-bus');
+        const { FrontendsHost } = await import('./frontends/host');
+        const bus = new EventBus();
+        (context as any).eventBus = bus;
+        frontendsHost = new FrontendsHost(bus, logger);
+        await frontendsHost.load((configWithTagFilter as any).frontends);
+        // Derive repo/pr/headSha and octokit if available
+        let owner: string | undefined;
+        let name: string | undefined;
+        let prNum: number | undefined;
+        let headSha: string | undefined;
+        try {
+          const anyInfo: any = prInfo as any;
+          owner =
+            anyInfo?.eventContext?.repository?.owner?.login ||
+            process.env.GITHUB_REPOSITORY?.split('/')?.[0];
+          name =
+            anyInfo?.eventContext?.repository?.name ||
+            process.env.GITHUB_REPOSITORY?.split('/')?.[1];
+          prNum = typeof anyInfo?.number === 'number' ? anyInfo.number : undefined;
+          headSha = anyInfo?.eventContext?.pull_request?.head?.sha || process.env.GITHUB_SHA;
+        } catch {}
+        const repoObj = owner && name ? { owner, name } : undefined;
+        const octokit = (this.executionContext as any)?.octokit;
+        // Fallback: if headSha is missing but we have PR info and octokit, fetch it
+        if (
+          !headSha &&
+          repoObj &&
+          prNum &&
+          octokit &&
+          typeof octokit.rest?.pulls?.get === 'function'
+        ) {
+          try {
+            const { data } = await octokit.rest.pulls.get({
+              owner: repoObj.owner,
+              repo: repoObj.name,
+              pull_number: prNum,
+            });
+            headSha = (data && (data as any).head && (data as any).head.sha) || headSha;
+          } catch {
+            // ignore; headSha remains undefined
+          }
+        }
+        await frontendsHost.startAll(() => ({
+          eventBus: bus,
+          logger,
+          // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
+          config: configWithTagFilter,
+          run: {
+            runId: (context as any).sessionId,
+            repo: repoObj,
+            pr: prNum,
+            headSha,
+            event: (context as any).event || (prInfo as any)?.eventType,
+            actor:
+              (prInfo as any)?.eventContext?.sender?.login ||
+              (typeof process.env.GITHUB_ACTOR === 'string' ? process.env.GITHUB_ACTOR : undefined),
+          },
+          octokit,
+        }));
+      } catch (err) {
+        logger.warn(
+          `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
     this._lastRunner = runner;
     const result = await runner.run();
 
+    // Stop frontends if started
+    if (frontendsHost && typeof frontendsHost.stopAll === 'function') {
+      try {
+        await frontendsHost.stopAll();
+      } catch {}
+    }
+
     if (debug) {
       logger.info('[StateMachine] Execution complete');
     }
 
-    // Optional grouped-mode PR comment posting (used by YAML tests via execution context)
-    try {
-      if (
-        this.executionContext?.mode?.postGroupedComments &&
-        configWithTagFilter?.output?.pr_comment
-      ) {
-        const { PRReviewer } = await import('./reviewer');
-        const reviewer = new PRReviewer(
-          (this._lastContext as any)?.executionContext?.octokit as any
-        );
-
-        // Resolve owner/repo from PRInfo.eventContext
-        let owner: string | undefined;
-        let repo: string | undefined;
-        try {
-          const anyInfo = prInfo as unknown as {
-            eventContext?: { repository?: { owner?: { login?: string }; name?: string } };
-          };
-          owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
-          repo = anyInfo?.eventContext?.repository?.name || repo;
-        } catch {}
-        owner = owner || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[0];
-        repo = repo || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[1];
-
-        if (owner && repo && (prInfo as any).number) {
-          await reviewer.postReviewComment(owner, repo, (prInfo as any).number, result.results, {
-            config: configWithTagFilter as any,
-            triggeredBy: (prInfo as any).eventType || 'manual',
-            commentId: 'visor-review',
-            octokitOverride: (prInfo as any)?.eventContext?.octokit,
-            commitSha: (prInfo as any)?.eventContext?.pull_request?.head?.sha,
-          });
-        }
-      }
-    } catch (err) {
-      logger.debug(`[StateMachine] Skipped postGroupedComments due to error: ${err}`);
-    }
+    // Post-grouped comments via legacy reviewer is removed; GitHub frontend handles comments
 
     // Cleanup AI sessions after execution
     try {

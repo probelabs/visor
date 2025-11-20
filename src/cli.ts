@@ -220,6 +220,7 @@ export class CLI {
         analyzeBranchDiff: options.analyzeBranchDiff,
         event: options.event,
         message: options.message,
+        githubV2: false,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

@@ -430,19 +430,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path16 = require("path");
-    const fs15 = require("fs");
+    const path17 = require("path");
+    const fs16 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path16.dirname(__ndjsonPath);
-      if (!fs15.existsSync(dir)) fs15.mkdirSync(dir, { recursive: true });
+      const dir = path17.dirname(__ndjsonPath);
+      if (!fs16.existsSync(dir)) fs16.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path16.join(process.cwd(), "output", "traces");
-    if (!fs15.existsSync(outDir)) fs15.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path17.join(process.cwd(), "output", "traces");
+    if (!fs16.existsSync(outDir)) fs16.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path16.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path17.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -451,11 +451,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs15 = require("fs");
+    const fs16 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs15.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs16.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -4510,7 +4510,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs15 = require("fs");
+    const fs16 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path5.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -4521,7 +4521,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs15.existsSync(candidatePath)) {
+      if (fs16.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -5237,8 +5237,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -5352,20 +5352,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
-              if (!fs15.existsSync(debugArtifactsDir)) {
-                fs15.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              if (!fs16.existsSync(debugArtifactsDir)) {
+                fs16.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path16.join(
+              const debugFile = path17.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs15.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path16.join(
+              fs16.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path17.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs15.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs16.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -5397,8 +5397,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -5409,8 +5409,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path16.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path17.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5422,7 +5422,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs15.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5449,7 +5449,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs15.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5458,11 +5458,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
-              const responseFile = path16.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const responseFile = path17.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5495,7 +5495,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs15.writeFileSync(responseFile, responseContent, "utf-8");
+              fs16.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5511,9 +5511,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs15 = require("fs");
-                  if (fs15.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs15.statSync(agentAny._traceFilePath);
+                  const fs16 = require("fs");
+                  if (fs16.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs16.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -5666,8 +5666,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const os = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -5741,18 +5741,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path16.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs15.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path17.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs16.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path16.join(
+                const base = path17.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs15.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs15.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs16.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs16.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -5797,8 +5797,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -5809,8 +5809,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path16.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path17.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5822,7 +5822,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs15.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5849,7 +5849,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs15.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5858,11 +5858,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs15 = require("fs");
-              const path16 = require("path");
+              const fs16 = require("fs");
+              const path17 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path16.join(process.cwd(), "debug-artifacts");
-              const responseFile = path16.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const responseFile = path17.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5895,7 +5895,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs15.writeFileSync(responseFile, responseContent, "utf-8");
+              fs16.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5913,9 +5913,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs15 = require("fs");
-                  if (fs15.existsSync(traceFilePath)) {
-                    const stats = fs15.statSync(traceFilePath);
+                  const fs16 = require("fs");
+                  if (fs16.existsSync(traceFilePath)) {
+                    const stats = fs16.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -5953,8 +5953,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs15 = require("fs").promises;
-        const path16 = require("path");
+        const fs16 = require("fs").promises;
+        const path17 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -5967,14 +5967,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path16.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path17.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path16.resolve(process.cwd(), schema);
+            const schemaPath = path17.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs15.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -5988,22 +5988,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path17.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs15.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path16.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path16.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path17.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -6704,9 +6704,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path16 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path16) return obj;
-    const parts = path16.split(".");
+    const path17 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path17) return obj;
+    const parts = path17.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -7129,9 +7129,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
-          const fs15 = require("fs").promises;
+          const fs16 = require("fs").promises;
           try {
-            const stat = await fs15.stat(resolvedPath);
+            const stat = await fs16.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -14575,6 +14575,24 @@ var init_config_schema = __esm({
             limits: {
               $ref: "#/definitions/LimitsConfig",
               description: "Global execution limits"
+            },
+            frontends: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Frontend name, e.g., 'ndjson-sink', 'github'"
+                  },
+                  config: {
+                    description: "Frontend-specific configuration"
+                  }
+                },
+                required: ["name"],
+                additionalProperties: false
+              },
+              description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)"
             }
           },
           required: ["output", "version"],
@@ -15052,7 +15070,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15683,13 +15701,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>>": {
+        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>": {
+        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>": {
           type: "object",
           additionalProperties: false
         },
@@ -17395,7 +17413,7 @@ var init_workflow_check_provider = __esm({
         const { StateMachineRunner: StateMachineRunner2 } = (init_runner(), __toCommonJS(runner_exports));
         const { ExecutionJournal: ExecutionJournal2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
         const { MemoryStore: MemoryStore2 } = (init_memory_store(), __toCommonJS(memory_store_exports));
-        const { v4: uuidv43 } = require("uuid");
+        const { v4: uuidv44 } = require("uuid");
         const parentContext = context2?._parentContext;
         const parentState = context2?._parentState;
         const currentDepth = parentState?.flags?.currentWorkflowDepth || 0;
@@ -17421,7 +17439,7 @@ var init_workflow_check_provider = __esm({
           memory: childMemory,
           workingDirectory: parentContext?.workingDirectory || process.cwd(),
           // Always use a fresh session for nested workflows to isolate history
-          sessionId: uuidv43(),
+          sessionId: uuidv44(),
           event: parentContext?.event || prInfo.eventType,
           debug: parentContext?.debug || false,
           maxParallelism: parentContext?.maxParallelism,
@@ -17599,10 +17617,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path16 = require("path");
-        const fs15 = require("fs");
-        const resolved = path16.isAbsolute(sourcePath) ? sourcePath : path16.resolve(baseDir, sourcePath);
-        if (!fs15.existsSync(resolved)) {
+        const path17 = require("path");
+        const fs16 = require("fs");
+        const resolved = path17.isAbsolute(sourcePath) ? sourcePath : path17.resolve(baseDir, sourcePath);
+        if (!fs16.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -17612,8 +17630,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path16.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path16.basename(resolved)}`;
+        const id = path17.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path17.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -17828,19 +17846,19 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs15 = await import("fs/promises");
-    const path16 = await import("path");
+    const fs16 = await import("fs/promises");
+    const path17 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When running from dist
-      path16.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path17.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path16.join(process.cwd(), "output", sanitized, "schema.json")
+      path17.join(process.cwd(), "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs15.readFile(p, "utf-8");
+        const raw = await fs16.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -18250,6 +18268,16 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           debug: !!context2.debug
         }
       };
+      try {
+        const maybeOctokit = context2.executionContext?.octokit;
+        if (maybeOctokit) {
+          providerConfig.eventContext = {
+            ...providerConfig.eventContext,
+            octokit: maybeOctokit
+          };
+        }
+      } catch {
+      }
       const dependencyResults = buildDependencyResultsWithScope(
         checkId,
         checkConfig,
@@ -19175,6 +19203,16 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         debug: !!context2.debug
       }
     };
+    try {
+      const maybeOctokit = context2.executionContext?.octokit;
+      if (maybeOctokit) {
+        providerConfig.eventContext = {
+          ...providerConfig.eventContext,
+          octokit: maybeOctokit
+        };
+      }
+    } catch {
+    }
     const dependencyResults = buildDependencyResults(checkId, checkConfig2, context2, state);
     const prInfo = context2.prInfo || {
       number: 1,
@@ -19815,8 +19853,8 @@ function updateStats(results, state, isForEachIteration = false) {
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs15 = await import("fs/promises");
-    const path16 = await import("path");
+    const fs16 = await import("fs/promises");
+    const path17 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -19824,20 +19862,20 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path16.resolve(process.cwd(), file);
-      templateContent = await fs15.readFile(resolved, "utf-8");
+      const resolved = path17.resolve(process.cwd(), file);
+      templateContent = await fs16.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
           // When bundled (dist), __dirname points to dist/state-machine/states
-          path16.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path17.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // Dev fallback
-          path16.join(process.cwd(), "output", sanitized, "template.liquid")
+          path17.join(process.cwd(), "output", sanitized, "template.liquid")
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs15.readFile(p, "utf-8");
+            templateContent = await fs16.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -19937,10 +19975,11 @@ var runner_exports = {};
 __export(runner_exports, {
   StateMachineRunner: () => StateMachineRunner
 });
-var StateMachineRunner;
+var import_uuid, StateMachineRunner;
 var init_runner = __esm({
   "src/state-machine/runner.ts"() {
     "use strict";
+    import_uuid = require("uuid");
     init_logger();
     init_trace_helpers();
     init_init();
@@ -20121,6 +20160,22 @@ var init_runner = __esm({
             this.streamEventToDebugServer(event);
           } catch (_err) {
           }
+        }
+        try {
+          const bus = this.context.eventBus;
+          if (bus && typeof bus.emit === "function") {
+            const envelope = {
+              id: (0, import_uuid.v4)(),
+              version: 1,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+              runId: this.context.sessionId,
+              workflowId: this.context.workflowId,
+              wave: this.state.wave,
+              payload: event
+            };
+            void bus.emit(envelope);
+          }
+        } catch {
         }
         if (this.context.debug && event.type !== "StateTransition") {
           logger.debug(`[StateMachine] Event: ${event.type}`);
@@ -20831,6 +20886,95 @@ ${file.patch}`).join("\n\n");
   }
 });
 
+// src/event-bus/event-bus.ts
+var event_bus_exports = {};
+__export(event_bus_exports, {
+  EventBus: () => EventBus
+});
+var EventBus;
+var init_event_bus = __esm({
+  "src/event-bus/event-bus.ts"() {
+    "use strict";
+    EventBus = class {
+      handlers = /* @__PURE__ */ new Map();
+      anyHandlers = /* @__PURE__ */ new Set();
+      on(eventType, handler) {
+        const set = this.handlers.get(eventType) || /* @__PURE__ */ new Set();
+        set.add(handler);
+        this.handlers.set(eventType, set);
+        return {
+          unsubscribe: () => {
+            set.delete(handler);
+          }
+        };
+      }
+      onAny(handler) {
+        this.anyHandlers.add(handler);
+        return { unsubscribe: () => this.anyHandlers.delete(handler) };
+      }
+      async emit(event) {
+        const type = event?.payload?.type ?? event?.type ?? "unknown";
+        const list = [
+          ...Array.from(this.anyHandlers),
+          ...Array.from(this.handlers.get(type) || [])
+        ];
+        for (const h of list) {
+          await h(event);
+        }
+      }
+    };
+  }
+});
+
+// src/frontends/ndjson-sink.ts
+var ndjson_sink_exports = {};
+__export(ndjson_sink_exports, {
+  NdjsonSink: () => NdjsonSink
+});
+var import_fs2, import_path5, NdjsonSink;
+var init_ndjson_sink = __esm({
+  "src/frontends/ndjson-sink.ts"() {
+    "use strict";
+    import_fs2 = __toESM(require("fs"));
+    import_path5 = __toESM(require("path"));
+    NdjsonSink = class {
+      name = "ndjson-sink";
+      cfg;
+      unsub;
+      filePath;
+      constructor(config) {
+        this.cfg = config || {};
+      }
+      start(ctx) {
+        this.filePath = this.resolveFile(this.cfg.file || ".visor-events.ndjson");
+        ctx.logger.info(`[ndjson-sink] Writing events to ${this.filePath}`);
+        this.unsub = ctx.eventBus.onAny(async (envelope) => {
+          try {
+            const line = JSON.stringify({
+              id: envelope && envelope.id || void 0,
+              ts: (/* @__PURE__ */ new Date()).toISOString(),
+              runId: ctx.run.runId,
+              payload: envelope && envelope.payload || envelope,
+              safe: true
+            });
+            await import_fs2.default.promises.appendFile(this.filePath, line + "\n");
+          } catch (err) {
+            ctx.logger.error("[ndjson-sink] Failed to write event:", err);
+          }
+        });
+      }
+      stop() {
+        this.unsub?.unsubscribe();
+        this.unsub = void 0;
+      }
+      resolveFile(p) {
+        if (import_path5.default.isAbsolute(p)) return p;
+        return import_path5.default.join(process.cwd(), p);
+      }
+    };
+  }
+});
+
 // src/footer.ts
 function generateFooter(options = {}) {
   const { includeMetadata, includeSeparator = true } = options;
@@ -20858,12 +21002,460 @@ var init_footer = __esm({
   }
 });
 
+// src/github-check-service.ts
+var github_check_service_exports = {};
+__export(github_check_service_exports, {
+  GitHubCheckService: () => GitHubCheckService
+});
+var GitHubCheckService;
+var init_github_check_service = __esm({
+  "src/github-check-service.ts"() {
+    "use strict";
+    init_footer();
+    GitHubCheckService = class {
+      octokit;
+      maxAnnotations = 50;
+      // GitHub API limit
+      constructor(octokit) {
+        this.octokit = octokit;
+      }
+      /**
+       * Create a new check run in queued status
+       * M4: Includes engine_mode metadata in summary
+       */
+      async createCheckRun(options, summary) {
+        try {
+          const enhancedSummary = summary && options.engine_mode ? {
+            ...summary,
+            summary: `${summary.summary}
+
+_Engine: ${options.engine_mode}_`
+          } : summary;
+          const response = await this.octokit.rest.checks.create({
+            owner: options.owner,
+            repo: options.repo,
+            name: options.name,
+            head_sha: options.head_sha,
+            status: "queued",
+            details_url: options.details_url,
+            external_id: options.external_id,
+            output: enhancedSummary ? {
+              title: enhancedSummary.title,
+              summary: enhancedSummary.summary,
+              text: enhancedSummary.text
+            } : void 0
+          });
+          return {
+            id: response.data.id,
+            url: response.data.html_url || ""
+          };
+        } catch (error) {
+          throw new Error(
+            `Failed to create check run: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      /**
+       * Update check run to in_progress status
+       */
+      async updateCheckRunInProgress(owner, repo, check_run_id, summary) {
+        try {
+          await this.octokit.rest.checks.update({
+            owner,
+            repo,
+            check_run_id,
+            status: "in_progress",
+            output: summary ? {
+              title: summary.title,
+              summary: summary.summary,
+              text: summary.text
+            } : void 0
+          });
+        } catch (error) {
+          throw new Error(
+            `Failed to update check run to in_progress: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      /**
+       * Complete a check run with results based on failure conditions
+       */
+      async completeCheckRun(owner, repo, check_run_id, checkName, failureResults, reviewIssues = [], executionError, filesChangedInCommit, prNumber, currentCommitSha) {
+        try {
+          if (prNumber && currentCommitSha) {
+            await this.clearOldAnnotations(
+              owner,
+              repo,
+              prNumber,
+              checkName,
+              currentCommitSha,
+              check_run_id
+            );
+          }
+          const { conclusion, summary } = this.determineCheckRunConclusion(
+            checkName,
+            failureResults,
+            reviewIssues,
+            executionError
+          );
+          let filteredIssues = reviewIssues.filter(
+            (issue) => !(issue.file === "system" && issue.line === 0)
+          );
+          if (filesChangedInCommit && filesChangedInCommit.length > 0) {
+            filteredIssues = filteredIssues.filter(
+              (issue) => filesChangedInCommit.some((changedFile) => issue.file === changedFile)
+            );
+          }
+          const annotations = this.convertIssuesToAnnotations(filteredIssues);
+          await this.octokit.rest.checks.update({
+            owner,
+            repo,
+            check_run_id,
+            status: "completed",
+            conclusion,
+            completed_at: (/* @__PURE__ */ new Date()).toISOString(),
+            output: {
+              title: summary.title,
+              summary: summary.summary,
+              text: summary.text,
+              annotations: annotations.slice(0, this.maxAnnotations)
+              // GitHub limit
+            }
+          });
+        } catch (error) {
+          throw new Error(
+            `Failed to complete check run: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      /**
+       * Determine check run conclusion based on failure conditions and issues
+       */
+      determineCheckRunConclusion(checkName, failureResults, reviewIssues, executionError) {
+        if (executionError) {
+          return {
+            conclusion: "failure",
+            summary: {
+              title: "\u274C Check Execution Failed",
+              summary: `The ${checkName} check failed to execute properly.`,
+              text: `**Error:** ${executionError}
+
+Please check your configuration and try again.`
+            }
+          };
+        }
+        const failedConditions = failureResults.filter((result) => result.failed);
+        const criticalIssues = reviewIssues.filter((issue) => issue.severity === "critical").length;
+        const errorIssues = reviewIssues.filter((issue) => issue.severity === "error").length;
+        const warningIssues = reviewIssues.filter((issue) => issue.severity === "warning").length;
+        const totalIssues = reviewIssues.length;
+        let conclusion;
+        let title;
+        let summaryText;
+        let details;
+        if (failedConditions.length > 0) {
+          conclusion = "failure";
+          title = "\u{1F6A8} Check Failed";
+          summaryText = `${checkName} check failed because fail_if condition was met.`;
+          details = this.formatCheckDetails(failureResults, reviewIssues, {
+            failedConditions: failedConditions.length,
+            warningConditions: 0,
+            criticalIssues,
+            errorIssues,
+            warningIssues,
+            totalIssues
+          });
+        } else {
+          conclusion = "success";
+          if (criticalIssues > 0 || errorIssues > 0) {
+            title = "\u2705 Check Passed (Issues Found)";
+            summaryText = `${checkName} check passed. Found ${criticalIssues} critical and ${errorIssues} error issues, but fail_if condition was not met.`;
+          } else if (warningIssues > 0) {
+            title = "\u2705 Check Passed (Warnings Found)";
+            summaryText = `${checkName} check passed. Found ${warningIssues} warning${warningIssues === 1 ? "" : "s"}, but fail_if condition was not met.`;
+          } else {
+            title = "\u2705 Check Passed";
+            summaryText = `${checkName} check completed successfully with no issues found.`;
+          }
+          details = this.formatCheckDetails(failureResults, reviewIssues, {
+            failedConditions: 0,
+            warningConditions: 0,
+            criticalIssues,
+            errorIssues,
+            warningIssues,
+            totalIssues
+          });
+        }
+        return {
+          conclusion,
+          summary: {
+            title,
+            summary: summaryText,
+            text: details
+          }
+        };
+      }
+      /**
+       * Format detailed check results for the check run summary
+       */
+      formatCheckDetails(failureResults, reviewIssues, counts) {
+        const sections = [];
+        sections.push("## \u{1F4CA} Summary");
+        sections.push(`- **Total Issues:** ${counts.totalIssues}`);
+        if (counts.criticalIssues > 0) {
+          sections.push(`- **Critical Issues:** ${counts.criticalIssues}`);
+        }
+        if (counts.errorIssues > 0) {
+          sections.push(`- **Error Issues:** ${counts.errorIssues}`);
+        }
+        if (counts.warningIssues > 0) {
+          sections.push(`- **Warning Issues:** ${counts.warningIssues}`);
+        }
+        sections.push("");
+        if (failureResults.length > 0) {
+          sections.push("## \u{1F50D} Failure Condition Results");
+          const failedConditions = failureResults.filter((result) => result.failed);
+          const passedConditions = failureResults.filter((result) => !result.failed);
+          if (failedConditions.length > 0) {
+            sections.push("### Failed Conditions");
+            failedConditions.forEach((condition) => {
+              sections.push(
+                `- **${condition.conditionName}**: ${condition.message || condition.expression}`
+              );
+              if (condition.severity) {
+                const icon = this.getSeverityEmoji(condition.severity);
+                sections.push(`  - Severity: ${icon} ${condition.severity}`);
+              }
+            });
+            sections.push("");
+          }
+          if (passedConditions.length > 0) {
+            sections.push("### Passed Conditions");
+            passedConditions.forEach((condition) => {
+              sections.push(
+                `- **${condition.conditionName}**: ${condition.message || "Condition passed"}`
+              );
+            });
+            sections.push("");
+          }
+        }
+        if (reviewIssues.length > 0) {
+          const issuesByCategory = this.groupIssuesByCategory(reviewIssues);
+          sections.push("## Issues by Category");
+          Object.entries(issuesByCategory).forEach(([category, issues]) => {
+            if (issues.length > 0) {
+              sections.push(
+                `### ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
+              );
+              const displayIssues = issues.slice(0, 5);
+              displayIssues.forEach((issue) => {
+                const severityIcon = this.getSeverityEmoji(issue.severity);
+                sections.push(`- ${severityIcon} **${issue.file}:${issue.line}** - ${issue.message}`);
+              });
+              if (issues.length > 5) {
+                sections.push(`- *...and ${issues.length - 5} more ${category} issues*`);
+              }
+              sections.push("");
+            }
+          });
+        }
+        sections.push("");
+        sections.push(generateFooter());
+        return sections.join("\n");
+      }
+      /**
+       * Convert review issues to GitHub check run annotations
+       */
+      convertIssuesToAnnotations(reviewIssues) {
+        return reviewIssues.slice(0, this.maxAnnotations).map((issue) => ({
+          path: issue.file,
+          start_line: issue.line,
+          end_line: issue.endLine || issue.line,
+          annotation_level: this.mapSeverityToAnnotationLevel(issue.severity),
+          message: issue.message,
+          title: `${issue.category} Issue`,
+          raw_details: issue.suggestion || void 0
+        }));
+      }
+      /**
+       * Map Visor issue severity to GitHub annotation level
+       */
+      mapSeverityToAnnotationLevel(severity) {
+        switch (severity) {
+          case "critical":
+          case "error":
+            return "failure";
+          case "warning":
+            return "warning";
+          case "info":
+          default:
+            return "notice";
+        }
+      }
+      /**
+       * Group issues by category
+       */
+      groupIssuesByCategory(issues) {
+        const grouped = {};
+        issues.forEach((issue) => {
+          const category = issue.category || "general";
+          if (!grouped[category]) {
+            grouped[category] = [];
+          }
+          grouped[category].push(issue);
+        });
+        return grouped;
+      }
+      /**
+       * Get emoji for issue severity (allowed; step/category emojis are removed)
+       */
+      getSeverityEmoji(severity) {
+        const iconMap = {
+          critical: "\u{1F6A8}",
+          error: "\u274C",
+          warning: "\u26A0\uFE0F",
+          info: "\u2139\uFE0F"
+        };
+        return iconMap[String(severity || "").toLowerCase()] || "";
+      }
+      /**
+       * Create multiple check runs for different checks with failure condition support
+       */
+      async createMultipleCheckRuns(options, checkResults) {
+        const results = [];
+        for (const checkResult of checkResults) {
+          try {
+            const checkRun = await this.createCheckRun({
+              ...options,
+              name: `Visor: ${checkResult.checkName}`,
+              external_id: `visor-${checkResult.checkName}-${options.head_sha.substring(0, 7)}`
+            });
+            await this.updateCheckRunInProgress(options.owner, options.repo, checkRun.id, {
+              title: `Running ${checkResult.checkName} check...`,
+              summary: `Analyzing code with ${checkResult.checkName} check using AI.`
+            });
+            await this.completeCheckRun(
+              options.owner,
+              options.repo,
+              checkRun.id,
+              checkResult.checkName,
+              checkResult.failureResults,
+              checkResult.reviewIssues,
+              checkResult.executionError
+            );
+            results.push({
+              checkName: checkResult.checkName,
+              id: checkRun.id,
+              url: checkRun.url
+            });
+          } catch (error) {
+            console.error(`Failed to create check run for ${checkResult.checkName}:`, error);
+          }
+        }
+        return results;
+      }
+      /**
+       * Get check runs for a specific commit
+       */
+      async getCheckRuns(owner, repo, ref) {
+        try {
+          const response = await this.octokit.rest.checks.listForRef({
+            owner,
+            repo,
+            ref,
+            filter: "all"
+          });
+          return response.data.check_runs.filter((check) => check.name.startsWith("Visor:")).map((check) => ({
+            id: check.id,
+            name: check.name,
+            status: check.status,
+            conclusion: check.conclusion
+          }));
+        } catch (error) {
+          throw new Error(
+            `Failed to get check runs: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      /**
+       * Get check runs for a specific commit SHA
+       * Returns all check runs with the given name on this commit
+       */
+      async getCheckRunsForCommit(owner, repo, commitSha, checkName) {
+        try {
+          const checksResponse = await this.octokit.rest.checks.listForRef({
+            owner,
+            repo,
+            ref: commitSha,
+            check_name: `Visor: ${checkName}`
+          });
+          return checksResponse.data.check_runs.map((check) => ({
+            id: check.id,
+            head_sha: commitSha
+          }));
+        } catch (error) {
+          throw new Error(
+            `Failed to get check runs for commit ${commitSha}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      /**
+       * Clear annotations from old check runs on the current commit
+       * This prevents annotation accumulation when a check runs multiple times on the same commit
+       * (e.g., force push, re-running checks)
+       */
+      async clearOldAnnotations(owner, repo, prNumber, checkName, currentCommitSha, currentCheckRunId) {
+        try {
+          const allCheckRuns = await this.getCheckRunsForCommit(
+            owner,
+            repo,
+            currentCommitSha,
+            checkName
+          );
+          const oldRuns = allCheckRuns.filter((run) => run.id !== currentCheckRunId);
+          if (oldRuns.length === 0) {
+            console.debug(`No old check runs to clear for ${checkName} on commit ${currentCommitSha}`);
+            return;
+          }
+          console.debug(
+            `Clearing ${oldRuns.length} old check run(s) for ${checkName} on commit ${currentCommitSha.substring(0, 7)} (keeping current run ${currentCheckRunId})`
+          );
+          for (const run of oldRuns) {
+            try {
+              await this.octokit.rest.checks.update({
+                owner,
+                repo,
+                check_run_id: run.id,
+                output: {
+                  title: "Outdated",
+                  summary: "This check has been superseded by a newer run.",
+                  annotations: []
+                  // Clear annotations
+                }
+              });
+              console.debug(`\u2713 Cleared annotations from check run ${run.id}`);
+            } catch (error) {
+              console.debug(`Could not clear annotations for check run ${run.id}:`, error);
+            }
+          }
+        } catch (error) {
+          console.warn("Failed to clear old annotations:", error);
+        }
+      }
+    };
+  }
+});
+
 // src/github-comments.ts
-var import_uuid, CommentManager;
+var github_comments_exports = {};
+__export(github_comments_exports, {
+  CommentManager: () => CommentManager
+});
+var import_uuid2, CommentManager;
 var init_github_comments = __esm({
   "src/github-comments.ts"() {
     "use strict";
-    import_uuid = require("uuid");
+    import_uuid2 = require("uuid");
     init_logger();
     init_footer();
     CommentManager = class {
@@ -21011,7 +21603,7 @@ ${content}
        * Generate unique comment ID
        */
       generateCommentId() {
-        return (0, import_uuid.v4)().substring(0, 8);
+        return (0, import_uuid2.v4)().substring(0, 8);
       }
       /**
        * Check if comment is a Visor comment
@@ -21144,337 +21736,523 @@ ${content}
   }
 });
 
-// src/reviewer.ts
-var reviewer_exports = {};
-__export(reviewer_exports, {
-  PRReviewer: () => PRReviewer,
-  calculateCriticalIssues: () => calculateCriticalIssues,
-  calculateTotalIssues: () => calculateTotalIssues,
-  convertIssuesToComments: () => convertIssuesToComments,
-  convertReviewSummaryToGroupedResults: () => convertReviewSummaryToGroupedResults
+// src/frontends/github-frontend.ts
+var github_frontend_exports = {};
+__export(github_frontend_exports, {
+  GitHubFrontend: () => GitHubFrontend
 });
-function convertReviewSummaryToGroupedResults(reviewSummary, checkName = "test-check", groupName = "default") {
-  let content = "";
-  if (reviewSummary.issues && reviewSummary.issues.length > 0) {
-    content += `## Issues Found (${reviewSummary.issues.length})
-
-`;
-    reviewSummary.issues.forEach((issue) => {
-      content += `- **${issue.severity.toUpperCase()}**: ${issue.message} (${issue.file}:${issue.line})
-`;
-    });
-    content += "\n";
-  }
-  if (!content) {
-    content = "No issues found.";
-  }
-  const checkResult = {
-    checkName,
-    content: content.trim(),
-    group: groupName,
-    debug: reviewSummary.debug,
-    issues: reviewSummary.issues
-    // Include structured issues
-  };
-  const groupedResults = {};
-  groupedResults[groupName] = [checkResult];
-  return groupedResults;
-}
-function calculateTotalIssues(issues) {
-  return (issues || []).length;
-}
-function calculateCriticalIssues(issues) {
-  return (issues || []).filter((i) => i.severity === "critical").length;
-}
-function convertIssuesToComments(issues) {
-  return issues.map((issue) => ({
-    file: issue.file,
-    line: issue.line,
-    message: issue.message,
-    severity: issue.severity,
-    category: issue.category,
-    suggestion: issue.suggestion,
-    replacement: issue.replacement,
-    ruleId: issue.ruleId
-  }));
-}
-var PRReviewer;
-var init_reviewer = __esm({
-  "src/reviewer.ts"() {
+var GitHubFrontend;
+var init_github_frontend = __esm({
+  "src/frontends/github-frontend.ts"() {
     "use strict";
-    init_github_comments();
-    init_ai_review_service();
-    PRReviewer = class {
-      constructor(octokit) {
-        this.octokit = octokit;
-        this.commentManager = new CommentManager(octokit);
-        this.aiReviewService = new AIReviewService();
-      }
-      commentManager;
-      aiReviewService;
-      async reviewPR(owner, repo, prNumber, prInfo, options = {}) {
-        const { debug = false, config, checks } = options;
-        if (config && checks && checks.length > 0) {
-          const { StateMachineExecutionEngine: StateMachineExecutionEngine2 } = await Promise.resolve().then(() => (init_state_machine_execution_engine(), state_machine_execution_engine_exports));
-          const engine = new StateMachineExecutionEngine2();
-          const { results } = await engine.executeGroupedChecks(
-            prInfo,
-            checks,
-            void 0,
-            config,
-            void 0,
-            debug,
-            void 0,
-            void 0,
-            options.tagFilter
-          );
-          return results;
-        }
-        throw new Error(
-          "No configuration provided. Please create a .visor.yaml file with check definitions. Built-in prompts have been removed - all checks must be explicitly configured."
-        );
-      }
-      /**
-       * Helper to check if a schema is comment-generating
-       * Comment-generating schemas include:
-       * - Built-in schemas: code-review, overview, plain, text
-       * - Custom schemas with a "text" field in properties
-       */
-      async isCommentGeneratingSchema(schema) {
-        try {
-          if (typeof schema === "string") {
-            if (["code-review", "overview", "plain", "text"].includes(schema)) {
-              return true;
-            }
-            const fs15 = require("fs").promises;
-            const path16 = require("path");
-            const sanitizedSchemaName = schema.replace(/[^a-zA-Z0-9-]/g, "");
-            if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
-              return false;
-            }
-            const candidatePaths = [
-              path16.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
-              path16.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
-            ];
-            for (const schemaPath of candidatePaths) {
-              try {
-                const schemaContent = await fs15.readFile(schemaPath, "utf-8");
-                const schemaObj = JSON.parse(schemaContent);
-                const properties = schemaObj.properties;
-                return !!(properties && "text" in properties);
-              } catch {
-              }
-            }
-            return false;
-          } else {
-            const properties = schema.properties;
-            return !!(properties && "text" in properties);
-          }
-        } catch {
-          return false;
-        }
-      }
-      /**
-       * Filter check results to only include those that should post GitHub comments
-       */
-      async filterCommentGeneratingChecks(checkResults, config) {
-        const filtered = [];
-        for (const r of checkResults) {
-          const cfg = config.checks?.[r.checkName];
-          const type = cfg?.type || "ai";
-          const schema = cfg?.schema;
-          let shouldPostComment = false;
-          const isAICheck = type === "ai" || type === "claude-code";
-          if (!schema || schema === "") {
-            shouldPostComment = isAICheck;
-          } else {
-            shouldPostComment = await this.isCommentGeneratingSchema(schema);
-          }
-          if (shouldPostComment) {
-            filtered.push(r);
-          }
-        }
-        return filtered;
-      }
-      async postReviewComment(owner, repo, prNumber, groupedResults, options = {}) {
-        for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-          let filteredResults = options.config ? await this.filterCommentGeneratingChecks(checkResults, options.config) : checkResults;
-          if (groupName === "github-output" && filteredResults && filteredResults.length > 1) {
-            const byName = /* @__PURE__ */ new Map();
-            for (const cr of filteredResults) byName.set(cr.checkName, cr);
-            let collapsed = Array.from(byName.values());
-            const hasVerified = collapsed.some((r) => r.checkName === "post-verified-response");
-            if (hasVerified) {
-              collapsed = collapsed.filter((r) => r.checkName !== "post-unverified-warning");
-            }
-            filteredResults = collapsed;
-          }
-          if (!filteredResults || filteredResults.length === 0) {
-            continue;
-          }
-          const comment = await this.formatGroupComment(filteredResults, options, {
-            owner,
-            repo,
-            prNumber,
-            commitSha: options.commitSha
-          });
-          let commentId;
-          if (groupName === "dynamic") {
-            const timestamp = Date.now();
-            commentId = `visor-dynamic-${timestamp}`;
-          } else {
-            commentId = options.commentId ? `${options.commentId}-${groupName}` : `visor-review-${groupName}`;
-          }
-          if (!comment || !comment.trim()) continue;
-          const manager = options.octokitOverride ? new CommentManager(options.octokitOverride) : this.commentManager;
-          await manager.updateOrCreateComment(owner, repo, prNumber, comment, {
-            commentId,
-            triggeredBy: options.triggeredBy || "unknown",
-            allowConcurrentUpdates: false,
-            commitSha: options.commitSha
-          });
-        }
-      }
-      async formatGroupComment(checkResults, _options, _githubContext) {
-        const normalize3 = (s) => s.replace(/\\n/g, "\n");
-        const checkContents = checkResults.map((result) => {
-          const trimmed = result.content?.trim();
-          if (trimmed) return normalize3(trimmed);
-          const out = result.output;
-          if (out) {
-            if (typeof out === "string" && out.trim()) return normalize3(out.trim());
-            if (typeof out === "object") {
-              const txt = out.text || out.response || out.message;
-              if (typeof txt === "string" && txt.trim()) return normalize3(txt.trim());
-            }
-          }
-          return "";
-        }).filter((content) => content && content.trim());
-        const debugInfo = checkResults.find((result) => result.debug)?.debug;
-        if (checkContents.length === 0 && !debugInfo) {
-          return "";
-        }
-        let comment = "";
-        comment += `## \u{1F50D} Code Analysis Results
-
-`;
-        comment += checkContents.join("\n\n");
-        if (debugInfo) {
-          comment += "\n\n" + this.formatDebugSection(debugInfo);
-          comment += "\n\n";
-        }
-        return comment;
-      }
-      formatDebugSection(debug) {
-        const formattedContent = [
-          `**Provider:** ${debug.provider}`,
-          `**Model:** ${debug.model}`,
-          `**API Key Source:** ${debug.apiKeySource}`,
-          `**Processing Time:** ${debug.processingTime}ms`,
-          `**Timestamp:** ${debug.timestamp}`,
-          `**Prompt Length:** ${debug.promptLength} characters`,
-          `**Response Length:** ${debug.responseLength} characters`,
-          `**JSON Parse Success:** ${debug.jsonParseSuccess ? "\u2705" : "\u274C"}`
-        ];
-        if (debug.errors && debug.errors.length > 0) {
-          formattedContent.push("", "### Errors");
-          debug.errors.forEach((error) => {
-            formattedContent.push(`- ${error}`);
-          });
-        }
-        const fullDebugContent = [
-          ...formattedContent,
-          "",
-          "### AI Prompt",
-          "```",
-          debug.prompt,
-          "```",
-          "",
-          "### Raw AI Response",
-          "```json",
-          debug.rawResponse,
-          "```"
-        ].join("\n");
-        if (fullDebugContent.length > 6e4) {
-          const artifactPath = this.saveDebugArtifact(debug);
-          formattedContent.push("");
-          formattedContent.push("### Debug Details");
-          formattedContent.push("\u26A0\uFE0F Debug information is too large for GitHub comments.");
-          if (artifactPath) {
-            formattedContent.push(
-              `\u{1F4C1} **Full debug information saved to artifact:** \`${artifactPath}\``
-            );
-            formattedContent.push("");
-            const runId = process.env.GITHUB_RUN_ID;
-            const repoUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` : null;
-            if (runId && repoUrl) {
-              formattedContent.push(
-                `\u{1F517} **Download Link:** [visor-debug-${process.env.GITHUB_RUN_NUMBER || runId}](${repoUrl}/actions/runs/${runId})`
+    init_logger();
+    GitHubFrontend = class {
+      name = "github";
+      subs = [];
+      checkRunIds = /* @__PURE__ */ new Map();
+      revision = 0;
+      cachedCommentId;
+      // legacy single-thread id (kept for compatibility)
+      // Group → (checkId → SectionState)
+      stepStatusByGroup = /* @__PURE__ */ new Map();
+      // Debounce/coalescing state
+      debounceMs = 400;
+      maxWaitMs = 2e3;
+      _timer = null;
+      _lastFlush = 0;
+      _pendingIds = /* @__PURE__ */ new Set();
+      start(ctx) {
+        const log2 = ctx.logger;
+        const bus = ctx.eventBus;
+        const octokit = ctx.octokit;
+        const repo = ctx.run.repo;
+        const pr = ctx.run.pr;
+        const headSha = ctx.run.headSha;
+        const canPostComments = !!(octokit && repo && pr);
+        const canPostChecks = !!(octokit && repo && pr && headSha);
+        const svc = canPostChecks ? new (init_github_check_service(), __toCommonJS(github_check_service_exports)).GitHubCheckService(octokit) : null;
+        const CommentManager2 = (init_github_comments(), __toCommonJS(github_comments_exports)).CommentManager;
+        const comments = canPostComments ? new CommentManager2(octokit) : null;
+        const threadKey = repo && pr && headSha ? `${repo.owner}/${repo.name}#${pr}@${(headSha || "").substring(0, 7)}` : ctx.run.runId;
+        this.cachedCommentId = `visor-thread-${threadKey}`;
+        this.subs.push(
+          bus.on("CheckScheduled", async (env) => {
+            const ev = env && env.payload || env;
+            try {
+              if (!canPostChecks || !svc) return;
+              if (this.checkRunIds.has(ev.checkId)) return;
+              const group = this.getGroupForCheck(ctx, ev.checkId);
+              this.upsertSectionState(group, ev.checkId, {
+                status: "queued",
+                lastUpdated: (/* @__PURE__ */ new Date()).toISOString()
+              });
+              const res = await svc.createCheckRun(
+                {
+                  owner: repo.owner,
+                  repo: repo.name,
+                  head_sha: headSha,
+                  name: `Visor: ${ev.checkId}`,
+                  external_id: `visor:${ctx.run.runId}:${ev.checkId}`,
+                  engine_mode: "state-machine"
+                },
+                { title: `${ev.checkId}`, summary: "Queued" }
+              );
+              this.checkRunIds.set(ev.checkId, res.id);
+            } catch (e) {
+              log2.warn(
+                `[github-frontend] createCheckRun failed for ${ev.checkId}: ${e instanceof Error ? e.message : e}`
               );
             }
-            formattedContent.push(
-              "\u{1F4A1} Go to the GitHub Action run above and download the debug artifact to view complete prompts and responses."
-            );
-          } else {
-            formattedContent.push("\u{1F4DD} **Prompt preview:** " + debug.prompt.substring(0, 500) + "...");
-            formattedContent.push(
-              "\u{1F4DD} **Response preview:** " + debug.rawResponse.substring(0, 500) + "..."
-            );
-          }
-        } else {
-          formattedContent.push("");
-          formattedContent.push("### AI Prompt");
-          formattedContent.push("```");
-          formattedContent.push(debug.prompt);
-          formattedContent.push("```");
-          formattedContent.push("");
-          formattedContent.push("### Raw AI Response");
-          formattedContent.push("```json");
-          formattedContent.push(debug.rawResponse);
-          formattedContent.push("```");
-        }
-        return this.commentManager.createCollapsibleSection(
-          "\u{1F41B} Debug Information",
-          formattedContent.join("\n"),
-          false
+          })
+        );
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            const ev = env && env.payload || env;
+            try {
+              if (canPostChecks && svc && this.checkRunIds.has(ev.checkId)) {
+                const id = this.checkRunIds.get(ev.checkId);
+                const issues = Array.isArray(ev.result?.issues) ? ev.result.issues : [];
+                const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
+                await svc.completeCheckRun(
+                  repo.owner,
+                  repo.name,
+                  id,
+                  ev.checkId,
+                  failureResults,
+                  issues,
+                  void 0,
+                  void 0,
+                  pr,
+                  headSha
+                );
+              }
+              if (canPostComments && comments) {
+                const count = Array.isArray(ev.result?.issues) ? ev.result.issues.length : 0;
+                const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
+                const failed = Array.isArray(failureResults) ? failureResults.some((r) => r && r.failed) : false;
+                const group = this.getGroupForCheck(ctx, ev.checkId);
+                this.upsertSectionState(group, ev.checkId, {
+                  status: "completed",
+                  conclusion: failed ? "failure" : "success",
+                  issues: count,
+                  lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
+                  content: ev?.result?.content
+                });
+                await this.updateGroupedComment(ctx, comments, group, ev.checkId);
+              }
+            } catch (e) {
+              log2.warn(
+                `[github-frontend] handle CheckCompleted failed: ${e instanceof Error ? e.message : e}`
+              );
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("CheckErrored", async (env) => {
+            const ev = env && env.payload || env;
+            try {
+              if (canPostChecks && svc && this.checkRunIds.has(ev.checkId)) {
+                const id = this.checkRunIds.get(ev.checkId);
+                await svc.completeCheckRun(
+                  repo.owner,
+                  repo.name,
+                  id,
+                  ev.checkId,
+                  [],
+                  [],
+                  ev.error?.message || "Execution error",
+                  void 0,
+                  pr,
+                  headSha
+                );
+              }
+              if (canPostComments && comments) {
+                const group = this.getGroupForCheck(ctx, ev.checkId);
+                this.upsertSectionState(group, ev.checkId, {
+                  status: "errored",
+                  conclusion: "failure",
+                  issues: 0,
+                  lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
+                  error: ev.error?.message || "Execution error"
+                });
+                await this.updateGroupedComment(ctx, comments, group, ev.checkId);
+              }
+            } catch (e) {
+              log2.warn(
+                `[github-frontend] handle CheckErrored failed: ${e instanceof Error ? e.message : e}`
+              );
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            try {
+              if (ev.to === "Completed" || ev.to === "Error") {
+                if (canPostComments && comments) {
+                  for (const group of this.stepStatusByGroup.keys()) {
+                    await this.updateGroupedComment(ctx, comments, group);
+                  }
+                }
+              }
+            } catch (e) {
+              log2.warn(
+                `[github-frontend] handle StateTransition failed: ${e instanceof Error ? e.message : e}`
+              );
+            }
+          })
         );
       }
-      saveDebugArtifact(debug) {
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      async buildFullBody(ctx, group) {
+        const header = this.renderThreadHeader(ctx, group);
+        const sections = this.renderSections(ctx, group);
+        return `${header}
+
+${sections}
+
+<!-- visor:thread-end key="${this.threadKeyFor(ctx)}" -->`;
+      }
+      threadKeyFor(ctx) {
+        const r = ctx.run;
+        return r.repo && r.pr && r.headSha ? `${r.repo.owner}/${r.repo.name}#${r.pr}@${(r.headSha || "").substring(0, 7)}` : r.runId;
+      }
+      renderThreadHeader(ctx, group) {
+        const header = {
+          key: this.threadKeyFor(ctx),
+          runId: ctx.run.runId,
+          workflowId: ctx.run.workflowId,
+          revision: this.revision,
+          group,
+          generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        return `<!-- visor:thread=${JSON.stringify(header)} -->`;
+      }
+      renderSections(ctx, group) {
+        const lines = [];
+        const groupMap = this.stepStatusByGroup.get(group) || /* @__PURE__ */ new Map();
+        for (const [checkId, st] of groupMap.entries()) {
+          const start = `<!-- visor:section=${JSON.stringify({ id: checkId, revision: this.revision })} -->`;
+          const end = `<!-- visor:section-end id="${checkId}" -->`;
+          const body = st.content && st.content.toString().trim().length > 0 ? st.content.toString().trim() : "";
+          lines.push(`${start}
+${body}
+${end}`);
+        }
+        return lines.join("\\n\\n");
+      }
+      async updateGroupedComment(ctx, comments, group, changedIds) {
         try {
-          const fs15 = require("fs");
-          const path16 = require("path");
-          const debugDir = path16.join(process.cwd(), "debug-artifacts");
-          if (!fs15.existsSync(debugDir)) {
-            fs15.mkdirSync(debugDir, { recursive: true });
+          if (!ctx.run.repo || !ctx.run.pr) return;
+          this.revision++;
+          const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
+          await comments.updateOrCreateComment(
+            ctx.run.repo.owner,
+            ctx.run.repo.name,
+            ctx.run.pr,
+            mergedBody,
+            {
+              commentId: this.commentIdForGroup(ctx, group),
+              triggeredBy: this.deriveTriggeredBy(ctx),
+              commitSha: ctx.run.headSha
+            }
+          );
+        } catch (e) {
+          logger.debug(
+            `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
+          );
+        }
+      }
+      deriveTriggeredBy(ctx) {
+        const ev = ctx.run.event || "";
+        const actor = ctx.run.actor;
+        const commentEvents = /* @__PURE__ */ new Set([
+          "issue_comment",
+          "issue_comment_created",
+          "pr_comment",
+          "comment",
+          "pull_request_review_comment"
+        ]);
+        if (commentEvents.has(ev) && actor) return actor;
+        if (ev) return ev;
+        return actor || "unknown";
+      }
+      async mergeIntoExistingBody(ctx, comments, group, changedIds) {
+        const repo = ctx.run.repo;
+        const pr = ctx.run.pr;
+        const existing = await comments.findVisorComment(
+          repo.owner,
+          repo.name,
+          pr,
+          this.commentIdForGroup(ctx, group)
+        );
+        if (!existing || !existing.body) return this.buildFullBody(ctx, group);
+        const body = String(existing.body);
+        const doc = this.parseSections(body);
+        doc.header = {
+          ...doc.header || {},
+          key: this.threadKeyFor(ctx),
+          revision: this.revision,
+          group
+        };
+        if (changedIds) {
+          const ids = Array.isArray(changedIds) ? changedIds : [changedIds];
+          const fresh = this.renderSections(ctx, group);
+          for (const id of ids) {
+            const block = this.extractSectionById(fresh, id);
+            if (block) doc.sections.set(id, block);
           }
-          const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-          const filename = `visor-debug-${timestamp}.md`;
-          const filepath = path16.join(debugDir, filename);
-          const content = [
-            `# Visor Debug Information`,
-            ``,
-            `**Timestamp:** ${debug.timestamp}`,
-            `**Provider:** ${debug.provider}`,
-            `**Model:** ${debug.model}`,
-            `**Processing Time:** ${debug.processingTime}ms`,
-            ``,
-            `## AI Prompt`,
-            ``,
-            "```",
-            debug.prompt,
-            "```",
-            ``,
-            `## Raw AI Response`,
-            ``,
-            "```json",
-            debug.rawResponse,
-            "```"
-          ].join("\n");
-          fs15.writeFileSync(filepath, content, "utf8");
-          return filename;
-        } catch (error) {
-          console.error("Failed to save debug artifact:", error);
-          return null;
+        } else {
+          const fresh = this.renderSections(ctx, group);
+          const map = this.stepStatusByGroup.get(group) || /* @__PURE__ */ new Map();
+          for (const [checkId] of map.entries()) {
+            if (!doc.sections.has(checkId)) {
+              const block = this.extractSectionById(fresh, checkId);
+              if (block) doc.sections.set(checkId, block);
+            }
+          }
+        }
+        return this.serializeSections(doc);
+      }
+      parseSections(body) {
+        const sections = /* @__PURE__ */ new Map();
+        const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
+        const startRe = /<!--\s*visor:section=(\{[\s\S]*?\})\s*-->/g;
+        const endRe = /<!--\s*visor:section-end\s+id=\"([^\"]+)\"\s*-->/g;
+        const safePick = (obj, allowed) => {
+          if (!obj || typeof obj !== "object" || Array.isArray(obj)) return void 0;
+          const out = /* @__PURE__ */ Object.create(null);
+          for (const [k, t] of Object.entries(allowed)) {
+            if (Object.prototype.hasOwnProperty.call(obj, k)) {
+              const v = obj[k];
+              if (t === "string" && typeof v === "string") out[k] = v;
+              else if (t === "number" && typeof v === "number" && Number.isFinite(v)) out[k] = v;
+            }
+          }
+          return out;
+        };
+        const safeParse = (text) => {
+          try {
+            return JSON.parse(text);
+          } catch {
+            return void 0;
+          }
+        };
+        let header;
+        try {
+          const h = headerRe.exec(body);
+          if (h) {
+            const parsed = safeParse(h[1]);
+            const picked = safePick(parsed, {
+              key: "string",
+              runId: "string",
+              workflowId: "string",
+              revision: "number",
+              group: "string",
+              generatedAt: "string"
+            });
+            header = picked;
+          }
+        } catch {
+        }
+        let cursor = 0;
+        while (true) {
+          const s = startRe.exec(body);
+          if (!s) break;
+          const metaRaw = safeParse(s[1]);
+          const meta = safePick(metaRaw, { id: "string", revision: "number" }) || { id: "" };
+          const startIdx = startRe.lastIndex;
+          endRe.lastIndex = startIdx;
+          const e = endRe.exec(body);
+          if (!e) break;
+          const id = typeof meta.id === "string" && meta.id ? String(meta.id) : String(e[1]);
+          const content = body.substring(startIdx, e.index).trim();
+          const block = `<!-- visor:section=${JSON.stringify(meta)} -->
+${content}
+<!-- visor:section-end id="${id}" -->`;
+          sections.set(id, block);
+          cursor = endRe.lastIndex;
+          startRe.lastIndex = cursor;
+        }
+        return { header, sections };
+      }
+      serializeSections(doc) {
+        const header = `<!-- visor:thread=${JSON.stringify({ ...doc.header || {}, generatedAt: (/* @__PURE__ */ new Date()).toISOString() })} -->`;
+        const blocks = Array.from(doc.sections.values()).join("\n\n");
+        const key = doc.header && doc.header.key || "";
+        return `${header}
+
+${blocks}
+
+<!-- visor:thread-end key="${key}" -->`;
+      }
+      extractSectionById(rendered, id) {
+        const rx = new RegExp(
+          `<!--\\s*visor:section=(\\{[\\s\\S]*?\\})\\s*-->[\\s\\S]*?<!--\\s*visor:section-end\\s+id=\\"${this.escapeRegExp(id)}\\"\\s*-->`,
+          "m"
+        );
+        const m = rx.exec(rendered);
+        return m ? m[0] : void 0;
+      }
+      escapeRegExp(s) {
+        return s.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+      }
+      getGroupForCheck(ctx, checkId) {
+        try {
+          const cfg = ctx.config || {};
+          const g = cfg?.checks?.[checkId]?.group || cfg?.steps?.[checkId]?.group;
+          if (typeof g === "string" && g.trim().length > 0) return g;
+        } catch {
+        }
+        return "review";
+      }
+      upsertSectionState(group, checkId, patch) {
+        let groupMap = this.stepStatusByGroup.get(group);
+        if (!groupMap) {
+          groupMap = /* @__PURE__ */ new Map();
+          this.stepStatusByGroup.set(group, groupMap);
+        }
+        const prev = groupMap.get(checkId) || { status: "queued", lastUpdated: (/* @__PURE__ */ new Date()).toISOString() };
+        groupMap.set(checkId, { ...prev, ...patch });
+      }
+      commentIdForGroup(ctx, group) {
+        const r = ctx.run;
+        const base = r.repo && r.pr ? `${r.repo.owner}/${r.repo.name}#${r.pr}` : r.runId;
+        return `visor-thread-${group}-${base}`;
+      }
+      /**
+       * Compute failure condition results for a completed check so Check Runs map to the
+       * correct GitHub conclusion. This mirrors the engine's evaluation for fail_if.
+       */
+      async evaluateFailureResults(ctx, checkId, result) {
+        try {
+          const config = ctx.config || {};
+          const checks = config && config.checks || {};
+          const checkCfg = checks[checkId] || {};
+          const checkSchema = typeof checkCfg.schema === "string" ? checkCfg.schema : "code-review";
+          const checkGroup = checkCfg.group || "default";
+          const { FailureConditionEvaluator: FailureConditionEvaluator2 } = (init_failure_condition_evaluator(), __toCommonJS(failure_condition_evaluator_exports));
+          const evaluator = new FailureConditionEvaluator2();
+          const reviewSummary = { issues: Array.isArray(result?.issues) ? result.issues : [] };
+          const failures = [];
+          if (config.fail_if) {
+            const failed = await evaluator.evaluateSimpleCondition(
+              checkId,
+              checkSchema,
+              checkGroup,
+              reviewSummary,
+              config.fail_if
+            );
+            failures.push({
+              conditionName: "global_fail_if",
+              failed,
+              expression: config.fail_if,
+              severity: "error",
+              haltExecution: false
+            });
+          }
+          if (checkCfg.fail_if) {
+            const failed = await evaluator.evaluateSimpleCondition(
+              checkId,
+              checkSchema,
+              checkGroup,
+              reviewSummary,
+              checkCfg.fail_if
+            );
+            failures.push({
+              conditionName: `${checkId}_fail_if`,
+              failed,
+              expression: checkCfg.fail_if,
+              severity: "error",
+              haltExecution: false
+            });
+          }
+          return failures;
+        } catch {
+          return [];
+        }
+      }
+      // Debounce helpers
+      scheduleUpdate(ctx, comments, group, id) {
+        if (id) this._pendingIds.add(id);
+        const now = Date.now();
+        const since = now - this._lastFlush;
+        const remaining = this.maxWaitMs - since;
+        if (this._timer) clearTimeout(this._timer);
+        const wait = Math.max(0, Math.min(this.debounceMs, remaining));
+        this._timer = setTimeout(async () => {
+          const ids = Array.from(this._pendingIds);
+          this._pendingIds.clear();
+          this._timer = null;
+          await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : void 0);
+          this._lastFlush = Date.now();
+        }, wait);
+      }
+      async flushNow(ctx, comments, group) {
+        if (this._timer) {
+          clearTimeout(this._timer);
+          this._timer = null;
+        }
+        const ids = Array.from(this._pendingIds);
+        this._pendingIds.clear();
+        await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : void 0);
+        this._lastFlush = Date.now();
+      }
+    };
+  }
+});
+
+// src/frontends/host.ts
+var host_exports = {};
+__export(host_exports, {
+  FrontendsHost: () => FrontendsHost
+});
+var FrontendsHost;
+var init_host = __esm({
+  "src/frontends/host.ts"() {
+    "use strict";
+    FrontendsHost = class {
+      bus;
+      log;
+      frontends = [];
+      constructor(bus, log2) {
+        this.bus = bus;
+        this.log = log2;
+      }
+      async load(specs) {
+        this.frontends = [];
+        for (const spec of specs) {
+          if (spec.name === "ndjson-sink") {
+            const { NdjsonSink: NdjsonSink2 } = await Promise.resolve().then(() => (init_ndjson_sink(), ndjson_sink_exports));
+            this.frontends.push(new NdjsonSink2(spec.config));
+          } else if (spec.name === "github") {
+            const { GitHubFrontend: GitHubFrontend2 } = await Promise.resolve().then(() => (init_github_frontend(), github_frontend_exports));
+            this.frontends.push(new GitHubFrontend2());
+          } else {
+            this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
+          }
+        }
+      }
+      async startAll(ctxFactory) {
+        for (const f of this.frontends) {
+          try {
+            await f.start(ctxFactory());
+            this.log.info(`[FrontendsHost] Started frontend '${f.name}'`);
+          } catch (err) {
+            this.log.error(`[FrontendsHost] Failed to start '${f.name}':`, err);
+          }
+        }
+      }
+      async stopAll() {
+        for (const f of this.frontends) {
+          try {
+            await f.stop();
+          } catch (err) {
+            this.log.error(`[FrontendsHost] Failed to stop '${f.name}':`, err);
+          }
         }
       }
     };
@@ -21540,7 +22318,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     journal,
     memory,
     workingDirectory,
-    sessionId: (0, import_uuid2.v4)(),
+    sessionId: (0, import_uuid3.v4)(),
     event: prInfo.eventType,
     debug,
     maxParallelism,
@@ -21550,13 +22328,13 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     prInfo
   };
 }
-var import_uuid2;
+var import_uuid3;
 var init_build_engine_context = __esm({
   "src/state-machine/context/build-engine-context.ts"() {
     "use strict";
     init_snapshot_store();
     init_memory_store();
-    import_uuid2 = require("uuid");
+    import_uuid3 = require("uuid");
     init_logger();
   }
 });
@@ -21602,11 +22380,734 @@ var init_summary = __esm({
   }
 });
 
-// src/state-machine-execution-engine.ts
-var state_machine_execution_engine_exports = {};
-__export(state_machine_execution_engine_exports, {
-  StateMachineExecutionEngine: () => StateMachineExecutionEngine
+// src/sdk.ts
+var sdk_exports = {};
+__export(sdk_exports, {
+  loadConfig: () => loadConfig,
+  resolveChecks: () => resolveChecks,
+  runChecks: () => runChecks
 });
+module.exports = __toCommonJS(sdk_exports);
+
+// src/state-machine-execution-engine.ts
+init_runner();
+init_logger();
+var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
+  workingDirectory;
+  executionContext;
+  debugServer;
+  _lastContext;
+  _lastRunner;
+  constructor(workingDirectory, octokit, debugServer) {
+    this.workingDirectory = workingDirectory || process.cwd();
+    this.debugServer = debugServer;
+  }
+  /**
+   * Execute checks using the state machine engine
+   *
+   * Converts CheckExecutionOptions -> executeGroupedChecks() -> AnalysisResult
+   */
+  async executeChecks(options) {
+    const startTime = Date.now();
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    try {
+      if (options.config?.memory) {
+        const { MemoryStore: MemoryStore2 } = await Promise.resolve().then(() => (init_memory_store(), memory_store_exports));
+        const memoryStore = MemoryStore2.getInstance(options.config.memory);
+        await memoryStore.initialize();
+        logger.debug("Memory store initialized");
+      }
+      const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
+      const gitAnalyzer = new GitRepositoryAnalyzer2(options.workingDirectory);
+      logger.info("Analyzing local git repository...");
+      const repositoryInfo = await gitAnalyzer.analyzeRepository();
+      if (!repositoryInfo.isGitRepository) {
+        return this.createErrorResult(
+          repositoryInfo,
+          "Not a git repository or no changes found",
+          startTime,
+          timestamp,
+          options.checks
+        );
+      }
+      const prInfo = gitAnalyzer.toPRInfo(repositoryInfo);
+      try {
+        const evt = options.webhookContext?.eventType;
+        if (evt) prInfo.eventType = evt;
+      } catch {
+      }
+      const filteredChecks = this.filterChecksByTags(
+        options.checks,
+        options.config,
+        options.tagFilter || options.config?.tag_filter
+      );
+      if (filteredChecks.length === 0) {
+        logger.warn("No checks match the tag filter criteria");
+        return this.createErrorResult(
+          repositoryInfo,
+          "No checks match the tag filter criteria",
+          startTime,
+          timestamp,
+          options.checks
+        );
+      }
+      logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
+      const executionResult = await this.executeGroupedChecks(
+        prInfo,
+        filteredChecks,
+        options.timeout,
+        options.config,
+        options.outputFormat,
+        options.debug,
+        options.maxParallelism,
+        options.failFast,
+        options.tagFilter
+      );
+      const executionTime = Date.now() - startTime;
+      const reviewSummary = this.convertGroupedResultsToReviewSummary(
+        executionResult.results,
+        executionResult.statistics
+      );
+      let debugInfo;
+      if (options.debug && reviewSummary.debug) {
+        debugInfo = {
+          provider: reviewSummary.debug.provider,
+          model: reviewSummary.debug.model,
+          processingTime: reviewSummary.debug.processingTime,
+          parallelExecution: options.checks.length > 1,
+          checksExecuted: options.checks,
+          totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
+          apiCallDetails: reviewSummary.debug.apiCallDetails
+        };
+      }
+      try {
+        const histSnap = this.getOutputHistorySnapshot();
+        reviewSummary.history = histSnap;
+      } catch {
+      }
+      return {
+        repositoryInfo,
+        reviewSummary,
+        executionTime,
+        timestamp,
+        checksExecuted: filteredChecks,
+        executionStatistics: executionResult.statistics,
+        debug: debugInfo
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error occurred";
+      logger.error("Error executing checks: " + message);
+      const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
+      if (strictEnv) {
+        throw error;
+      }
+      const fallbackRepositoryInfo = {
+        title: "Error during analysis",
+        body: `Error: ${message || "Unknown error"}`,
+        author: "system",
+        base: "main",
+        head: "HEAD",
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        isGitRepository: false,
+        workingDirectory: options.workingDirectory || process.cwd()
+      };
+      return this.createErrorResult(
+        fallbackRepositoryInfo,
+        message || "Unknown error occurred",
+        startTime,
+        timestamp,
+        options.checks
+      );
+    }
+  }
+  /**
+   * Get execution context (used by state machine to propagate hooks)
+   */
+  getExecutionContext() {
+    return this.executionContext;
+  }
+  /**
+   * Set execution context for external callers
+   */
+  setExecutionContext(context2) {
+    this.executionContext = context2;
+  }
+  /**
+   * Reset per-run state (no-op for state machine engine)
+   *
+   * The state machine engine is stateless per-run by design.
+   * Each execution creates a fresh journal and context.
+   * This method exists only for backward compatibility with test framework.
+   *
+   * @deprecated This is a no-op. State machine engine doesn't maintain per-run state.
+   */
+  resetPerRunState() {
+  }
+  /**
+   * Execute grouped checks using the state machine engine
+   *
+   * M4: Production-ready with full telemetry and debug server support
+   */
+  async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
+    if (debug) {
+      logger.info("[StateMachine] Using state machine engine");
+    }
+    if (!config) {
+      const { ConfigManager: ConfigManager2 } = await Promise.resolve().then(() => (init_config(), config_exports));
+      const configManager = new ConfigManager2();
+      config = await configManager.getDefaultConfig();
+      logger.debug("[StateMachine] Using default configuration (no config provided)");
+    }
+    const configWithTagFilter = tagFilter ? {
+      ...config,
+      tag_filter: tagFilter
+    } : config;
+    const context2 = this.buildEngineContext(
+      configWithTagFilter,
+      prInfo,
+      debug,
+      maxParallelism,
+      failFast,
+      checks
+      // Pass the explicit checks list
+    );
+    context2.executionContext = this.getExecutionContext();
+    this._lastContext = context2;
+    let frontendsHost;
+    if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
+      try {
+        const { EventBus: EventBus2 } = await Promise.resolve().then(() => (init_event_bus(), event_bus_exports));
+        const { FrontendsHost: FrontendsHost2 } = await Promise.resolve().then(() => (init_host(), host_exports));
+        const bus = new EventBus2();
+        context2.eventBus = bus;
+        frontendsHost = new FrontendsHost2(bus, logger);
+        await frontendsHost.load(configWithTagFilter.frontends);
+        let owner;
+        let name;
+        let prNum;
+        let headSha;
+        try {
+          const anyInfo = prInfo;
+          owner = anyInfo?.eventContext?.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
+          name = anyInfo?.eventContext?.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
+          prNum = typeof anyInfo?.number === "number" ? anyInfo.number : void 0;
+          headSha = anyInfo?.eventContext?.pull_request?.head?.sha || process.env.GITHUB_SHA;
+        } catch {
+        }
+        const repoObj = owner && name ? { owner, name } : void 0;
+        const octokit = this.executionContext?.octokit;
+        await frontendsHost.startAll(() => ({
+          eventBus: bus,
+          logger,
+          // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
+          config: configWithTagFilter,
+          run: {
+            runId: context2.sessionId,
+            repo: repoObj,
+            pr: prNum,
+            headSha,
+            event: context2.event || prInfo?.eventType,
+            actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
+          },
+          octokit
+        }));
+      } catch (err) {
+        logger.warn(
+          `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+    const runner = new StateMachineRunner(context2, this.debugServer);
+    this._lastRunner = runner;
+    const result = await runner.run();
+    if (frontendsHost && typeof frontendsHost.stopAll === "function") {
+      try {
+        await frontendsHost.stopAll();
+      } catch {
+      }
+    }
+    if (debug) {
+      logger.info("[StateMachine] Execution complete");
+    }
+    try {
+      const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
+      const sessionRegistry = SessionRegistry2.getInstance();
+      sessionRegistry.clearAllSessions();
+    } catch (error) {
+      logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    return result;
+  }
+  /**
+   * Build the engine context for state machine execution
+   */
+  buildEngineContext(config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
+    const { buildEngineContextForRun: buildEngineContextForRun2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+    return buildEngineContextForRun2(
+      this.workingDirectory,
+      config,
+      prInfo,
+      debug,
+      maxParallelism,
+      failFast,
+      requestedChecks
+    );
+  }
+  /**
+   * Get output history snapshot for test framework compatibility
+   * Extracts output history from the journal
+   */
+  getOutputHistorySnapshot() {
+    const journal = this._lastContext?.journal;
+    if (!journal) {
+      logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No journal found");
+      return {};
+    }
+    const sessionId = this._lastContext?.sessionId;
+    if (!sessionId) {
+      logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No sessionId found");
+      return {};
+    }
+    const snapshot = journal.beginSnapshot();
+    const allEntries = journal.readVisible(sessionId, snapshot, void 0);
+    logger.debug(
+      `[StateMachine][DEBUG] getOutputHistorySnapshot: Found ${allEntries.length} journal entries`
+    );
+    const outputHistory = {};
+    for (const entry of allEntries) {
+      const checkId = entry.checkId;
+      if (!outputHistory[checkId]) {
+        outputHistory[checkId] = [];
+      }
+      try {
+        if (entry && typeof entry.result === "object" && entry.result.__skipped) {
+          continue;
+        }
+      } catch {
+      }
+      const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
+      try {
+        if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
+          continue;
+        }
+      } catch {
+      }
+      if (payload !== void 0) outputHistory[checkId].push(payload);
+    }
+    logger.debug(
+      `[StateMachine][DEBUG] getOutputHistorySnapshot result: ${JSON.stringify(Object.keys(outputHistory))}`
+    );
+    for (const [checkId, outputs] of Object.entries(outputHistory)) {
+      logger.debug(`[StateMachine][DEBUG]   ${checkId}: ${outputs.length} outputs`);
+    }
+    return outputHistory;
+  }
+  /**
+   * Save a JSON snapshot of the last run's state and journal to a file (experimental).
+   * Does not include secrets. Intended for debugging and future resume support.
+   */
+  async saveSnapshotToFile(filePath) {
+    const fs16 = await import("fs/promises");
+    const ctx = this._lastContext;
+    const runner = this._lastRunner;
+    if (!ctx || !runner) {
+      throw new Error("No prior execution context to snapshot");
+    }
+    const journal = ctx.journal;
+    const snapshotId = journal.beginSnapshot();
+    const entries = journal.readVisible(ctx.sessionId, snapshotId, void 0);
+    const state = runner.getState();
+    const serializableState = serializeRunState(state);
+    const payload = {
+      version: 1,
+      sessionId: ctx.sessionId,
+      event: ctx.event,
+      wave: state.wave,
+      state: serializableState,
+      journal: entries,
+      requestedChecks: ctx.requestedChecks || []
+    };
+    await fs16.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+  }
+  /**
+   * Load a snapshot JSON from file and return it. Resume support can build on this.
+   */
+  async loadSnapshotFromFile(filePath) {
+    const fs16 = await import("fs/promises");
+    const raw = await fs16.readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  }
+  /**
+   * Filter checks by tag filter
+   */
+  filterChecksByTags(checks, config, tagFilter) {
+    return checks.filter((checkName) => {
+      const checkConfig = config?.checks?.[checkName];
+      if (!checkConfig) {
+        return true;
+      }
+      const checkTags = checkConfig.tags || [];
+      if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
+        return checkTags.length === 0;
+      }
+      if (checkTags.length === 0) {
+        return true;
+      }
+      if (tagFilter.exclude && tagFilter.exclude.length > 0) {
+        const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
+        if (hasExcludedTag) return false;
+      }
+      if (tagFilter.include && tagFilter.include.length > 0) {
+        const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
+        if (!hasIncludedTag) return false;
+      }
+      return true;
+    });
+  }
+  /**
+   * Create an error result in AnalysisResult format
+   */
+  createErrorResult(repositoryInfo, errorMessage, startTime, timestamp, checksExecuted) {
+    const executionTime = Date.now() - startTime;
+    return {
+      repositoryInfo,
+      reviewSummary: {
+        issues: [
+          {
+            file: "system",
+            line: 0,
+            endLine: void 0,
+            ruleId: "system/error",
+            message: errorMessage,
+            severity: "error",
+            category: "logic",
+            suggestion: void 0,
+            replacement: void 0
+          }
+        ]
+      },
+      executionTime,
+      timestamp,
+      checksExecuted
+    };
+  }
+  /**
+   * Convert GroupedCheckResults to ReviewSummary
+   * Aggregates all check results into a single ReviewSummary
+   */
+  convertGroupedResultsToReviewSummary(groupedResults, statistics) {
+    const { convertToReviewSummary: convertToReviewSummary2 } = (init_summary(), __toCommonJS(summary_exports));
+    return convertToReviewSummary2(groupedResults, statistics);
+  }
+  /**
+   * Evaluate failure conditions for a check result
+   *
+   * This method provides backward compatibility with the legacy engine by
+   * delegating to the FailureConditionEvaluator.
+   *
+   * @param checkName - The name of the check being evaluated
+   * @param reviewSummary - The review summary containing check results
+   * @param config - The Visor configuration containing failure conditions
+   * @param previousOutputs - Optional previous check outputs for cross-check conditions
+   * @param authorAssociation - Optional GitHub author association for permission checks
+   * @returns Array of failure condition evaluation results
+   */
+  async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
+    const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
+    const evaluator = new FailureConditionEvaluator2();
+    const { addEvent: addEvent2 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
+    const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
+    const checkConfig = config.checks?.[checkName];
+    if (!checkConfig) {
+      return [];
+    }
+    const rawSchema = checkConfig.schema || "code-review";
+    const checkSchema = typeof rawSchema === "string" ? rawSchema : "code-review";
+    const checkGroup = checkConfig.group || "default";
+    const results = [];
+    if (config.fail_if) {
+      const failed = await evaluator.evaluateSimpleCondition(
+        checkName,
+        checkSchema,
+        checkGroup,
+        reviewSummary,
+        config.fail_if,
+        previousOutputs || {}
+      );
+      try {
+        addEvent2("fail_if.evaluated", {
+          "visor.check.id": checkName,
+          scope: "global",
+          expression: String(config.fail_if),
+          result: failed ? "triggered" : "not_triggered"
+        });
+        if (failed) {
+          addEvent2("fail_if.triggered", {
+            "visor.check.id": checkName,
+            scope: "global",
+            expression: String(config.fail_if)
+          });
+          addFailIfTriggered2(checkName, "global");
+        }
+      } catch {
+      }
+      results.push({
+        conditionName: "global_fail_if",
+        failed,
+        expression: config.fail_if,
+        message: failed ? `Global failure condition met: ${config.fail_if}` : void 0,
+        severity: "error",
+        haltExecution: false
+      });
+    }
+    if (checkConfig.fail_if) {
+      const failed = await evaluator.evaluateSimpleCondition(
+        checkName,
+        checkSchema,
+        checkGroup,
+        reviewSummary,
+        checkConfig.fail_if,
+        previousOutputs || {}
+      );
+      try {
+        addEvent2("fail_if.evaluated", {
+          "visor.check.id": checkName,
+          scope: "check",
+          expression: String(checkConfig.fail_if),
+          result: failed ? "triggered" : "not_triggered"
+        });
+        if (failed) {
+          addEvent2("fail_if.triggered", {
+            "visor.check.id": checkName,
+            scope: "check",
+            expression: String(checkConfig.fail_if)
+          });
+          addFailIfTriggered2(checkName, "check");
+        }
+      } catch {
+      }
+      results.push({
+        conditionName: `${checkName}_fail_if`,
+        failed,
+        expression: checkConfig.fail_if,
+        message: failed ? `Check failure condition met: ${checkConfig.fail_if}` : void 0,
+        severity: "error",
+        haltExecution: false
+      });
+    }
+    const globalConditions = config.failure_conditions;
+    const checkConditions = checkConfig.failure_conditions;
+    if (globalConditions || checkConditions) {
+      const legacyResults = await evaluator.evaluateConditions(
+        checkName,
+        checkSchema,
+        checkGroup,
+        reviewSummary,
+        globalConditions,
+        checkConditions,
+        previousOutputs,
+        authorAssociation
+      );
+      results.push(...legacyResults);
+    }
+    return results;
+  }
+  /**
+   * Get repository status
+   * @returns Repository status information
+   */
+  async getRepositoryStatus() {
+    try {
+      const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
+      const analyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
+      const info = await analyzer.analyzeRepository();
+      return {
+        isGitRepository: info.isGitRepository,
+        branch: info.head,
+        // Use head as branch name
+        hasChanges: info.isGitRepository && (info.files?.length > 0 || false),
+        filesChanged: info.isGitRepository ? info.files?.length || 0 : 0
+      };
+    } catch {
+      return {
+        isGitRepository: false,
+        hasChanges: false
+      };
+    }
+  }
+  /**
+   * Check if current directory is a git repository
+   * @returns True if git repository, false otherwise
+   */
+  async isGitRepository() {
+    const status = await this.getRepositoryStatus();
+    return status.isGitRepository;
+  }
+  /**
+   * Get list of available check types
+   * @returns Array of check type names
+   */
+  static getAvailableCheckTypes() {
+    const { CheckProviderRegistry: CheckProviderRegistry2 } = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports));
+    const registry = CheckProviderRegistry2.getInstance();
+    return registry.getAvailableProviders();
+  }
+  /**
+   * Validate check types and return valid/invalid lists
+   * @param checks - Array of check type names to validate
+   * @returns Object with valid and invalid check types
+   */
+  static validateCheckTypes(checks) {
+    const availableTypes = _StateMachineExecutionEngine.getAvailableCheckTypes();
+    const valid = [];
+    const invalid = [];
+    for (const check of checks) {
+      if (availableTypes.includes(check)) {
+        valid.push(check);
+      } else {
+        invalid.push(check);
+      }
+    }
+    return { valid, invalid };
+  }
+  /**
+   * Render check content using the appropriate template
+   *
+   * This method handles template rendering for check results, supporting:
+   * - Plain schema: returns raw content without template processing
+   * - Custom templates: from inline content or file
+   * - Built-in schema templates: from output/{schema}/template.liquid
+   */
+  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
+    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
+    const fs16 = await import("fs/promises");
+    const path17 = await import("path");
+    const schema = checkConfig.schema || "plain";
+    let templateContent;
+    if (checkConfig.template) {
+      if (checkConfig.template.content) {
+        templateContent = checkConfig.template.content;
+      } else if (checkConfig.template.file) {
+        const templateFile = checkConfig.template.file;
+        if (path17.isAbsolute(templateFile)) {
+          throw new Error("Template path must be relative to project directory");
+        }
+        if (templateFile.includes("..")) {
+          throw new Error('Template path cannot contain ".." segments');
+        }
+        if (templateFile.startsWith("~")) {
+          throw new Error("Template path cannot reference home directory");
+        }
+        if (templateFile.includes("\0")) {
+          throw new Error("Template path contains invalid characters");
+        }
+        if (templateFile.trim() === "") {
+          throw new Error("Template path must be a non-empty string");
+        }
+        if (!templateFile.endsWith(".liquid")) {
+          throw new Error("Template file must have .liquid extension");
+        }
+        const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
+        const gitAnalyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
+        const repoInfo = await gitAnalyzer.analyzeRepository();
+        const workingDir = repoInfo.workingDirectory;
+        const resolvedPath = path17.resolve(workingDir, templateFile);
+        templateContent = await fs16.readFile(resolvedPath, "utf-8");
+      } else {
+        throw new Error('Custom template must specify either "file" or "content"');
+      }
+    } else if (schema === "plain") {
+      return reviewSummary.issues?.[0]?.message || "";
+    } else {
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
+      if (!sanitizedSchema) {
+        throw new Error("Invalid schema name");
+      }
+      const templatePath = path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs16.readFile(templatePath, "utf-8");
+    }
+    const liquid = createExtendedLiquid2({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false
+    });
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName
+    };
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
+  }
+  /**
+   * Format the status column for execution statistics
+   * Used by execution-statistics-formatting tests
+   */
+  formatStatusColumn(stats) {
+    if (stats.skipped) {
+      if (stats.skipReason === "if_condition") {
+        return "\u23ED if";
+      } else if (stats.skipReason === "fail_fast") {
+        return "\u23ED ff";
+      } else if (stats.skipReason === "dependency_failed") {
+        return "\u23ED dep";
+      }
+      return "\u23ED";
+    }
+    const totalRuns = stats.totalRuns;
+    const successfulRuns = stats.successfulRuns;
+    const failedRuns = stats.failedRuns;
+    if (failedRuns > 0 && successfulRuns > 0) {
+      return `\u2714/\u2716 ${successfulRuns}/${totalRuns}`;
+    } else if (failedRuns > 0) {
+      return totalRuns === 1 ? "\u2716" : `\u2716 \xD7${totalRuns}`;
+    } else {
+      return totalRuns === 1 ? "\u2714" : `\u2714 \xD7${totalRuns}`;
+    }
+  }
+  /**
+   * Format the details column for execution statistics
+   * Used by execution-statistics-formatting tests
+   */
+  formatDetailsColumn(stats) {
+    const parts = [];
+    if (stats.outputsProduced !== void 0 && stats.outputsProduced > 0) {
+      parts.push(`\u2192${stats.outputsProduced}`);
+    }
+    if (stats.issuesBySeverity.critical > 0) {
+      parts.push(`${stats.issuesBySeverity.critical}\u{1F534}`);
+    }
+    if (stats.issuesBySeverity.error > 0 && stats.issuesBySeverity.critical === 0) {
+      parts.push(`${stats.issuesBySeverity.error}\u274C`);
+    }
+    if (stats.issuesBySeverity.warning > 0) {
+      parts.push(`${stats.issuesBySeverity.warning}\u26A0\uFE0F`);
+    }
+    if (stats.issuesBySeverity.info > 0 && stats.issuesBySeverity.critical === 0 && stats.issuesBySeverity.error === 0 && stats.issuesBySeverity.warning === 0) {
+      parts.push(`${stats.issuesBySeverity.info}\u{1F4A1}`);
+    }
+    if (stats.errorMessage) {
+      parts.push(this.truncate(stats.errorMessage, 40));
+    }
+    if (stats.skipCondition) {
+      parts.push(this.truncate(stats.skipCondition, 40));
+    }
+    return parts.join(" ");
+  }
+  /**
+   * Truncate a string to a maximum length
+   * Used by formatDetailsColumn
+   */
+  truncate(str, maxLength) {
+    if (str.length <= maxLength) {
+      return str;
+    }
+    return str.substring(0, maxLength - 3) + "...";
+  }
+};
 function serializeRunState(state) {
   return {
     ...state,
@@ -21624,719 +23125,8 @@ function serializeRunState(state) {
     ])
   };
 }
-var StateMachineExecutionEngine;
-var init_state_machine_execution_engine = __esm({
-  "src/state-machine-execution-engine.ts"() {
-    "use strict";
-    init_runner();
-    init_logger();
-    StateMachineExecutionEngine = class _StateMachineExecutionEngine {
-      workingDirectory;
-      executionContext;
-      debugServer;
-      _lastContext;
-      _lastRunner;
-      constructor(workingDirectory, octokit, debugServer) {
-        this.workingDirectory = workingDirectory || process.cwd();
-        this.debugServer = debugServer;
-      }
-      /**
-       * Execute checks using the state machine engine
-       *
-       * Converts CheckExecutionOptions -> executeGroupedChecks() -> AnalysisResult
-       */
-      async executeChecks(options) {
-        const startTime = Date.now();
-        const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-        try {
-          if (options.config?.memory) {
-            const { MemoryStore: MemoryStore2 } = await Promise.resolve().then(() => (init_memory_store(), memory_store_exports));
-            const memoryStore = MemoryStore2.getInstance(options.config.memory);
-            await memoryStore.initialize();
-            logger.debug("Memory store initialized");
-          }
-          const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-          const gitAnalyzer = new GitRepositoryAnalyzer2(options.workingDirectory);
-          logger.info("Analyzing local git repository...");
-          const repositoryInfo = await gitAnalyzer.analyzeRepository();
-          if (!repositoryInfo.isGitRepository) {
-            return this.createErrorResult(
-              repositoryInfo,
-              "Not a git repository or no changes found",
-              startTime,
-              timestamp,
-              options.checks
-            );
-          }
-          const prInfo = gitAnalyzer.toPRInfo(repositoryInfo);
-          try {
-            const evt = options.webhookContext?.eventType;
-            if (evt) prInfo.eventType = evt;
-          } catch {
-          }
-          const filteredChecks = this.filterChecksByTags(
-            options.checks,
-            options.config,
-            options.tagFilter || options.config?.tag_filter
-          );
-          if (filteredChecks.length === 0) {
-            logger.warn("No checks match the tag filter criteria");
-            return this.createErrorResult(
-              repositoryInfo,
-              "No checks match the tag filter criteria",
-              startTime,
-              timestamp,
-              options.checks
-            );
-          }
-          logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
-          const executionResult = await this.executeGroupedChecks(
-            prInfo,
-            filteredChecks,
-            options.timeout,
-            options.config,
-            options.outputFormat,
-            options.debug,
-            options.maxParallelism,
-            options.failFast,
-            options.tagFilter
-          );
-          const executionTime = Date.now() - startTime;
-          const reviewSummary = this.convertGroupedResultsToReviewSummary(
-            executionResult.results,
-            executionResult.statistics
-          );
-          let debugInfo;
-          if (options.debug && reviewSummary.debug) {
-            debugInfo = {
-              provider: reviewSummary.debug.provider,
-              model: reviewSummary.debug.model,
-              processingTime: reviewSummary.debug.processingTime,
-              parallelExecution: options.checks.length > 1,
-              checksExecuted: options.checks,
-              totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
-              apiCallDetails: reviewSummary.debug.apiCallDetails
-            };
-          }
-          try {
-            const histSnap = this.getOutputHistorySnapshot();
-            reviewSummary.history = histSnap;
-          } catch {
-          }
-          return {
-            repositoryInfo,
-            reviewSummary,
-            executionTime,
-            timestamp,
-            checksExecuted: filteredChecks,
-            executionStatistics: executionResult.statistics,
-            debug: debugInfo
-          };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown error occurred";
-          logger.error("Error executing checks: " + message);
-          const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
-          if (strictEnv) {
-            throw error;
-          }
-          const fallbackRepositoryInfo = {
-            title: "Error during analysis",
-            body: `Error: ${message || "Unknown error"}`,
-            author: "system",
-            base: "main",
-            head: "HEAD",
-            files: [],
-            totalAdditions: 0,
-            totalDeletions: 0,
-            isGitRepository: false,
-            workingDirectory: options.workingDirectory || process.cwd()
-          };
-          return this.createErrorResult(
-            fallbackRepositoryInfo,
-            message || "Unknown error occurred",
-            startTime,
-            timestamp,
-            options.checks
-          );
-        }
-      }
-      /**
-       * Get execution context (used by state machine to propagate hooks)
-       */
-      getExecutionContext() {
-        return this.executionContext;
-      }
-      /**
-       * Set execution context for external callers
-       */
-      setExecutionContext(context2) {
-        this.executionContext = context2;
-      }
-      /**
-       * Reset per-run state (no-op for state machine engine)
-       *
-       * The state machine engine is stateless per-run by design.
-       * Each execution creates a fresh journal and context.
-       * This method exists only for backward compatibility with test framework.
-       *
-       * @deprecated This is a no-op. State machine engine doesn't maintain per-run state.
-       */
-      resetPerRunState() {
-      }
-      /**
-       * Execute grouped checks using the state machine engine
-       *
-       * M4: Production-ready with full telemetry and debug server support
-       */
-      async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
-        if (debug) {
-          logger.info("[StateMachine] Using state machine engine");
-        }
-        if (!config) {
-          const { ConfigManager: ConfigManager2 } = await Promise.resolve().then(() => (init_config(), config_exports));
-          const configManager = new ConfigManager2();
-          config = await configManager.getDefaultConfig();
-          logger.debug("[StateMachine] Using default configuration (no config provided)");
-        }
-        const configWithTagFilter = tagFilter ? {
-          ...config,
-          tag_filter: tagFilter
-        } : config;
-        const context2 = this.buildEngineContext(
-          configWithTagFilter,
-          prInfo,
-          debug,
-          maxParallelism,
-          failFast,
-          checks
-          // Pass the explicit checks list
-        );
-        context2.executionContext = this.getExecutionContext();
-        this._lastContext = context2;
-        const runner = new StateMachineRunner(context2, this.debugServer);
-        this._lastRunner = runner;
-        const result = await runner.run();
-        if (debug) {
-          logger.info("[StateMachine] Execution complete");
-        }
-        try {
-          if (this.executionContext?.mode?.postGroupedComments && configWithTagFilter?.output?.pr_comment) {
-            const { PRReviewer: PRReviewer2 } = await Promise.resolve().then(() => (init_reviewer(), reviewer_exports));
-            const reviewer = new PRReviewer2(
-              this._lastContext?.executionContext?.octokit
-            );
-            let owner;
-            let repo;
-            try {
-              const anyInfo = prInfo;
-              owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
-              repo = anyInfo?.eventContext?.repository?.name || repo;
-            } catch {
-            }
-            owner = owner || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[0];
-            repo = repo || (process.env.GITHUB_REPOSITORY || "owner/repo").split("/")[1];
-            if (owner && repo && prInfo.number) {
-              await reviewer.postReviewComment(owner, repo, prInfo.number, result.results, {
-                config: configWithTagFilter,
-                triggeredBy: prInfo.eventType || "manual",
-                commentId: "visor-review",
-                octokitOverride: prInfo?.eventContext?.octokit,
-                commitSha: prInfo?.eventContext?.pull_request?.head?.sha
-              });
-            }
-          }
-        } catch (err) {
-          logger.debug(`[StateMachine] Skipped postGroupedComments due to error: ${err}`);
-        }
-        try {
-          const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
-          const sessionRegistry = SessionRegistry2.getInstance();
-          sessionRegistry.clearAllSessions();
-        } catch (error) {
-          logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-        }
-        return result;
-      }
-      /**
-       * Build the engine context for state machine execution
-       */
-      buildEngineContext(config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
-        const { buildEngineContextForRun: buildEngineContextForRun2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
-        return buildEngineContextForRun2(
-          this.workingDirectory,
-          config,
-          prInfo,
-          debug,
-          maxParallelism,
-          failFast,
-          requestedChecks
-        );
-      }
-      /**
-       * Get output history snapshot for test framework compatibility
-       * Extracts output history from the journal
-       */
-      getOutputHistorySnapshot() {
-        const journal = this._lastContext?.journal;
-        if (!journal) {
-          logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No journal found");
-          return {};
-        }
-        const sessionId = this._lastContext?.sessionId;
-        if (!sessionId) {
-          logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No sessionId found");
-          return {};
-        }
-        const snapshot = journal.beginSnapshot();
-        const allEntries = journal.readVisible(sessionId, snapshot, void 0);
-        logger.debug(
-          `[StateMachine][DEBUG] getOutputHistorySnapshot: Found ${allEntries.length} journal entries`
-        );
-        const outputHistory = {};
-        for (const entry of allEntries) {
-          const checkId = entry.checkId;
-          if (!outputHistory[checkId]) {
-            outputHistory[checkId] = [];
-          }
-          try {
-            if (entry && typeof entry.result === "object" && entry.result.__skipped) {
-              continue;
-            }
-          } catch {
-          }
-          const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
-          try {
-            if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
-              continue;
-            }
-          } catch {
-          }
-          if (payload !== void 0) outputHistory[checkId].push(payload);
-        }
-        logger.debug(
-          `[StateMachine][DEBUG] getOutputHistorySnapshot result: ${JSON.stringify(Object.keys(outputHistory))}`
-        );
-        for (const [checkId, outputs] of Object.entries(outputHistory)) {
-          logger.debug(`[StateMachine][DEBUG]   ${checkId}: ${outputs.length} outputs`);
-        }
-        return outputHistory;
-      }
-      /**
-       * Save a JSON snapshot of the last run's state and journal to a file (experimental).
-       * Does not include secrets. Intended for debugging and future resume support.
-       */
-      async saveSnapshotToFile(filePath) {
-        const fs15 = await import("fs/promises");
-        const ctx = this._lastContext;
-        const runner = this._lastRunner;
-        if (!ctx || !runner) {
-          throw new Error("No prior execution context to snapshot");
-        }
-        const journal = ctx.journal;
-        const snapshotId = journal.beginSnapshot();
-        const entries = journal.readVisible(ctx.sessionId, snapshotId, void 0);
-        const state = runner.getState();
-        const serializableState = serializeRunState(state);
-        const payload = {
-          version: 1,
-          sessionId: ctx.sessionId,
-          event: ctx.event,
-          wave: state.wave,
-          state: serializableState,
-          journal: entries,
-          requestedChecks: ctx.requestedChecks || []
-        };
-        await fs15.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
-      }
-      /**
-       * Load a snapshot JSON from file and return it. Resume support can build on this.
-       */
-      async loadSnapshotFromFile(filePath) {
-        const fs15 = await import("fs/promises");
-        const raw = await fs15.readFile(filePath, "utf8");
-        return JSON.parse(raw);
-      }
-      /**
-       * Filter checks by tag filter
-       */
-      filterChecksByTags(checks, config, tagFilter) {
-        return checks.filter((checkName) => {
-          const checkConfig = config?.checks?.[checkName];
-          if (!checkConfig) {
-            return true;
-          }
-          const checkTags = checkConfig.tags || [];
-          if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
-            return checkTags.length === 0;
-          }
-          if (checkTags.length === 0) {
-            return true;
-          }
-          if (tagFilter.exclude && tagFilter.exclude.length > 0) {
-            const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
-            if (hasExcludedTag) return false;
-          }
-          if (tagFilter.include && tagFilter.include.length > 0) {
-            const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
-            if (!hasIncludedTag) return false;
-          }
-          return true;
-        });
-      }
-      /**
-       * Create an error result in AnalysisResult format
-       */
-      createErrorResult(repositoryInfo, errorMessage, startTime, timestamp, checksExecuted) {
-        const executionTime = Date.now() - startTime;
-        return {
-          repositoryInfo,
-          reviewSummary: {
-            issues: [
-              {
-                file: "system",
-                line: 0,
-                endLine: void 0,
-                ruleId: "system/error",
-                message: errorMessage,
-                severity: "error",
-                category: "logic",
-                suggestion: void 0,
-                replacement: void 0
-              }
-            ]
-          },
-          executionTime,
-          timestamp,
-          checksExecuted
-        };
-      }
-      /**
-       * Convert GroupedCheckResults to ReviewSummary
-       * Aggregates all check results into a single ReviewSummary
-       */
-      convertGroupedResultsToReviewSummary(groupedResults, statistics) {
-        const { convertToReviewSummary: convertToReviewSummary2 } = (init_summary(), __toCommonJS(summary_exports));
-        return convertToReviewSummary2(groupedResults, statistics);
-      }
-      /**
-       * Evaluate failure conditions for a check result
-       *
-       * This method provides backward compatibility with the legacy engine by
-       * delegating to the FailureConditionEvaluator.
-       *
-       * @param checkName - The name of the check being evaluated
-       * @param reviewSummary - The review summary containing check results
-       * @param config - The Visor configuration containing failure conditions
-       * @param previousOutputs - Optional previous check outputs for cross-check conditions
-       * @param authorAssociation - Optional GitHub author association for permission checks
-       * @returns Array of failure condition evaluation results
-       */
-      async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
-        const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
-        const evaluator = new FailureConditionEvaluator2();
-        const { addEvent: addEvent2 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
-        const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
-        const checkConfig = config.checks?.[checkName];
-        if (!checkConfig) {
-          return [];
-        }
-        const rawSchema = checkConfig.schema || "code-review";
-        const checkSchema = typeof rawSchema === "string" ? rawSchema : "code-review";
-        const checkGroup = checkConfig.group || "default";
-        const results = [];
-        if (config.fail_if) {
-          const failed = await evaluator.evaluateSimpleCondition(
-            checkName,
-            checkSchema,
-            checkGroup,
-            reviewSummary,
-            config.fail_if,
-            previousOutputs || {}
-          );
-          try {
-            addEvent2("fail_if.evaluated", {
-              "visor.check.id": checkName,
-              scope: "global",
-              expression: String(config.fail_if),
-              result: failed ? "triggered" : "not_triggered"
-            });
-            if (failed) {
-              addEvent2("fail_if.triggered", {
-                "visor.check.id": checkName,
-                scope: "global",
-                expression: String(config.fail_if)
-              });
-              addFailIfTriggered2(checkName, "global");
-            }
-          } catch {
-          }
-          results.push({
-            conditionName: "global_fail_if",
-            failed,
-            expression: config.fail_if,
-            message: failed ? `Global failure condition met: ${config.fail_if}` : void 0,
-            severity: "error",
-            haltExecution: false
-          });
-        }
-        if (checkConfig.fail_if) {
-          const failed = await evaluator.evaluateSimpleCondition(
-            checkName,
-            checkSchema,
-            checkGroup,
-            reviewSummary,
-            checkConfig.fail_if,
-            previousOutputs || {}
-          );
-          try {
-            addEvent2("fail_if.evaluated", {
-              "visor.check.id": checkName,
-              scope: "check",
-              expression: String(checkConfig.fail_if),
-              result: failed ? "triggered" : "not_triggered"
-            });
-            if (failed) {
-              addEvent2("fail_if.triggered", {
-                "visor.check.id": checkName,
-                scope: "check",
-                expression: String(checkConfig.fail_if)
-              });
-              addFailIfTriggered2(checkName, "check");
-            }
-          } catch {
-          }
-          results.push({
-            conditionName: `${checkName}_fail_if`,
-            failed,
-            expression: checkConfig.fail_if,
-            message: failed ? `Check failure condition met: ${checkConfig.fail_if}` : void 0,
-            severity: "error",
-            haltExecution: false
-          });
-        }
-        const globalConditions = config.failure_conditions;
-        const checkConditions = checkConfig.failure_conditions;
-        if (globalConditions || checkConditions) {
-          const legacyResults = await evaluator.evaluateConditions(
-            checkName,
-            checkSchema,
-            checkGroup,
-            reviewSummary,
-            globalConditions,
-            checkConditions,
-            previousOutputs,
-            authorAssociation
-          );
-          results.push(...legacyResults);
-        }
-        return results;
-      }
-      /**
-       * Get repository status
-       * @returns Repository status information
-       */
-      async getRepositoryStatus() {
-        try {
-          const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-          const analyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-          const info = await analyzer.analyzeRepository();
-          return {
-            isGitRepository: info.isGitRepository,
-            branch: info.head,
-            // Use head as branch name
-            hasChanges: info.isGitRepository && (info.files?.length > 0 || false),
-            filesChanged: info.isGitRepository ? info.files?.length || 0 : 0
-          };
-        } catch {
-          return {
-            isGitRepository: false,
-            hasChanges: false
-          };
-        }
-      }
-      /**
-       * Check if current directory is a git repository
-       * @returns True if git repository, false otherwise
-       */
-      async isGitRepository() {
-        const status = await this.getRepositoryStatus();
-        return status.isGitRepository;
-      }
-      /**
-       * Get list of available check types
-       * @returns Array of check type names
-       */
-      static getAvailableCheckTypes() {
-        const { CheckProviderRegistry: CheckProviderRegistry2 } = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports));
-        const registry = CheckProviderRegistry2.getInstance();
-        return registry.getAvailableProviders();
-      }
-      /**
-       * Validate check types and return valid/invalid lists
-       * @param checks - Array of check type names to validate
-       * @returns Object with valid and invalid check types
-       */
-      static validateCheckTypes(checks) {
-        const availableTypes = _StateMachineExecutionEngine.getAvailableCheckTypes();
-        const valid = [];
-        const invalid = [];
-        for (const check of checks) {
-          if (availableTypes.includes(check)) {
-            valid.push(check);
-          } else {
-            invalid.push(check);
-          }
-        }
-        return { valid, invalid };
-      }
-      /**
-       * Render check content using the appropriate template
-       *
-       * This method handles template rendering for check results, supporting:
-       * - Plain schema: returns raw content without template processing
-       * - Custom templates: from inline content or file
-       * - Built-in schema templates: from output/{schema}/template.liquid
-       */
-      async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
-        const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-        const fs15 = await import("fs/promises");
-        const path16 = await import("path");
-        const schema = checkConfig.schema || "plain";
-        let templateContent;
-        if (checkConfig.template) {
-          if (checkConfig.template.content) {
-            templateContent = checkConfig.template.content;
-          } else if (checkConfig.template.file) {
-            const templateFile = checkConfig.template.file;
-            if (path16.isAbsolute(templateFile)) {
-              throw new Error("Template path must be relative to project directory");
-            }
-            if (templateFile.includes("..")) {
-              throw new Error('Template path cannot contain ".." segments');
-            }
-            if (templateFile.startsWith("~")) {
-              throw new Error("Template path cannot reference home directory");
-            }
-            if (templateFile.includes("\0")) {
-              throw new Error("Template path contains invalid characters");
-            }
-            if (templateFile.trim() === "") {
-              throw new Error("Template path must be a non-empty string");
-            }
-            if (!templateFile.endsWith(".liquid")) {
-              throw new Error("Template file must have .liquid extension");
-            }
-            const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-            const gitAnalyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-            const repoInfo = await gitAnalyzer.analyzeRepository();
-            const workingDir = repoInfo.workingDirectory;
-            const resolvedPath = path16.resolve(workingDir, templateFile);
-            templateContent = await fs15.readFile(resolvedPath, "utf-8");
-          } else {
-            throw new Error('Custom template must specify either "file" or "content"');
-          }
-        } else if (schema === "plain") {
-          return reviewSummary.issues?.[0]?.message || "";
-        } else {
-          const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
-          if (!sanitizedSchema) {
-            throw new Error("Invalid schema name");
-          }
-          const templatePath = path16.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-          templateContent = await fs15.readFile(templatePath, "utf-8");
-        }
-        const liquid = createExtendedLiquid2({
-          trimTagLeft: false,
-          trimTagRight: false,
-          trimOutputLeft: false,
-          trimOutputRight: false,
-          greedy: false
-        });
-        const templateData = {
-          issues: reviewSummary.issues || [],
-          checkName
-        };
-        const rendered = await liquid.parseAndRender(templateContent, templateData);
-        return rendered.trim();
-      }
-      /**
-       * Format the status column for execution statistics
-       * Used by execution-statistics-formatting tests
-       */
-      formatStatusColumn(stats) {
-        if (stats.skipped) {
-          if (stats.skipReason === "if_condition") {
-            return "\u23ED if";
-          } else if (stats.skipReason === "fail_fast") {
-            return "\u23ED ff";
-          } else if (stats.skipReason === "dependency_failed") {
-            return "\u23ED dep";
-          }
-          return "\u23ED";
-        }
-        const totalRuns = stats.totalRuns;
-        const successfulRuns = stats.successfulRuns;
-        const failedRuns = stats.failedRuns;
-        if (failedRuns > 0 && successfulRuns > 0) {
-          return `\u2714/\u2716 ${successfulRuns}/${totalRuns}`;
-        } else if (failedRuns > 0) {
-          return totalRuns === 1 ? "\u2716" : `\u2716 \xD7${totalRuns}`;
-        } else {
-          return totalRuns === 1 ? "\u2714" : `\u2714 \xD7${totalRuns}`;
-        }
-      }
-      /**
-       * Format the details column for execution statistics
-       * Used by execution-statistics-formatting tests
-       */
-      formatDetailsColumn(stats) {
-        const parts = [];
-        if (stats.outputsProduced !== void 0 && stats.outputsProduced > 0) {
-          parts.push(`\u2192${stats.outputsProduced}`);
-        }
-        if (stats.issuesBySeverity.critical > 0) {
-          parts.push(`${stats.issuesBySeverity.critical}\u{1F534}`);
-        }
-        if (stats.issuesBySeverity.error > 0 && stats.issuesBySeverity.critical === 0) {
-          parts.push(`${stats.issuesBySeverity.error}\u274C`);
-        }
-        if (stats.issuesBySeverity.warning > 0) {
-          parts.push(`${stats.issuesBySeverity.warning}\u26A0\uFE0F`);
-        }
-        if (stats.issuesBySeverity.info > 0 && stats.issuesBySeverity.critical === 0 && stats.issuesBySeverity.error === 0 && stats.issuesBySeverity.warning === 0) {
-          parts.push(`${stats.issuesBySeverity.info}\u{1F4A1}`);
-        }
-        if (stats.errorMessage) {
-          parts.push(this.truncate(stats.errorMessage, 40));
-        }
-        if (stats.skipCondition) {
-          parts.push(this.truncate(stats.skipCondition, 40));
-        }
-        return parts.join(" ");
-      }
-      /**
-       * Truncate a string to a maximum length
-       * Used by formatDetailsColumn
-       */
-      truncate(str, maxLength) {
-        if (str.length <= maxLength) {
-          return str;
-        }
-        return str.substring(0, maxLength - 3) + "...";
-      }
-    };
-  }
-});
 
 // src/sdk.ts
-var sdk_exports = {};
-__export(sdk_exports, {
-  loadConfig: () => loadConfig,
-  resolveChecks: () => resolveChecks,
-  runChecks: () => runChecks
-});
-module.exports = __toCommonJS(sdk_exports);
-init_state_machine_execution_engine();
 init_config();
 async function loadConfig(configOrPath, options) {
   const cm = new ConfigManager();

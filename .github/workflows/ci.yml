@@ -36,8 +36,8 @@ jobs:
           # Explicitly install rollup platform-specific binary
           npm install --no-save @rollup/rollup-linux-x64-gnu
 
-      - name: Build package (skip pre/post scripts)
-        run: npm run build --ignore-scripts
+      - name: Build package
+        run: npm run build
 
       - name: Lint code
         run: npm run lint

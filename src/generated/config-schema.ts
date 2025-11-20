@@ -121,6 +121,24 @@ export const configSchema = {
           $ref: '#/definitions/LimitsConfig',
           description: 'Global execution limits',
         },
+        frontends: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: "Frontend name, e.g., 'ndjson-sink', 'github'",
+              },
+              config: {
+                description: 'Frontend-specific configuration',
+              },
+            },
+            required: ['name'],
+            additionalProperties: false,
+          },
+          description: 'Optional integrations: event-driven frontends (e.g., ndjson-sink, github)',
+        },
       },
       required: ['output', 'version'],
       patternProperties: {
@@ -622,7 +640,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1260,14 +1278,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>': {
+    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
       type: 'object',
       additionalProperties: false,
     },

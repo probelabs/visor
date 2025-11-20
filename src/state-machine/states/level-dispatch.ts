@@ -625,6 +625,17 @@ async function executeCheckWithForEachItems(
         },
       };
 
+      // Propagate authenticated Octokit (v2 frontends / Action mode)
+      try {
+        const maybeOctokit = (context.executionContext as any)?.octokit;
+        if (maybeOctokit) {
+          (providerConfig as any).eventContext = {
+            ...(providerConfig as any).eventContext,
+            octokit: maybeOctokit,
+          };
+        }
+      } catch {}
+
       // Build dependency results with scope
       const dependencyResults = buildDependencyResultsWithScope(
         checkId,
@@ -1826,6 +1837,17 @@ async function executeSingleCheck(
         debug: !!context.debug,
       },
     };
+
+    // Propagate authenticated Octokit (v2 frontends / Action mode)
+    try {
+      const maybeOctokit = (context.executionContext as any)?.octokit;
+      if (maybeOctokit) {
+        (providerConfig as any).eventContext = {
+          ...(providerConfig as any).eventContext,
+          octokit: maybeOctokit,
+        };
+      }
+    } catch {}
 
     // Build dependency results
     const dependencyResults = buildDependencyResults(checkId, checkConfig, context, state);

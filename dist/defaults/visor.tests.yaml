@@ -12,6 +12,8 @@ tests:
     strict: true
     ai_provider: mock
     fail_on_unexpected_calls: true
+    # Enable GitHub frontend for this suite (PR comment grouping & checks)
+    frontends: [github]
     # Run GitHub-tagged checks in tests (e.g., label application)
     tags: "github"
     # Example: enable negative GitHub recorder for all tests

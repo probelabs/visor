@@ -36,6 +36,21 @@ const schema: any = {
             ai_provider: { type: 'string' },
             fail_on_unexpected_calls: { type: 'boolean' },
             ai_include_code_context: { type: 'boolean' },
+            // Enable specific frontends during tests, e.g., ['github']
+            frontends: {
+              type: 'array',
+              items: {
+                oneOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    additionalProperties: true,
+                    properties: { name: { type: 'string' } },
+                    required: ['name'],
+                  },
+                ],
+              },
+            },
             tags: {
               oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
             },

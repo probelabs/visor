@@ -57,6 +57,8 @@ export interface CliOptions {
   debugPort?: number;
   /** Message for human-input checks (inline string or file path) */
   message?: string;
+  /** Deprecated: GitHub integration v2 is always enabled in GitHub contexts */
+  githubV2?: boolean;
 }
 
 /**

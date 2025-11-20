@@ -276,17 +276,46 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       if (failed.length) {
         write('  Failures:');
         const cross = '\u001b[31m✖\u001b[0m';
+        const fsSync = require('fs');
         for (const s of failed) {
           const fcases = s.results.filter((r: any) => !r.passed);
           write(`   ${rel(s.file)}`);
+          // best-effort line hints
+          let raw: string | undefined;
+          try {
+            raw = fsSync.readFileSync(s.file, 'utf8');
+          } catch {}
+          const findLine = (caseName: string, stageName?: string): number | undefined => {
+            if (!raw) return undefined;
+            const lines = raw.split(/\r?\n/);
+            let caseLine: number | undefined;
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].includes('- name:') && lines[i].includes(caseName)) {
+                caseLine = i + 1;
+                break;
+              }
+            }
+            if (!stageName) return caseLine;
+            if (caseLine !== undefined) {
+              for (let j = caseLine; j < lines.length; j++) {
+                if (lines[j].includes('- name:') && lines[j].includes(stageName)) return j + 1;
+              }
+            }
+            return caseLine;
+          };
           for (const c of fcases) {
             if (Array.isArray(c.stages) && c.stages.length > 0) {
               const bad = c.stages.filter(
                 (st: any) => Array.isArray(st.errors) && st.errors.length > 0
               );
               for (const st of bad) {
-                const errs = st.errors || [];
-                for (const e of errs) write(`     ${cross} ${c.name}#${st.name} | ${e}`);
+                const stageNameOnly = String(st.name || '').includes('#')
+                  ? String(st.name).split('#').pop()
+                  : String(st.name);
+                const label = `${c.name}#${stageNameOnly}`;
+                const ln = findLine(c.name, stageNameOnly);
+                write(`     ${cross} ${label}${ln ? ` (${rel(s.file)}:${ln})` : ''}`);
+                for (const e of st.errors || []) write(`       • ${e}`);
               }
             }
             if (
@@ -294,10 +323,12 @@ async function handleTestCommand(argv: string[]): Promise<void> {
               Array.isArray(c.errors) &&
               c.errors.length > 0
             ) {
-              for (const e of c.errors) write(`     ${cross} ${c.name} | ${e}`);
+              const ln = findLine(c.name);
+              write(`     ${cross} ${c.name}${ln ? ` (${rel(s.file)}:${ln})` : ''}`);
+              for (const e of c.errors) write(`       • ${e}`);
             }
           }
-          write(`   Tip: visor test --config ${rel(s.file)} --only "CASE[#STAGE]"`);
+          write(`   Tip: visor test --config ${rel(s.file)} --only \"CASE[#STAGE]\"`);
         }
       }
       runRes = { results: agg.perSuite };
@@ -633,7 +664,7 @@ export async function main(): Promise<void> {
     }
 
     // Load configuration FIRST (before starting debug server)
-    let config;
+    let config: import('./types/config').VisorConfig;
     if (options.configPath) {
       try {
         logger.step('Loading configuration');
@@ -953,6 +984,15 @@ export async function main(): Promise<void> {
 
     logger.info('🔍 Visor - AI-powered code review tool');
     logger.info(`Configuration version: ${config.version}`);
+
+    // GitHub event-bus integration is now the default when running in GitHub contexts
+    try {
+      const cfg = JSON.parse(JSON.stringify(config));
+      const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+      if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+      cfg.frontends = fronts;
+      config = cfg;
+    } catch {}
     logger.verbose(`Configuration source: ${options.configPath || 'default search locations'}`);
 
     // Check if there are any changes to analyze (only when code context is needed)
