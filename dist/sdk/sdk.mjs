@@ -13124,6 +13124,17 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         }
         const repoObj = owner && name ? { owner, name } : void 0;
         const octokit = this.executionContext?.octokit;
+        if (!headSha && repoObj && prNum && octokit && typeof octokit.rest?.pulls?.get === "function") {
+          try {
+            const { data } = await octokit.rest.pulls.get({
+              owner: repoObj.owner,
+              repo: repoObj.name,
+              pull_number: prNum
+            });
+            headSha = data && data.head && data.head.sha || headSha;
+          } catch {
+          }
+        }
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
