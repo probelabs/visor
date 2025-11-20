@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { CheckExecutionEngine, CheckExecutionOptions } from '../../../src/check-execution-engine';
 import { GitRepositoryAnalyzer, GitRepositoryInfo } from '../../../src/git-repository-analyzer';
-import { PRReviewer, ReviewSummary } from '../../../src/reviewer';
+import { ReviewSummary } from '../../../src/reviewer';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 
 // Mock the dependencies
 jest.mock('../../../src/git-repository-analyzer');
-jest.mock('../../../src/reviewer');
+// PRReviewer legacy removed from command path; no need to mock
 jest.mock('../../../src/providers/check-provider-registry');
 
 // Mock for renderCheckContent tests
@@ -19,7 +19,7 @@ jest.mock('../../../src/liquid-extensions');
 describe('CheckExecutionEngine', () => {
   let checkEngine: CheckExecutionEngine;
   let mockGitAnalyzer: jest.Mocked<GitRepositoryAnalyzer>;
-  let mockReviewer: jest.Mocked<PRReviewer>;
+  let mockReviewer: any;
   let mockRegistry: jest.Mocked<CheckProviderRegistry>;
   let mockAIProvider: any;
 
@@ -72,7 +72,7 @@ describe('CheckExecutionEngine', () => {
 
     // Create mock instances
     mockGitAnalyzer = new GitRepositoryAnalyzer() as jest.Mocked<GitRepositoryAnalyzer>;
-    mockReviewer = new PRReviewer(null as any) as jest.Mocked<PRReviewer>;
+    mockReviewer = {} as any;
 
     // Mock the AI provider to return a simple review summary
     mockAIProvider = {
@@ -108,7 +108,7 @@ describe('CheckExecutionEngine', () => {
     (GitRepositoryAnalyzer as jest.MockedClass<typeof GitRepositoryAnalyzer>).mockImplementation(
       () => mockGitAnalyzer
     );
-    (PRReviewer as jest.MockedClass<typeof PRReviewer>).mockImplementation(() => mockReviewer);
+    // no-op: legacy reviewer not used
 
     checkEngine = new CheckExecutionEngine('/test/working/dir');
   });
@@ -154,7 +154,7 @@ describe('CheckExecutionEngine', () => {
     beforeEach(() => {
       mockGitAnalyzer.analyzeRepository.mockResolvedValue(mockRepositoryInfo);
       mockGitAnalyzer.toPRInfo.mockReturnValue(mockPRInfo);
-      mockReviewer.reviewPR.mockResolvedValue(mockReviewSummary as any);
+      // legacy reviewer not used
     });
 
     it('should execute checks successfully', async () => {

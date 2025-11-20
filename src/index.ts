@@ -13,7 +13,7 @@ import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
 import { resolveHeadShaFromEvent } from './utils/head-sha';
-import { PRReviewer, GroupedCheckResults, ReviewIssue, CheckResult } from './reviewer';
+import { GroupedCheckResults, ReviewIssue, CheckResult } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { GitHubCheckService, CheckRunOptions } from './github-check-service';
@@ -1047,7 +1047,7 @@ async function handleIssueComment(
 
   const prNumber = issue.number;
   const analyzer = new PRAnalyzer(octokit);
-  const reviewer = new PRReviewer(octokit);
+  // Commands are handled by engine + frontends; PRReviewer is deprecated
 
   switch (command.type) {
     case 'status':
@@ -1200,84 +1200,27 @@ async function handleIssueComment(
           return;
         }
 
-        const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, {
-          focus,
-          format,
-          debug: String(inputs.debug || '').toLowerCase() === 'true',
-          config: config as import('./types/config').VisorConfig,
-          checks: filteredCheckIds,
-          parallelExecution: false,
-          tagFilter:
-            (inputs.tags && inputs.tags.trim() !== '') ||
-            (inputs['exclude-tags'] && inputs['exclude-tags']!.trim() !== '')
-              ? {
-                  include: inputs.tags
-                    ? inputs.tags
-                        .split(',')
-                        .map((t: string) => t.trim())
-                        .filter(Boolean)
-                    : undefined,
-                  exclude: inputs['exclude-tags']
-                    ? inputs['exclude-tags']
-                        .split(',')
-                        .map((t: string) => t.trim())
-                        .filter(Boolean)
-                    : undefined,
-                }
-              : undefined,
-        });
-
-        // Create GitHub checks for all executed checks if enabled
+        // Run via state-machine + frontends (checks + grouped comments handled by frontend)
+        const engine = new (
+          await import('./state-machine-execution-engine')
+        ).StateMachineExecutionEngine(undefined, octokit);
         try {
-          if (inputs && inputs['create-check'] !== 'false') {
-            const executed = deriveExecutedCheckNames(groupedResults);
-            const headSha = await resolveHeadShaFromEvent(octokit, owner, repo, context);
-            const checkSetup = await createGitHubChecks(
-              octokit,
-              inputs,
-              owner,
-              repo,
-              headSha,
-              executed,
-              config as import('./types/config').VisorConfig
-            );
-            if (checkSetup?.checkRunMap) {
-              await updateChecksInProgress(octokit, owner, repo, checkSetup.checkRunMap);
-              await completeGitHubChecks(
-                octokit,
-                owner,
-                repo,
-                checkSetup.checkRunMap,
-                groupedResults,
-                config as import('./types/config').VisorConfig
-              );
-            }
-          }
-        } catch (e) {
-          console.warn(
-            '⚠️ Could not create/complete GitHub checks for command path:',
-            e instanceof Error ? e.message : String(e)
-          );
-        }
+          (engine as any).setExecutionContext?.({ octokit });
+        } catch {}
+        const cfgAny: any = JSON.parse(JSON.stringify(config));
+        const fronts = Array.isArray(cfgAny.frontends) ? cfgAny.frontends : [];
+        if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+        cfgAny.frontends = fronts;
 
-        // Check if commenting is enabled before posting
-        const shouldComment = inputs['comment-on-pr'] !== 'false';
-        if (shouldComment) {
-          await reviewer.postReviewComment(owner, repo, prNumber, groupedResults, {
-            focus,
-            format,
-            config: config as import('./types/config').VisorConfig,
-            commentId: `pr-review-${prNumber}`,
-            triggeredBy: comment?.user?.login
-              ? `comment by @${comment.user.login}`
-              : 'issue_comment',
-          });
-        } else {
-          console.log('📝 Skipping comment (comment-on-pr is disabled)');
-        }
-
-        // Calculate total check results from grouped results
-        const totalChecks = Object.values(groupedResults).flatMap(checks => checks).length;
+        const exec = await engine.executeGroupedChecks(
+          prInfo,
+          filteredCheckIds,
+          undefined,
+          cfgAny,
+          undefined,
+          String(inputs.debug || '').toLowerCase() === 'true'
+        );
+        const totalChecks = Object.values(exec.results).flatMap(checks => checks).length;
         setOutput('checks-executed', totalChecks.toString());
       }
       break;
@@ -1306,7 +1249,7 @@ async function handlePullRequestWithConfig(
 
   const prNumber = pullRequest.number;
   const analyzer = new PRAnalyzer(octokit);
-  const reviewer = new PRReviewer(octokit);
+  // Deprecated: PRReviewer not used in PR auto-review path
 
   // Generate comment ID for this PR
   const commentId = `pr-review-${prNumber}`;
@@ -1425,37 +1368,12 @@ async function handlePullRequestWithConfig(
   };
 
   // Create GitHub check runs if enabled
-  let checkResults = null;
-  if (inputs && inputs['create-check'] !== 'false') {
-    checkResults = await createGitHubChecks(
-      octokit,
-      inputs,
-      owner,
-      repo,
-      pullRequest.head?.sha || 'unknown',
-      checksToExecute,
-      config
-    );
-
-    if (checkResults?.checkRunMap) {
-      await updateChecksInProgress(octokit, owner, repo, checkResults.checkRunMap);
-    }
-  }
+  // Legacy GitHub check-run path removed; GitHub frontend now handles Check Runs
 
   // Perform the review
   const groupedResults = await reviewer.reviewPR(owner, repo, prNumber, prInfo, reviewOptions);
 
-  // Complete GitHub check runs
-  if (checkResults?.checkRunMap) {
-    await completeGitHubChecks(
-      octokit,
-      owner,
-      repo,
-      checkResults.checkRunMap,
-      groupedResults,
-      config
-    );
-  }
+  // Check Runs are completed by the frontend; no action here
 
   // Post review comment (only if comment-on-pr is not disabled)
   const shouldComment = inputs['comment-on-pr'] !== 'false';
@@ -1561,6 +1479,7 @@ async function filterChecksToExecute(
 /**
  * Create GitHub check runs for individual checks if enabled
  */
+/*
 async function createGitHubChecks(
   octokit: Octokit,
   inputs: GitHubActionInputs,
@@ -1755,6 +1674,7 @@ async function completeGitHubChecks(
     await completeCombinedCheck(checkService, owner, repo, checkRunMap, groupedResults, config);
   }
 }
+*/
 
 /**
  * Extract ReviewIssue[] from GroupedCheckResults content by parsing the rendered text

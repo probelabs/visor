@@ -332,43 +332,7 @@ export class StateMachineExecutionEngine {
       logger.info('[StateMachine] Execution complete');
     }
 
-    // Optional grouped-mode PR comment posting (used by YAML tests via execution context)
-    try {
-      if (
-        this.executionContext?.mode?.postGroupedComments &&
-        configWithTagFilter?.output?.pr_comment
-      ) {
-        const { PRReviewer } = await import('./reviewer');
-        const reviewer = new PRReviewer(
-          (this._lastContext as any)?.executionContext?.octokit as any
-        );
-
-        // Resolve owner/repo from PRInfo.eventContext
-        let owner: string | undefined;
-        let repo: string | undefined;
-        try {
-          const anyInfo = prInfo as unknown as {
-            eventContext?: { repository?: { owner?: { login?: string }; name?: string } };
-          };
-          owner = anyInfo?.eventContext?.repository?.owner?.login || owner;
-          repo = anyInfo?.eventContext?.repository?.name || repo;
-        } catch {}
-        owner = owner || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[0];
-        repo = repo || (process.env.GITHUB_REPOSITORY || 'owner/repo').split('/')[1];
-
-        if (owner && repo && (prInfo as any).number) {
-          await reviewer.postReviewComment(owner, repo, (prInfo as any).number, result.results, {
-            config: configWithTagFilter as any,
-            triggeredBy: (prInfo as any).eventType || 'manual',
-            commentId: 'visor-review',
-            octokitOverride: (prInfo as any)?.eventContext?.octokit,
-            commitSha: (prInfo as any)?.eventContext?.pull_request?.head?.sha,
-          });
-        }
-      }
-    } catch (err) {
-      logger.debug(`[StateMachine] Skipped postGroupedComments due to error: ${err}`);
-    }
+    // Post-grouped comments via legacy reviewer is removed; GitHub frontend handles comments
 
     // Cleanup AI sessions after execution
     try {
