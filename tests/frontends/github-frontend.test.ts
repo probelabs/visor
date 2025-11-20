@@ -213,8 +213,18 @@ describe('GitHubFrontend (event-bus v2)', () => {
     // Schedule then complete both to create initial comment with both sections
     await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
     await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
-    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov' } });
-    await bus.emit({ type: 'CheckCompleted', checkId: 'security', scope: ['root'], result: { issues: [], content: 'sec' } });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'overview',
+      scope: ['root'],
+      result: { issues: [], content: 'ov' },
+    });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [], content: 'sec' },
+    });
 
     const initialBody = octokit.__state.comments[0]?.body as string;
     expect(initialBody).toContain('overview');
@@ -222,7 +232,12 @@ describe('GitHubFrontend (event-bus v2)', () => {
     const secBlockBefore = extractSection(initialBody, 'security');
 
     // Update only 'overview'
-    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov2' } });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'overview',
+      scope: ['root'],
+      result: { issues: [], content: 'ov2' },
+    });
 
     const updated = octokit.__state.comments[0]?.body as string;
     expect(updated).toContain('overview');
@@ -273,8 +288,18 @@ describe('GitHubFrontend (event-bus v2)', () => {
 
     await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
     await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
-    await bus.emit({ type: 'CheckCompleted', checkId: 'overview', scope: ['root'], result: { issues: [], content: 'ov' } });
-    await bus.emit({ type: 'CheckCompleted', checkId: 'security', scope: ['root'], result: { issues: [], content: 'sec' } });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'overview',
+      scope: ['root'],
+      result: { issues: [], content: 'ov' },
+    });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [], content: 'sec' },
+    });
 
     // Two distinct comments should now exist: one for group=overview, one for group=review
     const bodies = octokit.__state.comments.map((c: any) => String(c.body));
@@ -323,8 +348,9 @@ describe('GitHubFrontend (event-bus v2)', () => {
       result: { issues: [], content: 'Second render content' },
     });
 
-    const body = octokit.__state.comments.find((c: any) => /\"group\":\"review\"/.test(String(c.body)))
-      .body as string;
+    const body = octokit.__state.comments.find((c: any) =>
+      /\"group\":\"review\"/.test(String(c.body))
+    ).body as string;
 
     // Only one security section block present
     const count = (body.match(/visor:section=.*security/g) || []).length;

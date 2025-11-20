@@ -240,7 +240,8 @@ ${sections}
     for (const [checkId, st] of groupMap.entries()) {
       const start = `<!-- visor:section=${JSON.stringify({ id: checkId, revision: this.revision })} -->`;
       const end = `<!-- visor:section-end id="${checkId}" -->`;
-      const body = st.content && st.content.toString().trim().length > 0 ? st.content.toString().trim() : '';
+      const body =
+        st.content && st.content.toString().trim().length > 0 ? st.content.toString().trim() : '';
       lines.push(`${start}
 ${body}
 ${end}`);
@@ -390,7 +391,10 @@ ${end}`);
       endRe.lastIndex = startIdx;
       const e = endRe.exec(body);
       if (!e) break;
-      const id = typeof (meta as any).id === 'string' && (meta as any).id ? String((meta as any).id) : String(e[1]);
+      const id =
+        typeof (meta as any).id === 'string' && (meta as any).id
+          ? String((meta as any).id)
+          : String(e[1]);
       const content = body.substring(startIdx, e.index).trim();
       const block = `<!-- visor:section=${JSON.stringify(meta)} -->\n${content}\n<!-- visor:section-end id="${id}" -->`;
       sections.set(id, block);
@@ -435,7 +439,9 @@ ${end}`);
       groupMap = new Map<string, SectionState>();
       this.stepStatusByGroup.set(group, groupMap);
     }
-    const prev = groupMap.get(checkId) || ({ status: 'queued', lastUpdated: new Date().toISOString() } as SectionState);
+    const prev =
+      groupMap.get(checkId) ||
+      ({ status: 'queued', lastUpdated: new Date().toISOString() } as SectionState);
     groupMap.set(checkId, { ...prev, ...patch });
   }
 

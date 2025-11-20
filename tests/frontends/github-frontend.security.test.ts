@@ -68,14 +68,26 @@ old content
       eventBus: bus,
       logger: console as any,
       config: { checks: { security: { group: 'review', schema: 'code-review' } } },
-      run: { runId: 'r-sec', repo: { owner: 'o', name: 'r' }, pr: 999, headSha: 'feedbee', event: 'pr_updated' },
+      run: {
+        runId: 'r-sec',
+        repo: { owner: 'o', name: 'r' },
+        pr: 999,
+        headSha: 'feedbee',
+        event: 'pr_updated',
+      },
       octokit,
     });
 
     // Complete check with new safe content
-    await bus.emit({ type: 'CheckCompleted', checkId: 'security', scope: ['root'], result: { issues: [], content: 'SAFE' } });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [], content: 'SAFE' },
+    });
 
-    const body = octokit.__state.comments.find((c: any) => String(c.body).includes(commentId))?.body as string;
+    const body = octokit.__state.comments.find((c: any) => String(c.body).includes(commentId))
+      ?.body as string;
     expect(body).toBeTruthy();
 
     // Header should not contain __proto__ and only allowed keys

@@ -12,11 +12,9 @@ import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
 import { configureLoggerFromCli } from './logger';
 import { deriveExecutedCheckNames } from './utils/ui-helpers';
-import { resolveHeadShaFromEvent } from './utils/head-sha';
-import { GroupedCheckResults, ReviewIssue, CheckResult } from './reviewer';
+import { GroupedCheckResults, CheckResult } from './reviewer';
 import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
-import { GitHubCheckService, CheckRunOptions } from './github-check-service';
 import { ReactionManager } from './github-reactions';
 import { generateFooter, hasVisorFooter } from './footer';
 
@@ -1157,12 +1155,7 @@ async function handleIssueComment(
 
         // Extract common arguments
         const focus = command.args?.find(arg => arg.startsWith('--focus='))?.split('=')[1];
-        const format = command.args?.find(arg => arg.startsWith('--format='))?.split('=')[1] as
-          | 'table'
-          | 'json'
-          | 'markdown'
-          | 'sarif'
-          | undefined;
+        // Deprecated: format is no longer used in command path; frontends handle rendering
 
         // If focus is specified, update the checks' focus
         if (focus && config?.checks) {
@@ -1251,8 +1244,7 @@ async function handlePullRequestWithConfig(
   const analyzer = new PRAnalyzer(octokit);
   // Deprecated: PRReviewer not used in PR auto-review path
 
-  // Generate comment ID for this PR
-  const commentId = `pr-review-${prNumber}`;
+  // Deprecated: legacy comment ID no longer used; frontends manage threads
 
   // Map the action to event type
   const eventType = mapGitHubEventToTrigger('pull_request', action);
@@ -1419,62 +1411,13 @@ async function filterChecksToExecute(
  */
 // Legacy GitHub check helpers removed; GitHub frontend manages Check Runs
 
-/**
- * Extract ReviewIssue[] from GroupedCheckResults content by parsing the rendered text
- * This function parses the structured content created by CheckExecutionEngine.convertReviewSummaryToGroupedResults()
- */
-function extractIssuesFromGroupedResults(groupedResults: GroupedCheckResults): ReviewIssue[] {
-  const issues: ReviewIssue[] = [];
-
-  for (const checkResults of Object.values(groupedResults)) {
-    for (const checkResult of checkResults) {
-      const { checkName, content } = checkResult;
-
-      // First, check if structured issues are available
-      if (checkResult.issues && checkResult.issues.length > 0) {
-        // Use structured issues directly - they're already properly formatted
-        issues.push(...checkResult.issues);
-        continue;
-      }
-
-      // Fall back to parsing issues from content (legacy support)
-      // Parse issues from content - look for lines like:
-      // - **CRITICAL**: message (file:line)
-      // - **ERROR**: message (file:line)
-      // - **WARNING**: message (file:line)
-      // - **INFO**: message (file:line)
-      const issueRegex = /^- \*\*([A-Z]+)\*\*: (.+?) \(([^:]+):(\d+)\)$/gm;
-      let match;
-
-      while ((match = issueRegex.exec(content)) !== null) {
-        const [, severityUpper, message, file, lineStr] = match;
-        const severity = severityUpper.toLowerCase() as 'info' | 'warning' | 'error' | 'critical';
-        const line = parseInt(lineStr, 10);
-
-        // Create ReviewIssue with proper format for GitHub annotations
-        const issue: ReviewIssue = {
-          file,
-          line,
-          ruleId: `${checkName}/content-parsed`,
-          message: message.trim(),
-          severity,
-          category: 'logic', // Default category since we can't parse this from content
-          group: checkResult.group,
-          timestamp: Date.now(),
-        };
-
-        issues.push(issue);
-      }
-    }
-  }
-
-  return issues;
-}
+// Legacy content-parsing helper removed. GitHub frontend now maps issues directly
+// from structured outputs; no need to parse rendered text.
 
 /**
  * Complete individual GitHub check runs
  */
-async function completeIndividualChecks(
+/*async function completeIndividualChecks(
   checkService: GitHubCheckService,
   owner: string,
   repo: string,
@@ -1566,12 +1509,12 @@ async function completeIndividualChecks(
       await markCheckAsFailed(checkService, owner, repo, checkRun.id, checkName, error);
     }
   }
-}
+}*/
 
 /**
  * Complete combined GitHub check run
  */
-async function completeCombinedCheck(
+/*async function completeCombinedCheck(
   checkService: GitHubCheckService,
   owner: string,
   repo: string,
@@ -1637,33 +1580,9 @@ async function completeCombinedCheck(
     console.error(`❌ Failed to complete combined check:`, error);
     await markCheckAsFailed(checkService, owner, repo, combinedCheckRun.id, 'Code Review', error);
   }
-}
+}*/
 
-/**
- * Mark a check as failed due to execution error
- */
-async function markCheckAsFailed(
-  checkService: GitHubCheckService,
-  owner: string,
-  repo: string,
-  checkRunId: number,
-  checkName: string,
-  error: unknown
-): Promise<void> {
-  try {
-    await checkService.completeCheckRun(
-      owner,
-      repo,
-      checkRunId,
-      checkName,
-      [],
-      [],
-      error instanceof Error ? error.message : 'Unknown error occurred'
-    );
-  } catch (finalError) {
-    console.error(`❌ Failed to mark ${checkName} check as failed:`, finalError);
-  }
-}
+// Legacy markCheckAsFailed removed; Check Service completion handled in frontend.
 
 // Entry point - execute immediately when the script is run
 // Note: require.main === module check doesn't work reliably with ncc bundling
