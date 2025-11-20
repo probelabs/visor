@@ -236,21 +236,13 @@ ${sections}
 
   private renderSections(ctx: FrontendContext, group: string): string {
     const lines: string[] = [];
-    const now = new Date().toISOString();
     const groupMap = this.stepStatusByGroup.get(group) || new Map<string, SectionState>();
     for (const [checkId, st] of groupMap.entries()) {
       const start = `<!-- visor:section=${JSON.stringify({ id: checkId, revision: this.revision })} -->`;
       const end = `<!-- visor:section-end id="${checkId}" -->`;
-      const icon = st.conclusion === 'success' ? '✅' : st.conclusion === 'failure' ? '❌' : '⏳';
-      const statusText = st.status === 'completed' ? st.conclusion || 'completed' : st.status;
-      const details = st.error ? `Error: ${st.error}` : '';
-      const content = st.content && st.content.trim().length > 0
-        ? `\n${st.content.trim()}\n`
-        : (typeof st.issues === 'number' ? `\nIssues: ${st.issues}\n` : '\n');
+      const body = st.content && st.content.toString().trim().length > 0 ? st.content.toString().trim() : '';
       lines.push(`${start}
-### ${icon} ${checkId} — ${statusText}
-${details}
-${content}_updated: ${now}_
+${body}
 ${end}`);
     }
     return lines.join('\\n\\n');

@@ -174,7 +174,7 @@ describe('GitHubFrontend (event-bus v2)', () => {
     expect(lastUpdate.conclusion).toBe('success');
   });
 
-  test('CheckErrored marks failure and writes error into section', async () => {
+  test('CheckErrored marks failure; section exists (no extra headers injected)', async () => {
     const bus = new EventBus();
     const octokit = makeFakeOctokit();
     const fe = new GitHubFrontend();
@@ -196,8 +196,9 @@ describe('GitHubFrontend (event-bus v2)', () => {
 
     expect(octokit.rest.checks.update).toHaveBeenCalled();
     const body = octokit.__state.comments[0]?.body as string;
-    expect(body).toContain('quality');
-    expect(body).toContain('Error: boom');
+    // Section exists for the errored check (content may be empty now)
+    expect(body).toMatch(/visor:section=.*quality/);
+    // We no longer inject error text into section body; rely on templates only
   });
 
   test('Partial section update preserves unrelated sections', async () => {
