@@ -249,13 +249,20 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Enable GitHub frontend by default in Actions path
+    // Enable GitHub frontend by default only for PR contexts in Actions
+    // For issue events we post a single summary comment at the end to avoid noise
     try {
-      const cfg: any = JSON.parse(JSON.stringify(config));
-      const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
-      if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
-      cfg.frontends = fronts;
-      (config as any) = cfg;
+      const isPRContext =
+        eventName === 'pull_request' ||
+        eventName === 'pull_request_target' ||
+        Boolean((context.event as any)?.issue?.pull_request);
+      if (isPRContext) {
+        const cfg: any = JSON.parse(JSON.stringify(config));
+        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+        if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+        cfg.frontends = fronts;
+        (config as any) = cfg;
+      }
     } catch {}
 
     // Determine AI provider overrides && fallbacks for issue flows

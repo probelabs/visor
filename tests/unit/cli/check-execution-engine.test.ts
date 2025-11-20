@@ -307,7 +307,7 @@ describe('CheckExecutionEngine', () => {
       expect(result.repositoryInfo.isGitRepository).toBe(false);
       expect(result.reviewSummary.issues).toHaveLength(1);
       expect(result.reviewSummary.issues![0].message).toContain('Not a git repository');
-      expect(mockReviewer.reviewPR).not.toHaveBeenCalled();
+      // Legacy reviewer is removed; no reviewer side-effects to assert here
     });
 
     it('should handle git analyzer errors', async () => {
