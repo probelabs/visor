@@ -1,5 +1,9 @@
 version: "1.0"
 
+# Slack integration config (schema version marker for Socket Mode/Webhook helpers)
+slack:
+  version: "v1"
+
 # Simple agent: task-refinement
 # - Collects user input, refines it with AI (skip code context), and loops until refined.
 # - Returns final refined text via the `finish` step output.
