@@ -292,6 +292,15 @@ export class StateMachineExecutionEngine {
         } catch {}
         const repoObj = owner && name ? { owner, name } : undefined;
         const octokit = (this.executionContext as any)?.octokit;
+        // Fallback: if headSha is missing but we have PR info and octokit, fetch it
+        if (!headSha && repoObj && prNum && octokit && typeof octokit.rest?.pulls?.get === 'function') {
+          try {
+            const { data } = await octokit.rest.pulls.get({ owner: repoObj.owner, repo: repoObj.name, pull_number: prNum });
+            headSha = (data && (data as any).head && (data as any).head.sha) || headSha;
+          } catch {
+            // ignore; headSha remains undefined
+          }
+        }
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
