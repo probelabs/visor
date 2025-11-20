@@ -7,22 +7,23 @@ import { logger } from '../logger';
  * - Maps key events to debug logs for now (no side effects)
  * - Real implementation will upsert checks and manage grouped PR comments
  */
+type SectionState = {
+  status: 'queued' | 'in_progress' | 'completed' | 'errored';
+  conclusion?: 'success' | 'failure' | 'neutral' | 'skipped';
+  issues?: number;
+  lastUpdated: string;
+  error?: string;
+  content?: string;
+};
+
 export class GitHubFrontend implements Frontend {
   public readonly name = 'github';
   private subs: Array<{ unsubscribe(): void }> = [];
   private checkRunIds: Map<string, number> = new Map();
   private revision = 0;
-  private cachedCommentId?: string; // comment manager id
-  private stepStatus: Map<
-    string,
-    {
-      status: 'queued' | 'in_progress' | 'completed' | 'errored';
-      conclusion?: 'success' | 'failure' | 'neutral' | 'skipped';
-      issues?: number;
-      lastUpdated: string;
-      error?: string;
-    }
-  > = new Map();
+  private cachedCommentId?: string; // legacy single-thread id (kept for compatibility)
+  // Group → (checkId → SectionState)
+  private stepStatusByGroup: Map<string, Map<string, SectionState>> = new Map();
 
   // Debounce/coalescing state
   private debounceMs: number = 400;
@@ -63,11 +64,12 @@ export class GitHubFrontend implements Frontend {
           if (!canPost || !svc) return;
           if (this.checkRunIds.has(ev.checkId)) return; // already created
           // Update local model and grouped comment
-          this.stepStatus.set(ev.checkId, {
+          const group = this.getGroupForCheck(ctx, ev.checkId);
+          this.upsertSectionState(group, ev.checkId, {
             status: 'queued',
             lastUpdated: new Date().toISOString(),
           });
-          if (comments) await this.updateGroupedComment(ctx, comments, ev.checkId);
+          if (comments) await this.updateGroupedComment(ctx, comments, group, ev.checkId);
           const res = await svc.createCheckRun(
             {
               owner: repo!.owner,
@@ -120,13 +122,15 @@ export class GitHubFrontend implements Frontend {
             const failed = Array.isArray(failureResults)
               ? failureResults.some((r: any) => r && r.failed)
               : false;
-            this.stepStatus.set(ev.checkId, {
+            const group = this.getGroupForCheck(ctx, ev.checkId);
+            this.upsertSectionState(group, ev.checkId, {
               status: 'completed',
               conclusion: failed ? 'failure' : 'success',
               issues: count,
               lastUpdated: new Date().toISOString(),
+              content: (ev?.result as any)?.content,
             });
-            await this.updateGroupedComment(ctx, comments, ev.checkId);
+            await this.updateGroupedComment(ctx, comments, group, ev.checkId);
           }
         } catch (e) {
           log.warn(
@@ -157,14 +161,15 @@ export class GitHubFrontend implements Frontend {
             );
           }
           if (comments) {
-            this.stepStatus.set(ev.checkId, {
+            const group = this.getGroupForCheck(ctx, ev.checkId);
+            this.upsertSectionState(group, ev.checkId, {
               status: 'errored',
               conclusion: 'failure',
               issues: 0,
               lastUpdated: new Date().toISOString(),
               error: ev.error?.message || 'Execution error',
             });
-            await this.updateGroupedComment(ctx, comments, ev.checkId);
+            await this.updateGroupedComment(ctx, comments, group, ev.checkId);
           }
         } catch (e) {
           log.warn(
@@ -180,7 +185,11 @@ export class GitHubFrontend implements Frontend {
         const ev = (env && env.payload) || env;
         try {
           if (ev.to === 'Completed' || ev.to === 'Error') {
-            if (comments) await this.updateGroupedComment(ctx, comments);
+            if (comments) {
+              for (const group of this.stepStatusByGroup.keys()) {
+                await this.updateGroupedComment(ctx, comments, group);
+              }
+            }
           }
         } catch (e) {
           log.warn(
@@ -196,9 +205,9 @@ export class GitHubFrontend implements Frontend {
     this.subs = [];
   }
 
-  private async buildFullBody(ctx: FrontendContext): Promise<string> {
-    const header = this.renderThreadHeader(ctx);
-    const sections = this.renderSections(ctx);
+  private async buildFullBody(ctx: FrontendContext, group: string): Promise<string> {
+    const header = this.renderThreadHeader(ctx, group);
+    const sections = this.renderSections(ctx, group);
     return `${header}
 
 ${sections}
@@ -213,55 +222,57 @@ ${sections}
       : r.runId;
   }
 
-  private renderThreadHeader(ctx: FrontendContext): string {
+  private renderThreadHeader(ctx: FrontendContext, group: string): string {
     const header = {
       key: this.threadKeyFor(ctx),
       runId: ctx.run.runId,
       workflowId: ctx.run.workflowId,
       revision: this.revision,
+      group,
       generatedAt: new Date().toISOString(),
     } as any;
     return `<!-- visor:thread=${JSON.stringify(header)} -->`;
   }
 
-  private renderSections(_ctx: FrontendContext): string {
+  private renderSections(ctx: FrontendContext, group: string): string {
     const lines: string[] = [];
     const now = new Date().toISOString();
-    for (const [checkId, st] of this.stepStatus.entries()) {
+    const groupMap = this.stepStatusByGroup.get(group) || new Map<string, SectionState>();
+    for (const [checkId, st] of groupMap.entries()) {
       const start = `<!-- visor:section=${JSON.stringify({ id: checkId, revision: this.revision })} -->`;
       const end = `<!-- visor:section-end id="${checkId}" -->`;
       const icon = st.conclusion === 'success' ? '✅' : st.conclusion === 'failure' ? '❌' : '⏳';
       const statusText = st.status === 'completed' ? st.conclusion || 'completed' : st.status;
-      const details = st.error
-        ? `Error: ${st.error}`
-        : typeof st.issues === 'number'
-          ? `Issues: ${st.issues}`
-          : '';
+      const details = st.error ? `Error: ${st.error}` : '';
+      const content = st.content && st.content.trim().length > 0
+        ? `\n${st.content.trim()}\n`
+        : (typeof st.issues === 'number' ? `\nIssues: ${st.issues}\n` : '\n');
       lines.push(`${start}
 ### ${icon} ${checkId} — ${statusText}
 ${details}
-_updated: ${now}_
+${content}_updated: ${now}_
 ${end}`);
     }
-    return lines.join('\n\n');
+    return lines.join('\\n\\n');
   }
 
   private async updateGroupedComment(
     ctx: FrontendContext,
     comments: any,
+    group: string,
     changedIds?: string | string[]
   ) {
     try {
       if (!ctx.run.repo || !ctx.run.pr) return;
       this.revision++;
-      const mergedBody = await this.mergeIntoExistingBody(ctx, comments, changedIds);
+      const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
       await comments.updateOrCreateComment(
         ctx.run.repo.owner,
         ctx.run.repo.name,
         ctx.run.pr,
         mergedBody,
         {
-          commentId: this.cachedCommentId,
+          commentId: this.commentIdForGroup(ctx, group),
           triggeredBy: 'github-frontend',
           commitSha: ctx.run.headSha,
         }
@@ -276,6 +287,7 @@ ${end}`);
   private async mergeIntoExistingBody(
     ctx: FrontendContext,
     comments: any,
+    group: string,
     changedIds?: string | string[]
   ): Promise<string> {
     const repo = ctx.run.repo!;
@@ -284,27 +296,29 @@ ${end}`);
       repo.owner,
       repo.name,
       pr,
-      this.cachedCommentId
+      this.commentIdForGroup(ctx, group)
     );
-    if (!existing || !existing.body) return this.buildFullBody(ctx);
+    if (!existing || !existing.body) return this.buildFullBody(ctx, group);
     const body = String(existing.body);
     const doc = this.parseSections(body);
     doc.header = {
       ...(doc.header || {}),
       key: this.threadKeyFor(ctx),
       revision: this.revision,
+      group,
     } as any;
     if (changedIds) {
       const ids = Array.isArray(changedIds) ? changedIds : [changedIds];
-      const fresh = this.renderSections(ctx);
+      const fresh = this.renderSections(ctx, group);
       for (const id of ids) {
         const block = this.extractSectionById(fresh, id);
         if (block) doc.sections.set(id, block);
       }
     } else {
       // Add any missing new sections; leave others untouched to preserve text
-      const fresh = this.renderSections(ctx);
-      for (const [checkId] of this.stepStatus.entries()) {
+      const fresh = this.renderSections(ctx, group);
+      const map = this.stepStatusByGroup.get(group) || new Map<string, SectionState>();
+      for (const [checkId] of map.entries()) {
         if (!doc.sections.has(checkId)) {
           const block = this.extractSectionById(fresh, checkId);
           if (block) doc.sections.set(checkId, block);
@@ -361,6 +375,30 @@ ${end}`);
 
   private escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+  }
+
+  private getGroupForCheck(ctx: FrontendContext, checkId: string): string {
+    try {
+      const cfg: any = ctx.config || {};
+      const g = cfg?.checks?.[checkId]?.group || cfg?.steps?.[checkId]?.group;
+      if (typeof g === 'string' && g.trim().length > 0) return g;
+    } catch {}
+    return 'review';
+  }
+
+  private upsertSectionState(group: string, checkId: string, patch: Partial<SectionState>): void {
+    let groupMap = this.stepStatusByGroup.get(group);
+    if (!groupMap) {
+      groupMap = new Map<string, SectionState>();
+      this.stepStatusByGroup.set(group, groupMap);
+    }
+    const prev = groupMap.get(checkId) || ({ status: 'queued', lastUpdated: new Date().toISOString() } as SectionState);
+    groupMap.set(checkId, { ...prev, ...patch });
+  }
+
+  private commentIdForGroup(ctx: FrontendContext, group: string): string {
+    const base = this.threadKeyFor(ctx);
+    return `visor-thread-${group}-${base}`;
   }
 
   /**
@@ -428,7 +466,7 @@ ${end}`);
   }
 
   // Debounce helpers
-  private scheduleUpdate(ctx: FrontendContext, comments: any, id?: string) {
+  private scheduleUpdate(ctx: FrontendContext, comments: any, group: string, id?: string) {
     if (id) this._pendingIds.add(id);
     const now = Date.now();
     const since = now - this._lastFlush;
@@ -439,19 +477,19 @@ ${end}`);
       const ids = Array.from(this._pendingIds);
       this._pendingIds.clear();
       this._timer = null;
-      await this.updateGroupedComment(ctx, comments, ids.length > 0 ? ids : undefined);
+      await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : undefined);
       this._lastFlush = Date.now();
     }, wait);
   }
 
-  private async flushNow(ctx: FrontendContext, comments: any) {
+  private async flushNow(ctx: FrontendContext, comments: any, group: string) {
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
     }
     const ids = Array.from(this._pendingIds);
     this._pendingIds.clear();
-    await this.updateGroupedComment(ctx, comments, ids.length > 0 ? ids : undefined);
+    await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : undefined);
     this._lastFlush = Date.now();
   }
 }
