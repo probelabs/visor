@@ -382,6 +382,9 @@ export class VisorTestRunner {
           return (req.default ?? '').toString();
         },
       },
+      // Expose Octokit to frontends via executionContext so event-driven
+      // GitHub frontend can perform calls during tests
+      octokit: recorder as unknown as any,
     } as any);
     // Determine checks to run for this event
     const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
