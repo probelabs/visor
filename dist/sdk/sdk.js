@@ -17851,10 +17851,14 @@ async function loadRendererSchema(name) {
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
-      // When running from dist
+      // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+      path17.join(__dirname, "output", sanitized, "schema.json"),
+      // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
       path17.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path17.join(process.cwd(), "output", sanitized, "schema.json")
+      path17.join(process.cwd(), "output", sanitized, "schema.json"),
+      // Fallback: cwd/dist/output/
+      path17.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
@@ -19868,10 +19872,16 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          // When bundled (dist), __dirname points to dist/state-machine/states
+          path17.join(__dirname, "output", sanitized, "template.liquid"),
+          // bundled: dist/output/
           path17.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
-          // Dev fallback
-          path17.join(process.cwd(), "output", sanitized, "template.liquid")
+          // source (from state-machine/states)
+          path17.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          // source (alternate)
+          path17.join(process.cwd(), "output", sanitized, "template.liquid"),
+          // fallback: cwd/output/
+          path17.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
@@ -23036,8 +23046,32 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       if (!sanitizedSchema) {
         throw new Error("Invalid schema name");
       }
-      const templatePath = path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs16.readFile(templatePath, "utf-8");
+      const candidatePaths = [
+        path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`),
+        // bundled: dist/output/
+        path17.join(__dirname, "..", `output/${sanitizedSchema}/template.liquid`),
+        // source fallback
+        path17.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`),
+        // cwd/output/
+        path17.join(process.cwd(), `dist/output/${sanitizedSchema}/template.liquid`)
+        // cwd/dist/output/
+      ];
+      for (const templatePath of candidatePaths) {
+        try {
+          const content = await fs16.readFile(templatePath, "utf-8");
+          if (content) {
+            templateContent = content;
+            break;
+          }
+        } catch {
+        }
+      }
+      if (!templateContent) {
+        throw new Error(`Template not found for schema: ${sanitizedSchema}`);
+      }
+    }
+    if (!templateContent) {
+      throw new Error("No template content available");
     }
     const liquid = createExtendedLiquid2({
       trimTagLeft: false,
