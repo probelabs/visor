@@ -340,21 +340,57 @@ ${end}`);
     const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
     const startRe = /<!--\s*visor:section=(\{[\s\S]*?\})\s*-->/g;
     const endRe = /<!--\s*visor:section-end\s+id=\"([^\"]+)\"\s*-->/g;
+
+    // Helper: safely parse JSON and pick only allowed keys
+    const safePick = (obj: any, allowed: Record<string, 'string' | 'number'>) => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return undefined;
+      const out: Record<string, unknown> = Object.create(null);
+      for (const [k, t] of Object.entries(allowed)) {
+        if (Object.prototype.hasOwnProperty.call(obj, k)) {
+          const v = (obj as any)[k];
+          if (t === 'string' && typeof v === 'string') out[k] = v;
+          else if (t === 'number' && typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+        }
+      }
+      return out;
+    };
+
+    const safeParse = (text: string) => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    };
+
     let header: any;
     try {
       const h = headerRe.exec(body);
-      if (h) header = JSON.parse(h[1]);
+      if (h) {
+        const parsed = safeParse(h[1]);
+        const picked = safePick(parsed, {
+          key: 'string',
+          runId: 'string',
+          workflowId: 'string',
+          revision: 'number',
+          group: 'string',
+          generatedAt: 'string',
+        });
+        header = picked;
+      }
     } catch {}
+
     let cursor = 0;
     while (true) {
       const s = startRe.exec(body);
       if (!s) break;
-      const meta = JSON.parse(s[1]);
+      const metaRaw = safeParse(s[1]);
+      const meta = safePick(metaRaw, { id: 'string', revision: 'number' }) || { id: '' };
       const startIdx = startRe.lastIndex;
       endRe.lastIndex = startIdx;
       const e = endRe.exec(body);
       if (!e) break;
-      const id = String(meta.id || e[1]);
+      const id = typeof (meta as any).id === 'string' && (meta as any).id ? String((meta as any).id) : String(e[1]);
       const content = body.substring(startIdx, e.index).trim();
       const block = `<!-- visor:section=${JSON.stringify(meta)} -->\n${content}\n<!-- visor:section-end id="${id}" -->`;
       sections.set(id, block);
