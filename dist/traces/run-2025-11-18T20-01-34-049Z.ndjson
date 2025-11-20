@@ -1,0 +1,13 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"237463c2-1c08-4480-943f-fbef2fdaba0b"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"237463c2-1c08-4480-943f-fbef2fdaba0b"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"237463c2-1c08-4480-943f-fbef2fdaba0b"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review","visor.provider.type":"workflow"}}
+{"name":"visor.provider","attributes":{"visor.check.id":"post-verified","visor.provider.type":"log"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"6ddeb65a-be6c-43bf-8098-1a89b7a544a8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"6ddeb65a-be6c-43bf-8098-1a89b7a544a8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"6ddeb65a-be6c-43bf-8098-1a89b7a544a8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"237463c2-1c08-4480-943f-fbef2fdaba0b"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"6ddeb65a-be6c-43bf-8098-1a89b7a544a8"}}]}

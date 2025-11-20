@@ -1,0 +1,12 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"3252f2fc-69d1-4cbd-8a1b-39f2badeb3d1"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"3252f2fc-69d1-4cbd-8a1b-39f2badeb3d1"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"3252f2fc-69d1-4cbd-8a1b-39f2badeb3d1"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review","visor.provider.type":"workflow"}}
+{"name":"visor.provider","attributes":{"visor.check.id":"post-verified","visor.provider.type":"log"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"4e4b02b8-f29d-444d-bf81-2ab171bc72fc"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"4e4b02b8-f29d-444d-bf81-2ab171bc72fc"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"4e4b02b8-f29d-444d-bf81-2ab171bc72fc"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"3252f2fc-69d1-4cbd-8a1b-39f2badeb3d1"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review:overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"run-review:overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{}}"},"events":[]}

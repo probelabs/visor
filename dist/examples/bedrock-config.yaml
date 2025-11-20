@@ -1,0 +1,77 @@
+# Example Visor configuration for AWS Bedrock
+# This demonstrates various ways to configure and use AWS Bedrock as your AI provider
+
+
+# Example GitHub Actions workflow to use this configuration:
+#
+# name: AI Code Review with AWS Bedrock
+# on: [pull_request]
+#
+# jobs:
+#   review:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: probelabs/visor@v1
+#         with:
+#           ai-provider: bedrock
+#           ai-model: anthropic.claude-sonnet-4-20250514-v1:0
+#         env:
+#           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           AWS_REGION: us-east-1
+
+# As alternative to github action, you can also set it in config on various levels, or via following env vars:
+#
+# export AI_PROVIDER=bedrock  # This gets mapped internally
+# export AI_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
+
+# Configuration version
+version: "1.0"
+
+# Global AI provider settings, via config
+# Set Bedrock as the default provider for all AI checks
+ai_provider: bedrock
+ai_model: anthropic.claude-sonnet-4-20250514-v1:0  # Default Bedrock model
+
+steps:
+  # Basic check using global Bedrock settings
+  security-analysis:
+    type: ai
+    prompt: |
+      Analyze the code changes for security vulnerabilities including:
+      - SQL injection risks
+      - XSS vulnerabilities
+      - Authentication/authorization issues
+      - Sensitive data exposure
+      - Input validation problems
+
+  # Check with explicit Bedrock configuration
+  performance-review:
+    type: ai
+    ai_provider: bedrock
+    ai_model: anthropic.claude-3-opus-20240229  # Use a different Bedrock model
+    prompt: |
+      Review code for performance issues:
+      - Inefficient algorithms (O(n²) or worse)
+      - Memory leaks or excessive allocations
+      - Database query optimization opportunities
+      - Caching opportunities
+    schema: code-review  # Use structured output
+
+  # Mixed provider example - use different providers for different checks
+  quick-style-check:
+    type: ai
+    ai_provider: google  # Override to use Google Gemini for this check
+    ai_model: gemini-2.0-flash-exp
+    prompt: "Quick style and formatting check"
+
+# Output configuration
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+  github_checks:
+    enabled: true
+    per_check: true  # Create separate GitHub check runs for each check

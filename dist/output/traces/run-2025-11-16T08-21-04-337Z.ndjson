@@ -1,0 +1,132 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.output":"{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\"}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"security","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281264903}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"architecture","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281264903}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281264903}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"quality","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281264903}}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"fe8f51fa-a253-4bb7-9a82-d678a850bc1c"}}]}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.output":"{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\"}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"security","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265380}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"architecture","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265380}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265380}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"quality","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265380}}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"cbf5f0f8-cb45-44b1-b496-7fdc28a0ec77"}}]}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.output":"{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\"}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"security","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265844}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"architecture","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265844}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265844}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"quality","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281265844}}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.check","attributes":{"visor.check.id":"quality","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"ca700ed8-f62c-475b-ae43-8c8e68b19cc8"}}]}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.output":"{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\"}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"overview\":{\"issues\":[],\"text\":\"{\\\"issues\\\":[]}\",\"ts\":1763281266321}}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"5828fc0b-55b7-40ec-af18-587eb9ded482"}}]}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"cfe681ab-bde8-4b10-945b-879904ba760c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"cfe681ab-bde8-4b10-945b-879904ba760c"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"cfe681ab-bde8-4b10-945b-879904ba760c"}}]}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":0,\"title\":\"Local Analysis: unknown (No changes)\",\"author\":\"unknown\",\"branch\":\"unknown\",\"base\":\"main\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.output":"{\"issues\":[]}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"14fa5885-5764-45a2-b892-ed0f24f44525"}}]}

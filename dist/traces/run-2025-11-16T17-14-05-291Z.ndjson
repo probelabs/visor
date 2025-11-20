@@ -1,0 +1,7 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"8fa7011e-ded9-4214-a218-9d747c6b7e3a"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"8fa7011e-ded9-4214-a218-9d747c6b7e3a"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"8fa7011e-ded9-4214-a218-9d747c6b7e3a"}}]}

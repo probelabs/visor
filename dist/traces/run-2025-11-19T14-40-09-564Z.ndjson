@@ -1,0 +1,14 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"ask","visor.provider.type":"human-input"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"refine","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"refine","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"feat: add user search\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[],\"outputs\":{\"ask\":{\"text\":\"Verify app tests pass\",\"ts\":1763563209706}}}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"c1ee3ad3-b31b-40f3-b19e-104d50b7631e"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"plan-commands","visor.provider.type":"ai"}}

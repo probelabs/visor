@@ -1,0 +1,27 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review","visor.provider.type":"workflow"}}
+{"name":"visor.provider","attributes":{"visor.check.id":"post-verified","visor.provider.type":"log"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"b773b96f-bdc6-45d7-bacc-902a85e035ce"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"b773b96f-bdc6-45d7-bacc-902a85e035ce"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"b773b96f-bdc6-45d7-bacc-902a85e035ce"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review:overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"run-review:overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"b773b96f-bdc6-45d7-bacc-902a85e035ce"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"b773b96f-bdc6-45d7-bacc-902a85e035ce"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":1,"session_id":"79e38ec7-f7f5-489e-9f62-f078e709dd79"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"cd1768be-b8d4-48fd-9b9c-0dbccfbafdbe"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"cd1768be-b8d4-48fd-9b9c-0dbccfbafdbe"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"cd1768be-b8d4-48fd-9b9c-0dbccfbafdbe"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review","visor.provider.type":"workflow"}}
+{"name":"visor.provider","attributes":{"visor.check.id":"post-verified","visor.provider.type":"log"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"77116521-1403-4122-82e1-44932288b118"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"77116521-1403-4122-82e1-44932288b118"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"77116521-1403-4122-82e1-44932288b118"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"cd1768be-b8d4-48fd-9b9c-0dbccfbafdbe"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review:overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"run-review:overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{}}"},"events":[]}

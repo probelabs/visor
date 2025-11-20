@@ -1,0 +1,20 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"29d68192-5507-488e-8e3a-d72b60e389d1"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"29d68192-5507-488e-8e3a-d72b60e389d1"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"29d68192-5507-488e-8e3a-d72b60e389d1"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"run-review","visor.provider.type":"workflow"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{}}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"b74cdc6f-eaba-4515-981d-e7be231fbe3d"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"security","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"security","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{\"overview\":{\"text\":\"Overview body\",\"tags\":{\"label\":\"feature\",\"review-effort\":2},\"ts\":1763538708731}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"architecture","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"architecture","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{\"overview\":{\"text\":\"Overview body\",\"tags\":{\"label\":\"feature\",\"review-effort\":2},\"ts\":1763538708731}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"performance","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"performance","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"State Machine Execution\",\"author\":\"system\"},\"files\":[],\"outputs\":{\"overview\":{\"text\":\"Overview body\",\"tags\":{\"label\":\"feature\",\"review-effort\":2},\"ts\":1763538708731}}}"},"events":[]}
+{"name":"visor.provider","attributes":{"visor.check.id":"quality","visor.provider.type":"ai"}}

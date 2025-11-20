@@ -1,0 +1,5 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"9d0eced5-562d-451c-8573-50c70874cdfc"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"9d0eced5-562d-451c-8573-50c70874cdfc"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"9d0eced5-562d-451c-8573-50c70874cdfc"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"issue-assistant","visor.provider.type":"ai"}}

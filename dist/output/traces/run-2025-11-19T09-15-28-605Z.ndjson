@@ -1,0 +1,7 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"f665ef3e-b7f7-4f54-a4e0-bbf75ea75358"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"f665ef3e-b7f7-4f54-a4e0-bbf75ea75358"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"f665ef3e-b7f7-4f54-a4e0-bbf75ea75358"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"overview","visor.provider.type":"ai"}}
+{"name":"visor.check","attributes":{"visor.check.id":"overview","visor.check.input.context":"{\"pr\":{\"number\":1,\"title\":\"feat: add user search\",\"author\":\"test-user\",\"branch\":\"feature/test\",\"base\":\"main\"},\"files\":[{\"filename\":\"src/search.ts\",\"additions\":3,\"deletions\":0,\"changes\":3,\"status\":\"added\",\"patch\":\"@@\\n+export function search(q: string) {\\n  return []\\n}\\n\"}],\"outputs\":{}}"},"events":[]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"f665ef3e-b7f7-4f54-a4e0-bbf75ea75358"}}]}

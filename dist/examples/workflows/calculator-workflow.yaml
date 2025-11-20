@@ -1,0 +1,163 @@
+# Standalone executable workflow with inputs, outputs, and self-tests
+# Can be run directly: visor --config defaults/calculator-workflow.yaml
+# Or imported and used as a step in another config
+
+id: calculator
+name: Simple Calculator
+description: A simple calculator workflow that performs arithmetic operations
+version: "1.0.0"
+
+inputs:
+  - name: operation
+    description: The operation to perform (add, subtract, multiply, divide)
+    schema:
+      type: string
+      enum: [add, subtract, multiply, divide]
+    default: "add"
+
+  - name: a
+    description: First operand
+    schema:
+      type: number
+    default: 10
+
+  - name: b
+    description: Second operand
+    schema:
+      type: number
+    default: 5
+
+outputs:
+  - name: result
+    description: The calculated result
+    value_js: |
+      const calc = steps.calculate.output;
+      return calc ? calc.result : null;
+
+  - name: operation_performed
+    description: The operation that was performed
+    value_js: |
+      return inputs.operation;
+
+  - name: summary
+    description: Human readable summary
+    value_js: |
+      const calc = steps.calculate.output;
+      if (!calc) return "Calculation failed";
+      return `${inputs.a} ${inputs.operation} ${inputs.b} = ${calc.result}`;
+
+# Workflow steps - these define the workflow logic
+steps:
+  validate_inputs:
+    type: command
+    exec: |
+      echo '{"valid": true, "a": {{ inputs.a }}, "b": {{ inputs.b }}, "operation": "{{ inputs.operation }}"}'
+
+  calculate:
+    type: command
+    depends_on: [validate_inputs]
+    exec: |
+      #!/bin/bash
+      operation="{{ inputs.operation }}"
+      a={{ inputs.a }}
+      b={{ inputs.b }}
+
+      case $operation in
+        add)
+          result=$(echo "$a + $b" | bc -l)
+          ;;
+        subtract)
+          result=$(echo "$a - $b" | bc -l)
+          ;;
+        multiply)
+          result=$(echo "$a * $b" | bc -l)
+          ;;
+        divide)
+          if [ "$b" = "0" ]; then
+            echo '{"error": "Division by zero"}'
+            exit 1
+          fi
+          result=$(echo "scale=2; $a / $b" | bc -l)
+          ;;
+        *)
+          echo '{"error": "Unknown operation"}'
+          exit 1
+          ;;
+      esac
+
+      echo "{\"result\": $result, \"operation\": \"$operation\"}"
+
+  log_result:
+    type: log
+    depends_on: [calculate]
+    message: |
+      Calculator Result:
+      Operation: {{ inputs.operation }}
+      {{ inputs.a }} {{ inputs.operation }} {{ inputs.b }} = {{ steps.calculate.output.result }}
+
+# Tests - these are ONLY executed when running this file standalone
+# They are NOT imported when this workflow is used as a step in another config
+tests:
+  # Test 1: Default inputs (10 + 5 = 15)
+  test_default_addition:
+    type: workflow
+    workflow: calculator
+    # Uses default inputs (operation=add, a=10, b=5)
+
+  # Test 2: Subtraction
+  test_subtraction:
+    type: workflow
+    workflow: calculator
+    args:
+      operation: subtract
+      a: 20
+      b: 8
+    # Expected: 20 - 8 = 12
+
+  # Test 3: Multiplication
+  test_multiplication:
+    type: workflow
+    workflow: calculator
+    args:
+      operation: multiply
+      a: 6
+      b: 7
+    # Expected: 6 * 7 = 42
+
+  # Test 4: Division
+  test_division:
+    type: workflow
+    workflow: calculator
+    args:
+      operation: divide
+      a: 100
+      b: 4
+    # Expected: 100 / 4 = 25
+
+  # Validate all tests passed
+  validate_tests:
+    type: command
+    depends_on: [test_default_addition, test_subtraction, test_multiplication, test_division]
+    exec: |
+      #!/bin/bash
+      # Get results from each test
+      addition="{{ outputs.test_default_addition.result }}"
+      subtraction="{{ outputs.test_subtraction.result }}"
+      multiplication="{{ outputs.test_multiplication.result }}"
+      division="{{ outputs.test_division.result }}"
+
+      echo "Test Results:"
+      echo "  Addition (10 + 5): $addition (expected 15)"
+      echo "  Subtraction (20 - 8): $subtraction (expected 12)"
+      echo "  Multiplication (6 * 7): $multiplication (expected 42)"
+      echo "  Division (100 / 4): $division (expected 25)"
+
+      # Simple validation
+      if [ "$addition" = "15" ] && [ "$subtraction" = "12" ] && [ "$multiplication" = "42" ] && [ "$division" = "25" ]; then
+        echo '{"all_tests_passed": true}'
+        exit 0
+      else
+        echo '{"all_tests_passed": false, "error": "Some tests failed"}'
+        exit 1
+      fi
+    fail_if: output.all_tests_passed === false

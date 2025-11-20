@@ -1,0 +1,33 @@
+# Development Environment Configuration
+# Fast feedback for local development
+
+version: "1.0"
+
+# Inherit all checks from base
+extends: ./visor.base.yaml
+
+# Filter to only dev-appropriate checks
+tag_filter:
+  include:
+    - dev
+    - fast
+    - basic
+  exclude:
+    - slow
+    - experimental
+    - staging
+    - prod
+
+# Use faster AI model for dev
+ai_model: gemini-1.5-flash
+
+# Dev-specific settings
+max_parallelism: 5  # Run checks faster locally
+fail_fast: true     # Stop on first error for quick feedback
+
+# Override output for dev
+output:
+  pr_comment:
+    format: table  # Simpler format for terminal
+    group_by: check
+    collapse: false  # Show all details

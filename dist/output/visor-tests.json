@@ -1,0 +1,10 @@
+{
+  "failures": 0,
+  "results": [
+    {
+      "name": "github-negative-mode",
+      "passed": true,
+      "errors": []
+    }
+  ]
+}

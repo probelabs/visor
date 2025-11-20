@@ -1,0 +1,56 @@
+version: '1.0'
+steps:
+  run-review:
+    type: workflow
+    config: defaults/code-review.yaml
+    criticality: policy
+    'on':
+      - pr_opened
+      - pr_updated
+    fail_if: (output?.hasErrors === true) || ((output?.issues?.length ?? 0) > 0)
+    guarantee: typeof output.hasErrors === 'boolean' && Array.isArray(output.issues)
+    on_fail:
+      goto: fix-with-claude
+    on_success:
+      goto: post-verified
+  fix-with-claude:
+    type: claude-code
+    criticality: internal
+    if: outputs['run-review']?.hasErrors === true
+    guarantee: typeof output.content === 'string' && output.content.length > 0
+    prompt: >
+      You are an expert code refiner.
+
+      Apply targeted, minimal changes to resolve blocking issues from the latest
+      review.
+
+
+      Review results (JSON):
+
+      {{ outputs['run-review'] | json }}
+
+
+      Please prioritize fixing issues with severity "critical" or "error" first.
+
+
+      Rules:
+
+      - Keep diffs minimal; avoid broad refactors.
+
+      - Preserve behavior and tests unless the issue requires updating them.
+
+      - Prefer local fixes near the reported lines.
+
+      - Add/adjust tests when necessary.
+
+
+      When finished, summarize the changes you made.
+    on_success:
+      goto: run-review
+  post-verified:
+    type: log
+    group: summary
+    if: outputs['run-review']?.hasErrors === false
+    message: >
+      ✅ Code Refiner complete. No critical/error issues remain in the latest
+      review.

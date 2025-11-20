@@ -1,0 +1,26 @@
+version: "2.0"
+
+checks:
+  list:
+    type: command
+    exec: echo '["a","b","c"]'
+    forEach: true
+
+  summarize:
+    type: script
+    depends_on: [list]
+    content: |
+      const arr = outputs_raw['list'] || [];
+      return { total: arr.length };
+
+  branch-by-size:
+    type: script
+    depends_on: [list]
+    content: 'return true'
+    on_success:
+      goto_js: |
+        return (outputs_raw['list'] || []).length >= 3 ? 'after' : null;
+
+  after:
+    type: log
+    message: bulk mode reached

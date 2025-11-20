@@ -1,0 +1,182 @@
+# Visor configuration for Jira workflow automation using MCP
+# This example demonstrates:
+# 1. Listing Jira issues using JQL
+# 2. AI analysis of selected issues
+# 3. Adding labels to issues based on analysis
+
+version: "1.0"
+
+# Global AI configuration
+ai_provider: anthropic
+ai_model: claude-3-sonnet
+
+# Global MCP servers - Jira integration
+ai_mcp_servers:
+  jira:
+    command: "npx"
+    args: ["-y", "@aashari/mcp-server-atlassian-jira"]
+    env:
+      JIRA_BASE_URL: "${JIRA_BASE_URL}"        # https://your-company.atlassian.net
+      JIRA_EMAIL: "${JIRA_EMAIL}"              # your-email@company.com
+      JIRA_API_TOKEN: "${JIRA_API_TOKEN}"      # Your Jira API token
+
+steps:
+  # Step 1: Query and analyze high-priority bugs
+  analyze_priority_bugs:
+    type: ai
+    prompt: |
+      Use the Jira MCP tools to perform the following workflow:
+
+      1. Search for high-priority bugs using JQL: "project = DEV AND issuetype = Bug AND priority = High AND status != Closed"
+
+      2. For each issue found:
+         - Get detailed information about the issue
+         - Analyze the issue description, summary, and comments
+         - Evaluate the complexity and impact based on:
+           * Technical complexity indicators
+           * Business impact keywords
+           * Time sensitivity markers
+           * Dependencies mentioned
+
+      3. Classify each issue into categories:
+         - CRITICAL: Needs immediate attention (production impact, security, data loss)
+         - COMPLEX: Requires senior developer (architecture, performance, integration)
+         - ROUTINE: Standard bug fix (UI, validation, minor functionality)
+         - BLOCKED: Waiting for dependencies or more information
+
+      4. For each analyzed issue, add appropriate labels:
+         - "ai-analyzed" (always add this)
+         - "critical-bug" for CRITICAL issues
+         - "complex-implementation" for COMPLEX issues
+         - "quick-fix" for ROUTINE issues
+         - "needs-clarification" for BLOCKED issues
+
+      5. Provide a summary report of:
+         - Total issues analyzed
+         - Distribution by category
+         - Top 3 most critical issues with reasoning
+         - Recommended next actions
+
+      Use the available Jira MCP tools to search, retrieve, and update issues.
+    on: ["manual"]  # Trigger manually or via cron
+    tags: ["jira", "analysis", "priority"]
+
+  # Step 2: Analyze specific issue by key
+  analyze_specific_issue:
+    type: ai
+    prompt: |
+      Use the Jira MCP tools to analyze a specific issue:
+
+      1. Get the issue details for the provided issue key
+      2. Perform deep analysis including:
+         - Root cause investigation based on description
+         - Impact assessment on system components
+         - Effort estimation (story points recommendation)
+         - Risk assessment for implementation
+         - Suggested implementation approach
+
+      3. Based on analysis, add appropriate labels:
+         - Effort: "1-point", "3-points", "5-points", "8-points"
+         - Risk: "low-risk", "medium-risk", "high-risk"
+         - Component: "frontend", "backend", "database", "integration"
+         - Priority: "expedite", "normal", "defer"
+
+      4. If the issue is critical or complex, also:
+         - Add comment with AI analysis summary
+         - Set appropriate priority if not already set
+         - Suggest assignee if possible
+
+      Provide detailed reasoning for all assessments and actions taken.
+    on: ["manual"]
+    tags: ["jira", "deep-analysis", "individual"]
+
+  # Step 3: Sprint planning assistant
+  sprint_planning_analysis:
+    type: ai
+    prompt: |
+      Use Jira MCP tools to assist with sprint planning:
+
+      1. Query issues for upcoming sprint using JQL: "project = DEV AND sprint is EMPTY AND status = 'To Do' ORDER BY priority DESC, created ASC"
+
+      2. For each issue, analyze:
+         - Story point estimation based on complexity
+         - Dependencies between issues
+         - Team capacity alignment
+         - Risk factors
+
+      3. Recommend sprint composition:
+         - Categorize issues by complexity (Simple/Medium/Complex)
+         - Identify potential blockers
+         - Suggest issue prioritization
+         - Flag issues needing clarification
+
+      4. Add planning labels:
+         - "sprint-ready" for well-defined issues
+         - "needs-refinement" for unclear requirements
+         - "dependency-risk" for issues with external dependencies
+         - "good-first-issue" for junior developer tasks
+
+      5. Generate sprint planning report with:
+         - Recommended story point distribution
+         - Risk assessment
+         - Dependency mapping
+         - Team allocation suggestions
+
+      Use Jira MCP tools to query, analyze, and update issues accordingly.
+    schedule: "0 9 * * MON"  # Run every Monday at 9 AM for weekly planning
+    on: ["schedule"]
+    tags: ["jira", "planning", "automation"]
+
+  # Step 4: Issue health monitoring
+  issue_health_monitor:
+    type: ai
+    prompt: |
+      Monitor issue health using Jira MCP tools:
+
+      1. Query stale issues: "project = DEV AND status = 'In Progress' AND updated < -7d"
+      2. Query blocked issues: "project = DEV AND status = Blocked"
+      3. Query overdue issues: "project = DEV AND duedate < now() AND status != Done"
+
+      For each category, analyze and take action:
+
+      STALE ISSUES:
+      - Add "stale-issue" label
+      - Add comment requesting status update
+      - Notify stakeholders if high priority
+
+      BLOCKED ISSUES:
+      - Analyze blocking reasons from comments
+      - Add "needs-unblocking" label if actionable
+      - Escalate if blocked > 5 days
+
+      OVERDUE ISSUES:
+      - Add "overdue" label
+      - Assess impact and urgency
+      - Recommend timeline adjustment or priority change
+
+      Generate health report with:
+      - Issue distribution by health status
+      - Trending analysis (improving/degrading)
+      - Action items for team leads
+      - Automated remediation suggestions
+
+      Use Jira MCP tools for all queries and updates.
+    schedule: "0 10 * * MON,WED,FRI"  # Run 3 times per week
+    on: ["schedule"]
+    tags: ["jira", "monitoring", "health"]
+
+# Environment variables needed (set these in your environment):
+# JIRA_BASE_URL=https://your-company.atlassian.net
+# JIRA_EMAIL=your-email@company.com
+# JIRA_API_TOKEN=your-jira-api-token
+# ANTHROPIC_API_KEY=your-anthropic-api-key
+
+output:
+  pr_comment:
+    enabled: false  # These are Jira workflows, not PR-based
+  json:
+    enabled: true
+    file: "./jira-analysis-results.json"
+  markdown:
+    enabled: true
+    file: "./jira-analysis-report.md"
