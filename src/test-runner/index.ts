@@ -1052,21 +1052,7 @@ export class VisorTestRunner {
       rcOpts ? { errorCode: rcOpts.error_code, timeoutMs: rcOpts.timeout_ms } : undefined
     );
     setGlobalRecorder(recorder);
-    // Respect suite-level frontends for flows
-    const cfgFlow = JSON.parse(JSON.stringify(cfg || {}));
-    try {
-      const fns = (suiteDefaults.frontends || undefined) as unknown;
-      if (Array.isArray(fns) && fns.length > 0) {
-        const norm = (fns as any[]).map(x => (typeof x === 'string' ? { name: x } : x));
-        (cfgFlow as any).frontends = norm;
-      }
-    } catch {}
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
-    try {
-      const fns = (cfgFlow.frontends || []) as any[];
-      const hasGh = Array.isArray(fns) && fns.some(f => f && f.name === 'github');
-      if (hasGh) (engine as any).setExecutionContext({ octokit: recorder as unknown as any });
-    } catch {}
     const flowName = flowCase.name || 'flow';
     let failures = 0;
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
@@ -1115,7 +1101,7 @@ export class VisorTestRunner {
           flowName,
           engine,
           recorder,
-          cfgFlow,
+          cfg,
           prompts,
           promptCap,
           this.mapEventFromFixtureName.bind(this),
@@ -1124,7 +1110,8 @@ export class VisorTestRunner {
           this.printSelectedChecks.bind(this),
           this.warnUnmockedProviders.bind(this),
           defaultIncludeTags,
-          defaultExcludeTags
+          defaultExcludeTags,
+          (suiteDefaults.frontends || undefined) as any[]
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

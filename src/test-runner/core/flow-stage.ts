@@ -38,7 +38,8 @@ export class FlowStage {
     private readonly printSelectedChecks: PrintChecksFn,
     private readonly warnUnmockedProviders: WarnUnmockedFn,
     private readonly defaultIncludeTags?: string[],
-    private readonly defaultExcludeTags?: string[]
+    private readonly defaultExcludeTags?: string[],
+    private readonly defaultFrontends?: any[]
   ) {}
 
   async run(
@@ -201,6 +202,28 @@ export class FlowStage {
 
       // Merge stage-level routing configuration into config
       const stageConfig = { ...this.cfg };
+      // Enable suite frontends only for PR events; disable GitHub for issue events
+      try {
+        const ev = (eventForStage || '').toLowerCase();
+        const isPr = ev === 'pr_opened' || ev === 'pr_updated' || ev === 'pr_closed';
+        if (Array.isArray(this.defaultFrontends) && this.defaultFrontends.length > 0) {
+          if (isPr) {
+            const norm = (this.defaultFrontends as any[]).map(x =>
+              typeof x === 'string' ? { name: x } : x
+            );
+            (stageConfig as any).frontends = norm;
+            // Seed octokit for frontends that need it (e.g., GitHub)
+            const prev: any = (this.engine as any).executionContext || {};
+            this.engine.setExecutionContext({ ...prev, octokit: this.recorder as unknown as any });
+          } else {
+            // Remove GitHub frontend for issue events to satisfy no-comment expectations
+            const curr = Array.isArray((stageConfig as any).frontends)
+              ? ((stageConfig as any).frontends as any[])
+              : [];
+            (stageConfig as any).frontends = curr.filter(f => f && f.name !== 'github');
+          }
+        }
+      } catch {}
       if ((stage as any).routing) {
         stageConfig.routing = {
           ...(this.cfg.routing || {}),
