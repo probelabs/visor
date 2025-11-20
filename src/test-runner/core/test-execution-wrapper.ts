@@ -49,23 +49,11 @@ export class TestExecutionWrapper {
       baseCalls = rec && Array.isArray(rec.calls) ? rec.calls.length : 0;
     } catch {}
 
-    // Inject GitHub frontend automatically for PR contexts so YAML tests
-    // can assert GitHub calls without modifying user configs.
-    let cfgEffective = cfg;
-    try {
-      const isPrEvent = String((prInfo as any)?.eventType || '').startsWith('pr_');
-      if (isPrEvent) {
-        const curr = Array.isArray((cfg as any)?.frontends) ? [...(cfg as any).frontends] : [];
-        if (!curr.some((f: any) => f && f.name === 'github')) curr.push({ name: 'github' });
-        cfgEffective = { ...(cfg as any), frontends: curr };
-      }
-    } catch {}
-
     const res = await this.engine.executeGroupedChecks(
       prInfo,
       checks,
       120000,
-      cfgEffective,
+      cfg,
       'json',
       debug,
       undefined,
